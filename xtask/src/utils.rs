@@ -146,6 +146,10 @@ impl BuildContext {
         self.artifacts_root().join("demos").join(demo)
     }
 
+    pub(crate) fn example_artifacts_dir(&self, example: &str) -> PathBuf {
+        self.artifacts_root().join("examples").join(example)
+    }
+
     pub(crate) fn benchmark_artifacts_dir(&self, benchmark: &str) -> PathBuf {
         self.artifacts_root().join("benchmarks").join(benchmark)
     }
@@ -176,6 +180,10 @@ impl BuildContext {
 
     pub(crate) fn demos_root(&self) -> PathBuf {
         self.workspace_root.join("demos")
+    }
+
+    pub(crate) fn examples_root(&self) -> PathBuf {
+        self.workspace_root.join("examples")
     }
 
     pub(crate) fn benchmarks_root(&self) -> PathBuf {
@@ -254,6 +262,10 @@ impl BuildContext {
 
     pub(crate) fn demo_dirs(&self) -> Result<Vec<PathBuf>> {
         read_child_dirs(&self.demos_root())
+    }
+
+    pub(crate) fn browser_example_dir(&self) -> PathBuf {
+        self.examples_root().join("web")
     }
 
     pub(crate) fn benchmark_browser_dir(&self) -> PathBuf {

@@ -28,7 +28,10 @@ Start with:
   cargo xtask toolchain status
   cargo xtask clean --dry-run
   cargo xtask run --help
+  cargo xtask run examples serve browser
+  cargo xtask run benchmarks serve browser
   cargo xtask test --help
+  cargo xtask test smoke group examples --backend cpu
   cargo xtask build node --backend cpu
   cargo xtask build python --backend cuda
   cargo xtask build cli --backend all
@@ -64,12 +67,16 @@ Run long-lived demos and non-test diagnostics from the workspace root.
 Examples:
   cargo xtask run demos build chat
   cargo xtask run demos serve avatar --port 5173
+  cargo xtask run examples serve browser --port 5173
+  cargo xtask run benchmarks build browser
+  cargo xtask run benchmarks serve browser --mode preview --port 4173
   cargo xtask run llama backend-ops --backend cpu --mode support
   cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT
 
 Notes:
   Test execution, smoke checks, and coverage live under `cargo xtask test`.
-  `run demos serve` is intentionally long-running and starts a Vite server.";
+  Serve commands are intentionally long-running and start Vite servers.
+  Benchmark validation lives under `cargo xtask test smoke suite benchmark-browser`.";
 
 const RUN_DEMOS_HELP: &str = "\
 Build or serve individual browser demos.
@@ -92,8 +99,65 @@ Examples:
   cargo xtask run llama backend-ops --backend vulkan --mode support
   cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT
 
-Correctness mode lives under `cargo xtask test smoke llama`.
+Correctness mode lives under `cargo xtask test smoke suite llama-backend-ops`.
 The run command defaults to support probing.";
+
+const RUN_EXAMPLES_HELP: &str = "\
+Serve onboarding examples.
+
+Examples:
+  cargo xtask run examples serve browser
+  cargo xtask run examples serve browser --mode preview --port 4173
+
+The browser example lives under examples/web and mirrors the public CogentClient
+query, chat, embed, and remote gateway examples. Browser example smoke lives
+under `cargo xtask test smoke suite example-browser`.";
+
+const RUN_BENCHMARKS_HELP: &str = "\
+Build or serve benchmark apps.
+
+Examples:
+  cargo xtask run benchmarks build browser
+  cargo xtask run benchmarks serve browser
+  cargo xtask run benchmarks serve browser --mode preview --port 4173
+
+The browser benchmark lives under benchmarks/browser. Benchmark smoke stays in
+the test namespace: `cargo xtask test smoke suite benchmark-browser`.";
+
+const SMOKE_HELP: &str = "\
+Run holistic smoke checks through explicit suite and group namespaces.
+
+Examples:
+  cargo xtask test smoke suite example-node --backend cpu --case query
+  cargo xtask test smoke suite example-browser --case chat
+  cargo xtask test smoke suite benchmark-browser --require-webgpu
+  cargo xtask test smoke group examples --backend cpu
+  cargo xtask test smoke group local-model --backend cpu
+  cargo xtask test smoke group full --backend cpu
+
+Use `suite` for one concrete smoke target and `group` for a named bundle.
+Benchmark serving lives under `cargo xtask run benchmarks serve browser`.";
+
+const SMOKE_SUITE_HELP: &str = "\
+Run exactly one smoke suite.
+
+Suites and code locations:
+  cli                 staged CLI built from apps/cli
+  example-rust        examples/rust query/chat binaries
+  example-node        examples/node query.mjs/chat.mjs
+  example-python      examples/python query.py/chat.py
+  example-browser     examples/web query/chat pages through Playwright
+  benchmark-browser   benchmarks/browser runtime smoke through Playwright
+  provider-gateway    crates/gateway provider gateway integration test
+  llama-backend-ops   third_party/llama.cpp test-backend-ops";
+
+const SMOKE_GROUP_HELP: &str = "\
+Run a named bundle of smoke suites.
+
+Groups:
+  examples     Rust, Node, Python, and browser onboarding examples
+  local-model  CLI plus Rust, Node, and Python local model smoke
+  full         every smoke suite, including benchmark, gateway, and llama checks";
 
 const TEST_HELP: &str = "\
 List, run, and verify cataloged workspace tests.
@@ -105,13 +169,15 @@ Examples:
   cargo xtask test unit whitebox
   cargo xtask test unit rust --package cogentlm-core
   cargo xtask test unit node --backend cpu
-  cargo xtask test smoke node --backend cpu
-  cargo xtask test smoke model --backend cpu
+  cargo xtask test smoke suite example-node --backend cpu
+  cargo xtask test smoke suite benchmark-browser
+  cargo xtask test smoke group local-model --backend cpu
   cargo xtask test verify --changed
 
 Model-backed smoke tests default to the setup sample model cache under
 .build/models when --model is omitted.
 
+`test smoke suite` runs one smoke suite. `test smoke group` runs a named bundle.
 `test unit` and `test smoke` execute suites and write .build/test artifacts.
 Coverage-capable unit suites also write .build/coverage artifacts.
 `test verify` analyzes existing artifacts and test structure without running tests.
@@ -333,6 +399,24 @@ pub enum RunCommands {
         command: RunDemosCommands,
     },
 
+    /// Serve onboarding examples.
+    #[command(long_about = RUN_EXAMPLES_HELP)]
+    #[command(arg_required_else_help = true)]
+    Examples {
+        /// Example workflow to run.
+        #[command(subcommand)]
+        command: RunExamplesCommands,
+    },
+
+    /// Build or serve benchmark apps.
+    #[command(long_about = RUN_BENCHMARKS_HELP)]
+    #[command(arg_required_else_help = true)]
+    Benchmarks {
+        /// Benchmark workflow to run.
+        #[command(subcommand)]
+        command: RunBenchmarksCommands,
+    },
+
     /// Build and run standalone llama.cpp diagnostics.
     #[command(long_about = RUN_LLAMA_HELP)]
     #[command(arg_required_else_help = true)]
@@ -354,8 +438,8 @@ pub enum TestCommands {
     Unit(TestUnitArgs),
 
     /// Run holistic integration smoke tests.
+    #[command(long_about = SMOKE_HELP)]
     #[command(arg_required_else_help = true)]
-    #[command(after_long_help = BACKEND_HELP)]
     Smoke(TestSmokeArgs),
 
     /// Verify test structure and existing coverage artifacts.
@@ -442,51 +526,85 @@ pub struct TestUnitBackendArgs {
 /// Options for smoke test workflows.
 #[derive(Args)]
 pub struct TestSmokeArgs {
-    /// Smoke test target to run.
+    /// Smoke namespace to run.
     #[command(subcommand)]
-    pub target: TestSmokeTarget,
+    pub command: TestSmokeCommands,
 }
 
-/// Holistic integration smoke test targets.
+/// Smoke command namespaces.
 #[derive(Subcommand)]
-pub enum TestSmokeTarget {
-    /// Run CLI, Rust, Node, Python, provider gateway, browser, and llama smoke tests.
-    #[command(after_long_help = BACKEND_HELP)]
-    All(TestSmokeAllArgs),
-    /// Run model-backed CLI local inference smoke.
+pub enum TestSmokeCommands {
+    /// Run exactly one smoke suite.
+    #[command(long_about = SMOKE_SUITE_HELP)]
+    #[command(arg_required_else_help = true)]
+    Suite(TestSmokeSuiteArgs),
+    /// Run a named bundle of smoke suites.
+    #[command(long_about = SMOKE_GROUP_HELP)]
+    #[command(arg_required_else_help = true)]
+    Group(TestSmokeGroupArgs),
+}
+
+/// Options for one smoke suite.
+#[derive(Args)]
+pub struct TestSmokeSuiteArgs {
+    /// Concrete smoke suite to run.
+    #[command(subcommand)]
+    pub target: TestSmokeSuiteTarget,
+}
+
+/// Concrete smoke suite targets.
+#[derive(Subcommand)]
+pub enum TestSmokeSuiteTarget {
+    /// Run model-backed CLI smoke from apps/cli.
     #[command(after_long_help = BACKEND_HELP)]
     Cli(TestSmokeModelArgs),
-    /// Run model-backed Rust example smoke.
+    /// Run model-backed Rust query/chat examples under examples/rust.
+    #[command(name = "example-rust")]
     #[command(after_long_help = BACKEND_HELP)]
-    Rust(TestSmokeCaseArgs),
-    /// Run model-backed Node example smoke.
+    ExampleRust(TestSmokeCaseArgs),
+    /// Run model-backed Node query/chat examples under examples/node.
+    #[command(name = "example-node")]
     #[command(after_long_help = BACKEND_HELP)]
-    Node(TestSmokeCaseArgs),
-    /// Run model-backed Python example smoke.
+    ExampleNode(TestSmokeCaseArgs),
+    /// Run model-backed Python query/chat examples under examples/python.
+    #[command(name = "example-python")]
     #[command(after_long_help = BACKEND_HELP)]
-    Python(TestSmokeCaseArgs),
-    /// Run CLI, Rust, Node, and Python model-backed smoke tests.
-    #[command(after_long_help = BACKEND_HELP)]
-    Model(TestSmokeModelArgs),
+    ExamplePython(TestSmokeCaseArgs),
+    /// Run browser query/chat examples under examples/web through Playwright.
+    #[command(name = "example-browser")]
+    ExampleBrowser(TestSmokeExampleBrowserArgs),
+    /// Run benchmark browser runtime smoke under benchmarks/browser.
+    #[command(name = "benchmark-browser")]
+    BenchmarkBrowser(TestSmokeBenchmarkBrowserArgs),
     /// Run hermetic provider-backed gateway smoke tests.
     ProviderGateway,
-    /// Run browser runtime smoke tests through Playwright.
-    Browser(TestSmokeBrowserArgs),
     /// Run llama.cpp backend operation smoke.
+    #[command(name = "llama-backend-ops")]
     #[command(after_long_help = BACKEND_HELP)]
-    Llama(TestSmokeLlamaArgs),
+    LlamaBackendOps(TestSmokeLlamaArgs),
 }
 
-/// Options for `test smoke all`.
+/// Options for one smoke group.
 #[derive(Args)]
-pub struct TestSmokeAllArgs {
-    /// Model-backed smoke options shared by CLI, Rust, Node, and Python smoke tests.
-    #[command(flatten)]
-    pub model: TestSmokeModelArgs,
+pub struct TestSmokeGroupArgs {
+    /// Smoke group to run.
+    #[command(subcommand)]
+    pub target: TestSmokeGroupTarget,
+}
 
-    /// Browser smoke timeout in milliseconds.
-    #[arg(long, default_value = "30000")]
-    pub browser_timeout_ms: u64,
+/// Named smoke suite groups.
+#[derive(Subcommand)]
+pub enum TestSmokeGroupTarget {
+    /// Run Rust, Node, Python, and browser onboarding example smoke suites.
+    #[command(after_long_help = BACKEND_HELP)]
+    Examples(TestSmokeExamplesGroupArgs),
+    /// Run CLI plus Rust, Node, and Python local model smoke suites.
+    #[command(name = "local-model")]
+    #[command(after_long_help = BACKEND_HELP)]
+    LocalModel(TestSmokeModelArgs),
+    /// Run every smoke suite.
+    #[command(after_long_help = BACKEND_HELP)]
+    Full(TestSmokeFullGroupArgs),
 }
 
 /// Model-backed smoke options.
@@ -518,7 +636,7 @@ pub struct TestSmokeModelArgs {
 }
 
 /// Model-backed smoke options with query/chat case selection.
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct TestSmokeCaseArgs {
     /// Model-backed smoke options.
     #[command(flatten)]
@@ -527,6 +645,78 @@ pub struct TestSmokeCaseArgs {
     /// Example case to run. Repeat to include multiple cases.
     #[arg(long = "case", value_enum)]
     pub cases: Vec<TestSmokeCase>,
+}
+
+/// Options for browser example smoke.
+#[derive(Args)]
+pub struct TestSmokeExampleBrowserArgs {
+    /// GGUF model for browser example smoke. Defaults to .build/models.
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+
+    /// Do not download the default sample model when --model is omitted.
+    #[arg(long)]
+    pub offline: bool,
+
+    /// Prompt passed to browser query/chat examples.
+    #[arg(long, default_value = "Describe browser LLM inference.")]
+    pub prompt: String,
+
+    /// Maximum generated tokens for browser query/chat examples.
+    #[arg(long, default_value = "64")]
+    pub max_tokens: u32,
+
+    /// Browser example case to run. Repeat to include multiple cases.
+    #[arg(long = "case", value_enum)]
+    pub cases: Vec<TestSmokeCase>,
+
+    /// Host used for the examples/web Vite server.
+    #[arg(long)]
+    pub host: Option<String>,
+
+    /// Port used for the examples/web Vite server.
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Browser example smoke timeout in milliseconds.
+    #[arg(long, default_value = "30000")]
+    pub timeout_ms: u64,
+}
+
+/// Options for the examples smoke group.
+#[derive(Args)]
+pub struct TestSmokeExamplesGroupArgs {
+    /// Model-backed example options.
+    #[command(flatten)]
+    pub cases: TestSmokeCaseArgs,
+
+    /// Host used for the examples/web Vite server.
+    #[arg(long)]
+    pub browser_host: Option<String>,
+
+    /// Port used for the examples/web Vite server.
+    #[arg(long)]
+    pub browser_port: Option<u16>,
+
+    /// Browser example smoke timeout in milliseconds.
+    #[arg(long, default_value = "30000")]
+    pub browser_timeout_ms: u64,
+}
+
+/// Options for the full smoke group.
+#[derive(Args)]
+pub struct TestSmokeFullGroupArgs {
+    /// Model-backed smoke options shared by CLI and example smoke tests.
+    #[command(flatten)]
+    pub model: TestSmokeModelArgs,
+
+    /// Browser example smoke timeout in milliseconds.
+    #[arg(long, default_value = "30000")]
+    pub example_browser_timeout_ms: u64,
+
+    /// Benchmark browser smoke timeout in milliseconds.
+    #[arg(long, default_value = "30000")]
+    pub benchmark_browser_timeout_ms: u64,
 }
 
 /// Model-backed example smoke cases.
@@ -548,9 +738,9 @@ impl TestSmokeCase {
     }
 }
 
-/// Browser smoke options.
+/// Benchmark browser smoke options.
 #[derive(Args)]
-pub struct TestSmokeBrowserArgs {
+pub struct TestSmokeBenchmarkBrowserArgs {
     /// Host used for the benchmark Vite server.
     #[arg(long)]
     pub host: Option<String>,
@@ -742,8 +932,10 @@ pub enum TestSuiteId {
     PythonSmoke,
     /// Provider-backed gateway smoke tests.
     ProviderGatewaySmoke,
-    /// Browser runtime smoke tests.
-    BrowserSmoke,
+    /// Browser example smoke tests.
+    ExampleBrowserSmoke,
+    /// Benchmark browser runtime smoke tests.
+    BenchmarkBrowserSmoke,
     /// llama.cpp backend operation tests.
     LlamaBackendOps,
 }
@@ -766,7 +958,8 @@ impl TestSuiteId {
             TestSuiteId::NodeSmoke => "node-smoke",
             TestSuiteId::PythonSmoke => "python-smoke",
             TestSuiteId::ProviderGatewaySmoke => "provider-gateway-smoke",
-            TestSuiteId::BrowserSmoke => "browser-smoke",
+            TestSuiteId::ExampleBrowserSmoke => "example-browser-smoke",
+            TestSuiteId::BenchmarkBrowserSmoke => "benchmark-browser-smoke",
             TestSuiteId::LlamaBackendOps => "llama-backend-ops",
         }
     }
@@ -835,6 +1028,118 @@ impl DemoName {
             DemoName::Chat => "chat",
             DemoName::ProactiveUi => "proactive-ui",
             DemoName::Simulation => "simulation",
+        }
+    }
+}
+
+/// Example run workflows.
+#[derive(Subcommand)]
+pub enum RunExamplesCommands {
+    /// Start one long-running Vite dev or preview server.
+    Serve(RunExampleServeArgs),
+}
+
+/// Options for serving an example.
+#[derive(Args)]
+pub struct RunExampleServeArgs {
+    /// Example to serve.
+    #[arg(value_enum)]
+    pub example: ExampleName,
+
+    /// Vite server mode to run.
+    #[arg(long, value_enum, default_value = "dev")]
+    pub mode: DemoServeMode,
+
+    /// Host passed through to Vite.
+    #[arg(long)]
+    pub host: Option<String>,
+
+    /// Port passed through to Vite.
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Start the server without first building browser package artifacts.
+    #[arg(long)]
+    pub no_build: bool,
+}
+
+/// Examples known to xtask.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ExampleName {
+    /// Browser examples under examples/web.
+    Browser,
+}
+
+impl ExampleName {
+    /// Directory name under `examples`.
+    pub(crate) fn dir_name(&self) -> &'static str {
+        match self {
+            ExampleName::Browser => "web",
+        }
+    }
+
+    /// Command label used in console output.
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            ExampleName::Browser => "browser",
+        }
+    }
+}
+
+/// Benchmark run workflows.
+#[derive(Subcommand)]
+pub enum RunBenchmarksCommands {
+    /// Build one benchmark app.
+    Build(RunBenchmarkBuildArgs),
+
+    /// Start one long-running Vite dev or preview server.
+    Serve(RunBenchmarkServeArgs),
+}
+
+/// Options for building a benchmark app.
+#[derive(Args)]
+pub struct RunBenchmarkBuildArgs {
+    /// Benchmark to build.
+    #[arg(value_enum)]
+    pub benchmark: BenchmarkName,
+}
+
+/// Options for serving a benchmark app.
+#[derive(Args)]
+pub struct RunBenchmarkServeArgs {
+    /// Benchmark to serve.
+    #[arg(value_enum)]
+    pub benchmark: BenchmarkName,
+
+    /// Vite server mode to run.
+    #[arg(long, value_enum, default_value = "dev")]
+    pub mode: DemoServeMode,
+
+    /// Host passed through to Vite.
+    #[arg(long)]
+    pub host: Option<String>,
+
+    /// Port passed through to Vite.
+    #[arg(long)]
+    pub port: Option<u16>,
+
+    /// Start the server without first building browser package artifacts.
+    #[arg(long)]
+    pub no_build: bool,
+}
+
+/// Benchmarks known to xtask.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum BenchmarkName {
+    /// Browser benchmark under benchmarks/browser.
+    Browser,
+}
+
+impl BenchmarkName {
+    /// Directory name under `benchmarks`.
+    pub(crate) fn slug(&self) -> &'static str {
+        match self {
+            BenchmarkName::Browser => "browser",
         }
     }
 }

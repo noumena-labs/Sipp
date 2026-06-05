@@ -1,8 +1,9 @@
 //! Developer run workflows for long-lived demos and non-test diagnostics.
 
 use crate::cli::{
-    Backend, DemoName, DemoServeMode, LlamaBackendOpsMode, RunCommands, RunDemoServeArgs,
-    RunDemosCommands, RunLlamaBackendOpsArgs, RunLlamaCommands,
+    Backend, BenchmarkName, DemoName, DemoServeMode, ExampleName, LlamaBackendOpsMode,
+    RunBenchmarkServeArgs, RunBenchmarksCommands, RunCommands, RunDemoServeArgs, RunDemosCommands,
+    RunExampleServeArgs, RunExamplesCommands, RunLlamaBackendOpsArgs, RunLlamaCommands,
 };
 use crate::output;
 use crate::targets;
@@ -30,6 +31,8 @@ const LLAMA_BACKEND_OPS_TARGET: &str = "test-backend-ops";
 pub fn run(sh: &Shell, ctx: &BuildContext, command: RunCommands) -> Result<()> {
     match command {
         RunCommands::Demos { command } => run_demos(sh, ctx, command),
+        RunCommands::Examples { command } => run_examples(sh, ctx, command),
+        RunCommands::Benchmarks { command } => run_benchmarks(sh, ctx, command),
         RunCommands::Llama { command } => run_llama(sh, ctx, command),
     }
 }
@@ -41,12 +44,25 @@ fn run_demos(sh: &Shell, ctx: &BuildContext, command: RunDemosCommands) -> Resul
     }
 }
 
+fn run_examples(sh: &Shell, ctx: &BuildContext, command: RunExamplesCommands) -> Result<()> {
+    match command {
+        RunExamplesCommands::Serve(args) => serve_example(sh, ctx, &args),
+    }
+}
+
+fn run_benchmarks(sh: &Shell, ctx: &BuildContext, command: RunBenchmarksCommands) -> Result<()> {
+    match command {
+        RunBenchmarksCommands::Build(args) => build_one_benchmark(sh, ctx, args.benchmark),
+        RunBenchmarksCommands::Serve(args) => serve_benchmark(sh, ctx, &args),
+    }
+}
+
 fn run_llama(sh: &Shell, ctx: &BuildContext, command: RunLlamaCommands) -> Result<()> {
     match command {
         RunLlamaCommands::BackendOps(args) => {
             if matches!(args.mode, LlamaBackendOpsMode::Test) {
                 anyhow::bail!(
-                    "llama.cpp correctness checks moved to `cargo xtask test smoke llama`"
+                    "llama.cpp correctness checks moved to `cargo xtask test smoke suite llama-backend-ops`"
                 );
             }
             run_llama_backend_ops(sh, ctx, &args)
@@ -113,6 +129,132 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
         serve_cmd,
     )
     .with_context(|| format!("{} demo server failed", args.demo.slug()))
+}
+
+fn build_one_benchmark(sh: &Shell, ctx: &BuildContext, benchmark: BenchmarkName) -> Result<()> {
+    output::phase(&format!("Build benchmark: {}", benchmark.slug()));
+    ensure_workspace_bun_install(sh, ctx)?;
+    targets::wasm::build(sh, ctx)?;
+    build_benchmark_only(sh, ctx, benchmark)
+}
+
+fn build_benchmark_only(sh: &Shell, ctx: &BuildContext, benchmark: BenchmarkName) -> Result<()> {
+    let benchmark_dir = benchmark_dir(ctx, benchmark);
+    output::phase(&format!("Benchmark build: {}", benchmark.slug()));
+    output::path("Benchmark workspace", &benchmark_dir);
+    output::path(
+        "Artifact directory",
+        &ctx.benchmark_artifacts_dir(benchmark.slug()),
+    );
+
+    let _dir = sh.push_dir(&benchmark_dir);
+    output::run_command(
+        format!("Building {} benchmark", benchmark.slug()),
+        cmd!(sh, "bun run build"),
+    )
+    .with_context(|| format!("failed to build {} benchmark", benchmark.slug()))
+}
+
+fn serve_benchmark(sh: &Shell, ctx: &BuildContext, args: &RunBenchmarkServeArgs) -> Result<()> {
+    output::phase(&format!("Serve benchmark: {}", args.benchmark.slug()));
+    output::detail("Mode", args.mode.as_str());
+    output::path("Benchmark workspace", &benchmark_dir(ctx, args.benchmark));
+
+    if !args.no_build {
+        ensure_workspace_bun_install(sh, ctx)?;
+        targets::wasm::build(sh, ctx)?;
+        if matches!(args.mode, DemoServeMode::Preview) {
+            build_benchmark_only(sh, ctx, args.benchmark)?;
+        }
+    } else {
+        output::warning("Skipping browser package build before serving");
+    }
+
+    serve_vite_workspace(
+        sh,
+        &benchmark_dir(ctx, args.benchmark),
+        args.mode,
+        args.host.as_deref(),
+        args.port,
+        format!(
+            "Starting {} Vite server for {} benchmark",
+            args.mode.as_str(),
+            args.benchmark.slug()
+        ),
+        format!("{} benchmark server failed", args.benchmark.slug()),
+    )
+}
+
+fn serve_example(sh: &Shell, ctx: &BuildContext, args: &RunExampleServeArgs) -> Result<()> {
+    output::phase(&format!("Serve example: {}", args.example.label()));
+    output::detail("Mode", args.mode.as_str());
+    output::path("Example workspace", &example_dir(ctx, args.example));
+
+    if !args.no_build {
+        ensure_workspace_bun_install(sh, ctx)?;
+        targets::wasm::build(sh, ctx)?;
+        if matches!(args.mode, DemoServeMode::Preview) {
+            build_example_only(sh, ctx, args.example)?;
+        }
+    } else {
+        output::warning("Skipping browser package build before serving");
+    }
+
+    serve_vite_workspace(
+        sh,
+        &example_dir(ctx, args.example),
+        args.mode,
+        args.host.as_deref(),
+        args.port,
+        format!(
+            "Starting {} Vite server for {} example",
+            args.mode.as_str(),
+            args.example.label()
+        ),
+        format!("{} example server failed", args.example.label()),
+    )
+}
+
+fn build_example_only(sh: &Shell, ctx: &BuildContext, example: ExampleName) -> Result<()> {
+    let example_dir = example_dir(ctx, example);
+    output::phase(&format!("Example build: {}", example.label()));
+    output::path("Example workspace", &example_dir);
+    output::path(
+        "Artifact directory",
+        &ctx.example_artifacts_dir(example.dir_name()),
+    );
+
+    let _dir = sh.push_dir(&example_dir);
+    output::run_command(
+        format!("Building {} example", example.label()),
+        cmd!(sh, "bun run build"),
+    )
+    .with_context(|| format!("failed to build {} example", example.label()))
+}
+
+fn serve_vite_workspace(
+    sh: &Shell,
+    workspace: &Path,
+    mode: DemoServeMode,
+    host: Option<&str>,
+    port: Option<u16>,
+    label: String,
+    error_context: String,
+) -> Result<()> {
+    let _dir = sh.push_dir(workspace);
+    let mut serve_cmd = match mode {
+        DemoServeMode::Dev => cmd!(sh, "bunx --bun vite"),
+        DemoServeMode::Preview => cmd!(sh, "bunx --bun vite preview"),
+    };
+
+    if let Some(host) = host {
+        serve_cmd = serve_cmd.arg("--host").arg(host);
+    }
+    if let Some(port) = port {
+        serve_cmd = serve_cmd.arg("--port").arg(port.to_string());
+    }
+
+    output::run_long_command(label, serve_cmd).with_context(|| error_context)
 }
 
 pub(crate) fn run_llama_backend_ops(
@@ -220,6 +362,18 @@ fn ensure_workspace_bun_install(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         "Installing workspace Bun dependencies",
         cmd!(sh, "bun install"),
     )
+}
+
+fn example_dir(ctx: &BuildContext, example: ExampleName) -> PathBuf {
+    match example {
+        ExampleName::Browser => ctx.browser_example_dir(),
+    }
+}
+
+fn benchmark_dir(ctx: &BuildContext, benchmark: BenchmarkName) -> PathBuf {
+    match benchmark {
+        BenchmarkName::Browser => ctx.benchmark_browser_dir(),
+    }
 }
 
 fn host_binding_backends() -> &'static [Backend] {

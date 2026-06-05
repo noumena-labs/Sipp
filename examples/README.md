@@ -50,8 +50,7 @@ cargo xtask build wasm
 Then run the Vite example app:
 
 ```powershell
-cd examples/web
-bun run dev
+cargo xtask run examples serve browser
 ```
 
 Open the matching page:
@@ -66,3 +65,19 @@ Open the matching page:
 Browser gateway pages collect the alias, base URL, and token in the page because
 browser code cannot read process environment variables. The token is held only
 in memory and is not printed in the output.
+
+## Smoke Coverage
+
+Xtask smoke suites exercise the local onboarding examples:
+
+```powershell
+cargo xtask test smoke suite example-rust --case query
+cargo xtask test smoke suite example-node --case query
+cargo xtask test smoke suite example-python --case query
+cargo xtask test smoke suite example-browser --case query
+cargo xtask test smoke group examples
+```
+
+The browser example smoke runs the `query.html` and `chat.html` pages through
+Playwright against the same sample GGUF model resolution used by other model
+smoke suites.

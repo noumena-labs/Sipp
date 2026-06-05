@@ -50,6 +50,10 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
         temp.join(".build/artifacts/demos/examples")
     );
     assert_eq!(
+        ctx.example_artifacts_dir("web"),
+        temp.join(".build/artifacts/examples/web")
+    );
+    assert_eq!(
         ctx.benchmark_artifacts_dir("browser"),
         temp.join(".build/artifacts/benchmarks/browser")
     );

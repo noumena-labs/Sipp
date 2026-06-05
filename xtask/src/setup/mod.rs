@@ -290,7 +290,7 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             output::detail("Python API tests", "clm test unit python --backend cpu");
             output::detail(
                 "Model smoke",
-                format!("clm test smoke model --backend cpu --model {model}"),
+                format!("clm test smoke group local-model --backend cpu --model {model}"),
             );
         }
         SetupProfile::Full => {
@@ -300,7 +300,7 @@ fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
             output::detail("Run unit tests", "clm test unit");
             output::detail(
                 "Run smoke tests",
-                format!("clm test smoke all --backend cpu --model {model}"),
+                format!("clm test smoke group full --backend cpu --model {model}"),
             );
         }
     }

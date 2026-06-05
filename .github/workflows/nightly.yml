@@ -119,4 +119,4 @@ jobs:
       - name: Run full test workflow
         run: |
           cargo xtask --plain test unit
-          cargo xtask --plain test smoke all --backend cpu
+          cargo xtask --plain test smoke group full --backend cpu

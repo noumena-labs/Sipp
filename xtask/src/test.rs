@@ -2,9 +2,11 @@
 
 use crate::cli::{
     Backend, LlamaBackendOpsMode, LlamaBackendOpsOutput, RunLlamaBackendOpsArgs, TestCommands,
-    TestGroupFilter, TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBrowserArgs,
-    TestSmokeCase, TestSmokeCaseArgs, TestSmokeLlamaArgs, TestSmokeModelArgs, TestSmokeTarget,
-    TestSuiteId, TestUnitArgs, TestUnitLayer, TestUnitTarget, TestVerifyArgs, TestVerifyTarget,
+    TestGroupFilter, TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBenchmarkBrowserArgs,
+    TestSmokeCase, TestSmokeCaseArgs, TestSmokeCommands, TestSmokeExampleBrowserArgs,
+    TestSmokeExamplesGroupArgs, TestSmokeFullGroupArgs, TestSmokeGroupTarget, TestSmokeLlamaArgs,
+    TestSmokeModelArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitLayer,
+    TestUnitTarget, TestVerifyArgs, TestVerifyTarget,
 };
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
@@ -120,6 +122,8 @@ const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/rust/src"];
 const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "lib/node"];
 const PYTHON_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/python", "lib/python"];
+const BROWSER_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/web", "lib/web/src"];
+const BROWSER_BENCHMARK_SMOKE_SOURCE_ROOTS: &[&str] = &["benchmarks/browser"];
 const PROVIDER_GATEWAY_SMOKE_SOURCE_ROOTS: &[&str] =
     &["crates/gateway/src", "crates/gateway-providers/src"];
 
@@ -293,15 +297,27 @@ const TEST_SUITES: &[TestSuite] = &[
         discoverer: CaseDiscoverer::RustTargets(PROVIDER_GATEWAY_SMOKE_TARGETS),
     },
     TestSuite {
-        id: TestSuiteId::BrowserSmoke,
+        id: TestSuiteId::ExampleBrowserSmoke,
         group: TestGroup::Smoke,
         layer: None,
-        description: "Playwright browser runtime smoke",
+        description: "Browser query/chat example smoke under examples/web",
+        requirements: "sample GGUF model, bun, wasm build, playwright chromium",
+        source_roots: BROWSER_EXAMPLE_SMOKE_SOURCE_ROOTS,
+        coverage: false,
+        backend_policy: BackendPolicy::ConcreteOnly,
+        runner: SuiteRunner::ExampleBrowserSmoke,
+        discoverer: CaseDiscoverer::None,
+    },
+    TestSuite {
+        id: TestSuiteId::BenchmarkBrowserSmoke,
+        group: TestGroup::Smoke,
+        layer: None,
+        description: "Benchmark browser runtime smoke under benchmarks/browser",
         requirements: "bun, wasm build, playwright chromium",
-        source_roots: &["benchmarks/browser/src"],
+        source_roots: BROWSER_BENCHMARK_SMOKE_SOURCE_ROOTS,
         coverage: false,
         backend_policy: BackendPolicy::None,
-        runner: SuiteRunner::BrowserSmoke,
+        runner: SuiteRunner::BenchmarkBrowserSmoke,
         discoverer: CaseDiscoverer::None,
     },
     TestSuite {
@@ -361,7 +377,8 @@ fn run_unit(sh: &Shell, ctx: &BuildContext, args: &TestUnitArgs) -> Result<()> {
         max_tokens: DEFAULT_SMOKE_MAX_TOKENS,
         temperature: DEFAULT_SMOKE_TEMPERATURE,
         cases: &[],
-        browser: BrowserSmokeRunOptions::default(),
+        example_browser: BrowserSmokeRunOptions::default(),
+        benchmark_browser: BrowserSmokeRunOptions::default(),
         llama: LlamaBackendOpsRunOptions::default(),
     };
 
@@ -378,10 +395,18 @@ fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()>
     let selection = selected_smoke_suites(args)?;
     validate_suite_backends(&selection.suites, selection.backend)?;
 
-    let browser = BrowserSmokeRunOptions {
+    let example_browser = BrowserSmokeRunOptions {
         host: selection.browser_host.as_deref(),
         port: selection.browser_port,
-        timeout_ms: selection.browser_timeout_ms,
+        timeout_ms: selection.example_browser_timeout_ms,
+        require_rust_engine: false,
+        require_gguf_ingest: false,
+        require_webgpu: false,
+    };
+    let benchmark_browser = BrowserSmokeRunOptions {
+        host: selection.browser_host.as_deref(),
+        port: selection.browser_port,
+        timeout_ms: selection.benchmark_browser_timeout_ms,
         require_rust_engine: selection.require_rust_engine,
         require_gguf_ingest: selection.require_gguf_ingest,
         require_webgpu: selection.require_webgpu,
@@ -401,7 +426,8 @@ fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()>
         max_tokens: selection.max_tokens,
         temperature: selection.temperature,
         cases: &selection.cases,
-        browser,
+        example_browser,
+        benchmark_browser,
         llama,
     };
 
@@ -489,8 +515,11 @@ fn run_suite(
         SuiteRunner::RustSmoke => run_rust_model_smoke(sh, ctx, options),
         SuiteRunner::NodeSmoke => run_node_model_smoke(sh, ctx, options),
         SuiteRunner::PythonSmoke => run_python_model_smoke(sh, ctx, options),
+        SuiteRunner::ExampleBrowserSmoke => run_browser_example_smoke(sh, ctx, options),
         SuiteRunner::ProviderGatewaySmoke => run_provider_gateway_smoke(sh, ctx),
-        SuiteRunner::BrowserSmoke => run_browser_runtime_smoke(sh, ctx, &options.browser),
+        SuiteRunner::BenchmarkBrowserSmoke => {
+            run_benchmark_browser_runtime_smoke(sh, ctx, &options.benchmark_browser)
+        }
         SuiteRunner::LlamaBackendOps => {
             run_llama_backend_ops_suite(sh, ctx, &options.backend, &options.llama)
         }
@@ -733,12 +762,52 @@ fn run_python_model_smoke(
     run_python_generation_smoke(sh, ctx, &model, options)
 }
 
-fn run_browser_runtime_smoke(
+fn run_browser_example_smoke(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: &SuiteRunOptions<'_>,
+) -> Result<()> {
+    output::phase("Browser example smoke");
+    let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
+    output::path("Model", &model);
+    ensure_workspace_bun_install(sh, ctx)?;
+    targets::wasm::build(sh, ctx)?;
+    ensure_playwright_chromium(sh, ctx)?;
+
+    let example_dir = ctx.browser_example_dir();
+    output::path("Example workspace", &example_dir);
+    output::path("Artifact directory", &ctx.example_artifacts_dir("web"));
+    let _example_dir = sh.push_dir(&example_dir);
+    let timeout_ms = options.example_browser.timeout_ms.to_string();
+    let max_tokens = options.max_tokens.to_string();
+    let mut smoke_cmd = cmd!(sh, "node scripts/browser-example-smoke.mjs")
+        .arg("--model")
+        .arg(model)
+        .arg("--prompt")
+        .arg(options.prompt)
+        .arg("--max-tokens")
+        .arg(max_tokens)
+        .arg("--timeout-ms")
+        .arg(timeout_ms)
+        .env("PLAYWRIGHT_BROWSERS_PATH", ctx.playwright_browsers_dir());
+    if let Some(host) = options.example_browser.host {
+        smoke_cmd = smoke_cmd.arg("--host").arg(host);
+    }
+    if let Some(port) = options.example_browser.port {
+        smoke_cmd = smoke_cmd.arg("--port").arg(port.to_string());
+    }
+    for case in selected_smoke_cases(options.cases) {
+        smoke_cmd = smoke_cmd.arg("--case").arg(case.as_str());
+    }
+    output::run_command("Running browser example smoke", smoke_cmd)
+}
+
+fn run_benchmark_browser_runtime_smoke(
     sh: &Shell,
     ctx: &BuildContext,
     options: &BrowserSmokeRunOptions<'_>,
 ) -> Result<()> {
-    output::phase("Browser runtime smoke");
+    output::phase("Benchmark browser runtime smoke");
     ensure_workspace_bun_install(sh, ctx)?;
     targets::wasm::build(sh, ctx)?;
     ensure_playwright_chromium(sh, ctx)?;
@@ -1223,7 +1292,8 @@ fn coverage_report_areas(suites: &[&TestSuite]) -> CoverageReportAreas {
             | SuiteRunner::NodeSmoke
             | SuiteRunner::PythonSmoke
             | SuiteRunner::ProviderGatewaySmoke
-            | SuiteRunner::BrowserSmoke
+            | SuiteRunner::ExampleBrowserSmoke
+            | SuiteRunner::BenchmarkBrowserSmoke
             | SuiteRunner::LlamaBackendOps => {}
         }
     }
@@ -1746,85 +1816,75 @@ fn selected_unit_suites(args: &TestUnitArgs) -> Result<UnitSelection> {
 
 fn selected_smoke_suites(args: &TestSmokeArgs) -> Result<SmokeSelection> {
     let mut selection = SmokeSelection::default();
-    match &args.target {
-        TestSmokeTarget::All(args) => {
-            selection.suites = vec![
-                suite_by_id(TestSuiteId::CliSmoke)?,
-                suite_by_id(TestSuiteId::RustSmoke)?,
-                suite_by_id(TestSuiteId::NodeSmoke)?,
-                suite_by_id(TestSuiteId::PythonSmoke)?,
-                suite_by_id(TestSuiteId::ProviderGatewaySmoke)?,
-                suite_by_id(TestSuiteId::BrowserSmoke)?,
-                suite_by_id(TestSuiteId::LlamaBackendOps)?,
-            ];
-            selection.apply_model_args(&args.model);
-            selection.browser_timeout_ms = args.browser_timeout_ms;
-            selection.filters = smoke_filters(
-                "all",
-                &args.model,
-                &[],
-                json!({
-                    "browserTimeoutMs": args.browser_timeout_ms,
-                }),
-            );
+    match &args.command {
+        TestSmokeCommands::Suite(args) => {
+            apply_smoke_suite_selection(&mut selection, &args.target)?
         }
-        TestSmokeTarget::Cli(args) => {
+        TestSmokeCommands::Group(args) => {
+            apply_smoke_group_selection(&mut selection, &args.target)?
+        }
+    }
+    Ok(selection)
+}
+
+fn apply_smoke_suite_selection(
+    selection: &mut SmokeSelection,
+    target: &TestSmokeSuiteTarget,
+) -> Result<()> {
+    match target {
+        TestSmokeSuiteTarget::Cli(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::CliSmoke)?];
             selection.apply_model_args(args);
-            selection.filters = smoke_filters("cli", args, &[], json!({}));
+            selection.filters = smoke_filters("suite", "cli", args, &[], json!({}));
         }
-        TestSmokeTarget::Rust(args) => {
+        TestSmokeSuiteTarget::ExampleRust(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustSmoke)?];
             selection.apply_case_args(args);
-            selection.filters = smoke_filters("rust", &args.model, &args.cases, json!({}));
+            selection.filters =
+                smoke_filters("suite", "example-rust", &args.model, &args.cases, json!({}));
         }
-        TestSmokeTarget::Node(args) => {
+        TestSmokeSuiteTarget::ExampleNode(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::NodeSmoke)?];
             selection.apply_case_args(args);
-            selection.filters = smoke_filters("node", &args.model, &args.cases, json!({}));
+            selection.filters =
+                smoke_filters("suite", "example-node", &args.model, &args.cases, json!({}));
         }
-        TestSmokeTarget::Python(args) => {
+        TestSmokeSuiteTarget::ExamplePython(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::PythonSmoke)?];
             selection.apply_case_args(args);
-            selection.filters = smoke_filters("python", &args.model, &args.cases, json!({}));
+            selection.filters = smoke_filters(
+                "suite",
+                "example-python",
+                &args.model,
+                &args.cases,
+                json!({}),
+            );
         }
-        TestSmokeTarget::Model(args) => {
-            selection.suites = vec![
-                suite_by_id(TestSuiteId::CliSmoke)?,
-                suite_by_id(TestSuiteId::RustSmoke)?,
-                suite_by_id(TestSuiteId::NodeSmoke)?,
-                suite_by_id(TestSuiteId::PythonSmoke)?,
-            ];
-            selection.apply_model_args(args);
-            selection.filters = smoke_filters("model", args, &[], json!({}));
+        TestSmokeSuiteTarget::ExampleBrowser(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::ExampleBrowserSmoke)?];
+            selection.apply_example_browser_args(args);
+            selection.filters = browser_example_filters("suite", "example-browser", args);
         }
-        TestSmokeTarget::ProviderGateway => {
+        TestSmokeSuiteTarget::BenchmarkBrowser(args) => {
+            selection.suites = vec![suite_by_id(TestSuiteId::BenchmarkBrowserSmoke)?];
+            selection.apply_benchmark_browser_args(args);
+            selection.filters = benchmark_browser_filters("suite", "benchmark-browser", args);
+        }
+        TestSmokeSuiteTarget::ProviderGateway => {
             selection.suites = vec![suite_by_id(TestSuiteId::ProviderGatewaySmoke)?];
             selection.filters = json!({
                 "command": "smoke",
+                "namespace": "suite",
                 "target": "provider-gateway",
             });
         }
-        TestSmokeTarget::Browser(args) => {
-            selection.suites = vec![suite_by_id(TestSuiteId::BrowserSmoke)?];
-            selection.apply_browser_args(args);
-            selection.filters = json!({
-                "command": "smoke",
-                "target": "browser",
-                "host": args.host.as_deref(),
-                "port": args.port,
-                "timeoutMs": args.timeout_ms,
-                "requireRustEngine": args.require_rust_engine,
-                "requireGgufIngest": args.require_gguf_ingest,
-                "requireWebgpu": args.require_webgpu,
-            });
-        }
-        TestSmokeTarget::Llama(args) => {
+        TestSmokeSuiteTarget::LlamaBackendOps(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::LlamaBackendOps)?];
             selection.apply_llama_args(args);
             selection.filters = json!({
                 "command": "smoke",
-                "target": "llama",
+                "namespace": "suite",
+                "target": "llama-backend-ops",
                 "backend": args.backend.as_str(),
                 "mode": args.mode.as_str(),
                 "op": args.op.as_deref(),
@@ -1833,7 +1893,94 @@ fn selected_smoke_suites(args: &TestSmokeArgs) -> Result<SmokeSelection> {
             });
         }
     }
-    Ok(selection)
+    Ok(())
+}
+
+fn apply_smoke_group_selection(
+    selection: &mut SmokeSelection,
+    target: &TestSmokeGroupTarget,
+) -> Result<()> {
+    match target {
+        TestSmokeGroupTarget::Examples(args) => apply_examples_group_selection(selection, args),
+        TestSmokeGroupTarget::LocalModel(args) => {
+            selection.suites = local_model_smoke_suites()?;
+            selection.apply_model_args(args);
+            selection.filters = smoke_filters("group", "local-model", args, &[], json!({}));
+            Ok(())
+        }
+        TestSmokeGroupTarget::Full(args) => apply_full_group_selection(selection, args),
+    }
+}
+
+fn apply_examples_group_selection(
+    selection: &mut SmokeSelection,
+    args: &TestSmokeExamplesGroupArgs,
+) -> Result<()> {
+    selection.suites = example_smoke_suites()?;
+    selection.apply_case_args(&args.cases);
+    selection.browser_host = args.browser_host.clone();
+    selection.browser_port = args.browser_port;
+    selection.example_browser_timeout_ms = args.browser_timeout_ms;
+    selection.filters = smoke_filters(
+        "group",
+        "examples",
+        &args.cases.model,
+        &args.cases.cases,
+        json!({
+            "browserHost": args.browser_host.as_deref(),
+            "browserPort": args.browser_port,
+            "browserTimeoutMs": args.browser_timeout_ms,
+        }),
+    );
+    Ok(())
+}
+
+fn apply_full_group_selection(
+    selection: &mut SmokeSelection,
+    args: &TestSmokeFullGroupArgs,
+) -> Result<()> {
+    selection.suites = vec![
+        suite_by_id(TestSuiteId::CliSmoke)?,
+        suite_by_id(TestSuiteId::RustSmoke)?,
+        suite_by_id(TestSuiteId::NodeSmoke)?,
+        suite_by_id(TestSuiteId::PythonSmoke)?,
+        suite_by_id(TestSuiteId::ExampleBrowserSmoke)?,
+        suite_by_id(TestSuiteId::BenchmarkBrowserSmoke)?,
+        suite_by_id(TestSuiteId::ProviderGatewaySmoke)?,
+        suite_by_id(TestSuiteId::LlamaBackendOps)?,
+    ];
+    selection.apply_model_args(&args.model);
+    selection.example_browser_timeout_ms = args.example_browser_timeout_ms;
+    selection.benchmark_browser_timeout_ms = args.benchmark_browser_timeout_ms;
+    selection.filters = smoke_filters(
+        "group",
+        "full",
+        &args.model,
+        &[],
+        json!({
+            "exampleBrowserTimeoutMs": args.example_browser_timeout_ms,
+            "benchmarkBrowserTimeoutMs": args.benchmark_browser_timeout_ms,
+        }),
+    );
+    Ok(())
+}
+
+fn local_model_smoke_suites() -> Result<Vec<&'static TestSuite>> {
+    Ok(vec![
+        suite_by_id(TestSuiteId::CliSmoke)?,
+        suite_by_id(TestSuiteId::RustSmoke)?,
+        suite_by_id(TestSuiteId::NodeSmoke)?,
+        suite_by_id(TestSuiteId::PythonSmoke)?,
+    ])
+}
+
+fn example_smoke_suites() -> Result<Vec<&'static TestSuite>> {
+    Ok(vec![
+        suite_by_id(TestSuiteId::RustSmoke)?,
+        suite_by_id(TestSuiteId::NodeSmoke)?,
+        suite_by_id(TestSuiteId::PythonSmoke)?,
+        suite_by_id(TestSuiteId::ExampleBrowserSmoke)?,
+    ])
 }
 
 fn selected_verify_suites(args: &TestVerifyArgs) -> Result<Vec<&'static TestSuite>> {
@@ -1913,6 +2060,7 @@ fn unit_target_filters(target: &str) -> Value {
 }
 
 fn smoke_filters(
+    namespace: &str,
     target: &str,
     args: &TestSmokeModelArgs,
     cases: &[TestSmokeCase],
@@ -1920,6 +2068,7 @@ fn smoke_filters(
 ) -> Value {
     json!({
         "command": "smoke",
+        "namespace": namespace,
         "target": target,
         "backend": args.backend.as_str(),
         "model": args.model.as_ref().map(|model| model.display().to_string()),
@@ -1929,6 +2078,44 @@ fn smoke_filters(
         "temperature": args.temperature,
         "cases": cases.iter().map(TestSmokeCase::as_str).collect::<Vec<_>>(),
         "extra": extra,
+    })
+}
+
+fn benchmark_browser_filters(
+    namespace: &str,
+    target: &str,
+    args: &TestSmokeBenchmarkBrowserArgs,
+) -> Value {
+    json!({
+        "command": "smoke",
+        "namespace": namespace,
+        "target": target,
+        "host": args.host.as_deref(),
+        "port": args.port,
+        "timeoutMs": args.timeout_ms,
+        "requireRustEngine": args.require_rust_engine,
+        "requireGgufIngest": args.require_gguf_ingest,
+        "requireWebgpu": args.require_webgpu,
+    })
+}
+
+fn browser_example_filters(
+    namespace: &str,
+    target: &str,
+    args: &TestSmokeExampleBrowserArgs,
+) -> Value {
+    json!({
+        "command": "smoke",
+        "namespace": namespace,
+        "target": target,
+        "model": args.model.as_ref().map(|model| model.display().to_string()),
+        "offline": args.offline,
+        "prompt": args.prompt.as_str(),
+        "maxTokens": args.max_tokens,
+        "cases": args.cases.iter().map(TestSmokeCase::as_str).collect::<Vec<_>>(),
+        "host": args.host.as_deref(),
+        "port": args.port,
+        "timeoutMs": args.timeout_ms,
     })
 }
 
@@ -2630,7 +2817,8 @@ fn coverage_artifacts_for_suite(ctx: &BuildContext, suite: &TestSuite) -> Vec<St
         | SuiteRunner::NodeSmoke
         | SuiteRunner::PythonSmoke
         | SuiteRunner::ProviderGatewaySmoke
-        | SuiteRunner::BrowserSmoke
+        | SuiteRunner::ExampleBrowserSmoke
+        | SuiteRunner::BenchmarkBrowserSmoke
         | SuiteRunner::LlamaBackendOps => Vec::new(),
     };
     artifacts
@@ -2742,8 +2930,9 @@ enum SuiteRunner {
     RustSmoke,
     NodeSmoke,
     PythonSmoke,
+    ExampleBrowserSmoke,
     ProviderGatewaySmoke,
-    BrowserSmoke,
+    BenchmarkBrowserSmoke,
     LlamaBackendOps,
 }
 
@@ -2852,7 +3041,8 @@ struct SmokeSelection {
     cases: Vec<TestSmokeCase>,
     browser_host: Option<String>,
     browser_port: Option<u16>,
-    browser_timeout_ms: u64,
+    example_browser_timeout_ms: u64,
+    benchmark_browser_timeout_ms: u64,
     require_rust_engine: bool,
     require_gguf_ingest: bool,
     require_webgpu: bool,
@@ -2876,7 +3066,8 @@ impl Default for SmokeSelection {
             cases: Vec::new(),
             browser_host: None,
             browser_port: None,
-            browser_timeout_ms: 30_000,
+            example_browser_timeout_ms: 30_000,
+            benchmark_browser_timeout_ms: 30_000,
             require_rust_engine: false,
             require_gguf_ingest: false,
             require_webgpu: false,
@@ -2904,10 +3095,21 @@ impl SmokeSelection {
         self.cases = args.cases.clone();
     }
 
-    fn apply_browser_args(&mut self, args: &TestSmokeBrowserArgs) {
+    fn apply_example_browser_args(&mut self, args: &TestSmokeExampleBrowserArgs) {
+        self.model = args.model.clone();
+        self.offline = args.offline;
+        self.prompt = args.prompt.clone();
+        self.max_tokens = args.max_tokens;
+        self.cases = args.cases.clone();
         self.browser_host = args.host.clone();
         self.browser_port = args.port;
-        self.browser_timeout_ms = args.timeout_ms;
+        self.example_browser_timeout_ms = args.timeout_ms;
+    }
+
+    fn apply_benchmark_browser_args(&mut self, args: &TestSmokeBenchmarkBrowserArgs) {
+        self.browser_host = args.host.clone();
+        self.browser_port = args.port;
+        self.benchmark_browser_timeout_ms = args.timeout_ms;
         self.require_rust_engine = args.require_rust_engine;
         self.require_gguf_ingest = args.require_gguf_ingest;
         self.require_webgpu = args.require_webgpu;
@@ -2931,7 +3133,8 @@ struct SuiteRunOptions<'a> {
     max_tokens: u32,
     temperature: f32,
     cases: &'a [TestSmokeCase],
-    browser: BrowserSmokeRunOptions<'a>,
+    example_browser: BrowserSmokeRunOptions<'a>,
+    benchmark_browser: BrowserSmokeRunOptions<'a>,
     llama: LlamaBackendOpsRunOptions<'a>,
 }
 

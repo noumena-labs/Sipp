@@ -48,7 +48,7 @@ change.
   ```
 - Run model-backed Node smoke when local inference behavior changed:
   ```bash
-  cargo xtask test smoke node --backend cpu
+  cargo xtask test smoke suite example-node --backend cpu
   ```
 
 ### 4. Browser Package And Demos (`lib/web/`, `demos/`)
@@ -68,21 +68,25 @@ change.
   ```
 - Run model-backed Python smoke when local inference behavior changed:
   ```bash
-  cargo xtask test smoke python --backend cpu
+  cargo xtask test smoke suite example-python --backend cpu
   ```
 
 ### 6. Browser and holistic smoke checks
-- Run browser runtime smoke:
+- Run browser example smoke:
   ```bash
-  cargo xtask test smoke browser
+  cargo xtask test smoke suite example-browser
+  ```
+- Run browser benchmark runtime smoke:
+  ```bash
+  cargo xtask test smoke suite benchmark-browser
   ```
 - Run CLI, Rust, Node, and Python model-backed smoke:
   ```bash
-  cargo xtask test smoke model --backend cpu
+  cargo xtask test smoke group local-model --backend cpu
   ```
 - Run llama.cpp backend correctness smoke:
   ```bash
-  cargo xtask test smoke llama --backend cpu
+  cargo xtask test smoke suite llama-backend-ops --backend cpu
   ```
 
 ### 7. Coverage and verification

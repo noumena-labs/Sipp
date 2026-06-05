@@ -9,8 +9,10 @@ use clap::Parser;
 
 use crate::cli::{
     Backend, Cli, Commands, LlamaBackendOpsMode, RunCommands, RunLlamaCommands, TestCommands,
-    TestSmokeArgs, TestSmokeCase, TestSmokeModelArgs, TestSmokeTarget, TestSuiteId, TestUnitArgs,
-    TestUnitLayer, TestUnitTarget, TestVerifyArgs, TestVerifyTarget,
+    TestSmokeArgs, TestSmokeCase, TestSmokeCaseArgs, TestSmokeCommands, TestSmokeExamplesGroupArgs,
+    TestSmokeFullGroupArgs, TestSmokeGroupArgs, TestSmokeGroupTarget, TestSmokeModelArgs,
+    TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitLayer,
+    TestUnitTarget, TestVerifyArgs, TestVerifyTarget,
 };
 use crate::test_support::TempDir;
 use crate::utils::BuildContext;
@@ -95,7 +97,8 @@ fn test_smoke_accepts_node_model_options_and_cases() {
         "xtask",
         "test",
         "smoke",
-        "node",
+        "suite",
+        "example-node",
         "--backend",
         "cpu",
         "--model",
@@ -116,7 +119,10 @@ fn test_smoke_accepts_node_model_options_and_cases() {
     let TestCommands::Smoke(args) = command else {
         panic!("expected smoke command");
     };
-    let TestSmokeTarget::Node(args) = args.target else {
+    let TestSmokeCommands::Suite(args) = args.command else {
+        panic!("expected smoke suite command");
+    };
+    let TestSmokeSuiteTarget::ExampleNode(args) = args.target else {
         panic!("expected node smoke target");
     };
     assert_eq!(args.model.backend, Backend::Cpu);
@@ -132,7 +138,7 @@ fn test_smoke_accepts_node_model_options_and_cases() {
 
 #[test]
 fn test_smoke_accepts_provider_gateway_target() {
-    let cli = Cli::parse_from(["xtask", "test", "smoke", "provider-gateway"]);
+    let cli = Cli::parse_from(["xtask", "test", "smoke", "suite", "provider-gateway"]);
 
     let Commands::Test { command } = cli.command else {
         panic!("expected test command");
@@ -140,7 +146,12 @@ fn test_smoke_accepts_provider_gateway_target() {
     let TestCommands::Smoke(args) = command else {
         panic!("expected smoke command");
     };
-    assert!(matches!(args.target, TestSmokeTarget::ProviderGateway));
+    assert!(matches!(
+        args.command,
+        TestSmokeCommands::Suite(TestSmokeSuiteArgs {
+            target: TestSmokeSuiteTarget::ProviderGateway
+        })
+    ));
 }
 
 #[test]
@@ -207,7 +218,7 @@ fn empty_unit_selection_selects_every_unit_suite() {
 }
 
 #[test]
-fn smoke_model_and_all_targets_expand_to_primitive_smoke_suites() {
+fn smoke_groups_expand_to_expected_suites() {
     let model_args = TestSmokeModelArgs {
         backend: Backend::Cpu,
         model: None,
@@ -216,12 +227,14 @@ fn smoke_model_and_all_targets_expand_to_primitive_smoke_suites() {
         max_tokens: 1,
         temperature: 0.0,
     };
-    let model = selected_smoke_suites(&TestSmokeArgs {
-        target: TestSmokeTarget::Model(model_args.clone()),
+    let local_model = selected_smoke_suites(&TestSmokeArgs {
+        command: TestSmokeCommands::Group(TestSmokeGroupArgs {
+            target: TestSmokeGroupTarget::LocalModel(model_args.clone()),
+        }),
     })
     .unwrap();
     assert_eq!(
-        model
+        local_model
             .suites
             .iter()
             .map(|suite| suite.id)
@@ -234,10 +247,42 @@ fn smoke_model_and_all_targets_expand_to_primitive_smoke_suites() {
         ]
     );
 
+    let examples = selected_smoke_suites(&TestSmokeArgs {
+        command: TestSmokeCommands::Group(TestSmokeGroupArgs {
+            target: TestSmokeGroupTarget::Examples(TestSmokeExamplesGroupArgs {
+                cases: TestSmokeCaseArgs {
+                    model: model_args.clone(),
+                    cases: vec![TestSmokeCase::Query],
+                },
+                browser_host: None,
+                browser_port: None,
+                browser_timeout_ms: 30_000,
+            }),
+        }),
+    })
+    .unwrap();
+    assert_eq!(
+        examples
+            .suites
+            .iter()
+            .map(|suite| suite.id)
+            .collect::<Vec<_>>(),
+        vec![
+            TestSuiteId::RustSmoke,
+            TestSuiteId::NodeSmoke,
+            TestSuiteId::PythonSmoke,
+            TestSuiteId::ExampleBrowserSmoke
+        ]
+    );
+    assert_eq!(examples.cases, vec![TestSmokeCase::Query]);
+
     let all = selected_smoke_suites(&TestSmokeArgs {
-        target: TestSmokeTarget::All(crate::cli::TestSmokeAllArgs {
-            model: model_args,
-            browser_timeout_ms: 30_000,
+        command: TestSmokeCommands::Group(TestSmokeGroupArgs {
+            target: TestSmokeGroupTarget::Full(TestSmokeFullGroupArgs {
+                model: model_args,
+                example_browser_timeout_ms: 30_000,
+                benchmark_browser_timeout_ms: 30_000,
+            }),
         }),
     })
     .unwrap();
@@ -248,8 +293,9 @@ fn smoke_model_and_all_targets_expand_to_primitive_smoke_suites() {
             TestSuiteId::RustSmoke,
             TestSuiteId::NodeSmoke,
             TestSuiteId::PythonSmoke,
+            TestSuiteId::ExampleBrowserSmoke,
+            TestSuiteId::BenchmarkBrowserSmoke,
             TestSuiteId::ProviderGatewaySmoke,
-            TestSuiteId::BrowserSmoke,
             TestSuiteId::LlamaBackendOps
         ]
     );
@@ -383,6 +429,15 @@ fn old_test_commands_are_rejected() {
     assert!(Cli::try_parse_from(["xtask", "test", "whitebox"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "interface"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "coverage"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "all"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "model"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "browser"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "rust"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "node"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "python"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "cli"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "provider-gateway"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "llama"]).is_err());
 }
 
 #[test]
@@ -425,12 +480,24 @@ fn old_run_test_commands_are_rejected() {
 }
 
 #[test]
-fn run_keeps_demo_and_llama_groups() {
+fn run_keeps_demo_example_benchmark_and_llama_groups() {
     let cli = Cli::parse_from(["xtask", "run", "demos", "build", "chat"]);
     let Commands::Run { command } = cli.command else {
         panic!("expected run command");
     };
     assert!(matches!(command, RunCommands::Demos { .. }));
+
+    let cli = Cli::parse_from(["xtask", "run", "examples", "serve", "browser"]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    assert!(matches!(command, RunCommands::Examples { .. }));
+
+    let cli = Cli::parse_from(["xtask", "run", "benchmarks", "build", "browser"]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    assert!(matches!(command, RunCommands::Benchmarks { .. }));
 
     let cli = Cli::parse_from(["xtask", "run", "llama", "backend-ops"]);
     let Commands::Run { command } = cli.command else {

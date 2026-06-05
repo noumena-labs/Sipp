@@ -5,8 +5,8 @@
 
 use xtask::cli::{
     Backend, BackendArgs, BuildCommands, CleanArgs, Commands, TestCommands, TestGroupFilter,
-    TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBrowserArgs, TestSmokeTarget,
-    TestUnitArgs, TestVerifyArgs, TestVerifyTarget,
+    TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeBenchmarkBrowserArgs, TestSmokeCommands,
+    TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestUnitArgs, TestVerifyArgs, TestVerifyTarget,
 };
 
 use super::{backend_summary, build_summary, command_summary, test_summary};
@@ -47,13 +47,15 @@ fn test_summary_labels_test_subcommands() {
     );
     assert_eq!(
         test_summary(&TestCommands::Smoke(TestSmokeArgs {
-            target: TestSmokeTarget::Browser(TestSmokeBrowserArgs {
-                host: None,
-                port: None,
-                timeout_ms: 30_000,
-                require_rust_engine: false,
-                require_gguf_ingest: false,
-                require_webgpu: false,
+            command: TestSmokeCommands::Suite(TestSmokeSuiteArgs {
+                target: TestSmokeSuiteTarget::BenchmarkBrowser(TestSmokeBenchmarkBrowserArgs {
+                    host: None,
+                    port: None,
+                    timeout_ms: 30_000,
+                    require_rust_engine: false,
+                    require_gguf_ingest: false,
+                    require_webgpu: false,
+                }),
             }),
         })),
         "Run smoke tests"

@@ -17,17 +17,23 @@ It supports:
 From the monorepo root:
 
 ```bash
-bun run benchmark:dev
+cargo xtask run benchmarks serve browser
 ```
 
-`benchmark:dev` builds the browser WebGPU ingest package first: wasm32 WebGPU
-with the Rust GGUF ingest splitter linked by Emscripten. Large monolithic GGUF
-files are split into OPFS-backed shards on the browser path.
+`run benchmarks serve browser` builds the browser WebGPU ingest package first:
+wasm32 WebGPU with the Rust GGUF ingest splitter linked by Emscripten. Large
+monolithic GGUF files are split into OPFS-backed shards on the browser path.
 
 For a production build:
 
 ```bash
-bun run benchmark:build
+cargo xtask run benchmarks build browser
+```
+
+For the automated benchmark runtime smoke:
+
+```bash
+cargo xtask test smoke suite benchmark-browser
 ```
 
 ## Automation
