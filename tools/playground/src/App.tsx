@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   CogentClient,
   type BrowserRuntimeSmokeResult,
@@ -7,7 +7,22 @@ import {
   type ObservabilitySnapshot,
   type TokenBatch,
 } from '@noumena-labs/cogentlm';
+import {
+  Activity,
+  BarChart3,
+  Cpu,
+  Database,
+  Download,
+  FileJson,
+  Gauge,
+  Play,
+  Settings2,
+  TerminalSquare,
+} from 'lucide-react';
 import { MetricCard } from './components/MetricCard';
+import { Panel } from './components/Panel';
+import { SegmentedControl } from './components/SegmentedControl';
+import { StatusBadge } from './components/StatusBadge';
 import {
   buildBenchmarkScenarios,
   buildBenchmarkBackendProfile,
@@ -256,6 +271,31 @@ const DEFAULT_QUERY_PROMPT = 'Describe how to benchmark browser-hosted inference
 const ENCODER_DECODER_QUERY_PROMPT = 'translate English to German: The house is wonderful.';
 const DEFAULT_TOKEN_COUNT = 64;
 const ENCODER_DECODER_TOKEN_COUNT = 32;
+type ModelSourceType = 'registry' | 'url' | 'file';
+type PlaygroundView = 'request' | 'benchmarks' | 'observability' | 'report';
+
+const MODEL_SOURCE_OPTIONS: readonly { readonly label: string; readonly value: ModelSourceType }[] = [
+  { label: 'Library', value: 'registry' },
+  { label: 'URL', value: 'url' },
+  { label: 'Local File', value: 'file' },
+];
+
+const OPERATION_OPTIONS: readonly { readonly label: string; readonly value: BenchmarkOperation }[] = [
+  { label: 'Chat', value: 'chat' },
+  { label: 'Query', value: 'query' },
+  { label: 'Embed', value: 'embed' },
+];
+
+const VIEW_OPTIONS: readonly {
+  readonly icon: typeof Activity;
+  readonly label: string;
+  readonly value: PlaygroundView;
+}[] = [
+  { icon: TerminalSquare, label: 'Request', value: 'request' },
+  { icon: BarChart3, label: 'Benchmarks', value: 'benchmarks' },
+  { icon: Activity, label: 'Observability', value: 'observability' },
+  { icon: FileJson, label: 'Report', value: 'report' },
+];
 
 function defaultOperationForModel(model: ModelInfo): BenchmarkOperation {
   const capabilities = model.capabilities;
@@ -328,7 +368,8 @@ export default function App() {
   const [client, setClient] = useState<CogentClient | null>(null);
   const [status, setStatus] = useState('booting');
   const [isBusy, setIsBusy] = useState(false);
-  const [modelType, setModelType] = useState<'registry' | 'url' | 'file'>('registry');
+  const [activeView, setActiveView] = useState<PlaygroundView>('request');
+  const [modelType, setModelType] = useState<ModelSourceType>('registry');
   const [selectedRegistryId, setSelectedRegistryId] = useState(MODEL_REGISTRY[0].id);
   const selectedModel = getModelById(selectedRegistryId) ?? MODEL_REGISTRY[0];
   const selectedVariant = getDefaultVariant(selectedModel);
@@ -616,6 +657,7 @@ export default function App() {
 
   const runQuery = async () => {
     if (client == null) return;
+    setActiveView('request');
     setIsBusy(true);
     setResponse('');
     setLastRun(null);
@@ -725,6 +767,7 @@ export default function App() {
       return;
     }
 
+    setActiveView('benchmarks');
     setIsBusy(true);
     setScenarioResults([]);
     setMixedLoadResult(null);
@@ -883,147 +926,190 @@ export default function App() {
     setImageEnabled(true);
   };
 
+  const renderDetailTable = (
+    rows: readonly { readonly label: string; readonly value: ReactNode }[]
+  ) => (
+    <div className="detail-table">
+      {rows.map((row) => (
+        <div className="detail-row" key={row.label}>
+          <span>{row.label}</span>
+          <strong>{row.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+
+  const renderRunMetrics = () => (
+    <div className="metric-grid">
+      {lastRun == null ? (
+        <MetricCard label="Last Run" value="No request yet" />
+      ) : (
+        <>
+          <MetricCard label="Operation" value={lastRun.operation} />
+          <MetricCard label="Latency" value={formatMs(lastRun.wallMs)} />
+          <MetricCard label="TTFT" value={lastRun.ttftMs == null ? 'n/a' : formatMs(lastRun.ttftMs)} />
+          {lastRun.outputKind === 'embedding' ? (
+            <>
+              <MetricCard label="Dimensions" value={lastRun.embeddingDimensions ?? 'n/a'} />
+              <MetricCard label="Pooling" value={lastRun.embeddingPooling ?? 'n/a'} />
+              <MetricCard
+                label="Normalized"
+                value={lastRun.embeddingNormalized == null ? 'n/a' : yesNo(lastRun.embeddingNormalized)}
+              />
+            </>
+          ) : (
+            <>
+              <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
+              <MetricCard label="Decode TPS" value={lastRun.decodeTps == null ? 'n/a' : formatTps(lastRun.decodeTps)} />
+              <MetricCard label="E2E TPS" value={lastRun.e2eTps == null ? 'n/a' : formatTps(lastRun.e2eTps)} />
+            </>
+          )}
+          <MetricCard label="Prefill TPS" value={lastRun.prefillTps == null ? 'n/a' : formatTps(lastRun.prefillTps)} />
+        </>
+      )}
+    </div>
+  );
+
+  const renderLiveOutput = (emptyLabel: string) => (
+    <div className={`response-console ${isBusy ? 'generating' : ''}`} ref={responseElementRef}>
+      {response || (isBusy ? 'Running...' : emptyLabel)}
+    </div>
+  );
+
   const renderGroup = (title: string, group: GroupResult) => (
-    <div className="result-card" key={`${group.id}-${title}`}>
-      <h3>{title}</h3>
-      <div className="metric-group-title">Latency (User Experience)</div>
-      <div className="metric-grid">
-        <MetricCard label="Operation" value={group.runs[0]?.operation ?? operation} />
-        <MetricCard label="TTFT" value={formatSummary(group.summary.runtime.ttftMs)} />
-        <MetricCard label="ITL Avg" value={formatSummary(group.summary.runtime.itlAvgMs)} />
-        <MetricCard label="ITL P99" value={formatSummary(group.summary.runtime.itlP99Ms)} />
-        <MetricCard label="E2E TPS" value={formatSummary(group.summary.runtime.e2eTps, 'tok/s')} />
-        <MetricCard label="Prefill TPS" value={formatSummary(group.summary.runtime.prefillTps, 'tok/s')} />
-        <MetricCard label="Decode TPS" value={formatSummary(group.summary.runtime.decodeTps, 'tok/s')} />
-      </div>
-
-      <div className="metric-group-title">Compute Profile</div>
-      <div className="metric-grid">
-        <MetricCard
-          label="Prefill"
-          value={group.summary.runtime.avgPrefillMs != null ? formatMs(group.summary.runtime.avgPrefillMs) : 'n/a'}
-        />
-        <MetricCard
-          label="Decode"
-          value={group.summary.runtime.avgDecodeMs != null ? formatMs(group.summary.runtime.avgDecodeMs) : 'n/a'}
-        />
-        <MetricCard
-          label="Input Tokens"
-          value={group.summary.runtime.avgInputTokens ?? 'n/a'}
-        />
-        <MetricCard
-          label="Prefill Tokens"
-          value={group.summary.runtime.avgPrefillTokens ?? 'n/a'}
-        />
-        <MetricCard
-          label="Output Tokens"
-          value={group.summary.runtime.avgOutputTokens ?? 'n/a'}
-        />
-        {group.runs[0]?.outputKind === 'embedding' ? (
-          <>
-            <MetricCard
-              label="Dimensions"
-              value={group.runs[0].embeddingDimensions ?? 'n/a'}
-            />
-            <MetricCard
-              label="Pooling"
-              value={group.runs[0].embeddingPooling ?? 'n/a'}
-            />
-          </>
-        ) : null}
-      </div>
-
-      <div className="metric-group-title">Native Pipeline</div>
-      <div className="metric-grid">
-        <MetricCard
-          label="GPU Wall"
-          value={group.summary.runtime.avgNativeGpuMs != null ? formatMs(group.summary.runtime.avgNativeGpuMs) : 'n/a'}
-        />
-        <MetricCard
-          label="Sync/Wait"
-          value={group.summary.runtime.avgNativeSyncMs != null ? formatMs(group.summary.runtime.avgNativeSyncMs) : 'n/a'}
-        />
-        <MetricCard
-          label="CPU Logic"
-          value={group.summary.runtime.avgNativeLogicMs != null ? formatMs(group.summary.runtime.avgNativeLogicMs) : 'n/a'}
-        />
-        <MetricCard
-          label="Cache Hits"
-          value={group.summary.runtime.avgCacheHits ?? 'n/a'}
-        />
-        <MetricCard
-          label="Cache Reuse"
-          value={
-            group.cacheReuse.expected
-              ? group.cacheReuse.invalidRunLabels.length === 0
-                ? `valid (${group.cacheReuse.expectedSource})`
-                : `invalid (${group.cacheReuse.invalidRunLabels.length})`
-              : 'n/a'
-          }
+    <div className="result-panel" key={`${group.id}-${title}`}>
+      <div className="result-panel-header">
+        <h4>{title}</h4>
+        <StatusBadge
           tone={
             group.cacheReuse.expected
               ? group.cacheReuse.invalidRunLabels.length === 0
                 ? 'ok'
                 : 'warn'
-              : 'default'
+              : 'neutral'
           }
-        />
+        >
+          {group.cacheReuse.expected
+            ? group.cacheReuse.invalidRunLabels.length === 0
+              ? `cache ${group.cacheReuse.expectedSource}`
+              : `cache invalid ${group.cacheReuse.invalidRunLabels.length}`
+            : 'cache n/a'}
+        </StatusBadge>
       </div>
-
+      <div className="data-table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>Latency</th>
+              <th>Compute</th>
+              <th>Native</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Primary</td>
+              <td>TTFT {formatSummary(group.summary.runtime.ttftMs)}</td>
+              <td>
+                Prefill {group.summary.runtime.avgPrefillMs == null ? 'n/a' : formatMs(group.summary.runtime.avgPrefillMs)}
+              </td>
+              <td>
+                GPU {group.summary.runtime.avgNativeGpuMs == null ? 'n/a' : formatMs(group.summary.runtime.avgNativeGpuMs)}
+              </td>
+            </tr>
+            <tr>
+              <td>Throughput</td>
+              <td>E2E {formatSummary(group.summary.runtime.e2eTps, 'tok/s')}</td>
+              <td>Decode {formatSummary(group.summary.runtime.decodeTps, 'tok/s')}</td>
+              <td>
+                Sync {group.summary.runtime.avgNativeSyncMs == null ? 'n/a' : formatMs(group.summary.runtime.avgNativeSyncMs)}
+              </td>
+            </tr>
+            <tr>
+              <td>Tokens</td>
+              <td>ITL P99 {formatSummary(group.summary.runtime.itlP99Ms)}</td>
+              <td>
+                In {group.summary.runtime.avgInputTokens ?? 'n/a'} / Out {group.summary.runtime.avgOutputTokens ?? 'n/a'}
+              </td>
+              <td>
+                CPU {group.summary.runtime.avgNativeLogicMs == null ? 'n/a' : formatMs(group.summary.runtime.avgNativeLogicMs)}
+              </td>
+            </tr>
+            <tr>
+              <td>Cache</td>
+              <td>ITL Avg {formatSummary(group.summary.runtime.itlAvgMs)}</td>
+              <td>Prefill TPS {formatSummary(group.summary.runtime.prefillTps, 'tok/s')}</td>
+              <td>Hits {group.summary.runtime.avgCacheHits ?? 'n/a'}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       {group.runs[0]?.outputPreview ? (
         <p className="result-preview">{group.runs[0].outputPreview}</p>
       ) : null}
     </div>
   );
 
+  const runtimeStatusTone = isBusy ? 'info' : status === 'idle' ? 'ok' : status === 'booting' ? 'warn' : 'neutral';
+  const engineStatus = browserSmokeError ?? (
+    browserSmoke == null
+      ? 'pending'
+      : browserSmoke.rustEngine.available
+        ? `abi ${browserSmoke.rustEngine.abiVersion}`
+        : browserSmoke.rustEngine.error ?? 'unavailable'
+  );
+  const ingestStatus = browserSmokeError ?? (
+    browserSmoke == null
+      ? 'pending'
+      : browserSmoke.ggufIngest.available
+        ? `ready (${browserSmoke.ggufIngest.plannedShardCount} shards)`
+        : browserSmoke.ggufIngest.error ?? 'unavailable'
+  );
+  const webgpuStatus = browserSmokeError ?? (
+    browserSmoke == null
+      ? 'pending'
+      : browserSmoke.webgpuReady
+        ? `ready (${browserSmoke.backend?.webgpuDeviceCount ?? 0})`
+        : browserSmoke.backend?.webgpuCompiled
+          ? 'compiled, unavailable'
+          : 'not compiled'
+  );
+
   return (
-    <div className="shell">
-      <header className="hero">
-        <div className="eyebrow">Browser Playground</div>
-        <h1>CogentLM Runtime Diagnostics</h1>
-        <p>
-          Load with <code>client.addLocal()</code>, inspect with{' '}
-          <code>client.currentLocal()</code>, run with <code>client.chat()</code>,{' '}
-          <code>client.query()</code>, or <code>client.embed()</code>, consume{' '}
-          <code>.response</code> and <code>.tokens</code>, and inspect with
-          the same minimal surface.
-        </p>
+    <div className="app-shell">
+      <header className="app-topbar">
+        <div className="brand-block">
+          <div className="brand-mark">
+            <Cpu size={20} aria-hidden="true" />
+          </div>
+          <div>
+            <h1>CogentLM Playground</h1>
+            <p>Local inference console</p>
+          </div>
+        </div>
+        <div className="topbar-status">
+          <StatusBadge tone={runtimeStatusTone}>{status}</StatusBadge>
+          <StatusBadge tone={currentModel?.loaded ? 'ok' : 'warn'}>
+            {currentModel?.name ?? 'no model'}
+          </StatusBadge>
+        </div>
       </header>
 
-      <div className="layout">
-        <div className="column">
-          <section className="section">
-            <div className="section-header">
-              <h2>Model</h2>
-            </div>
-            <div className="field-grid">
-              <div className="row">
+      <main className="app-layout">
+        <aside className="control-rail">
+          <Panel title="Model Source">
+            <div className="form-stack">
+              <div className="field">
                 <label>Source Type</label>
-                <div className="toggle-group">
-                  <button
-                    type="button"
-                    className={`toggle-item ${modelType === 'registry' ? 'active' : ''}`}
-                    onClick={() => setModelType('registry')}
-                  >
-                    Library
-                  </button>
-                  <button
-                    type="button"
-                    className={`toggle-item ${modelType === 'url' ? 'active' : ''}`}
-                    onClick={() => setModelType('url')}
-                  >
-                    URL
-                  </button>
-                  <button
-                    type="button"
-                    className={`toggle-item ${modelType === 'file' ? 'active' : ''}`}
-                    onClick={() => setModelType('file')}
-                  >
-                    Local File
-                  </button>
-                </div>
+                <SegmentedControl
+                  ariaLabel="Model source type"
+                  onChange={setModelType}
+                  options={MODEL_SOURCE_OPTIONS}
+                  value={modelType}
+                />
               </div>
-              <div className="row">
+              <div className="field">
+                <label>Model</label>
                 {modelType === 'registry' ? (
                   <select
                     value={selectedRegistryId}
@@ -1034,7 +1120,6 @@ export default function App() {
                       setModelUrl(getVariantPrimaryUrl(getDefaultVariant(entry)));
                       setImageEnabled(isVisionModel(entry));
                     }}
-                    style={{ flex: 1 }}
                   >
                     {MODEL_REGISTRY.map((model) => {
                       const variant = getDefaultVariant(model);
@@ -1056,8 +1141,8 @@ export default function App() {
                   <input type="file" accept=".gguf" ref={fileInputRef} multiple />
                 )}
               </div>
-              <div className="row">
-                <label>Optional Projector</label>
+              <div className="field">
+                <label>Projector</label>
                 <input
                   value={projectorUrl}
                   onChange={(event) => setProjectorUrl(event.target.value)}
@@ -1065,435 +1150,386 @@ export default function App() {
                 />
                 <input type="file" accept=".gguf" ref={projectorFileInputRef} />
               </div>
-              <div className="button-row">
-                <button
-                  type="button"
-                  onClick={loadSelectedModel}
-                  disabled={isBusy || client == null}
-                >
-                  Load Model
-                </button>
-              </div>
+              <button
+                className="button button-primary"
+                disabled={isBusy || client == null}
+                onClick={loadSelectedModel}
+                type="button"
+              >
+                <Database size={16} aria-hidden="true" />
+                Load Model
+              </button>
             </div>
-          </section>
+          </Panel>
 
-          <section className="section">
-            <div className="section-header">
-              <h2>Request</h2>
+          <Panel title="Runtime Controls">
+            <div className="rail-heading">
+              <Settings2 size={16} aria-hidden="true" />
+              <span>Diagnostics</span>
             </div>
-            <div className="field-grid">
-              <div className="row">
-                <label>Operation</label>
-                <div className="toggle-group">
-                  <button
-                    type="button"
-                    className={`toggle-item ${operation === 'chat' ? 'active' : ''}`}
-                    onClick={() => setOperation('chat')}
-                  >
-                    Chat
-                  </button>
-                  <button
-                    type="button"
-                    className={`toggle-item ${operation === 'query' ? 'active' : ''}`}
-                    onClick={() => setOperation('query')}
-                  >
-                    Query
-                  </button>
-                  <button
-                    type="button"
-                    className={`toggle-item ${operation === 'embed' ? 'active' : ''}`}
-                    onClick={() => setOperation('embed')}
-                  >
-                    Embed
-                  </button>
-                </div>
-              </div>
-              <div className="row">
-                <label>Prompt</label>
-                <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-              </div>
-              <div className="row">
-                <label>Max Tokens</label>
+            <div className="form-grid compact">
+              <div className="field">
+                <label>Warmup Runs</label>
                 <input
                   type="number"
-                  value={tokenCount}
-                  disabled={operation === 'embed'}
-                  onChange={(event) =>
-                    setTokenCount(Number.parseInt(event.target.value, 10) || 0)
-                  }
+                  value={warmupRuns}
+                  onChange={(event) => setWarmupRuns(Number.parseInt(event.target.value, 10) || 0)}
                 />
               </div>
-              {operation !== 'embed' ? (
-                <div className="row">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={imageEnabled}
-                      onChange={(event) => setImageEnabled(event.target.checked)}
-                    />{' '}
-                    Attach Image
-                  </label>
-                </div>
-              ) : null}
-              {operation !== 'embed' && imageEnabled ? (
-                <div className="row">
-                  <label>Image URL or File</label>
-                  <div className="field-grid">
-                    <input
-                      value={imageSource.startsWith('data:') ? '' : imageSource}
-                      onChange={(event) => setImageSource(event.target.value)}
-                      placeholder="https://.../image.jpg"
-                    />
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp,image/gif"
-                      onChange={uploadImage}
-                      style={{ padding: '8px' }}
-                    />
-                  </div>
-                </div>
-              ) : null}
+              <div className="field">
+                <label>Measured Runs</label>
+                <input
+                  type="number"
+                  value={measuredRuns}
+                  onChange={(event) => setMeasuredRuns(Number.parseInt(event.target.value, 10) || 0)}
+                />
+              </div>
+            </div>
+            <div className="form-stack">
+              <div className="field">
+                <label>Token Emission</label>
+                <SegmentedControl
+                  ariaLabel="Token emission"
+                  onChange={(value) => setEmitTokens(value === 'on')}
+                  options={[
+                    { label: 'Off', value: 'off' },
+                    { label: 'On', value: 'on' },
+                  ]}
+                  value={emitTokens ? 'on' : 'off'}
+                />
+              </div>
+              {renderDetailTable([
+                { label: 'Observability', value: observability?.mode ?? 'off' },
+                { label: 'Transport', value: observability?.runtime?.execution.tokenPath ?? 'pending' },
+                { label: 'Installed', value: installedModels.length },
+                { label: 'Load Time', value: formatMs(lastLoadMs) },
+              ])}
               <div className="button-row">
                 <button
-                  type="button"
-                  onClick={runQuery}
+                  className="button button-primary"
                   disabled={isBusy || client == null}
-                >
-                  Run Request
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <section className="section">
-            <div className="section-header">
-              <h2>Diagnostics</h2>
-            </div>
-            <div className="field-grid">
-              <div className="field-grid field-grid-compact">
-                <div className="row">
-                  <label>Warmup Runs</label>
-                  <input
-                    type="number"
-                    value={warmupRuns}
-                    onChange={(event) =>
-                      setWarmupRuns(Number.parseInt(event.target.value, 10) || 0)
-                    }
-                  />
-                </div>
-                <div className="row">
-                  <label>Measured Runs</label>
-                  <input
-                    type="number"
-                    value={measuredRuns}
-                    onChange={(event) =>
-                      setMeasuredRuns(Number.parseInt(event.target.value, 10) || 0)
-                    }
-                  />
-                </div>
-                <div className="row">
-                  <label>Observability</label>
-                  <input value={observability?.mode ?? 'off'} readOnly />
-                </div>
-                <div className="row">
-                  <label title="Off disables native token emission. On emits visible token chunks.">
-                    Token Emission
-                  </label>
-                  <div className="toggle-group">
-                    <button
-                      type="button"
-                      className={`toggle-item ${!emitTokens ? 'active' : ''}`}
-                      onClick={() => setEmitTokens(false)}
-                      title="Off - native NONE"
-                    >
-                      Off
-                    </button>
-                    <button
-                      type="button"
-                      className={`toggle-item ${emitTokens ? 'active' : ''}`}
-                      onClick={() => setEmitTokens(true)}
-                      title="On - render emitted token chunks"
-                    >
-                      On
-                    </button>
-                  </div>
-                </div>
-                <div className="row">
-                  <label>Active Transport</label>
-                  <input
-                    value={observability?.runtime?.execution.tokenPath ?? 'pending'}
-                    readOnly
-                  />
-                </div>
-              </div>
-              <div className="button-row">
-                <button
-                  type="button"
                   onClick={runBenchmark}
-                  disabled={isBusy || client == null}
+                  type="button"
                 >
+                  <Gauge size={16} aria-hidden="true" />
                   Run Diagnostics
                 </button>
                 <button
-                  className="secondary-button"
-                  type="button"
+                  className="button button-secondary"
+                  disabled={benchmarkReport == null}
                   onClick={() =>
                     benchmarkReport == null
                       ? undefined
                       : downloadJson('cogent-playground-report.json', benchmarkReport)
                   }
-                  disabled={benchmarkReport == null}
+                  type="button"
                 >
-                  Export JSON
+                  <Download size={16} aria-hidden="true" />
+                  Export
                 </button>
               </div>
             </div>
-          </section>
+          </Panel>
+        </aside>
 
-          <p className="status">Status: {status}</p>
-        </div>
+        <div className="workbench">
+          <nav className="workspace-tabs" aria-label="Playground views">
+            {VIEW_OPTIONS.map((view) => {
+              const Icon = view.icon;
+              return (
+                <button
+                  className={`workspace-tab ${activeView === view.value ? 'active' : ''}`}
+                  key={view.value}
+                  onClick={() => setActiveView(view.value)}
+                  type="button"
+                >
+                  <Icon size={16} aria-hidden="true" />
+                  {view.label}
+                </button>
+              );
+            })}
+          </nav>
 
-        <div className="column">
-          <section className="section">
-            <div className="section-header">
-              <h2>State</h2>
-            </div>
-            <div className="metric-grid">
-              <MetricCard
-                label="Current Model"
-                value={currentModel?.name ?? 'none'}
-                tone={currentModel?.loaded ? 'ok' : 'warn'}
-              />
-              <MetricCard label="Status" value={currentModel?.status ?? 'none'} />
-              <MetricCard label="Model Class" value={currentModel?.capabilities?.modelClass ?? 'unknown'} />
-              <MetricCard
-                label="Text"
-                value={yesNo(currentModel?.capabilities?.supportsTextGeneration)}
-              />
-              <MetricCard
-                label="Embeddings"
-                value={yesNo(currentModel?.capabilities?.supportsEmbeddings)}
-              />
-              <MetricCard
-                label="Pooling"
-                value={currentModel?.capabilities?.embedding?.pooling ?? 'n/a'}
-              />
-              <MetricCard label="Installed" value={installedModels.length} />
-              <MetricCard label="Load Time" value={formatMs(lastLoadMs)} />
-              <MetricCard label="Model Bytes" value={formatBytes(sourceInfo?.bytes ?? null)} />
-              <MetricCard label="Source" value={sourceInfo?.label ?? 'none'} />
-              <MetricCard label="Obs Mode" value={observability?.mode ?? 'off'} />
-              <MetricCard label="Obs State" value={observability?.state ?? 'idle'} />
-              <MetricCard
-                label="Current Decode TPS"
-                value={
-                  lastRun?.decodeTps != null
-                    ? formatTps(lastRun.decodeTps)
-                    : observability?.runtime?.decodeTokensPerSecond == null
-                      ? 'n/a'
-                      : round(observability.runtime.decodeTokensPerSecond)
+          {activeView === 'request' ? (
+            <div className="workspace-view">
+              <Panel
+                title="Request Runner"
+                actions={
+                  <button
+                    className="button button-primary"
+                    disabled={isBusy || client == null}
+                    onClick={runQuery}
+                    type="button"
+                  >
+                    <Play size={16} aria-hidden="true" />
+                    Run Request
+                  </button>
                 }
-              />
-              <MetricCard
-                label="Current E2E TPS"
-                value={
-                  lastRun?.e2eTps != null
-                    ? formatTps(lastRun.e2eTps)
-                    : observability?.runtime?.e2eTokensPerSecond == null
-                      ? 'n/a'
-                      : round(observability.runtime.e2eTokensPerSecond)
-                }
-              />
-              <MetricCard
-                label="Current Prefill TPS"
-                value={
-                  lastRun?.prefillTps != null
-                    ? formatTps(lastRun.prefillTps)
-                    : observability?.runtime?.prefillTokensPerSecond == null
-                      ? 'n/a'
-                      : round(observability.runtime.prefillTokensPerSecond)
-                }
-              />
-              <MetricCard
-                label="Backend"
-                value={describeRuntimeBackend(observability?.profile)}
-              />
-              <MetricCard
-                label="Rust Engine"
-                value={
-                  browserSmokeError ??
-                  (browserSmoke == null
-                    ? 'pending'
-                    : browserSmoke.rustEngine.available
-                      ? `abi ${browserSmoke.rustEngine.abiVersion}`
-                      : browserSmoke.rustEngine.error ?? 'unavailable')
-                }
-                tone={browserSmoke?.rustEngine.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
-              />
-              <MetricCard
-                label="Rust GGUF Ingest"
-                value={
-                  browserSmokeError ??
-                  (browserSmoke == null
-                    ? 'pending'
-                    : browserSmoke.ggufIngest.available
-                      ? `ready (${browserSmoke.ggufIngest.plannedShardCount} shards)`
-                      : browserSmoke.ggufIngest.error ?? 'unavailable')
-                }
-                tone={browserSmoke?.ggufIngest.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
-              />
-              <MetricCard
-                label="WebGPU Smoke"
-                value={
-                  browserSmokeError ??
-                  (browserSmoke == null
-                    ? 'pending'
-                    : browserSmoke.webgpuReady
-                      ? `ready (${browserSmoke.backend?.webgpuDeviceCount ?? 0})`
-                      : browserSmoke.backend?.webgpuCompiled
-                        ? 'compiled, unavailable'
-                        : 'not compiled')
-                }
-                tone={browserSmoke?.webgpuReady ? 'ok' : browserSmokeError ? 'warn' : undefined}
-              />
-            </div>
-          </section>
-
-          <section className="section">
-            <div className="section-header">
-              <h2>Response</h2>
-            </div>
-            <div className="metric-grid">
-              {lastRun == null ? (
-                <MetricCard label="Last Run" value="No query yet" />
-              ) : (
-                <>
-                  <MetricCard label="Operation" value={lastRun.operation} />
-                  <MetricCard label="Latency" value={formatMs(lastRun.wallMs)} />
-                  <MetricCard
-                    label="TTFT"
-                    value={lastRun.ttftMs == null ? 'n/a' : formatMs(lastRun.ttftMs)}
-                  />
-                  {lastRun.outputKind === 'embedding' ? (
-                    <>
-                      <MetricCard label="Dimensions" value={lastRun.embeddingDimensions ?? 'n/a'} />
-                      <MetricCard label="Pooling" value={lastRun.embeddingPooling ?? 'n/a'} />
-                      <MetricCard
-                        label="Normalized"
-                        value={lastRun.embeddingNormalized == null ? 'n/a' : yesNo(lastRun.embeddingNormalized)}
+              >
+                <div className="form-stack">
+                  <div className="form-grid request-grid">
+                    <div className="field">
+                      <label>Operation</label>
+                      <SegmentedControl
+                        ariaLabel="Request operation"
+                        onChange={setOperation}
+                        options={OPERATION_OPTIONS}
+                        value={operation}
                       />
-                    </>
-                  ) : (
-                    <>
-                      <MetricCard label="Tokens" value={lastRun.tokens || 'n/a'} />
-                      <MetricCard label="Decode TPS" value={lastRun.decodeTps == null ? 'n/a' : formatTps(lastRun.decodeTps)} />
-                      <MetricCard label="E2E TPS" value={lastRun.e2eTps == null ? 'n/a' : formatTps(lastRun.e2eTps)} />
-                    </>
-                  )}
-                  <MetricCard label="Prefill TPS" value={lastRun.prefillTps == null ? 'n/a' : formatTps(lastRun.prefillTps)} />
-                  {lastRun.observability && (
-                    <>
-                      <div className="metric-group-title" style={{ gridColumn: '1 / -1', marginTop: '1rem' }}>Compute Phases</div>
-                      <MetricCard label="Prefill" value={formatMs(lastRun.observability.prefillMs)} />
-                      <MetricCard label="Decode" value={formatMs(lastRun.observability.decodeMs)} />
-                      <MetricCard label="Input" value={lastRun.observability.inputTokens} />
-                      <MetricCard label="Prefill Tokens" value={lastRun.observability.prefillTokens} />
-                      <MetricCard label="Cache Hits" value={lastRun.observability.cacheHits} />
-
-                      <div className="metric-group-title" style={{ gridColumn: '1 / -1', marginTop: '1rem' }}>Hardware Efficiency</div>
-                      <MetricCard label="Native GPU" value={formatMs(lastRun.observability.nativeGpuMs)} />
-                      <MetricCard label="Native Sync" value={formatMs(lastRun.observability.nativeSyncMs)} />
-                      <MetricCard label="Engine Logic" value={formatMs(lastRun.observability.nativeLogicMs)} />
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-            <div
-              className={`response ${isBusy ? 'generating' : ''}`}
-              style={{ marginTop: '16px' }}
-              ref={responseElementRef}
-            >
-              {response || (isBusy ? 'Running request...' : 'Ready for request.')}
-            </div>
-          </section>
-
-          <section className="section">
-            <div className="section-header">
-              <h2>Diagnostics Results</h2>
-            </div>
-            {scenarioResults.length === 0 && mixedLoadResult == null ? (
-              <p className="hint">
-                Run diagnostics to capture SISO, SILO, LISO, LILO, mixed-load, and memory
-                snapshots with the minimal client API.
-              </p>
-            ) : (
-              <div className="benchmark-results">
-                {scenarioResults.map((scenario) => (
-                  <div className="result-stack" key={scenario.definition.id}>
-                    <div className="result-card">
-                      <h3>{scenario.definition.label}</h3>
-                      <div className="metric-grid">
-                        <MetricCard label="Scenario" value={scenario.definition.id.toUpperCase()} />
-                        <MetricCard
-                          label="Load Runtime"
-                          value={formatMs(scenario.runtime.loadRuntimeMs)}
-                        />
-                        <MetricCard
-                          label="Output Limit"
-                          value={scenario.definition.outputTokenLimit}
-                        />
-                      </div>
                     </div>
-                    {renderGroup('Cold Prompt', scenario.coldPrompt)}
-                    {renderGroup('Hot Fresh Context', scenario.hotFreshContext)}
-                    {renderGroup('Repeated Prompt', scenario.repeatedPrompt)}
+                    <div className="field">
+                      <label>Max Tokens</label>
+                      <input
+                        type="number"
+                        value={tokenCount}
+                        disabled={operation === 'embed'}
+                        onChange={(event) =>
+                          setTokenCount(Number.parseInt(event.target.value, 10) || 0)
+                        }
+                      />
+                    </div>
                   </div>
-                ))}
-
-                {mixedLoadResult != null ? (
-                  mixedLoadResult.unsupported ? (
-                    <div className="result-card">
-                      <h3>{mixedLoadResult.definition.label}</h3>
-                      <p className="result-detail">{mixedLoadResult.reason ?? 'Unsupported.'}</p>
-                    </div>
-                  ) : (
-                    <div className="result-stack">
-                      <div className="result-card">
-                        <h3>{mixedLoadResult.definition.label}</h3>
-                        <div className="metric-grid">
-                          <MetricCard
-                            label="Concurrency"
-                            value={mixedLoadResult.definition.concurrency}
-                          />
-                          <MetricCard
-                            label="Foreground"
-                            value={mixedLoadResult.definition.foreground.label}
-                          />
-                          <MetricCard
-                            label="Background"
-                            value={mixedLoadResult.definition.background.label}
-                          />
-                        </div>
-                      </div>
-                      {mixedLoadResult.foreground
-                        ? renderGroup('Foreground Under Load', mixedLoadResult.foreground)
-                        : null}
-                      {mixedLoadResult.background
-                        ? renderGroup('Background Under Load', mixedLoadResult.background)
-                        : null}
-                    </div>
-                  )
-                ) : null}
-
-                {memorySnapshots.length > 0 && benchmarkReport != null ? (
-                  <div className="result-card">
-                    <h3>Memory Snapshots</h3>
-                    <div className="metric-grid">
-                      <MetricCard
-                        label="Snapshots"
-                        value={benchmarkReport.memory.summary.snapshotCount}
+                  <div className="field">
+                    <label>Prompt</label>
+                    <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+                  </div>
+                  {operation !== 'embed' ? (
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={imageEnabled}
+                        onChange={(event) => setImageEnabled(event.target.checked)}
                       />
+                      <span>Attach Image</span>
+                    </label>
+                  ) : null}
+                  {operation !== 'embed' && imageEnabled ? (
+                    <div className="field">
+                      <label>Image URL or File</label>
+                      <div className="form-grid">
+                        <input
+                          value={imageSource.startsWith('data:') ? '' : imageSource}
+                          onChange={(event) => setImageSource(event.target.value)}
+                          placeholder="https://.../image.jpg"
+                        />
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          onChange={uploadImage}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </Panel>
+
+              <Panel title="Response">
+                {renderRunMetrics()}
+                {lastRun?.observability == null ? null : (
+                  <div className="detail-grid">
+                    {renderDetailTable([
+                      { label: 'Prefill', value: formatMs(lastRun.observability.prefillMs) },
+                      { label: 'Decode', value: formatMs(lastRun.observability.decodeMs) },
+                      { label: 'Input', value: lastRun.observability.inputTokens },
+                      { label: 'Prefill Tokens', value: lastRun.observability.prefillTokens },
+                      { label: 'Cache Hits', value: lastRun.observability.cacheHits },
+                    ])}
+                    {renderDetailTable([
+                      { label: 'Native GPU', value: formatMs(lastRun.observability.nativeGpuMs) },
+                      { label: 'Native Sync', value: formatMs(lastRun.observability.nativeSyncMs) },
+                      { label: 'Engine Logic', value: formatMs(lastRun.observability.nativeLogicMs) },
+                    ])}
+                  </div>
+                )}
+                {renderLiveOutput('Ready for request.')}
+              </Panel>
+            </div>
+          ) : null}
+
+          {activeView === 'benchmarks' ? (
+            <div className="workspace-view">
+              <Panel
+                title="Benchmark Runs"
+                actions={
+                  <button
+                    className="button button-primary"
+                    disabled={isBusy || client == null}
+                    onClick={runBenchmark}
+                    type="button"
+                  >
+                    <Gauge size={16} aria-hidden="true" />
+                    Run Diagnostics
+                  </button>
+                }
+              >
+                {scenarioResults.length === 0 && mixedLoadResult == null ? (
+                  <div className="empty-state">No benchmark results yet.</div>
+                ) : (
+                  <div className="benchmark-results">
+                    {scenarioResults.map((scenario) => (
+                      <div className="scenario-block" key={scenario.definition.id}>
+                        <div className="scenario-header">
+                          <div>
+                            <h3>{scenario.definition.label}</h3>
+                            <p>{scenario.definition.id.toUpperCase()}</p>
+                          </div>
+                          <div className="scenario-meta">
+                            <StatusBadge tone="neutral">
+                              load {formatMs(scenario.runtime.loadRuntimeMs)}
+                            </StatusBadge>
+                            <StatusBadge tone="neutral">
+                              limit {scenario.definition.outputTokenLimit}
+                            </StatusBadge>
+                          </div>
+                        </div>
+                        {renderGroup('Cold Prompt', scenario.coldPrompt)}
+                        {renderGroup('Hot Fresh Context', scenario.hotFreshContext)}
+                        {renderGroup('Repeated Prompt', scenario.repeatedPrompt)}
+                      </div>
+                    ))}
+
+                    {mixedLoadResult == null ? null : mixedLoadResult.unsupported ? (
+                      <div className="result-panel">
+                        <div className="result-panel-header">
+                          <h4>{mixedLoadResult.definition.label}</h4>
+                          <StatusBadge tone="warn">unsupported</StatusBadge>
+                        </div>
+                        <p className="result-preview">{mixedLoadResult.reason ?? 'Unsupported.'}</p>
+                      </div>
+                    ) : (
+                      <div className="scenario-block">
+                        <div className="scenario-header">
+                          <div>
+                            <h3>{mixedLoadResult.definition.label}</h3>
+                            <p>Concurrency {mixedLoadResult.definition.concurrency}</p>
+                          </div>
+                          <div className="scenario-meta">
+                            <StatusBadge tone="neutral">
+                              foreground {mixedLoadResult.definition.foreground.label}
+                            </StatusBadge>
+                            <StatusBadge tone="neutral">
+                              background {mixedLoadResult.definition.background.label}
+                            </StatusBadge>
+                          </div>
+                        </div>
+                        {mixedLoadResult.foreground == null
+                          ? null
+                          : renderGroup('Foreground Under Load', mixedLoadResult.foreground)}
+                        {mixedLoadResult.background == null
+                          ? null
+                          : renderGroup('Background Under Load', mixedLoadResult.background)}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {renderLiveOutput('Benchmark output will stream here.')}
+              </Panel>
+            </div>
+          ) : null}
+
+          {activeView === 'observability' ? (
+            <div className="workspace-view two-column">
+              <Panel title="Runtime State">
+                <div className="metric-grid">
+                  <MetricCard
+                    label="Current Model"
+                    value={currentModel?.name ?? 'none'}
+                    tone={currentModel?.loaded ? 'ok' : 'warn'}
+                  />
+                  <MetricCard label="Status" value={currentModel?.status ?? 'none'} />
+                  <MetricCard label="Model Class" value={currentModel?.capabilities?.modelClass ?? 'unknown'} />
+                  <MetricCard label="Model Bytes" value={formatBytes(sourceInfo?.bytes ?? null)} />
+                  <MetricCard label="Source" value={sourceInfo?.label ?? 'none'} />
+                  <MetricCard label="Backend" value={describeRuntimeBackend(observability?.profile)} />
+                  <MetricCard label="Memory Snapshots" value={memorySnapshots.length} />
+                </div>
+                {renderDetailTable([
+                  { label: 'Text', value: yesNo(currentModel?.capabilities?.supportsTextGeneration) },
+                  { label: 'Embeddings', value: yesNo(currentModel?.capabilities?.supportsEmbeddings) },
+                  { label: 'Pooling', value: currentModel?.capabilities?.embedding?.pooling ?? 'n/a' },
+                  { label: 'Observability State', value: observability?.state ?? 'idle' },
+                ])}
+              </Panel>
+
+              <Panel title="Engine Health">
+                <div className="metric-grid">
+                  <MetricCard
+                    label="Rust Engine"
+                    value={engineStatus}
+                    tone={browserSmoke?.rustEngine.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
+                  />
+                  <MetricCard
+                    label="Rust GGUF Ingest"
+                    value={ingestStatus}
+                    tone={browserSmoke?.ggufIngest.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
+                  />
+                  <MetricCard
+                    label="WebGPU Smoke"
+                    value={webgpuStatus}
+                    tone={browserSmoke?.webgpuReady ? 'ok' : browserSmokeError ? 'warn' : undefined}
+                  />
+                </div>
+                {renderDetailTable([
+                  {
+                    label: 'Current Decode TPS',
+                    value:
+                      lastRun?.decodeTps != null
+                        ? formatTps(lastRun.decodeTps)
+                        : observability?.runtime?.decodeTokensPerSecond == null
+                          ? 'n/a'
+                          : round(observability.runtime.decodeTokensPerSecond),
+                  },
+                  {
+                    label: 'Current E2E TPS',
+                    value:
+                      lastRun?.e2eTps != null
+                        ? formatTps(lastRun.e2eTps)
+                        : observability?.runtime?.e2eTokensPerSecond == null
+                          ? 'n/a'
+                          : round(observability.runtime.e2eTokensPerSecond),
+                  },
+                  {
+                    label: 'Current Prefill TPS',
+                    value:
+                      lastRun?.prefillTps != null
+                        ? formatTps(lastRun.prefillTps)
+                        : observability?.runtime?.prefillTokensPerSecond == null
+                          ? 'n/a'
+                          : round(observability.runtime.prefillTokensPerSecond),
+                  },
+                ])}
+              </Panel>
+            </div>
+          ) : null}
+
+          {activeView === 'report' ? (
+            <div className="workspace-view">
+              <Panel
+                title="Report"
+                actions={
+                  <button
+                    className="button button-primary"
+                    disabled={benchmarkReport == null}
+                    onClick={() =>
+                      benchmarkReport == null
+                        ? undefined
+                        : downloadJson('cogent-playground-report.json', benchmarkReport)
+                    }
+                    type="button"
+                  >
+                    <Download size={16} aria-hidden="true" />
+                    Export JSON
+                  </button>
+                }
+              >
+                {benchmarkReport == null ? (
+                  <div className="empty-state">No report generated.</div>
+                ) : (
+                  <>
+                    <div className="metric-grid">
+                      <MetricCard label="Schema" value={benchmarkReport.schema} />
+                      <MetricCard label="Raw Runs" value={benchmarkReport.trace.runCount} />
+                      <MetricCard label="Snapshots" value={benchmarkReport.memory.summary.snapshotCount} />
                       <MetricCard
                         label="JS Heap Peak"
                         value={formatBytes(benchmarkReport.memory.summary.maxUsedJsHeapBytes)}
@@ -1502,49 +1538,56 @@ export default function App() {
                         label="UA Memory Peak"
                         value={formatBytes(benchmarkReport.memory.summary.maxUserAgentBytes)}
                       />
+                      <MetricCard label="Backend" value={benchmarkReport.backend.inferredExecutionBackend} />
                     </div>
-                  </div>
-                ) : null}
-
-                {benchmarkReport != null ? (
-                  <div className="result-card">
-                    <h3>Timing Trace</h3>
-                    <div className="metric-grid">
-                      <MetricCard label="Raw Runs" value={benchmarkReport.trace.runCount} />
-                      <MetricCard
-                        label="Trace TTFT"
-                        value={formatSummary(benchmarkReport.trace.analysis.ttftMs)}
-                      />
-                      <MetricCard
-                        label="Trace Mean ITL"
-                        value={formatSummary(benchmarkReport.trace.analysis.itlAvgMs)}
-                      />
-                      <MetricCard
-                        label="Trace Tail ITL"
-                        value={formatSummary(benchmarkReport.trace.analysis.itlP99Ms)}
-                      />
-                      <MetricCard
-                        label="Trace Decode TPS"
-                        value={formatSummary(
-                          benchmarkReport.trace.analysis.decodeTps,
-                          'tok/s'
-                        )}
-                      />
-                      <MetricCard
-                        label="Trace E2E TPS"
-                        value={formatSummary(
-                          benchmarkReport.trace.analysis.e2eTps,
-                          'tok/s'
-                        )}
-                      />
+                    {renderDetailTable([
+                      { label: 'Generated', value: benchmarkReport.generatedAt },
+                      { label: 'Model', value: benchmarkReport.model?.name ?? 'none' },
+                      { label: 'Source', value: benchmarkReport.source.label },
+                      { label: 'Operation', value: benchmarkReport.settings.operation },
+                      { label: 'Prompt Tokens', value: benchmarkReport.settings.tokenCount },
+                      { label: 'Runtime', value: benchmarkReport.backend.runtimeBackendStatus },
+                    ])}
+                    <div className="data-table-wrap">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Trace</th>
+                            <th>Mean</th>
+                            <th>P99</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>TTFT</td>
+                            <td>{benchmarkReport.trace.analysis.ttftMs?.mean ?? 'n/a'}</td>
+                            <td>{benchmarkReport.trace.analysis.ttftMs?.p99 ?? 'n/a'}</td>
+                          </tr>
+                          <tr>
+                            <td>ITL</td>
+                            <td>{benchmarkReport.trace.analysis.itlAvgMs?.mean ?? 'n/a'}</td>
+                            <td>{benchmarkReport.trace.analysis.itlP99Ms?.p99 ?? 'n/a'}</td>
+                          </tr>
+                          <tr>
+                            <td>Decode TPS</td>
+                            <td>{benchmarkReport.trace.analysis.decodeTps?.mean ?? 'n/a'}</td>
+                            <td>{benchmarkReport.trace.analysis.decodeTps?.p99 ?? 'n/a'}</td>
+                          </tr>
+                          <tr>
+                            <td>E2E TPS</td>
+                            <td>{benchmarkReport.trace.analysis.e2eTps?.mean ?? 'n/a'}</td>
+                            <td>{benchmarkReport.trace.analysis.e2eTps?.p99 ?? 'n/a'}</td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </section>
+                  </>
+                )}
+              </Panel>
+            </div>
+          ) : null}
         </div>
-      </div>
+      </main>
     </div>
   );
 }

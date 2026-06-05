@@ -1,9 +1,9 @@
-import React from 'react';
+import type { ReactNode } from 'react';
 
 interface MetricCardProps {
-  label: string;
-  value: React.ReactNode;
-  tone?: 'default' | 'ok' | 'warn';
+  readonly label: string;
+  readonly tone?: 'default' | 'ok' | 'warn';
+  readonly value: ReactNode;
 }
 
 export function MetricCard({ label, value, tone = 'default' }: MetricCardProps) {
