@@ -17,6 +17,7 @@ pub(crate) mod test_support;
 pub mod clean;
 pub mod cli;
 pub mod doctor;
+pub(crate) mod javascript;
 pub mod run;
 pub mod sample_model;
 pub mod setup;

@@ -1,6 +1,7 @@
 //! Node.js binding build target.
 
 use crate::cli::Backend;
+use crate::javascript;
 use crate::output;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
@@ -33,9 +34,9 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
     output::path("Binding workspace", &node_dir);
     output::path("Artifact directory", &ctx.node_artifacts_dir());
 
-    let _dir = sh.push_dir(&node_dir);
+    javascript::install_node_binding_dependencies(sh, ctx)?;
 
-    output::run_build_command("Installing Node dependencies", cmd!(sh, "bun install"))?;
+    let _dir = sh.push_dir(&node_dir);
 
     let dist_dir = ctx.node_artifacts_dir();
     prepare_dist_dir(sh, ctx, &dist_dir)?;

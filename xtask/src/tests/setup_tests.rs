@@ -9,8 +9,9 @@ use crate::test_support::TempDir;
 use crate::utils::BuildContext;
 
 use super::{
-    recommended_downloads, run_downloads, select_downloads, select_profile,
-    should_install_launcher, SetupDownload,
+    recommended_downloads, root_javascript_package_dirs, run_downloads, select_downloads,
+    select_profile, should_install_launcher, should_install_node_binding_javascript_dependencies,
+    SetupDownload,
 };
 
 fn args(
@@ -82,6 +83,46 @@ fn recommended_downloads_match_profile_scope() {
         ]
     );
     assert!(recommended_downloads(SetupProfile::Full).contains(&SetupDownload::SampleModel));
+}
+
+#[test]
+fn javascript_package_dirs_match_profile_scope() {
+    let temp = TempDir::new("setup-javascript-scope");
+    temp.create_dir("lib/web");
+    temp.create_dir("lib/node");
+    temp.create_dir("examples/web");
+    temp.create_dir("demos/chat");
+    temp.create_dir("demos/avatar");
+    temp.create_dir("benchmarks/browser");
+    let ctx = BuildContext::from_workspace_root_for_test(temp.path());
+
+    let browser = root_javascript_package_dirs(&ctx, SetupProfile::Browser).unwrap();
+    assert!(browser.contains(&temp.join("lib/web")));
+    assert!(browser.contains(&temp.join("examples/web")));
+    assert!(browser.contains(&temp.join("demos/avatar")));
+    assert!(browser.contains(&temp.join("demos/chat")));
+    assert!(browser.contains(&temp.join("benchmarks/browser")));
+    assert!(!browser.contains(&temp.join("lib/node")));
+
+    let bindings = root_javascript_package_dirs(&ctx, SetupProfile::Bindings).unwrap();
+    assert_eq!(bindings, vec![temp.join("lib/node")]);
+
+    let full = root_javascript_package_dirs(&ctx, SetupProfile::Full).unwrap();
+    assert!(full.contains(&temp.join("lib/web")));
+    assert!(full.contains(&temp.join("lib/node")));
+}
+
+#[test]
+fn node_binding_javascript_dependencies_match_setup_profile_scope() {
+    assert!(!should_install_node_binding_javascript_dependencies(
+        SetupProfile::Browser
+    ));
+    assert!(should_install_node_binding_javascript_dependencies(
+        SetupProfile::Bindings
+    ));
+    assert!(should_install_node_binding_javascript_dependencies(
+        SetupProfile::Full
+    ));
 }
 
 #[test]

@@ -3,6 +3,7 @@
 mod launcher;
 
 use crate::cli::{SetupArgs, SetupProfile};
+use crate::javascript;
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::terminal::splash;
@@ -14,7 +15,8 @@ use console::Term;
 use inquire::{Confirm, Select};
 use std::env;
 use std::fmt;
-use xshell::{cmd, Shell};
+use std::path::PathBuf;
+use xshell::Shell;
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -213,7 +215,7 @@ fn run_downloads(
         install_managed_toolchains(sh, ctx, profile)?;
     }
     if downloads.contains(&SetupDownload::JavaScriptDependencies) {
-        install_javascript_dependencies(sh, ctx)?;
+        install_javascript_dependencies(sh, ctx, profile)?;
     }
     if downloads.contains(&SetupDownload::SampleModel) {
         download_sample_model(sh, ctx)?;
@@ -243,23 +245,50 @@ fn install_managed_toolchains(sh: &Shell, ctx: &BuildContext, profile: SetupProf
     Ok(())
 }
 
-fn install_javascript_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+fn install_javascript_dependencies(
+    sh: &Shell,
+    ctx: &BuildContext,
+    profile: SetupProfile,
+) -> Result<()> {
     output::phase("JavaScript dependencies");
-    {
-        let _dir = sh.push_dir(ctx.workspace_root());
-        output::run_command(
+
+    let package_dirs = root_javascript_package_dirs(ctx, profile)?;
+    if !package_dirs.is_empty() {
+        javascript::install_root_workspace_dependencies(
+            sh,
+            ctx,
             "Installing JavaScript workspace dependencies",
-            cmd!(sh, "bun install"),
+            &package_dirs,
         )?;
     }
-    {
-        let _dir = sh.push_dir(ctx.bindings_node_dir());
-        output::run_command(
-            "Installing Node binding JavaScript dependencies",
-            cmd!(sh, "bun install"),
-        )?;
+
+    if should_install_node_binding_javascript_dependencies(profile) {
+        javascript::install_node_binding_dependencies(sh, ctx)?;
     }
+
     Ok(())
+}
+
+fn root_javascript_package_dirs(ctx: &BuildContext, profile: SetupProfile) -> Result<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+    if matches!(profile, SetupProfile::Browser | SetupProfile::Full) {
+        dirs.extend(browser_javascript_package_dirs(ctx)?);
+    }
+    if matches!(profile, SetupProfile::Bindings | SetupProfile::Full) {
+        dirs.push(ctx.node_package_dir());
+    }
+    Ok(dirs)
+}
+
+fn browser_javascript_package_dirs(ctx: &BuildContext) -> Result<Vec<PathBuf>> {
+    let mut dirs = vec![ctx.browser_package_dir(), ctx.browser_example_dir()];
+    dirs.extend(ctx.demo_dirs()?);
+    dirs.extend(ctx.benchmark_dirs()?);
+    Ok(dirs)
+}
+
+fn should_install_node_binding_javascript_dependencies(profile: SetupProfile) -> bool {
+    matches!(profile, SetupProfile::Bindings | SetupProfile::Full)
 }
 
 fn download_sample_model(sh: &Shell, ctx: &BuildContext) -> Result<()> {

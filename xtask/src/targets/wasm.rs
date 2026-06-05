@@ -1,5 +1,6 @@
 //! WebAssembly/WebGPU browser build target.
 
+use crate::javascript;
 use crate::output;
 use crate::toolchains::emsdk::{run_with_emsdk, setup_emsdk};
 use crate::toolchains::ninja::setup_ninja;
@@ -49,12 +50,14 @@ pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let npm_workspace = ctx.browser_package_dir();
     output::path("Browser package workspace", &npm_workspace);
 
-    let _npm_dir = sh.push_dir(&npm_workspace);
-
-    output::run_build_command(
-        "Installing NPM package dependencies",
-        cmd!(sh, "bun install"),
+    javascript::install_root_workspace_dependencies(
+        sh,
+        ctx,
+        "Installing browser package dependencies",
+        &[npm_workspace.clone()],
     )?;
+
+    let _npm_dir = sh.push_dir(&npm_workspace);
     output::run_build_command(
         "Compiling TypeScript wrappers",
         cmd!(sh, "bun run build:ts"),

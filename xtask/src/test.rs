@@ -8,6 +8,7 @@ use crate::cli::{
     TestSmokeModelArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitCommands,
     TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, TestVerifyArgs, TestVerifyTarget,
 };
+use crate::javascript;
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::targets;
@@ -913,14 +914,15 @@ fn run_package_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
 
 fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     output::phase("White-box browser demo TypeScript tests");
-    ensure_javascript_workspace_dependencies(sh, ctx)?;
-    targets::wasm::build(sh, ctx)?;
-
     let tests = demo_test_files(ctx)?;
     if tests.is_empty() {
         output::warning("No demo TypeScript tests were found under demos/");
         return Ok(());
     }
+
+    let workspaces = demo_test_workspaces(ctx, &tests)?;
+    ensure_javascript_workspace_dependencies(sh, ctx, &workspaces)?;
+    targets::wasm::build(sh, ctx)?;
 
     output::detail("Test files", tests.len());
     for (index, test) in tests.into_iter().enumerate() {
@@ -951,6 +953,7 @@ fn run_node_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> 
     sh.create_dir(&coverage_dir)?;
 
     let node_dir = ctx.node_package_dir();
+    ensure_javascript_workspace_dependencies(sh, ctx, &[node_dir.clone()])?;
     let _node = sh.push_dir(&node_dir);
     for backend in node_test_backends(ctx, backend)? {
         let report_path = suite_case_report_file(
@@ -1070,11 +1073,11 @@ fn run_browser_example_smoke(
     output::phase("Browser example smoke");
     let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
     output::path("Model", &model);
-    ensure_javascript_workspace_dependencies(sh, ctx)?;
+    let example_dir = ctx.browser_example_dir();
+    ensure_javascript_workspace_dependencies(sh, ctx, &[example_dir.clone()])?;
     targets::wasm::build(sh, ctx)?;
     ensure_playwright_chromium(sh, ctx)?;
 
-    let example_dir = ctx.browser_example_dir();
     output::path("Example workspace", &example_dir);
     output::path("Artifact directory", &ctx.example_artifacts_dir("web"));
     let _example_dir = sh.push_dir(&example_dir);
@@ -1108,11 +1111,11 @@ fn run_benchmark_browser_runtime_smoke(
     options: &BrowserSmokeRunOptions<'_>,
 ) -> Result<()> {
     output::phase("Benchmark browser runtime smoke");
-    ensure_javascript_workspace_dependencies(sh, ctx)?;
+    let benchmark_dir = ctx.benchmark_browser_dir();
+    ensure_javascript_workspace_dependencies(sh, ctx, &[benchmark_dir.clone()])?;
     targets::wasm::build(sh, ctx)?;
     ensure_playwright_chromium(sh, ctx)?;
 
-    let benchmark_dir = ctx.benchmark_browser_dir();
     output::path("Benchmark workspace", &benchmark_dir);
     output::path(
         "Artifact directory",
@@ -2905,11 +2908,16 @@ fn find_wheel_artifact(dir: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn ensure_javascript_workspace_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()> {
-    let _dir = sh.push_dir(ctx.workspace_root());
-    output::run_build_command(
+fn ensure_javascript_workspace_dependencies(
+    sh: &Shell,
+    ctx: &BuildContext,
+    package_dirs: &[PathBuf],
+) -> Result<()> {
+    javascript::install_root_workspace_dependencies(
+        sh,
+        ctx,
         "Installing JavaScript workspace dependencies",
-        cmd!(sh, "bun install"),
+        package_dirs,
     )
 }
 
@@ -2918,6 +2926,17 @@ fn demo_test_files(ctx: &BuildContext) -> Result<Vec<PathBuf>> {
     collect_demo_test_files(&ctx.demos_root(), &mut tests)?;
     tests.sort();
     Ok(tests)
+}
+
+fn demo_test_workspaces(ctx: &BuildContext, tests: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut workspaces = Vec::new();
+    for test in tests {
+        let workspace = demo_test_workspace(ctx, test)?;
+        if !workspaces.contains(&workspace) {
+            workspaces.push(workspace);
+        }
+    }
+    Ok(workspaces)
 }
 
 fn demo_test_workspace(ctx: &BuildContext, test: &Path) -> Result<PathBuf> {

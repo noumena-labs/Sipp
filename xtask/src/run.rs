@@ -5,6 +5,7 @@ use crate::cli::{
     RunBenchmarkServeArgs, RunBenchmarksCommands, RunCommands, RunDemoServeArgs, RunDemosCommands,
     RunExampleServeArgs, RunExamplesCommands, RunLlamaBackendOpsArgs, RunLlamaCommands,
 };
+use crate::javascript;
 use crate::output;
 use crate::targets;
 use crate::toolchains::env::apply_toolchains;
@@ -72,7 +73,7 @@ fn run_llama(sh: &Shell, ctx: &BuildContext, command: RunLlamaCommands) -> Resul
 
 fn build_one_demo(sh: &Shell, ctx: &BuildContext, demo: DemoName) -> Result<()> {
     output::phase(&format!("Build browser demo: {}", demo.slug()));
-    ensure_javascript_workspace_dependencies(sh, ctx)?;
+    ensure_javascript_workspace_dependencies(sh, ctx, &ctx.demo_dir(demo.slug()))?;
     targets::wasm::build(sh, ctx)?;
     build_demo_only(sh, ctx, demo)
 }
@@ -97,7 +98,7 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
     output::path("Demo workspace", &ctx.demo_dir(args.demo.slug()));
 
     if !args.no_build {
-        ensure_javascript_workspace_dependencies(sh, ctx)?;
+        ensure_javascript_workspace_dependencies(sh, ctx, &ctx.demo_dir(args.demo.slug()))?;
         targets::wasm::build(sh, ctx)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_demo_only(sh, ctx, args.demo)?;
@@ -133,7 +134,7 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
 
 fn build_one_benchmark(sh: &Shell, ctx: &BuildContext, benchmark: BenchmarkName) -> Result<()> {
     output::phase(&format!("Build benchmark: {}", benchmark.slug()));
-    ensure_javascript_workspace_dependencies(sh, ctx)?;
+    ensure_javascript_workspace_dependencies(sh, ctx, &benchmark_dir(ctx, benchmark))?;
     targets::wasm::build(sh, ctx)?;
     build_benchmark_only(sh, ctx, benchmark)
 }
@@ -161,7 +162,7 @@ fn serve_benchmark(sh: &Shell, ctx: &BuildContext, args: &RunBenchmarkServeArgs)
     output::path("Benchmark workspace", &benchmark_dir(ctx, args.benchmark));
 
     if !args.no_build {
-        ensure_javascript_workspace_dependencies(sh, ctx)?;
+        ensure_javascript_workspace_dependencies(sh, ctx, &benchmark_dir(ctx, args.benchmark))?;
         targets::wasm::build(sh, ctx)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_benchmark_only(sh, ctx, args.benchmark)?;
@@ -191,7 +192,7 @@ fn serve_example(sh: &Shell, ctx: &BuildContext, args: &RunExampleServeArgs) -> 
     output::path("Example workspace", &example_dir(ctx, args.example));
 
     if !args.no_build {
-        ensure_javascript_workspace_dependencies(sh, ctx)?;
+        ensure_javascript_workspace_dependencies(sh, ctx, &example_dir(ctx, args.example))?;
         targets::wasm::build(sh, ctx)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_example_only(sh, ctx, args.example)?;
@@ -356,11 +357,16 @@ fn run_llama_backend_ops_for_backend(
     )
 }
 
-fn ensure_javascript_workspace_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()> {
-    let _dir = sh.push_dir(ctx.workspace_root());
-    output::run_build_command(
+fn ensure_javascript_workspace_dependencies(
+    sh: &Shell,
+    ctx: &BuildContext,
+    package_dir: &Path,
+) -> Result<()> {
+    javascript::install_root_workspace_dependencies(
+        sh,
+        ctx,
         "Installing JavaScript workspace dependencies",
-        cmd!(sh, "bun install"),
+        &[package_dir.to_path_buf()],
     )
 }
 
