@@ -204,7 +204,7 @@ fn run_downloads(
     if downloads.is_empty() {
         output::phase("Downloads skipped");
         output::detail("Toolchains", "cargo xtask toolchain install all");
-        output::detail("JavaScript", "bun install");
+        output::detail("JavaScript", "cargo xtask setup --profile browser --yes");
         output::detail("Sample model", sample_model::sample_model_url());
         return Ok(());
     }
@@ -248,14 +248,14 @@ fn install_javascript_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()>
     {
         let _dir = sh.push_dir(ctx.workspace_root());
         output::run_command(
-            "Installing workspace Bun dependencies",
+            "Installing JavaScript workspace dependencies",
             cmd!(sh, "bun install"),
         )?;
     }
     {
         let _dir = sh.push_dir(ctx.bindings_node_dir());
         output::run_command(
-            "Installing Node binding Bun dependencies",
+            "Installing Node binding JavaScript dependencies",
             cmd!(sh, "bun install"),
         )?;
     }
@@ -324,7 +324,7 @@ impl fmt::Display for SetupDownload {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             SetupDownload::ManagedToolchains => "Download or activate missing managed toolchains",
-            SetupDownload::JavaScriptDependencies => "Install Bun workspace dependencies",
+            SetupDownload::JavaScriptDependencies => "Install JavaScript workspace dependencies",
             SetupDownload::SampleModel => "Download the small Qwen sample GGUF model",
         })
     }

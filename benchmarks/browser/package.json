@@ -20,6 +20,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3",
+    "playwright-core": "^1.54.2",
     "typescript": "^6.0.2",
     "vite": "^5.4.0"
   }

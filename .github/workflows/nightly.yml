@@ -77,7 +77,7 @@ jobs:
           restore-keys: |
             cargo-nightly-${{ runner.os }}-
 
-      - name: Cache Bun dependencies
+      - name: Cache JavaScript dependencies
         uses: actions/cache@v5.0.5
         with:
           path: |
@@ -111,7 +111,7 @@ jobs:
           restore-keys: |
             sample-models-nightly-${{ runner.os }}-
 
-      - name: Install dependencies
+      - name: Install JavaScript workspace dependencies
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun install --frozen-lockfile

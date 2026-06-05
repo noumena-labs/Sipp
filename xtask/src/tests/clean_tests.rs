@@ -48,9 +48,7 @@ fn generated_dirs_include_every_workspace_output_name() {
 
     add_generated_dirs(&mut targets, &root);
 
-    for name in [
-        "dist", ".vite", ".turbo", "coverage", "build", "out", ".next",
-    ] {
+    for name in ["dist", ".vite", "coverage", "build", "out", ".next"] {
         assert!(targets.contains(&root.join(name)));
     }
 }
@@ -75,7 +73,7 @@ fn clean_targets_include_generated_dirs_and_optional_purge_roots() {
     assert!(base.contains(&ctx.cargo_build_root()));
     assert!(base.contains(&ctx.demo_dir("chat").join("dist")));
     assert!(base.contains(&ctx.benchmark_browser_dir().join(".vite")));
-    assert!(base.contains(&ctx.browser_package_dir().join(".turbo")));
+    assert!(base.contains(&ctx.browser_package_dir().join("dist")));
     assert!(!base.contains(&ctx.workspace_root().join("node_modules")));
     assert!(!base.contains(&ctx.toolchain_dir()));
 

@@ -29,15 +29,15 @@ Always use the **`build-orchestrator`** skill when compiling. The repository use
 
 Always use the **`test-runner`** skill when verifying changes.
 - **List Tests:** `cargo xtask test list` (see [docs/testing.md](file:///docs/testing.md) for suite contents)
-- **Run All Tests:** `cargo xtask test run`
-- **xtask Tests:** `cargo xtask test run --suite xtask`
-- **White-box Tests:** `cargo xtask test run --suite rust-crates --package <crate_name>`
-- **Interface Tests:** `cargo xtask test run --suite node-package --backend cpu`
-- **Verify Coverage/Structure:** `cargo xtask test verify --category whitebox`
+- **Run All Tests:** `cargo xtask test unit group full`
+- **xtask Tests:** `cargo xtask test unit suite xtask`
+- **White-box Tests:** `cargo xtask test unit suite rust-crates --package <crate_name>`
+- **Interface Tests:** `cargo xtask test unit suite node-package --backend cpu`
+- **Verify Coverage/Structure:** `cargo xtask test verify --target whitebox`
 - **Rust Tests:** `cargo test` (or `cargo test -p <crate_name>` for narrow Rust-only checks)
 - **Rust Linting/Formatting:** `cargo clippy` and `cargo fmt`
-- **TypeScript Typecheck:** `pnpm typecheck` or `bun run typecheck`
-- **TypeScript Linting:** `pnpm lint` or `bun run lint`
+- **Browser Package TypeScript Tests:** `cargo xtask test unit suite browser-package`
+- **Demo TypeScript Tests:** `cargo xtask test unit suite demos`
 
 ---
 

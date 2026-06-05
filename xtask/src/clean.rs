@@ -22,9 +22,7 @@ mod clean_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const GENERATED_DIRS: &[&str] = &[
-    "dist", ".vite", ".turbo", "coverage", "build", "out", ".next",
-];
+const GENERATED_DIRS: &[&str] = &["dist", ".vite", "coverage", "build", "out", ".next"];
 
 /// Runs the workspace cleanup command.
 pub fn run(sh: &Shell, ctx: &BuildContext, args: &CleanArgs) -> Result<()> {
@@ -83,9 +81,7 @@ fn clean_targets(ctx: &BuildContext, args: &CleanArgs) -> Result<Vec<PathBuf>> {
     targets.insert(ctx.artifacts_root());
     targets.insert(ctx.tmp_dir());
     targets.insert(ctx.command_logs_dir());
-    targets.insert(ctx.workspace_root().join(".turbo"));
     targets.insert(ctx.browser_package_dir().join("dist"));
-    targets.insert(ctx.browser_package_dir().join(".turbo"));
 
     for dir in ctx.demo_dirs()? {
         add_generated_dirs(&mut targets, &dir);

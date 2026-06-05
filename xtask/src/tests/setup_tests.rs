@@ -92,7 +92,7 @@ fn setup_download_display_text_is_actionable() {
     );
     assert_eq!(
         SetupDownload::JavaScriptDependencies.to_string(),
-        "Install Bun workspace dependencies"
+        "Install JavaScript workspace dependencies"
     );
     assert_eq!(
         SetupDownload::SampleModel.to_string(),

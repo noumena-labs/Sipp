@@ -45,16 +45,8 @@ const PROVIDER_GATEWAY_SMOKE_TARGETS: &[RustTestTarget] = &[RustTestTarget::test
     "provider_gateway_smoke",
 )];
 const DEMO_TEST_SUFFIX: &str = ".test.ts";
-const BROWSER_PACKAGE_TEST_DIR: &str = "lib/web/tests";
-const SKIPPED_DEMO_TEST_DIRS: &[&str] = &[
-    "node_modules",
-    "dist",
-    "build",
-    "out",
-    ".vite",
-    ".turbo",
-    "coverage",
-];
+const SKIPPED_DEMO_TEST_DIRS: &[&str] =
+    &["node_modules", "dist", "build", "out", ".vite", "coverage"];
 
 const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::lib("cogentlm"),
@@ -621,17 +613,17 @@ fn run_rust_coverage_targets(
 fn run_package_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     output::phase("White-box browser package TypeScript tests");
     targets::wasm::build(sh, ctx)?;
-    let _dir = sh.push_dir(ctx.workspace_root());
-    let browser_package_test_dir = BROWSER_PACKAGE_TEST_DIR;
+    let browser_package_dir = ctx.browser_package_dir();
+    let _dir = sh.push_dir(&browser_package_dir);
     output::run_command(
         "Running browser package TypeScript tests",
-        cmd!(sh, "bun test {browser_package_test_dir}"),
+        cmd!(sh, "bun test tests"),
     )
 }
 
 fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     output::phase("White-box browser demo TypeScript tests");
-    ensure_workspace_bun_install(sh, ctx)?;
+    ensure_javascript_workspace_dependencies(sh, ctx)?;
     targets::wasm::build(sh, ctx)?;
 
     let tests = demo_test_files(ctx)?;
@@ -640,13 +632,20 @@ fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         return Ok(());
     }
 
-    let _dir = sh.push_dir(ctx.workspace_root());
     output::detail("Test files", tests.len());
-    let mut test_cmd = cmd!(sh, "bun test");
     for test in tests {
-        test_cmd = test_cmd.arg(test);
+        let workspace = demo_test_workspace(ctx, &test)?;
+        let relative_test = test.strip_prefix(&workspace).unwrap_or(&test);
+        let _dir = sh.push_dir(&workspace);
+        output::run_command(
+            format!(
+                "Running demo TypeScript test {}",
+                display_relative(ctx, &test)
+            ),
+            cmd!(sh, "bun test {relative_test}"),
+        )?;
     }
-    output::run_command("Running demo TypeScript tests through Bun", test_cmd)
+    Ok(())
 }
 
 fn run_node_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> Result<()> {
@@ -770,7 +769,7 @@ fn run_browser_example_smoke(
     output::phase("Browser example smoke");
     let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
     output::path("Model", &model);
-    ensure_workspace_bun_install(sh, ctx)?;
+    ensure_javascript_workspace_dependencies(sh, ctx)?;
     targets::wasm::build(sh, ctx)?;
     ensure_playwright_chromium(sh, ctx)?;
 
@@ -808,7 +807,7 @@ fn run_benchmark_browser_runtime_smoke(
     options: &BrowserSmokeRunOptions<'_>,
 ) -> Result<()> {
     output::phase("Benchmark browser runtime smoke");
-    ensure_workspace_bun_install(sh, ctx)?;
+    ensure_javascript_workspace_dependencies(sh, ctx)?;
     targets::wasm::build(sh, ctx)?;
     ensure_playwright_chromium(sh, ctx)?;
 
@@ -2605,10 +2604,10 @@ fn find_wheel_artifact(dir: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn ensure_workspace_bun_install(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+fn ensure_javascript_workspace_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let _dir = sh.push_dir(ctx.workspace_root());
     output::run_command(
-        "Installing workspace Bun dependencies",
+        "Installing JavaScript workspace dependencies",
         cmd!(sh, "bun install"),
     )
 }
@@ -2618,6 +2617,17 @@ fn demo_test_files(ctx: &BuildContext) -> Result<Vec<PathBuf>> {
     collect_demo_test_files(&ctx.demos_root(), &mut tests)?;
     tests.sort();
     Ok(tests)
+}
+
+fn demo_test_workspace(ctx: &BuildContext, test: &Path) -> Result<PathBuf> {
+    let relative = test
+        .strip_prefix(ctx.demos_root())
+        .with_context(|| format!("demo test is outside demos/: {}", test.display()))?;
+    let demo_name = relative
+        .components()
+        .next()
+        .with_context(|| format!("demo test has no demo workspace: {}", test.display()))?;
+    Ok(ctx.demos_root().join(demo_name.as_os_str()))
 }
 
 fn package_ts_test_files(ctx: &BuildContext) -> Result<Vec<PathBuf>> {

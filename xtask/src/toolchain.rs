@@ -292,7 +292,7 @@ pub(crate) fn node_workspace_status(ctx: &BuildContext) -> ToolStatus {
         ToolStatus::Warn {
             name: "Node workspaces",
             detail: format!("missing dependency installs: {detail}"),
-            fix: "Run `bun install` at the workspace root and in bindings/node when needed",
+            fix: "Run `cargo xtask setup --profile full --yes`",
         }
     }
 }

@@ -9,8 +9,7 @@ The app is a dynamic sketch pad. The user draws with fixed colors and a simple p
 From the repo root:
 
 ```bash
-bun install
-bun run proactive-ui:dev
+cargo xtask run demos serve proactive-ui
 ```
 
 Open the printed local URL, load the default vision model/projector pair, then draw on the canvas. Auto inference runs after each stroke by default. Use `AI_TRACE` for manual deeper inspection.

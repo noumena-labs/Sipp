@@ -72,7 +72,7 @@ fn run_llama(sh: &Shell, ctx: &BuildContext, command: RunLlamaCommands) -> Resul
 
 fn build_one_demo(sh: &Shell, ctx: &BuildContext, demo: DemoName) -> Result<()> {
     output::phase(&format!("Build browser demo: {}", demo.slug()));
-    ensure_workspace_bun_install(sh, ctx)?;
+    ensure_javascript_workspace_dependencies(sh, ctx)?;
     targets::wasm::build(sh, ctx)?;
     build_demo_only(sh, ctx, demo)
 }
@@ -97,7 +97,7 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
     output::path("Demo workspace", &ctx.demo_dir(args.demo.slug()));
 
     if !args.no_build {
-        ensure_workspace_bun_install(sh, ctx)?;
+        ensure_javascript_workspace_dependencies(sh, ctx)?;
         targets::wasm::build(sh, ctx)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_demo_only(sh, ctx, args.demo)?;
@@ -133,7 +133,7 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
 
 fn build_one_benchmark(sh: &Shell, ctx: &BuildContext, benchmark: BenchmarkName) -> Result<()> {
     output::phase(&format!("Build benchmark: {}", benchmark.slug()));
-    ensure_workspace_bun_install(sh, ctx)?;
+    ensure_javascript_workspace_dependencies(sh, ctx)?;
     targets::wasm::build(sh, ctx)?;
     build_benchmark_only(sh, ctx, benchmark)
 }
@@ -161,7 +161,7 @@ fn serve_benchmark(sh: &Shell, ctx: &BuildContext, args: &RunBenchmarkServeArgs)
     output::path("Benchmark workspace", &benchmark_dir(ctx, args.benchmark));
 
     if !args.no_build {
-        ensure_workspace_bun_install(sh, ctx)?;
+        ensure_javascript_workspace_dependencies(sh, ctx)?;
         targets::wasm::build(sh, ctx)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_benchmark_only(sh, ctx, args.benchmark)?;
@@ -191,7 +191,7 @@ fn serve_example(sh: &Shell, ctx: &BuildContext, args: &RunExampleServeArgs) -> 
     output::path("Example workspace", &example_dir(ctx, args.example));
 
     if !args.no_build {
-        ensure_workspace_bun_install(sh, ctx)?;
+        ensure_javascript_workspace_dependencies(sh, ctx)?;
         targets::wasm::build(sh, ctx)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_example_only(sh, ctx, args.example)?;
@@ -356,10 +356,10 @@ fn run_llama_backend_ops_for_backend(
     )
 }
 
-fn ensure_workspace_bun_install(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+fn ensure_javascript_workspace_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let _dir = sh.push_dir(ctx.workspace_root());
     output::run_command(
-        "Installing workspace Bun dependencies",
+        "Installing JavaScript workspace dependencies",
         cmd!(sh, "bun install"),
     )
 }

@@ -15,9 +15,7 @@ The app keeps responsibilities split cleanly:
 From the repo root:
 
 ```bash
-bun install
-bun run build:wasm
-bun run avatar:dev
+cargo xtask run demos serve avatar
 ```
 
 Open the printed local URL and press `Start`. The start screen pre-populates a

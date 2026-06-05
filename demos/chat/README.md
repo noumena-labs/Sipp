@@ -6,12 +6,12 @@ This directory contains minimal, developer-centric examples for the `@noumena-la
 
 1. **Install Dependencies**:
    ```bash
-   bun install
+   cargo xtask setup --profile browser
    ```
 
 2. **Run the Dev Server**:
    ```bash
-   bun run dev
+   cargo xtask run demos serve chat
    ```
 
 3. **Open in Browser**:

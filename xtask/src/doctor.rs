@@ -81,7 +81,10 @@ fn print_node_statuses(ctx: &BuildContext) {
     output::phase("Node binding readiness");
     optional_command_status("Bun", "bun", "Install Bun from https://bun.sh/").print();
     toolchain::node_workspace_status(ctx).print();
-    output::detail("Recovery", "Run `bun install` and `cargo xtask build node`");
+    output::detail(
+        "Recovery",
+        "Run `cargo xtask setup --profile bindings --yes`",
+    );
 }
 
 fn print_python_statuses(ctx: &BuildContext) {
@@ -102,7 +105,7 @@ fn print_wasm_statuses(ctx: &BuildContext, include_js_workspace: bool) {
     }
     output::detail(
         "Recovery",
-        "Run `cargo xtask toolchain install emsdk` and `bun install`",
+        "Run `cargo xtask setup --profile browser --yes`",
     );
 }
 
