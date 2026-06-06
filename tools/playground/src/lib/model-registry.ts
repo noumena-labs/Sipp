@@ -7,7 +7,7 @@
 
 import type { ModelSource } from '@noumena-labs/cogentlm';
 
-export type ModelCapability = 'text' | 'vision';
+export type ModelCapability = 'text' | 'vision' | 'embedding';
 
 export interface ModelVariant {
   /** Quantization label (e.g. "Q4_0", "Q4_K_M") */
@@ -31,6 +31,8 @@ export interface ModelRegistryEntry {
   parameterCount: string;
   /** What this model can do */
   capability: ModelCapability;
+  /** Optional runtime model class hint used for playground defaults. */
+  modelClass?: 'decoder_only' | 'encoder_decoder' | 'encoder_only';
   /** Available quantization variants */
   variants: ModelVariant[];
   /** Default variant index */
@@ -80,6 +82,51 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q8_0',
         sizeBytes: 386_000_000,
         source: 'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
+      },
+    ],
+  },
+  {
+    id: 't5-small-gguf',
+    name: 'T5 Small Text-to-text',
+    publisher: 'Noumena Labs',
+    parameterCount: '60.5M',
+    capability: 'text',
+    modelClass: 'encoder_decoder',
+    variants: [
+      {
+        quant: 'Q5_K_M',
+        sizeBytes: 46_300_000,
+        source: 'https://huggingface.co/noumenalabs/t5-small-gguf/resolve/main/t5-small-q5_k_m.gguf',
+      },
+    ],
+  },
+
+  // Embedding models
+  {
+    id: 'bge-small-en-v1.5',
+    name: 'BGE Small EN v1.5',
+    publisher: 'BAAI',
+    parameterCount: '33M',
+    capability: 'embedding',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 29_200_000,
+        source: 'https://huggingface.co/ChristianAzinn/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5.Q4_K_M.gguf',
+      },
+    ],
+  },
+  {
+    id: 'nomic-embed-text-v1.5',
+    name: 'Nomic Embed Text v1.5',
+    publisher: 'Nomic',
+    parameterCount: '137M',
+    capability: 'embedding',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 84_100_000,
+        source: 'https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf',
       },
     ],
   },
@@ -157,6 +204,24 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       },
     ],
   },
+  {
+    id: 'minicpm-v-2.6',
+    name: 'MiniCPM-V 2.6',
+    publisher: 'MiniCPM',
+    parameterCount: '8B',
+    capability: 'vision',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 4_680_000_000,
+        projectorSizeBytes: 1_040_000_000,
+        source: {
+          model: 'https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/MiniCPM-V-2_6-Q4_K_M.gguf',
+          projector: 'https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/mmproj-model-f16-2.gguf',
+        },
+      },
+    ],
+  },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -198,8 +263,16 @@ export function isVisionModel(model: ModelRegistryEntry): boolean {
   return model.capability === 'vision';
 }
 
+export function isEmbeddingModel(model: ModelRegistryEntry): boolean {
+  return model.capability === 'embedding';
+}
+
 export function getVisionModels(): ModelRegistryEntry[] {
   return MODEL_REGISTRY.filter((m) => m.capability === 'vision');
+}
+
+export function getEmbeddingModels(): ModelRegistryEntry[] {
+  return MODEL_REGISTRY.filter((m) => m.capability === 'embedding');
 }
 
 export function getTextModels(): ModelRegistryEntry[] {

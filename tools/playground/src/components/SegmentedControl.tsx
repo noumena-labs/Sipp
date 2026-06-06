@@ -1,4 +1,5 @@
 export interface SegmentedOption<T extends string> {
+  readonly disabled?: boolean;
   readonly label: string;
   readonly title?: string;
   readonly value: T;
@@ -6,6 +7,7 @@ export interface SegmentedOption<T extends string> {
 
 interface SegmentedControlProps<T extends string> {
   readonly ariaLabel: string;
+  readonly disabled?: boolean;
   readonly onChange: (value: T) => void;
   readonly options: readonly SegmentedOption<T>[];
   readonly value: T;
@@ -13,6 +15,7 @@ interface SegmentedControlProps<T extends string> {
 
 export function SegmentedControl<T extends string>({
   ariaLabel,
+  disabled = false,
   onChange,
   options,
   value,
@@ -22,6 +25,7 @@ export function SegmentedControl<T extends string>({
       {options.map((option) => (
         <button
           className={`segmented-control__item ${value === option.value ? 'active' : ''}`}
+          disabled={disabled || option.disabled}
           key={option.value}
           onClick={() => onChange(option.value)}
           title={option.title}

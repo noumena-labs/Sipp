@@ -9,7 +9,6 @@ import {
 } from '@noumena-labs/cogentlm';
 import {
   Activity,
-  BarChart3,
   Cpu,
   Database,
   Download,
@@ -52,11 +51,16 @@ import {
 } from './lib/utils';
 import {
   formatSize,
+  getEmbeddingModels,
   getDefaultVariant,
   getModelById,
   getVariantPrimaryUrl,
+  getVisionModels,
+  isEmbeddingModel,
   isVisionModel,
   MODEL_REGISTRY,
+  type ModelCapability,
+  type ModelRegistryEntry,
 } from './lib/model-registry';
 import type {
   BenchmarkOperation,
@@ -109,6 +113,12 @@ interface BenchmarkReport {
     summary: ReturnType<typeof summarizeMemorySnapshots>;
   };
   trace: BenchmarkTraceReport;
+}
+
+interface ImageSelectionMeta {
+  readonly name: string;
+  readonly size: number;
+  readonly type: string;
 }
 
 const AUTO_SPLIT_SMOKE_BYTES = 256 * 1024 * 1024;
@@ -259,7 +269,7 @@ function downloadJson(filename: string, value: unknown): void {
 }
 
 function logBenchmarkReport(report: BenchmarkReport): void {
-  console.groupCollapsed('[CogentLM playground] diagnostics run complete');
+  console.groupCollapsed('[CogentLM playground] benchmark suite complete');
   console.log('backend profile', report.backend);
   console.log('runtime config', report.settings.runtime);
   console.log('summary', report.trace.analysis);
@@ -269,10 +279,129 @@ function logBenchmarkReport(report: BenchmarkReport): void {
 
 const DEFAULT_QUERY_PROMPT = 'Describe how to benchmark browser-hosted inference.';
 const ENCODER_DECODER_QUERY_PROMPT = 'translate English to German: The house is wonderful.';
+const DEFAULT_VISION_PROMPT =
+  'Describe the image in detail, including visible objects, text, context, and uncertainty.';
+const DEFAULT_EMBED_PROMPT = 'search_query: browser-hosted inference playground observability';
 const DEFAULT_TOKEN_COUNT = 64;
 const ENCODER_DECODER_TOKEN_COUNT = 32;
 type ModelSourceType = 'registry' | 'url' | 'file';
-type PlaygroundView = 'request' | 'benchmarks' | 'observability' | 'report';
+type PlaygroundView =
+  | 'requests'
+  | 'vision'
+  | 'embeddings'
+  | 'benchmarks'
+  | 'observability'
+  | 'reports';
+type TextOperation = Extract<BenchmarkOperation, 'chat' | 'query'>;
+type EmbeddingUseCase = 'semanticSearch' | 'ragDocument' | 'classification' | 'clustering';
+
+const CAPABILITY_LABELS: Record<ModelCapability, string> = {
+  embedding: 'Embed',
+  text: 'Text',
+  vision: 'Vision',
+};
+
+const EMBEDDING_USE_CASES: readonly {
+  readonly description: string;
+  readonly label: string;
+  readonly prefix: string;
+  readonly prompt: string;
+  readonly value: EmbeddingUseCase;
+}[] = [
+  {
+    description: 'Turn a user search into a vector for similarity search.',
+    label: 'Semantic Search',
+    prefix: 'search_query:',
+    prompt: DEFAULT_EMBED_PROMPT,
+    value: 'semanticSearch',
+  },
+  {
+    description: 'Encode a passage before storing it in a retrieval index.',
+    label: 'RAG Document',
+    prefix: 'search_document:',
+    prompt:
+      'search_document: The CogentLM playground runs local models and captures latency, cache, memory, and backend metrics.',
+    value: 'ragDocument',
+  },
+  {
+    description: 'Compare short labels or examples by vector distance.',
+    label: 'Classification',
+    prefix: 'plain text',
+    prompt:
+      'Classify this support ticket by comparing it with known examples: vision setup fails because the projector is missing.',
+    value: 'classification',
+  },
+  {
+    description: 'Group related text snippets without generating tokens.',
+    label: 'Clustering',
+    prefix: 'plain text',
+    prompt: 'Cluster feedback about browser inference latency, memory pressure, and model setup.',
+    value: 'clustering',
+  },
+];
+
+function capabilityLabel(capability: ModelCapability): string {
+  return CAPABILITY_LABELS[capability];
+}
+
+function totalVariantSize(model: ModelRegistryEntry): number {
+  const variant = getDefaultVariant(model);
+  return variant.sizeBytes + (variant.projectorSizeBytes ?? 0);
+}
+
+function formatModelOption(model: ModelRegistryEntry): string {
+  const variant = getDefaultVariant(model);
+  return [
+    `[${capabilityLabel(model.capability)}] ${model.name}`,
+    `(${model.parameterCount}, ${variant.quant})`,
+    `- ${formatSize(totalVariantSize(model))}`,
+  ].join(' ');
+}
+
+function isManagedPrompt(value: string): boolean {
+  return [
+    DEFAULT_QUERY_PROMPT,
+    ENCODER_DECODER_QUERY_PROMPT,
+    DEFAULT_VISION_PROMPT,
+    ...EMBEDDING_USE_CASES.map((useCase) => useCase.prompt),
+  ].includes(value);
+}
+
+function registryModelSupportsOperation(
+  model: ModelRegistryEntry,
+  operation: BenchmarkOperation
+): boolean {
+  if (operation === 'embed') {
+    return isEmbeddingModel(model);
+  }
+  return model.capability !== 'embedding';
+}
+
+function defaultOperationForRegistryEntry(model: ModelRegistryEntry): BenchmarkOperation {
+  if (isEmbeddingModel(model)) {
+    return 'embed';
+  }
+  if (model.modelClass === 'encoder_decoder') {
+    return 'query';
+  }
+  return 'chat';
+}
+
+function defaultPromptForRegistryEntry(model: ModelRegistryEntry): string {
+  if (isVisionModel(model)) {
+    return DEFAULT_VISION_PROMPT;
+  }
+  if (model.modelClass === 'encoder_decoder') {
+    return ENCODER_DECODER_QUERY_PROMPT;
+  }
+  return DEFAULT_QUERY_PROMPT;
+}
+
+function defaultTokenCountForRegistryEntry(model: ModelRegistryEntry): number {
+  return model.modelClass === 'encoder_decoder'
+    ? ENCODER_DECODER_TOKEN_COUNT
+    : DEFAULT_TOKEN_COUNT;
+}
 
 const MODEL_SOURCE_OPTIONS: readonly { readonly label: string; readonly value: ModelSourceType }[] = [
   { label: 'Library', value: 'registry' },
@@ -280,21 +409,28 @@ const MODEL_SOURCE_OPTIONS: readonly { readonly label: string; readonly value: M
   { label: 'Local File', value: 'file' },
 ];
 
-const OPERATION_OPTIONS: readonly { readonly label: string; readonly value: BenchmarkOperation }[] = [
+const TEXT_OPERATION_OPTIONS: readonly { readonly label: string; readonly value: TextOperation }[] = [
   { label: 'Chat', value: 'chat' },
   { label: 'Query', value: 'query' },
+];
+
+const OPERATION_OPTIONS: readonly { readonly label: string; readonly value: BenchmarkOperation }[] = [
+  ...TEXT_OPERATION_OPTIONS,
   { label: 'Embed', value: 'embed' },
 ];
 
 const VIEW_OPTIONS: readonly {
   readonly icon: typeof Activity;
   readonly label: string;
+  readonly title: string;
   readonly value: PlaygroundView;
 }[] = [
-  { icon: TerminalSquare, label: 'Request', value: 'request' },
-  { icon: BarChart3, label: 'Benchmarks', value: 'benchmarks' },
-  { icon: Activity, label: 'Observability', value: 'observability' },
-  { icon: FileJson, label: 'Report', value: 'report' },
+  { icon: TerminalSquare, label: 'Requests', title: 'Chat and query requests', value: 'requests' },
+  { icon: Cpu, label: 'Vision', title: 'Image and prompt requests', value: 'vision' },
+  { icon: Database, label: 'Embeddings', title: 'Vector embedding requests', value: 'embeddings' },
+  { icon: Gauge, label: 'Benchmarks', title: 'Benchmark suite and traces', value: 'benchmarks' },
+  { icon: Activity, label: 'Observability', title: 'Runtime and request observability', value: 'observability' },
+  { icon: FileJson, label: 'Reports', title: 'Benchmark report output', value: 'reports' },
 ];
 
 function defaultOperationForModel(model: ModelInfo): BenchmarkOperation {
@@ -368,7 +504,7 @@ export default function App() {
   const [client, setClient] = useState<CogentClient | null>(null);
   const [status, setStatus] = useState('booting');
   const [isBusy, setIsBusy] = useState(false);
-  const [activeView, setActiveView] = useState<PlaygroundView>('request');
+  const [activeView, setActiveView] = useState<PlaygroundView>('requests');
   const [modelType, setModelType] = useState<ModelSourceType>('registry');
   const [selectedRegistryId, setSelectedRegistryId] = useState(MODEL_REGISTRY[0].id);
   const selectedModel = getModelById(selectedRegistryId) ?? MODEL_REGISTRY[0];
@@ -377,11 +513,14 @@ export default function App() {
   const [projectorUrl, setProjectorUrl] = useState('');
   const [operation, setOperation] = useState<BenchmarkOperation>('chat');
   const [prompt, setPrompt] = useState(DEFAULT_QUERY_PROMPT);
+  const [embeddingUseCase, setEmbeddingUseCase] =
+    useState<EmbeddingUseCase>('semanticSearch');
   const [tokenCount, setTokenCount] = useState(DEFAULT_TOKEN_COUNT);
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
   const [emitTokens, setEmitTokens] = useState(true);
   const [imageSource, setImageSource] = useState('');
+  const [imageMeta, setImageMeta] = useState<ImageSelectionMeta | null>(null);
   const [imageEnabled, setImageEnabled] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
   const [installedModels, setInstalledModels] = useState<ModelInfo[]>([]);
@@ -583,14 +722,53 @@ export default function App() {
   };
 
   const modelSource = (): ModelSource | null => {
-    const projector = projectorOverride();
-    if (modelType === 'registry') return withProjector(selectedVariant.source, projector);
+    if (modelType === 'registry') return selectedVariant.source;
     if (modelType === 'url') {
+      const projector = projectorOverride();
       return modelUrl.trim().length > 0 ? withProjector(modelUrl.trim(), projector) : null;
     }
     const files = Array.from(fileInputRef.current?.files ?? []);
     if (files.length === 0) return null;
-    return withProjector(files.length === 1 ? files[0] : files, projector);
+    return files.length === 1 ? files[0] : files;
+  };
+
+  const applyEmbeddingUseCase = (value: EmbeddingUseCase): void => {
+    const nextUseCase =
+      EMBEDDING_USE_CASES.find((useCase) => useCase.value === value) ?? EMBEDDING_USE_CASES[0];
+    setEmbeddingUseCase(nextUseCase.value);
+    setPrompt(nextUseCase.prompt);
+  };
+
+  const configureRegistryEntry = (entry: ModelRegistryEntry): void => {
+    const variant = getDefaultVariant(entry);
+    setSelectedRegistryId(entry.id);
+    setModelUrl(getVariantPrimaryUrl(variant));
+    setProjectorUrl('');
+
+    if (isVisionModel(entry)) {
+      setActiveView('vision');
+      setOperation(defaultOperationForRegistryEntry(entry));
+      setImageEnabled(true);
+      setPrompt(defaultPromptForRegistryEntry(entry));
+      setTokenCount(defaultTokenCountForRegistryEntry(entry));
+      return;
+    }
+
+    if (isEmbeddingModel(entry)) {
+      setActiveView('embeddings');
+      setOperation('embed');
+      setImageEnabled(false);
+      applyEmbeddingUseCase('semanticSearch');
+      return;
+    }
+
+    setActiveView('requests');
+    setOperation(defaultOperationForRegistryEntry(entry));
+    setImageEnabled(false);
+    if (isManagedPrompt(prompt)) {
+      setPrompt(defaultPromptForRegistryEntry(entry));
+    }
+    setTokenCount(defaultTokenCountForRegistryEntry(entry));
   };
 
   const refreshModels = async (targetClient: CogentClient) => {
@@ -663,9 +841,13 @@ export default function App() {
     }
   };
 
-  const runQuery = async () => {
+  const runQuery = async (
+    requestedOperation: BenchmarkOperation = operation,
+    targetView: PlaygroundView = 'requests',
+    includeImage = imageEnabled
+  ) => {
     if (client == null) return;
-    setActiveView('request');
+    setActiveView(targetView);
     setIsBusy(true);
     setResponse('');
     setLastRun(null);
@@ -677,7 +859,7 @@ export default function App() {
       }
       const nextSourceKey = sourceKey(source);
       const loadedModel = client.currentLocal();
-      let requestOperation = operation;
+      let requestOperation = requestedOperation;
       let requestPrompt = prompt;
       let requestTokenCount = tokenCount;
       if (
@@ -687,16 +869,15 @@ export default function App() {
       ) {
         const info = await loadLocalSelection(client, source);
         if (!modelSupportsOperation(info, requestOperation)) {
-          requestOperation = defaultOperationForModel(info);
+          setStatus(`${info.name} does not support ${requestOperation}.`);
+          return;
         }
         requestPrompt = effectivePromptForModel(info, requestPrompt);
         requestTokenCount = effectiveTokenCountForModel(info, requestTokenCount);
         setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
       } else if (!modelSupportsOperation(loadedModel, requestOperation)) {
-        requestOperation = defaultOperationForModel(loadedModel);
-        setOperation(requestOperation);
-        requestPrompt = effectivePromptForModel(loadedModel, requestPrompt);
-        requestTokenCount = effectiveTokenCountForModel(loadedModel, requestTokenCount);
+        setStatus(`${loadedModel.name} does not support ${requestOperation}.`);
+        return;
       } else {
         requestPrompt = effectivePromptForModel(loadedModel, requestPrompt);
         requestTokenCount = effectiveTokenCountForModel(loadedModel, requestTokenCount);
@@ -704,12 +885,15 @@ export default function App() {
       if (requestPrompt !== prompt) {
         setPrompt(requestPrompt);
       }
+      if (requestOperation !== operation) {
+        setOperation(requestOperation);
+      }
       if (requestTokenCount !== tokenCount) {
         setTokenCount(requestTokenCount);
       }
 
       const image =
-        requestOperation !== 'embed' && imageEnabled && imageSource.trim().length > 0
+        requestOperation !== 'embed' && includeImage && imageSource.trim().length > 0
           ? await fetchImageBytes(imageSource.trim())
           : undefined;
       const requestEmitTokens = requestOperation !== 'embed' && emitTokens;
@@ -913,7 +1097,7 @@ export default function App() {
       setMemorySnapshots(snapshots);
       setBenchmarkReport(report);
       logBenchmarkReport(report);
-      setStatus('diagnostics complete');
+      setStatus('benchmark complete');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -931,6 +1115,11 @@ export default function App() {
       return;
     }
     setImageSource(await fileToBase64(file));
+    setImageMeta({
+      name: file.name,
+      size: file.size,
+      type: file.type || 'image',
+    });
     setImageEnabled(true);
   };
 
@@ -982,6 +1171,200 @@ export default function App() {
     <div className={`response-console ${isBusy ? 'generating' : ''}`} ref={responseElementRef}>
       {response || (isBusy ? 'Running...' : emptyLabel)}
     </div>
+  );
+
+  const selectedEmbeddingUseCase =
+    EMBEDDING_USE_CASES.find((useCase) => useCase.value === embeddingUseCase) ??
+    EMBEDDING_USE_CASES[0];
+  const selectedSourceForState = modelSource();
+  const selectedSourceKey =
+    selectedSourceForState == null ? null : sourceKey(selectedSourceForState);
+  const isLoadedSelectedSource =
+    currentModel?.loaded === true &&
+    selectedSourceKey != null &&
+    loadedSourceKeyRef.current === selectedSourceKey;
+
+  const selectedRegistryOperationReason = (
+    requestedOperation: BenchmarkOperation
+  ): string | null => {
+    if (modelType !== 'registry') {
+      return null;
+    }
+    if (registryModelSupportsOperation(selectedModel, requestedOperation)) {
+      return null;
+    }
+    return `${selectedModel.name} is a ${capabilityLabel(selectedModel.capability)} model.`;
+  };
+
+  const loadedModelOperationReason = (
+    requestedOperation: BenchmarkOperation
+  ): string | null => {
+    if (!isLoadedSelectedSource || currentModel == null) {
+      return null;
+    }
+    if (modelSupportsOperation(currentModel, requestedOperation)) {
+      return null;
+    }
+    return `${currentModel.name} does not support ${requestedOperation}.`;
+  };
+
+  const operationDisabledReason = (
+    requestedOperation: BenchmarkOperation
+  ): string | null =>
+    selectedRegistryOperationReason(requestedOperation) ??
+    loadedModelOperationReason(requestedOperation);
+
+  const textOperation: TextOperation = operation === 'query' ? 'query' : 'chat';
+  const textRequestDisabledReason = operationDisabledReason(textOperation);
+  const visionDisabledReason =
+    modelType === 'registry' && !isVisionModel(selectedModel)
+      ? `${selectedModel.name} is a ${capabilityLabel(selectedModel.capability)} model. Select a Vision model to enable image inputs.`
+      : isLoadedSelectedSource && currentModel != null && currentModel.modality !== 'vision'
+        ? `${currentModel.name} is loaded as a ${currentModel.modality} model. Load a Vision model to enable image inputs.`
+        : null;
+  const embeddingDisabledReason =
+    modelType === 'registry' && !isEmbeddingModel(selectedModel)
+      ? `${selectedModel.name} is a ${capabilityLabel(selectedModel.capability)} model. Select an Embed model to generate vectors.`
+      : isLoadedSelectedSource &&
+          currentModel?.capabilities != null &&
+          !currentModel.capabilities.supportsEmbeddings
+        ? `${currentModel.name} does not support embeddings. Load an Embed model to generate vectors.`
+        : null;
+  const urlProjectorConfigured =
+    projectorUrl.trim().length > 0 ||
+    (projectorFileInputRef.current?.files?.length ?? 0) > 0;
+  const projectorDetail =
+    modelType === 'registry'
+      ? isVisionModel(selectedModel)
+        ? 'registry/default'
+        : 'n/a'
+      : modelType === 'url'
+        ? urlProjectorConfigured
+          ? 'url/file override'
+          : 'not provided'
+        : 'local source files';
+  const sourceDetailRows =
+    modelType === 'registry'
+      ? [
+          { label: 'Capability', value: capabilityLabel(selectedModel.capability) },
+          { label: 'Variant', value: getDefaultVariant(selectedModel).quant },
+          { label: 'Download', value: formatSize(totalVariantSize(selectedModel)) },
+          { label: 'Projector', value: projectorDetail },
+        ]
+      : modelType === 'url'
+        ? [
+            { label: 'Capability', value: currentModel?.capabilities == null ? 'unknown until load' : 'loaded' },
+            { label: 'Model URL', value: modelUrl.trim().length > 0 ? 'provided' : 'missing' },
+            { label: 'Projector', value: projectorDetail },
+          ]
+        : [
+            { label: 'Capability', value: currentModel?.capabilities == null ? 'unknown until load' : 'loaded' },
+            { label: 'Source', value: 'local GGUF file' },
+            { label: 'Projector', value: projectorDetail },
+          ];
+  const imagePreviewSource =
+    imageEnabled && imageSource.trim().length > 0 ? imageSource.trim() : null;
+  const imageSelectionKind =
+    imagePreviewSource == null ? 'none' : imageMeta == null ? 'url' : 'file';
+  const imageSelectionName =
+    imageMeta?.name ??
+    (imagePreviewSource == null
+      ? 'none'
+      : imagePreviewSource.startsWith('data:')
+        ? 'inline image'
+        : imagePreviewSource);
+  const benchmarkDisabledReason = operationDisabledReason(operation);
+  const tokenEmissionDisabledReason =
+    operation === 'embed' ? 'Embedding requests return vectors and do not emit tokens.' : null;
+  const visionSurfaceClass =
+    visionDisabledReason == null ? 'form-stack' : 'form-stack disabled-surface';
+  const embeddingSurfaceClass =
+    embeddingDisabledReason == null ? 'form-stack' : 'form-stack disabled-surface';
+  const operationOptionsForCurrentModel = OPERATION_OPTIONS.map((option) => {
+    const disabledReason = operationDisabledReason(option.value);
+    return {
+      ...option,
+      disabled: disabledReason != null,
+      title: disabledReason ?? option.label,
+    };
+  });
+  const textOperationOptionsForCurrentModel = TEXT_OPERATION_OPTIONS.map((option) => {
+    const disabledReason = operationDisabledReason(option.value);
+    return {
+      ...option,
+      disabled: disabledReason != null,
+      title: disabledReason ?? option.label,
+    };
+  });
+  const embeddingUseCaseOptions = EMBEDDING_USE_CASES.map((useCase) => ({
+    disabled: embeddingDisabledReason != null,
+    label: useCase.label,
+    title: embeddingDisabledReason ?? useCase.description,
+    value: useCase.value,
+  }));
+
+  const runVisionRequest = async () => {
+    if (visionDisabledReason != null) {
+      setStatus(visionDisabledReason);
+      return;
+    }
+    if (imageSource.trim().length === 0) {
+      setStatus('Add an image for the vision request.');
+      return;
+    }
+    setImageEnabled(true);
+    await runQuery(textOperation, 'vision', true);
+  };
+
+  const runEmbeddingRequest = async () => {
+    if (embeddingDisabledReason != null) {
+      setStatus(embeddingDisabledReason);
+      return;
+    }
+    await runQuery('embed', 'embeddings', false);
+  };
+
+  const renderRequestObservability = () => {
+    const metrics = lastRun?.observability;
+    if (metrics == null) {
+      return null;
+    }
+    return (
+      <div className="detail-grid">
+        {renderDetailTable([
+          { label: 'Prefill', value: formatMs(metrics.prefillMs) },
+          { label: 'Decode', value: formatMs(metrics.decodeMs) },
+          { label: 'E2E', value: formatMs(metrics.e2eMs) },
+          { label: 'ITL Avg', value: formatMs(metrics.itlAvgMs) },
+          { label: 'ITL P99', value: formatMs(metrics.itlP99Ms) },
+        ])}
+        {renderDetailTable([
+          { label: 'Input Tokens', value: metrics.inputTokens },
+          { label: 'Output Tokens', value: metrics.outputTokens },
+          { label: 'Prefill Tokens', value: metrics.prefillTokens },
+          { label: 'Cache Mode', value: metrics.cacheMode },
+          { label: 'Cache Source', value: metrics.cacheSource },
+          { label: 'Cache Hits', value: metrics.cacheHits },
+        ])}
+        {renderDetailTable([
+          { label: 'Native GPU', value: formatMs(metrics.nativeGpuMs) },
+          { label: 'Native Sync', value: formatMs(metrics.nativeSyncMs) },
+          { label: 'Engine Logic', value: formatMs(metrics.nativeLogicMs) },
+          { label: 'Execution', value: metrics.execution.mode },
+          { label: 'Worker', value: yesNo(metrics.execution.workerBacked) },
+          { label: 'Token Path', value: metrics.execution.tokenPath ?? 'none' },
+          { label: 'JS Drain', value: metrics.jsTokenDrainMs == null ? 'n/a' : formatMs(metrics.jsTokenDrainMs) },
+        ])}
+      </div>
+    );
+  };
+
+  const renderFeatureOutputPanel = (title: string, emptyLabel: string) => (
+    <Panel title={title}>
+      {renderRunMetrics()}
+      {renderRequestObservability()}
+      {renderLiveOutput(emptyLabel)}
+    </Panel>
   );
 
   const renderGroup = (title: string, group: GroupResult) => (
@@ -1097,6 +1480,7 @@ export default function App() {
         </div>
         <div className="topbar-status">
           <StatusBadge tone={runtimeStatusTone}>{status}</StatusBadge>
+          <StatusBadge tone="info">{capabilityLabel(selectedModel.capability)}</StatusBadge>
           <StatusBadge tone={currentModel?.loaded ? 'ok' : 'warn'}>
             {currentModel?.name ?? 'no model'}
           </StatusBadge>
@@ -1124,20 +1508,14 @@ export default function App() {
                     onChange={(event) => {
                       const entry = getModelById(event.target.value);
                       if (entry == null) return;
-                      setSelectedRegistryId(entry.id);
-                      setModelUrl(getVariantPrimaryUrl(getDefaultVariant(entry)));
-                      setImageEnabled(isVisionModel(entry));
+                      configureRegistryEntry(entry);
                     }}
                   >
-                    {MODEL_REGISTRY.map((model) => {
-                      const variant = getDefaultVariant(model);
-                      return (
-                        <option key={model.id} value={model.id}>
-                          {model.name} ({model.parameterCount}) -{' '}
-                          {formatSize(variant.sizeBytes + (variant.projectorSizeBytes ?? 0))}
-                        </option>
-                      );
-                    })}
+                    {MODEL_REGISTRY.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {formatModelOption(model)}
+                      </option>
+                    ))}
                   </select>
                 ) : modelType === 'url' ? (
                   <input
@@ -1149,15 +1527,18 @@ export default function App() {
                   <input type="file" accept=".gguf" ref={fileInputRef} multiple />
                 )}
               </div>
-              <div className="field">
-                <label>Projector</label>
-                <input
-                  value={projectorUrl}
-                  onChange={(event) => setProjectorUrl(event.target.value)}
-                  placeholder="https://.../mmproj.gguf"
-                />
-                <input type="file" accept=".gguf" ref={projectorFileInputRef} />
-              </div>
+              {renderDetailTable(sourceDetailRows)}
+              {modelType === 'url' ? (
+                <div className="field">
+                  <label>Projector URL (optional)</label>
+                  <input
+                    value={projectorUrl}
+                    onChange={(event) => setProjectorUrl(event.target.value)}
+                    placeholder="https://.../mmproj.gguf"
+                  />
+                  <input type="file" accept=".gguf" ref={projectorFileInputRef} />
+                </div>
+              ) : null}
               <button
                 className="button button-primary"
                 disabled={isBusy || client == null}
@@ -1170,57 +1551,28 @@ export default function App() {
             </div>
           </Panel>
 
-          <Panel title="Runtime Controls">
+          <Panel title="Runtime Snapshot">
             <div className="rail-heading">
               <Settings2 size={16} aria-hidden="true" />
-              <span>Diagnostics</span>
-            </div>
-            <div className="form-grid compact">
-              <div className="field">
-                <label>Warmup Runs</label>
-                <input
-                  type="number"
-                  value={warmupRuns}
-                  onChange={(event) => setWarmupRuns(Number.parseInt(event.target.value, 10) || 0)}
-                />
-              </div>
-              <div className="field">
-                <label>Measured Runs</label>
-                <input
-                  type="number"
-                  value={measuredRuns}
-                  onChange={(event) => setMeasuredRuns(Number.parseInt(event.target.value, 10) || 0)}
-                />
-              </div>
+              <span>Current model and transport</span>
             </div>
             <div className="form-stack">
-              <div className="field">
-                <label>Token Emission</label>
-                <SegmentedControl
-                  ariaLabel="Token emission"
-                  onChange={(value) => setEmitTokens(value === 'on')}
-                  options={[
-                    { label: 'Off', value: 'off' },
-                    { label: 'On', value: 'on' },
-                  ]}
-                  value={emitTokens ? 'on' : 'off'}
-                />
-              </div>
               {renderDetailTable([
                 { label: 'Observability', value: observability?.mode ?? 'off' },
+                { label: 'State', value: observability?.state ?? 'idle' },
                 { label: 'Transport', value: observability?.runtime?.execution.tokenPath ?? 'pending' },
                 { label: 'Installed', value: installedModels.length },
                 { label: 'Load Time', value: formatMs(lastLoadMs) },
+                { label: 'Selected', value: capabilityLabel(selectedModel.capability) },
               ])}
               <div className="button-row">
                 <button
-                  className="button button-primary"
-                  disabled={isBusy || client == null}
-                  onClick={runBenchmark}
+                  className="button button-secondary"
+                  onClick={() => setActiveView('observability')}
                   type="button"
                 >
-                  <Gauge size={16} aria-hidden="true" />
-                  Run Diagnostics
+                  <Activity size={16} aria-hidden="true" />
+                  Observability
                 </button>
                 <button
                   className="button button-secondary"
@@ -1233,7 +1585,7 @@ export default function App() {
                   type="button"
                 >
                   <Download size={16} aria-hidden="true" />
-                  Export
+                  Export Report
                 </button>
               </div>
             </div>
@@ -1247,8 +1599,10 @@ export default function App() {
               return (
                 <button
                   className={`workspace-tab ${activeView === view.value ? 'active' : ''}`}
+                  aria-current={activeView === view.value ? 'page' : undefined}
                   key={view.value}
                   onClick={() => setActiveView(view.value)}
+                  title={view.title}
                   type="button"
                 >
                   <Icon size={16} aria-hidden="true" />
@@ -1258,39 +1612,40 @@ export default function App() {
             })}
           </nav>
 
-          {activeView === 'request' ? (
+          {activeView === 'requests' ? (
             <div className="workspace-view">
               <Panel
-                title="Request Runner"
+                title="Text Requests"
                 actions={
                   <button
                     className="button button-primary"
-                    disabled={isBusy || client == null}
-                    onClick={runQuery}
+                    disabled={isBusy || client == null || textRequestDisabledReason != null}
+                    onClick={() => void runQuery(textOperation, 'requests', false)}
+                    title={textRequestDisabledReason ?? undefined}
                     type="button"
                   >
                     <Play size={16} aria-hidden="true" />
-                    Run Request
+                    Run {textOperation === 'chat' ? 'Chat' : 'Query'}
                   </button>
                 }
               >
                 <div className="form-stack">
                   <div className="form-grid request-grid">
                     <div className="field">
-                      <label>Operation</label>
+                      <label>Request Type</label>
                       <SegmentedControl
-                        ariaLabel="Request operation"
+                        ariaLabel="Text request type"
                         onChange={setOperation}
-                        options={OPERATION_OPTIONS}
-                        value={operation}
+                        options={textOperationOptionsForCurrentModel}
+                        value={textOperation}
                       />
                     </div>
                     <div className="field">
                       <label>Max Tokens</label>
                       <input
+                        disabled={textRequestDisabledReason != null}
                         type="number"
                         value={tokenCount}
-                        disabled={operation === 'embed'}
                         onChange={(event) =>
                           setTokenCount(Number.parseInt(event.target.value, 10) || 0)
                         }
@@ -1299,77 +1654,339 @@ export default function App() {
                   </div>
                   <div className="field">
                     <label>Prompt</label>
-                    <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+                    <textarea
+                      disabled={textRequestDisabledReason != null}
+                      value={prompt}
+                      onChange={(event) => setPrompt(event.target.value)}
+                    />
                   </div>
-                  {operation !== 'embed' ? (
+                  <div className="field">
+                    <label>Token Emission</label>
+                    <SegmentedControl
+                      ariaLabel="Text token emission"
+                      disabled={textRequestDisabledReason != null}
+                      onChange={(value) => setEmitTokens(value === 'on')}
+                      options={[
+                        { label: 'Off', value: 'off', title: textRequestDisabledReason ?? 'Off' },
+                        { label: 'On', value: 'on', title: textRequestDisabledReason ?? 'On' },
+                      ]}
+                      value={emitTokens ? 'on' : 'off'}
+                    />
+                  </div>
+                </div>
+              </Panel>
+
+              {renderFeatureOutputPanel('Response', 'Ready for a text request.')}
+            </div>
+          ) : null}
+
+          {activeView === 'vision' ? (
+            <div className="workspace-view">
+              <Panel
+                title="Vision Request"
+                actions={
+                  <button
+                    className="button button-primary"
+                    disabled={isBusy || client == null || visionDisabledReason != null}
+                    onClick={() => void runVisionRequest()}
+                    title={visionDisabledReason ?? undefined}
+                    type="button"
+                  >
+                    <Play size={16} aria-hidden="true" />
+                    Run Vision
+                  </button>
+                }
+              >
+                <div className="form-stack">
+                  {modelType === 'registry' ? (
+                    <div className="field">
+                      <label>Vision Model</label>
+                      <select
+                        value={isVisionModel(selectedModel) ? selectedRegistryId : ''}
+                        onChange={(event) => {
+                          const entry = getModelById(event.target.value);
+                          if (entry == null) return;
+                          configureRegistryEntry(entry);
+                        }}
+                      >
+                        <option value="" disabled>
+                          Select a vision model
+                        </option>
+                        {getVisionModels().map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {formatModelOption(model)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+                  <div
+                    aria-disabled={visionDisabledReason != null}
+                    className={visionSurfaceClass}
+                    title={visionDisabledReason ?? undefined}
+                  >
+                    <div className="form-grid request-grid">
+                      <div className="field">
+                        <label>Vision Mode</label>
+                        <SegmentedControl
+                          ariaLabel="Vision request type"
+                          disabled={visionDisabledReason != null}
+                          onChange={setOperation}
+                          options={textOperationOptionsForCurrentModel}
+                          value={textOperation}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Max Tokens</label>
+                        <input
+                          disabled={visionDisabledReason != null}
+                          type="number"
+                          value={tokenCount}
+                          onChange={(event) =>
+                            setTokenCount(Number.parseInt(event.target.value, 10) || 0)
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>Prompt</label>
+                      <textarea
+                        disabled={visionDisabledReason != null}
+                        value={prompt}
+                        onChange={(event) => setPrompt(event.target.value)}
+                      />
+                    </div>
                     <label className="checkbox-row">
                       <input
-                        type="checkbox"
                         checked={imageEnabled}
+                        disabled={visionDisabledReason != null}
+                        type="checkbox"
                         onChange={(event) => setImageEnabled(event.target.checked)}
                       />
                       <span>Attach Image</span>
                     </label>
-                  ) : null}
-                  {operation !== 'embed' && imageEnabled ? (
-                    <div className="field">
-                      <label>Image URL or File</label>
-                      <div className="form-grid">
-                        <input
-                          value={imageSource.startsWith('data:') ? '' : imageSource}
-                          onChange={(event) => setImageSource(event.target.value)}
-                          placeholder="https://.../image.jpg"
-                        />
-                        <input
-                          type="file"
-                          accept="image/jpeg,image/png,image/webp,image/gif"
-                          onChange={uploadImage}
-                        />
+                    {imageEnabled ? (
+                      <div className="field">
+                        <label>Image URL or File</label>
+                        <div className="form-grid">
+                          <input
+                            disabled={visionDisabledReason != null}
+                            value={imageSource.startsWith('data:') ? '' : imageSource}
+                            onChange={(event) => {
+                              setImageSource(event.target.value);
+                              setImageMeta(null);
+                            }}
+                            placeholder="https://.../image.jpg"
+                          />
+                          <input
+                            accept="image/jpeg,image/png,image/webp,image/gif"
+                            disabled={visionDisabledReason != null}
+                            type="file"
+                            onChange={uploadImage}
+                          />
+                        </div>
                       </div>
+                    ) : null}
+                    <div className="image-preview-panel">
+                      <div className="image-preview-frame">
+                        {imagePreviewSource == null ? (
+                          <div className="image-preview-empty">No image selected</div>
+                        ) : (
+                          <img alt="Selected vision input" src={imagePreviewSource} />
+                        )}
+                      </div>
+                      {renderDetailTable([
+                        { label: 'Image Source', value: imageSelectionKind },
+                        { label: 'Image Name', value: imageSelectionName },
+                        {
+                          label: 'Image Size',
+                          value: imageMeta == null ? 'unknown' : formatBytes(imageMeta.size),
+                        },
+                        { label: 'Image Type', value: imageMeta?.type ?? 'unknown' },
+                      ])}
                     </div>
-                  ) : null}
+                    {renderDetailTable([
+                      { label: 'Selected Capability', value: capabilityLabel(selectedModel.capability) },
+                      {
+                        label: 'Projector',
+                        value: projectorDetail,
+                      },
+                      { label: 'Loaded Media Marker', value: currentModel?.mediaMarker ?? 'not loaded' },
+                    ])}
+                  </div>
                 </div>
               </Panel>
 
-              <Panel title="Response">
-                {renderRunMetrics()}
-                {lastRun?.observability == null ? null : (
-                  <div className="detail-grid">
-                    {renderDetailTable([
-                      { label: 'Prefill', value: formatMs(lastRun.observability.prefillMs) },
-                      { label: 'Decode', value: formatMs(lastRun.observability.decodeMs) },
-                      { label: 'Input', value: lastRun.observability.inputTokens },
-                      { label: 'Prefill Tokens', value: lastRun.observability.prefillTokens },
-                      { label: 'Cache Hits', value: lastRun.observability.cacheHits },
-                    ])}
-                    {renderDetailTable([
-                      { label: 'Native GPU', value: formatMs(lastRun.observability.nativeGpuMs) },
-                      { label: 'Native Sync', value: formatMs(lastRun.observability.nativeSyncMs) },
-                      { label: 'Engine Logic', value: formatMs(lastRun.observability.nativeLogicMs) },
-                    ])}
+              {renderFeatureOutputPanel('Vision Response', 'Ready for a vision request.')}
+            </div>
+          ) : null}
+
+          {activeView === 'embeddings' ? (
+            <div className="workspace-view">
+              <Panel
+                title="Embedding Request"
+                actions={
+                  <button
+                    className="button button-primary"
+                    disabled={isBusy || client == null || embeddingDisabledReason != null}
+                    onClick={() => void runEmbeddingRequest()}
+                    title={embeddingDisabledReason ?? undefined}
+                    type="button"
+                  >
+                    <Play size={16} aria-hidden="true" />
+                    Run Embed
+                  </button>
+                }
+              >
+                <div className="form-stack">
+                  {modelType === 'registry' ? (
+                    <div className="field">
+                      <label>Embedding Model</label>
+                      <select
+                        value={isEmbeddingModel(selectedModel) ? selectedRegistryId : ''}
+                        onChange={(event) => {
+                          const entry = getModelById(event.target.value);
+                          if (entry == null) return;
+                          configureRegistryEntry(entry);
+                        }}
+                      >
+                        <option value="" disabled>
+                          Select an embedding model
+                        </option>
+                        {getEmbeddingModels().map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {formatModelOption(model)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+                  <div
+                    aria-disabled={embeddingDisabledReason != null}
+                    className={embeddingSurfaceClass}
+                    title={embeddingDisabledReason ?? undefined}
+                  >
+                    <div className="field">
+                      <label>Use Case</label>
+                      <SegmentedControl
+                        ariaLabel="Embedding use case"
+                        disabled={embeddingDisabledReason != null}
+                        onChange={applyEmbeddingUseCase}
+                        options={embeddingUseCaseOptions}
+                        value={embeddingUseCase}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Input Text</label>
+                      <textarea
+                        disabled={embeddingDisabledReason != null}
+                        value={prompt}
+                        onChange={(event) => setPrompt(event.target.value)}
+                      />
+                    </div>
+                    <div className="detail-grid">
+                      {renderDetailTable([
+                        { label: 'Use Case', value: selectedEmbeddingUseCase.label },
+                        { label: 'Why', value: selectedEmbeddingUseCase.description },
+                        { label: 'Input Prefix', value: selectedEmbeddingUseCase.prefix },
+                      ])}
+                      {renderDetailTable([
+                        {
+                          label: 'Model Embeddings',
+                          value: yesNo(currentModel?.capabilities?.supportsEmbeddings),
+                        },
+                        {
+                          label: 'Dimensions',
+                          value: currentModel?.capabilities?.embedding?.dimensions ?? 'unknown',
+                        },
+                        {
+                          label: 'Pooling',
+                          value: currentModel?.capabilities?.embedding?.pooling ?? 'unknown',
+                        },
+                        {
+                          label: 'Vector Preview',
+                          value:
+                            lastRun?.outputKind === 'embedding'
+                              ? `${lastRun.embeddingDimensions ?? 'unknown'} dimensions`
+                              : 'run embed to preview',
+                        },
+                      ])}
+                    </div>
                   </div>
-                )}
-                {renderLiveOutput('Ready for request.')}
+                </div>
               </Panel>
+
+              {renderFeatureOutputPanel('Embedding Result', 'Ready for an embedding request.')}
             </div>
           ) : null}
 
           {activeView === 'benchmarks' ? (
             <div className="workspace-view">
               <Panel
-                title="Benchmark Runs"
+                title="Benchmark Suite"
                 actions={
                   <button
                     className="button button-primary"
-                    disabled={isBusy || client == null}
+                    disabled={isBusy || client == null || benchmarkDisabledReason != null}
                     onClick={runBenchmark}
+                    title={benchmarkDisabledReason ?? undefined}
                     type="button"
                   >
                     <Gauge size={16} aria-hidden="true" />
-                    Run Diagnostics
+                    Run Benchmark Suite
                   </button>
                 }
               >
+                <div className="form-stack benchmark-controls">
+                  <div className="form-grid">
+                    <div className="field">
+                      <label>Operation</label>
+                      <SegmentedControl
+                        ariaLabel="Benchmark operation"
+                        onChange={setOperation}
+                        options={operationOptionsForCurrentModel}
+                        value={operation}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Token Emission</label>
+                      <SegmentedControl
+                        ariaLabel="Benchmark token emission"
+                        disabled={tokenEmissionDisabledReason != null}
+                        onChange={(value) => setEmitTokens(value === 'on')}
+                        options={[
+                          { label: 'Off', value: 'off', title: tokenEmissionDisabledReason ?? 'Off' },
+                          { label: 'On', value: 'on', title: tokenEmissionDisabledReason ?? 'On' },
+                        ]}
+                        value={emitTokens ? 'on' : 'off'}
+                      />
+                    </div>
+                  </div>
+                  <div className="form-grid">
+                    <div className="field">
+                      <label>Warmup Runs</label>
+                      <input
+                        type="number"
+                        value={warmupRuns}
+                        onChange={(event) => setWarmupRuns(Number.parseInt(event.target.value, 10) || 0)}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Measured Runs</label>
+                      <input
+                        type="number"
+                        value={measuredRuns}
+                        onChange={(event) => setMeasuredRuns(Number.parseInt(event.target.value, 10) || 0)}
+                      />
+                    </div>
+                  </div>
+                  {renderDetailTable([
+                    { label: 'Scenarios', value: 'SISO, SILO, LISO, LILO' },
+                    { label: 'Cache Checks', value: operation === 'embed' ? 'n/a for embed' : 'repeated prompt reuse' },
+                    { label: 'Mixed Load', value: operation === 'embed' ? 'unsupported for embed' : 'foreground/background' },
+                    { label: 'Report', value: benchmarkReport == null ? 'not generated' : benchmarkReport.generatedAt },
+                  ])}
+                </div>
                 {scenarioResults.length === 0 && mixedLoadResult == null ? (
                   <div className="empty-state">No benchmark results yet.</div>
                 ) : (
@@ -1445,6 +2062,8 @@ export default function App() {
                     tone={currentModel?.loaded ? 'ok' : 'warn'}
                   />
                   <MetricCard label="Status" value={currentModel?.status ?? 'none'} />
+                  <MetricCard label="Selected Capability" value={capabilityLabel(selectedModel.capability)} />
+                  <MetricCard label="Loaded Modality" value={currentModel?.modality ?? 'none'} />
                   <MetricCard label="Model Class" value={currentModel?.capabilities?.modelClass ?? 'unknown'} />
                   <MetricCard label="Model Bytes" value={formatBytes(sourceInfo?.bytes ?? null)} />
                   <MetricCard label="Source" value={sourceInfo?.label ?? 'none'} />
@@ -1453,6 +2072,7 @@ export default function App() {
                 </div>
                 {renderDetailTable([
                   { label: 'Text', value: yesNo(currentModel?.capabilities?.supportsTextGeneration) },
+                  { label: 'Vision', value: yesNo(currentModel?.modality === 'vision') },
                   { label: 'Embeddings', value: yesNo(currentModel?.capabilities?.supportsEmbeddings) },
                   { label: 'Pooling', value: currentModel?.capabilities?.embedding?.pooling ?? 'n/a' },
                   { label: 'Observability State', value: observability?.state ?? 'idle' },
@@ -1507,13 +2127,82 @@ export default function App() {
                   },
                 ])}
               </Panel>
+
+              <Panel title="Request Observability">
+                {lastRun == null ? (
+                  <div className="empty-state">No request metrics yet.</div>
+                ) : (
+                  <>
+                    {renderRunMetrics()}
+                    {renderRequestObservability()}
+                  </>
+                )}
+              </Panel>
+
+              <Panel title="Backend Profile">
+                <div className="metric-grid">
+                  <MetricCard
+                    label="Profiling"
+                    value={yesNo(observability?.profile?.profilingEnabled)}
+                    tone={observability?.profile?.profilingEnabled ? 'ok' : undefined}
+                  />
+                  <MetricCard
+                    label="WebGPU"
+                    value={describeRuntimeBackend(observability?.profile)}
+                    tone={observability?.profile?.webgpuRegistered ? 'ok' : 'warn'}
+                  />
+                  <MetricCard
+                    label="Devices"
+                    value={observability?.profile?.devices.length ?? 0}
+                  />
+                </div>
+                {renderDetailTable([
+                  {
+                    label: 'Available Backends',
+                    value:
+                      observability?.profile?.availableBackends
+                        ?.map((backend) => `${backend.name}:${backend.deviceCount}`)
+                        .join(', ') || 'none',
+                  },
+                  {
+                    label: 'Runtime Devices',
+                    value:
+                      observability?.profile?.devices
+                        ?.map((device) => device.description || device.name || device.type)
+                        .join(' | ') || 'none',
+                  },
+                  { label: 'Memory Snapshots', value: memorySnapshots.length },
+                  {
+                    label: 'Last JS Heap Peak',
+                    value: formatBytes(benchmarkReport?.memory.summary.maxUsedJsHeapBytes ?? null),
+                  },
+                  {
+                    label: 'Last UA Memory Peak',
+                    value: formatBytes(benchmarkReport?.memory.summary.maxUserAgentBytes ?? null),
+                  },
+                ])}
+              </Panel>
+
+              <Panel className="wide-panel" title="Raw Observability Snapshot">
+                <pre className="json-preview">
+                  {JSON.stringify(
+                    {
+                      observability,
+                      runtimeSmoke: browserSmoke,
+                      lastRun: lastRun?.observability ?? null,
+                    },
+                    null,
+                    2
+                  )}
+                </pre>
+              </Panel>
             </div>
           ) : null}
 
-          {activeView === 'report' ? (
+          {activeView === 'reports' ? (
             <div className="workspace-view">
               <Panel
-                title="Report"
+                title="Reports"
                 actions={
                   <button
                     className="button button-primary"
@@ -1589,6 +2278,9 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
+                    <pre className="json-preview">
+                      {JSON.stringify(benchmarkReport, null, 2)}
+                    </pre>
                   </>
                 )}
               </Panel>

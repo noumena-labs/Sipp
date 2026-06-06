@@ -187,6 +187,10 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.wide-panel {
+  grid-column: 1 / -1;
+}
+
 .panel {
   min-width: 0;
   padding: 16px;
@@ -301,6 +305,18 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
 }
 
+.disabled-surface {
+  opacity: 0.52;
+  filter: grayscale(0.18);
+}
+
+.disabled-surface input,
+.disabled-surface select,
+.disabled-surface textarea,
+.disabled-surface .segmented-control {
+  background: #f3f5f7;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -344,8 +360,7 @@ textarea:focus {
 
 .segmented-control {
   display: grid;
-  grid-auto-columns: 1fr;
-  grid-auto-flow: column;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: 2px;
   min-width: 0;
   padding: 3px;
@@ -549,6 +564,60 @@ textarea:focus {
   vertical-align: -2px;
 }
 
+.image-preview-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.image-preview-frame {
+  display: grid;
+  min-height: 220px;
+  max-height: 360px;
+  place-items: center;
+  overflow: hidden;
+  background: #111827;
+  border: 1px solid #273244;
+  border-radius: 8px;
+}
+
+.image-preview-frame img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.image-preview-empty {
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.benchmark-controls {
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.json-preview {
+  max-height: 420px;
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  color: #d8dee9;
+  background: #111827;
+  border: 1px solid #273244;
+  border-radius: 8px;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .empty-state {
   display: grid;
   min-height: 120px;
@@ -702,6 +771,7 @@ textarea:focus {
 
   .form-grid,
   .request-grid,
+  .image-preview-panel,
   .detail-grid,
   .metric-grid {
     grid-template-columns: 1fr;
