@@ -50,6 +50,8 @@ node examples/node/gateway_chat.mjs <model.gguf> local [input]
 node examples/node/gateway_embed.mjs <model.gguf> local-embed [input]
 ```
 
+`gateway_embed` requires a model/runtime that reports embedding support.
+
 For the OpenAI gateway, use alias `openai-chat` for query/chat and
 `openai-embed` for embeddings. The OpenAI gateway requires `OPENAI_API_KEY` in
 the gateway process.

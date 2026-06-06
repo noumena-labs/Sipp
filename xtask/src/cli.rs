@@ -137,7 +137,7 @@ Run holistic smoke checks through explicit suite and group namespaces.
 
 Examples:
   cargo xtask test smoke suite example-node --backend cpu --case query
-  cargo xtask test smoke suite example-gateway --backend cpu --case embed
+  cargo xtask test smoke suite example-gateway --backend cpu --case chat
   cargo xtask test smoke suite example-browser --case chat
   cargo xtask test smoke suite playground-browser --require-webgpu
   cargo xtask test smoke group examples --backend cpu

@@ -61,7 +61,8 @@ python examples/python/gateway_query.py <model.gguf> local [input]
 ```
 
 Use alias `local` for `gateway_query` and `gateway_chat`; use `local-embed`
-for `gateway_embed`.
+for `gateway_embed`. Embedding examples require a model/runtime that reports
+embedding support.
 
 OpenAI gateway examples require a real `OPENAI_API_KEY`:
 

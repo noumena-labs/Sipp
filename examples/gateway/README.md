@@ -101,7 +101,8 @@ python examples/python/gateway_embed.py <model.gguf> local-embed
 ```
 
 Use alias `local` for query/chat examples and `local-embed` for embedding
-examples.
+examples. Embedding examples require a model/runtime that reports embedding
+support.
 
 OpenAI gateway aliases are `openai-chat` for query/chat and `openai-embed` for
 embeddings. OpenAI workflows are manual because they require a secret and spend

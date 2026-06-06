@@ -75,7 +75,8 @@ namespaces:
 
 Model-backed smoke suites default to the setup sample model cache under
 `.build/models` when `--model` is omitted. Rust, Node, Python, gateway, and
-browser example smoke accept repeated `--case query|chat|embed`.
+browser example smoke accept repeated `--case query|chat|embed`. Embedding
+cases require a model/runtime that reports embedding support.
 
 ## Smoke Suites
 

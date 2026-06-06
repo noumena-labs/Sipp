@@ -37,6 +37,8 @@ cargo run -p cogentlm-rust-examples --features remote --bin gateway_chat -- <mod
 cargo run -p cogentlm-rust-examples --features remote --bin gateway_embed -- <model.gguf> local-embed [input]
 ```
 
+`gateway_embed` requires a model/runtime that reports embedding support.
+
 ## OpenAI Provider
 
 These examples require `OPENAI_API_KEY`:
