@@ -35,6 +35,16 @@ Set `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a built backend.
 
 ## Gateway Clients
 
+To start the local gateway and run one Node gateway client from a single
+terminal:
+
+```bash
+cargo xtask run examples gateway node --case query
+```
+
+The cached sample model under `.build/models` is used by default; pass
+`--model <model.gguf>` to override it.
+
 Start a gateway first, then set:
 
 ```bash

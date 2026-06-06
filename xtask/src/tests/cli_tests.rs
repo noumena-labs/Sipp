@@ -8,10 +8,11 @@ use clap::Parser;
 use super::{
     Backend, Cli, Commands, DemoName, DemoServeMode, DoctorTarget, LlamaBackendOpsMode,
     LlamaBackendOpsOutput, RunCommands, RunDemosCommands, RunExampleServeTarget,
-    RunExamplesCommands, RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands,
-    TestGroupFilter, TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget,
-    TestSuiteId, TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget,
-    ToolName, ToolchainCommands, ToolchainComponent,
+    RunExamplesCommands, RunGatewayExampleCase, RunGatewayExampleTarget, RunLlamaCommands,
+    RunToolsCommands, SetupProfile, TestCommands, TestGroupFilter, TestListFormat,
+    TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget, TestSuiteId, TestUnitCommands,
+    TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, ToolName, ToolchainCommands,
+    ToolchainComponent,
 };
 
 #[test]
@@ -88,7 +89,9 @@ fn run_examples_and_tools_parse_browser_workflows() {
     let RunCommands::Examples { command } = command else {
         panic!("expected examples command");
     };
-    let RunExamplesCommands::Serve(args) = command;
+    let RunExamplesCommands::Serve(args) = command else {
+        panic!("expected examples serve command");
+    };
     let RunExampleServeTarget::Browser(args) = args.target else {
         panic!("expected browser example serve target");
     };
@@ -113,7 +116,9 @@ fn run_examples_and_tools_parse_browser_workflows() {
     let RunCommands::Examples { command } = command else {
         panic!("expected examples command");
     };
-    let RunExamplesCommands::Serve(args) = command;
+    let RunExamplesCommands::Serve(args) = command else {
+        panic!("expected examples serve command");
+    };
     let RunExampleServeTarget::GatewayLocal(args) = args.target else {
         panic!("expected gateway-local serve target");
     };
@@ -133,6 +138,162 @@ fn run_examples_and_tools_parse_browser_workflows() {
         panic!("expected tool build command");
     };
     assert_eq!(args.tool, ToolName::Playground);
+}
+
+#[test]
+fn run_examples_gateway_parses_all_client_targets() {
+    let cli = Cli::parse_from(["xtask", "run", "examples", "gateway", "rust"]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::Examples { command } = command else {
+        panic!("expected examples command");
+    };
+    let RunExamplesCommands::Gateway(args) = command else {
+        panic!("expected gateway command");
+    };
+    let RunGatewayExampleTarget::Rust(args) = args.target else {
+        panic!("expected rust gateway target");
+    };
+    assert_eq!(args.common.model, None);
+    assert_eq!(args.common.case, RunGatewayExampleCase::Query);
+    assert_eq!(args.common.bind, "127.0.0.1:8787");
+    assert_eq!(args.common.backend, Backend::Cpu);
+    assert_eq!(args.common.token, "dev-token");
+    assert_eq!(args.prompt, "Write one sentence about gateway inference.");
+    assert_eq!(args.max_tokens, 128);
+    assert_eq!(args.temperature, 0.7);
+
+    let cli = Cli::parse_from([
+        "xtask",
+        "run",
+        "examples",
+        "gateway",
+        "rust",
+        "--model",
+        "model.gguf",
+    ]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::Examples { command } = command else {
+        panic!("expected examples command");
+    };
+    let RunExamplesCommands::Gateway(args) = command else {
+        panic!("expected gateway command");
+    };
+    let RunGatewayExampleTarget::Rust(args) = args.target else {
+        panic!("expected rust gateway target");
+    };
+    assert_eq!(
+        args.common.model.as_deref(),
+        Some(std::path::Path::new("model.gguf"))
+    );
+
+    let cli = Cli::parse_from([
+        "xtask",
+        "run",
+        "examples",
+        "gateway",
+        "node",
+        "--model",
+        "model.gguf",
+        "--case",
+        "chat",
+        "--bind",
+        "127.0.0.1:18888",
+        "--backend",
+        "vulkan",
+        "--token",
+        "test-token",
+        "--prompt",
+        "hello",
+        "--max-tokens",
+        "12",
+        "--temperature",
+        "0.25",
+    ]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::Examples { command } = command else {
+        panic!("expected examples command");
+    };
+    let RunExamplesCommands::Gateway(args) = command else {
+        panic!("expected gateway command");
+    };
+    let RunGatewayExampleTarget::Node(args) = args.target else {
+        panic!("expected node gateway target");
+    };
+    assert_eq!(args.common.case, RunGatewayExampleCase::Chat);
+    assert_eq!(args.common.bind, "127.0.0.1:18888");
+    assert_eq!(args.common.backend, Backend::Vulkan);
+    assert_eq!(args.common.token, "test-token");
+    assert_eq!(args.prompt, "hello");
+    assert_eq!(args.max_tokens, 12);
+    assert_eq!(args.temperature, 0.25);
+
+    let cli = Cli::parse_from([
+        "xtask",
+        "run",
+        "examples",
+        "gateway",
+        "python",
+        "--model",
+        "model.gguf",
+        "--case",
+        "embed",
+    ]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::Examples { command } = command else {
+        panic!("expected examples command");
+    };
+    let RunExamplesCommands::Gateway(args) = command else {
+        panic!("expected gateway command");
+    };
+    assert!(matches!(
+        args.target,
+        RunGatewayExampleTarget::Python(args)
+            if args.common.case == RunGatewayExampleCase::Embed
+    ));
+
+    let cli = Cli::parse_from([
+        "xtask",
+        "run",
+        "examples",
+        "gateway",
+        "web",
+        "--model",
+        "model.gguf",
+        "--case",
+        "chat",
+        "--host",
+        "localhost",
+        "--port",
+        "4173",
+        "--mode",
+        "preview",
+        "--no-build",
+    ]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::Examples { command } = command else {
+        panic!("expected examples command");
+    };
+    let RunExamplesCommands::Gateway(args) = command else {
+        panic!("expected gateway command");
+    };
+    let RunGatewayExampleTarget::Web(args) = args.target else {
+        panic!("expected web gateway target");
+    };
+    assert_eq!(args.common.case, RunGatewayExampleCase::Chat);
+    assert_eq!(args.host, "localhost");
+    assert_eq!(args.port, 4173);
+    assert_eq!(args.mode, DemoServeMode::Preview);
+    assert!(args.no_build);
 }
 
 #[test]

@@ -397,8 +397,10 @@ dependencies = [
  "axum",
  "clap",
  "cogentlm-gateway",
- "cogentlm-gateway-server",
+ "futures-util",
+ "serde_json",
  "tokio",
+ "tower-http",
 ]
 
 [[package]]

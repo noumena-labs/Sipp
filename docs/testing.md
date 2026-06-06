@@ -102,9 +102,10 @@ cases require a model/runtime that reports embedding support.
 Use `cargo xtask run examples serve browser` to manually serve browser examples.
 Use `cargo xtask run examples serve gateway-local --model <model.gguf>` or
 `cargo xtask run examples serve gateway-openai` to manually serve the embedded
-gateway proxy. The dashboard is available at the configured bind address. The OpenAI
-gateway requires `OPENAI_API_KEY` and is documented/manual rather than
-smoke-tested. Playground validation remains under
+gateway proxy. The minimal proxy page is available at the configured bind
+address. The production-style dashboard and request history live in
+`apps/gateway-server`. The OpenAI gateway requires `OPENAI_API_KEY` and is
+documented/manual rather than smoke-tested. Playground validation remains under
 `test smoke suite playground-browser`.
 
 `test unit` and `test smoke` print a final suite and test/check summary, then

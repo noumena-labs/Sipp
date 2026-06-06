@@ -30,6 +30,7 @@ Start with:
   cargo xtask run --help
   cargo xtask run examples serve browser
   cargo xtask run examples serve gateway-local --model .build/models/model.gguf
+  cargo xtask run examples gateway rust
   cargo xtask run tools serve playground
   cargo xtask test --help
   cargo xtask test unit group full
@@ -72,6 +73,8 @@ Examples:
   cargo xtask run examples serve browser --port 5173
   cargo xtask run examples serve gateway-local --model .build/models/model.gguf --bind 127.0.0.1:8787
   cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
+  cargo xtask run examples gateway rust --case query
+  cargo xtask run examples gateway web --port 5173
   cargo xtask run tools build playground
   cargo xtask run tools serve playground --mode preview --port 4173
   cargo xtask run llama backend-ops --backend cpu --mode support
@@ -114,11 +117,17 @@ Examples:
   cargo xtask run examples serve browser --mode preview --port 4173
   cargo xtask run examples serve gateway-local --model .build/models/model.gguf --bind 127.0.0.1:8787
   cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
+  cargo xtask run examples gateway rust --case query
+  cargo xtask run examples gateway node --case chat
+  cargo xtask run examples gateway python --case embed
+  cargo xtask run examples gateway web
 
 The browser example lives under examples/web and mirrors the public CogentClient
-query, chat, embed, and gateway examples. Gateway serve commands start a real
-gateway process from examples/gateway-style configs; `gateway-openai` requires
-OPENAI_API_KEY. Browser example smoke lives under
+query, chat, embed, and gateway examples. Gateway commands start a real gateway
+process from examples/gateway-style configs. The `gateway` workflow starts the
+local gateway and a selected Rust, Node, Python, or web client in one terminal;
+when --model is omitted it uses the cached sample model under .build/models.
+`gateway-openai` requires OPENAI_API_KEY. Browser example smoke lives under
 `cargo xtask test smoke suite example-browser`.";
 
 const RUN_TOOLS_HELP: &str = "\
@@ -1133,6 +1142,10 @@ impl DemoName {
 pub enum RunExamplesCommands {
     /// Start one long-running example server.
     Serve(RunExampleServeArgs),
+
+    /// Start a local gateway and run one gateway client workflow.
+    #[command(after_long_help = BACKEND_HELP)]
+    Gateway(RunGatewayExampleArgs),
 }
 
 /// Options for serving an example.
@@ -1141,6 +1154,118 @@ pub struct RunExampleServeArgs {
     /// Example server to start.
     #[command(subcommand)]
     pub target: RunExampleServeTarget,
+}
+
+/// Options for running local gateway examples.
+#[derive(Args)]
+pub struct RunGatewayExampleArgs {
+    /// Gateway client workflow to run.
+    #[command(subcommand)]
+    pub target: RunGatewayExampleTarget,
+}
+
+/// Gateway example client workflows.
+#[derive(Subcommand)]
+pub enum RunGatewayExampleTarget {
+    /// Start a gateway and run an examples/rust gateway binary.
+    Rust(RunGatewayExampleClientArgs),
+    /// Start a gateway and run an examples/node gateway script.
+    Node(RunGatewayExampleClientArgs),
+    /// Start a gateway and run an examples/python gateway script.
+    Python(RunGatewayExampleClientArgs),
+    /// Start a gateway and serve examples/web.
+    Web(RunGatewayExampleWebArgs),
+}
+
+/// Shared options for local gateway example workflows.
+#[derive(Args)]
+pub struct RunGatewayExampleCommonArgs {
+    /// GGUF model loaded by the gateway process and local client endpoint.
+    /// Defaults to the cached sample model under .build/models.
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+
+    /// Gateway client case to run.
+    #[arg(long, value_enum, default_value = "query")]
+    pub case: RunGatewayExampleCase,
+
+    /// Gateway socket address.
+    #[arg(long, default_value = "127.0.0.1:8787")]
+    pub bind: String,
+
+    /// Native backend used by the gateway process.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
+
+    /// Gateway bearer token used for the generated local gateway config.
+    #[arg(long, default_value = "dev-token")]
+    pub token: String,
+}
+
+/// Options for one-shot Rust, Node, and Python gateway clients.
+#[derive(Args)]
+pub struct RunGatewayExampleClientArgs {
+    /// Shared gateway options.
+    #[command(flatten)]
+    pub common: RunGatewayExampleCommonArgs,
+
+    /// Prompt or embedding input passed to the client example.
+    #[arg(long, default_value = "Write one sentence about gateway inference.")]
+    pub prompt: String,
+
+    /// Maximum generated tokens for query and chat clients.
+    #[arg(long, default_value = "128")]
+    pub max_tokens: u32,
+
+    /// Sampling temperature for query and chat clients.
+    #[arg(long, default_value = "0.7")]
+    pub temperature: f32,
+}
+
+/// Options for serving the web gateway example.
+#[derive(Args)]
+pub struct RunGatewayExampleWebArgs {
+    /// Shared gateway options.
+    #[command(flatten)]
+    pub common: RunGatewayExampleCommonArgs,
+
+    /// Vite server mode to run.
+    #[arg(long, value_enum, default_value = "dev")]
+    pub mode: DemoServeMode,
+
+    /// Host passed through to Vite.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+
+    /// Port passed through to Vite.
+    #[arg(long, default_value = "5173")]
+    pub port: u16,
+
+    /// Start the server without first building browser package artifacts.
+    #[arg(long)]
+    pub no_build: bool,
+}
+
+/// Gateway example cases known to xtask.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum RunGatewayExampleCase {
+    /// Query/text generation example.
+    Query,
+    /// Chat generation example.
+    Chat,
+    /// Embedding example.
+    Embed,
+}
+
+impl RunGatewayExampleCase {
+    /// Stable case label.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            RunGatewayExampleCase::Query => "query",
+            RunGatewayExampleCase::Chat => "chat",
+            RunGatewayExampleCase::Embed => "embed",
+        }
+    }
 }
 
 /// Example server targets.

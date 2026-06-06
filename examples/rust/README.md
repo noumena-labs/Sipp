@@ -22,6 +22,16 @@ cargo run -p cogentlm-rust-examples --bin vision_chat -- <model.gguf> <projector
 
 ## Gateway Clients
 
+To start the local gateway and run one Rust gateway client from a single
+terminal:
+
+```bash
+cargo xtask run examples gateway rust --case query
+```
+
+The cached sample model under `.build/models` is used by default; pass
+`--model <model.gguf>` to override it.
+
 Start a gateway first, then set:
 
 ```bash

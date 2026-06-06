@@ -41,8 +41,17 @@ cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0
 Then enter URL `http://127.0.0.1:8787`, token `dev-token`, and alias `local`
 for query/chat pages. Use alias `local-embed` for the embedding page.
 
-Open `http://127.0.0.1:8787/` to inspect gateway status and request history.
-The xtask gateway serve command uses `dev-token` as the dashboard admin token.
+To start the local gateway and the web example from one terminal instead, run:
+
+```bash
+cargo xtask run examples gateway web --case query
+```
+
+The cached sample model under `.build/models` is used by default; pass
+`--model <model.gguf>` to override it.
+
+Open `http://127.0.0.1:8787/` to inspect the minimal example proxy route list.
+The production-style dashboard and request history live in `apps/gateway-server`.
 
 OpenAI gateway pages require the gateway process to have `OPENAI_API_KEY` set.
 Use alias `openai-chat` for query/chat and `openai-embed` for embeddings.

@@ -34,7 +34,23 @@ and image path.
 
 ## Gateway Examples
 
-Gateway examples are intentionally two-process:
+Use `xtask` to start the local GGUF gateway and run a gateway client from one
+terminal:
+
+```bash
+cargo xtask run examples gateway rust --case query
+cargo xtask run examples gateway node --case chat
+cargo xtask run examples gateway python --case embed
+cargo xtask run examples gateway web
+```
+
+The command uses token `dev-token` by default, starts the gateway on
+`127.0.0.1:8787`, waits for readiness, and stops the gateway after Rust, Node,
+or Python clients exit. The web workflow keeps the gateway running while Vite is
+serving. The cached sample model under `.build/models` is used by default; pass
+`--model <model.gguf>` to override it.
+
+The manual flow is still available when you want two terminals:
 
 1. Start a gateway.
 2. Start an app/client that calls the gateway alias.
@@ -46,9 +62,10 @@ export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
-Open `http://127.0.0.1:8787/` to inspect status, aliases, recent request
-history, and manual curl verification commands. The xtask gateway serve command
-uses `dev-token` as the dashboard admin token.
+Open `http://127.0.0.1:8787/` to inspect the minimal example proxy page and
+route list. `examples/gateway/README.md` explains how the proxy is built from
+`crates/gateway`; the production-style dashboard and request history live in
+`apps/gateway-server`.
 
 In another terminal:
 

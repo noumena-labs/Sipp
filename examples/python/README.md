@@ -31,6 +31,16 @@ Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a built backend.
 
 ## Gateway Clients
 
+To start the local gateway and run one Python gateway client from a single
+terminal:
+
+```bash
+cargo xtask run examples gateway python --case query
+```
+
+The cached sample model under `.build/models` is used by default; pass
+`--model <model.gguf>` to override it.
+
 Start a gateway first, then set:
 
 ```bash

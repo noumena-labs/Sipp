@@ -3,18 +3,25 @@
 use crate::cli::{
     Backend, DemoName, DemoServeMode, ExampleName, LlamaBackendOpsMode, RunBrowserExampleServeArgs,
     RunCommands, RunDemoServeArgs, RunDemosCommands, RunExampleServeArgs, RunExampleServeTarget,
-    RunExamplesCommands, RunGatewayLocalServeArgs, RunGatewayOpenAiServeArgs,
-    RunLlamaBackendOpsArgs, RunLlamaCommands, RunToolServeArgs, RunToolsCommands, ToolName,
+    RunExamplesCommands, RunGatewayExampleArgs, RunGatewayExampleCase, RunGatewayExampleClientArgs,
+    RunGatewayExampleCommonArgs, RunGatewayExampleTarget, RunGatewayExampleWebArgs,
+    RunGatewayLocalServeArgs, RunGatewayOpenAiServeArgs, RunLlamaBackendOpsArgs, RunLlamaCommands,
+    RunToolServeArgs, RunToolsCommands, ToolName,
 };
 use crate::javascript;
 use crate::output;
+use crate::sample_model::{self, SampleModelOptions};
 use crate::targets;
 use crate::toolchains::env::apply_toolchains;
+use crate::toolchains::python::{apply_uv_env, setup_uv};
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::env;
 use std::fs;
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 use xshell::{cmd, Shell};
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -30,6 +37,8 @@ mod run_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 const LLAMA_BACKEND_OPS_TARGET: &str = "test-backend-ops";
+const GATEWAY_RUN_TOKEN_ENV: &str = "COGENTLM_GATEWAY_TOKEN";
+const GATEWAY_RUN_START_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Runs a developer workflow.
 pub fn run(sh: &Shell, ctx: &BuildContext, command: RunCommands) -> Result<()> {
@@ -51,6 +60,7 @@ fn run_demos(sh: &Shell, ctx: &BuildContext, command: RunDemosCommands) -> Resul
 fn run_examples(sh: &Shell, ctx: &BuildContext, command: RunExamplesCommands) -> Result<()> {
     match command {
         RunExamplesCommands::Serve(args) => serve_example(sh, ctx, &args),
+        RunExamplesCommands::Gateway(args) => run_gateway_example(sh, ctx, &args),
     }
 }
 
@@ -279,6 +289,201 @@ fn serve_openai_gateway_example(
     )
 }
 
+fn run_gateway_example(sh: &Shell, ctx: &BuildContext, args: &RunGatewayExampleArgs) -> Result<()> {
+    match &args.target {
+        RunGatewayExampleTarget::Rust(args) => run_rust_gateway_example_client(sh, ctx, args),
+        RunGatewayExampleTarget::Node(args) => run_node_gateway_example_client(sh, ctx, args),
+        RunGatewayExampleTarget::Python(args) => run_python_gateway_example_client(sh, ctx, args),
+        RunGatewayExampleTarget::Web(args) => run_web_gateway_example(sh, ctx, args),
+    }
+}
+
+fn run_rust_gateway_example_client(
+    sh: &Shell,
+    ctx: &BuildContext,
+    args: &RunGatewayExampleClientArgs,
+) -> Result<()> {
+    output::phase("Run Rust gateway example");
+    output::detail("Case", args.common.case.as_str());
+    output::detail("Gateway bind", &args.common.bind);
+    output::detail("Gateway backend", args.common.backend.as_str());
+    validate_gateway_example_common(&args.common)?;
+    let model = resolve_gateway_example_model(sh, ctx, &args.common)?;
+    output::path("Model", &model);
+
+    let mut gateway = start_local_gateway_example(
+        sh,
+        ctx,
+        &args.common,
+        &model,
+        &default_gateway_allowed_origins(),
+    )?;
+    wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
+
+    let alias = gateway_example_alias(args.common.case);
+    let bin = rust_gateway_example_bin(args.common.case);
+    let gateway_url = gateway_url(&args.common.bind);
+    let _dir = sh.push_dir(ctx.workspace_root());
+    let mut client_cmd = cmd!(sh, "cargo run -p cogentlm-rust-examples")
+        .arg("--features")
+        .arg("remote")
+        .arg("--bin")
+        .arg(bin)
+        .arg("--")
+        .arg(&model)
+        .arg(alias)
+        .arg(&args.prompt)
+        .env("COGENTLM_GATEWAY_URL", gateway_url)
+        .env(GATEWAY_RUN_TOKEN_ENV, &args.common.token)
+        .env("COGENTLM_MAX_TOKENS", args.max_tokens.to_string())
+        .env("COGENTLM_TEMPERATURE", format_temperature(args.temperature));
+    client_cmd = apply_toolchains(sh, ctx, client_cmd, None)?;
+    output::run_long_command(format!("Running Rust gateway example: {bin}"), client_cmd)
+        .with_context(|| format!("Rust gateway example failed: {bin}"))
+}
+
+fn run_node_gateway_example_client(
+    sh: &Shell,
+    ctx: &BuildContext,
+    args: &RunGatewayExampleClientArgs,
+) -> Result<()> {
+    output::phase("Run Node gateway example");
+    output::detail("Case", args.common.case.as_str());
+    output::detail("Gateway bind", &args.common.bind);
+    output::detail("Gateway backend", args.common.backend.as_str());
+    validate_gateway_example_common(&args.common)?;
+    let model = resolve_gateway_example_model(sh, ctx, &args.common)?;
+    output::path("Model", &model);
+    targets::node::build(sh, ctx, Some(&Backend::Cpu))?;
+
+    let mut gateway = start_local_gateway_example(
+        sh,
+        ctx,
+        &args.common,
+        &model,
+        &default_gateway_allowed_origins(),
+    )?;
+    wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
+
+    let alias = gateway_example_alias(args.common.case);
+    let script = node_gateway_example_script(args.common.case);
+    let gateway_url = gateway_url(&args.common.bind);
+    let node_dir = ctx.examples_root().join("node");
+    let _dir = sh.push_dir(&node_dir);
+    let mut client_cmd = cmd!(sh, "node")
+        .arg(script)
+        .arg(&model)
+        .arg(alias)
+        .arg(&args.prompt)
+        .env("COGENTLM_NODE_BACKEND", "cpu")
+        .env("COGENTLM_GATEWAY_URL", gateway_url)
+        .env(GATEWAY_RUN_TOKEN_ENV, &args.common.token)
+        .env("COGENTLM_MAX_TOKENS", args.max_tokens.to_string())
+        .env("COGENTLM_TEMPERATURE", format_temperature(args.temperature));
+    client_cmd = apply_toolchains(sh, ctx, client_cmd, Some(&Backend::Cpu))?;
+    output::run_long_command(
+        format!("Running Node gateway example: {script}"),
+        client_cmd,
+    )
+    .with_context(|| format!("Node gateway example failed: {script}"))
+}
+
+fn run_python_gateway_example_client(
+    sh: &Shell,
+    ctx: &BuildContext,
+    args: &RunGatewayExampleClientArgs,
+) -> Result<()> {
+    output::phase("Run Python gateway example");
+    output::detail("Case", args.common.case.as_str());
+    output::detail("Gateway bind", &args.common.bind);
+    output::detail("Gateway backend", args.common.backend.as_str());
+    validate_gateway_example_common(&args.common)?;
+    let model = resolve_gateway_example_model(sh, ctx, &args.common)?;
+    output::path("Model", &model);
+    let wheel = build_python_gateway_run_wheel(sh, ctx)?;
+    let python_exe = install_python_gateway_run_venv(sh, ctx, &wheel)?;
+
+    let mut gateway = start_local_gateway_example(
+        sh,
+        ctx,
+        &args.common,
+        &model,
+        &default_gateway_allowed_origins(),
+    )?;
+    wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
+
+    let alias = gateway_example_alias(args.common.case);
+    let script = python_gateway_example_script(args.common.case);
+    let gateway_url = gateway_url(&args.common.bind);
+    let python_dir = ctx.examples_root().join("python");
+    let _dir = sh.push_dir(&python_dir);
+    let mut client_cmd = cmd!(sh, "{python_exe}")
+        .arg(script)
+        .arg(&model)
+        .arg(alias)
+        .arg(&args.prompt)
+        .env("COGENTLM_PYTHON_BACKEND", "cpu")
+        .env("COGENTLM_GATEWAY_URL", gateway_url)
+        .env(GATEWAY_RUN_TOKEN_ENV, &args.common.token)
+        .env("COGENTLM_MAX_TOKENS", args.max_tokens.to_string())
+        .env("COGENTLM_TEMPERATURE", format_temperature(args.temperature));
+    client_cmd = apply_toolchains(sh, ctx, client_cmd, Some(&Backend::Cpu))?;
+    output::run_long_command(
+        format!("Running Python gateway example: {script}"),
+        client_cmd,
+    )
+    .with_context(|| format!("Python gateway example failed: {script}"))
+}
+
+fn run_web_gateway_example(
+    sh: &Shell,
+    ctx: &BuildContext,
+    args: &RunGatewayExampleWebArgs,
+) -> Result<()> {
+    output::phase("Run web gateway example");
+    output::detail("Case", args.common.case.as_str());
+    output::detail("Gateway bind", &args.common.bind);
+    output::detail("Gateway backend", args.common.backend.as_str());
+    output::detail("Vite host", &args.host);
+    output::detail("Vite port", args.port);
+    validate_gateway_example_common(&args.common)?;
+    let model = resolve_gateway_example_model(sh, ctx, &args.common)?;
+    output::path("Model", &model);
+
+    let example = ExampleName::Browser;
+    if !args.no_build {
+        ensure_javascript_workspace_dependencies(sh, ctx, &example_dir(ctx, example))?;
+        targets::wasm::build(sh, ctx)?;
+        if matches!(args.mode, DemoServeMode::Preview) {
+            build_example_only(sh, ctx, example)?;
+        }
+    } else {
+        output::warning("Skipping browser package build before serving");
+    }
+
+    let allowed_origins = gateway_web_allowed_origins(&args.host, args.port);
+    let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model, &allowed_origins)?;
+    wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
+
+    output::detail("Gateway URL", gateway_url(&args.common.bind));
+    output::detail("Gateway alias", gateway_example_alias(args.common.case));
+    output::detail("Gateway token", gateway_token_display(&args.common.token));
+    output::detail("Open page", gateway_example_page(args.common.case));
+
+    serve_vite_workspace(
+        sh,
+        &example_dir(ctx, example),
+        args.mode,
+        Some(&args.host),
+        Some(args.port),
+        format!(
+            "Starting {} Vite server for gateway web example",
+            args.mode.as_str()
+        ),
+        "gateway web example server failed".to_owned(),
+    )
+}
+
 fn build_example_only(sh: &Shell, ctx: &BuildContext, example: ExampleName) -> Result<()> {
     let example_dir = example_dir(ctx, example);
     output::phase(&format!("Example build: {}", example.label()));
@@ -300,10 +505,34 @@ fn write_local_gateway_example_config(
     ctx: &BuildContext,
     args: &RunGatewayLocalServeArgs,
 ) -> Result<PathBuf> {
+    let allowed_origins = default_gateway_allowed_origins();
+    write_local_gateway_config(
+        ctx,
+        LocalGatewayConfigOptions {
+            model: &args.model,
+            bind: &args.bind,
+            token_env: &args.token_env,
+            allowed_origins: &allowed_origins,
+        },
+    )
+}
+
+struct LocalGatewayConfigOptions<'a> {
+    model: &'a Path,
+    bind: &'a str,
+    token_env: &'a str,
+    allowed_origins: &'a [String],
+}
+
+fn write_local_gateway_config(
+    ctx: &BuildContext,
+    options: LocalGatewayConfigOptions<'_>,
+) -> Result<PathBuf> {
     let config_dir = ctx.tmp_dir().join("examples").join("gateway");
     fs::create_dir_all(&config_dir)
         .with_context(|| format!("failed to create {}", config_dir.display()))?;
     let config_path = config_dir.join("local-gateway.toml");
+    let allowed_origins = toml_array(options.allowed_origins);
     let contents = format!(
         r#"[server]
 bind = {bind}
@@ -317,7 +546,7 @@ max_request_bytes = 1048576
 history_capacity = 200
 
 [cors]
-allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+allowed_origins = {allowed_origins}
 
 [[aliases]]
 name = "local"
@@ -380,9 +609,10 @@ mode = "live_slot_prefix"
 runtime_metrics = true
 backend_profiling = false
 "#,
-        bind = toml_string(&args.bind),
-        token_env = toml_string(&args.token_env),
-        model_path = toml_string(&args.model.display().to_string()),
+        bind = toml_string(options.bind),
+        token_env = toml_string(options.token_env),
+        model_path = toml_string(&options.model.display().to_string()),
+        allowed_origins = allowed_origins,
     );
     fs::write(&config_path, contents)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
@@ -475,6 +705,163 @@ fn run_gateway_server(
         .with_context(|| format!("{label} failed"))
 }
 
+fn start_local_gateway_example(
+    sh: &Shell,
+    ctx: &BuildContext,
+    common: &RunGatewayExampleCommonArgs,
+    model: &Path,
+    allowed_origins: &[String],
+) -> Result<ManagedGatewayProcess> {
+    validate_gateway_example_common(common)?;
+    let config_path = write_local_gateway_config(
+        ctx,
+        LocalGatewayConfigOptions {
+            model,
+            bind: &common.bind,
+            token_env: GATEWAY_RUN_TOKEN_ENV,
+            allowed_origins,
+        },
+    )?;
+    ManagedGatewayProcess::start(
+        sh,
+        ctx,
+        &config_path,
+        &common.backend,
+        GATEWAY_RUN_TOKEN_ENV,
+        &common.token,
+    )
+}
+
+pub(crate) fn validate_gateway_example_backend(backend: &Backend) -> Result<()> {
+    if matches!(backend, Backend::All) {
+        anyhow::bail!(
+            "gateway examples require a concrete backend; choose cpu, vulkan, cuda, or metal"
+        );
+    }
+    Ok(())
+}
+
+fn validate_gateway_example_common(common: &RunGatewayExampleCommonArgs) -> Result<()> {
+    validate_gateway_example_backend(&common.backend)?;
+    if common.token.trim().is_empty() {
+        anyhow::bail!("gateway token must not be empty");
+    }
+    Ok(())
+}
+
+fn resolve_gateway_example_model(
+    sh: &Shell,
+    ctx: &BuildContext,
+    common: &RunGatewayExampleCommonArgs,
+) -> Result<PathBuf> {
+    if let Some(model) = &common.model {
+        if !model.is_file() {
+            anyhow::bail!("gateway model file does not exist: {}", model.display());
+        }
+        return Ok(model.to_path_buf());
+    }
+
+    sample_model::ensure_sample_model(
+        sh,
+        ctx,
+        SampleModelOptions {
+            allow_download: false,
+        },
+    )
+    .with_context(|| {
+        format!(
+            "failed to use cached sample model at {}; pass --model <model.gguf> or run setup to install it",
+            sample_model::sample_model_path(ctx).display()
+        )
+    })
+}
+
+fn wait_for_gateway_example(bind: &str, child: &mut Child) -> Result<()> {
+    output::phase("Waiting for local gateway");
+    let probe_addr = gateway_client_addr(bind);
+    let started_at = Instant::now();
+    while started_at.elapsed() < GATEWAY_RUN_START_TIMEOUT {
+        if let Some(status) = child.try_wait().context("failed to poll gateway process")? {
+            anyhow::bail!("gateway process exited before readiness: {status}");
+        }
+        if TcpStream::connect(&probe_addr).is_ok() {
+            output::success(format!("Gateway is ready at {}", gateway_url(bind)));
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    anyhow::bail!(
+        "gateway did not answer readiness probe at {} within {} seconds",
+        gateway_url(bind),
+        GATEWAY_RUN_START_TIMEOUT.as_secs()
+    )
+}
+
+struct ManagedGatewayProcess {
+    child: Option<Child>,
+}
+
+impl ManagedGatewayProcess {
+    fn start(
+        sh: &Shell,
+        ctx: &BuildContext,
+        config_path: &Path,
+        backend: &Backend,
+        token_env: &str,
+        token: &str,
+    ) -> Result<Self> {
+        let log_dir = ctx.command_logs_dir();
+        fs::create_dir_all(&log_dir)
+            .with_context(|| format!("failed to create {}", log_dir.display()))?;
+        let log_path = log_dir.join("example-gateway-run.log");
+        let log = fs::File::create(&log_path)
+            .with_context(|| format!("failed to create {}", log_path.display()))?;
+        output::path("Gateway log", &log_path);
+
+        let _dir = sh.push_dir(ctx.workspace_root());
+        let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway-example");
+        if *backend != Backend::Cpu {
+            gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
+        }
+        gateway_cmd = gateway_cmd.arg("--").arg("--config").arg(config_path);
+        gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(backend))?;
+
+        let mut command: Command = gateway_cmd.quiet().into();
+        command
+            .env(token_env, token)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(
+                log.try_clone()
+                    .context("failed to clone gateway run log handle")?,
+            ))
+            .stderr(Stdio::from(log));
+
+        let child = command.spawn().context("failed to start gateway process")?;
+        Ok(Self { child: Some(child) })
+    }
+
+    fn child_mut(&mut self) -> Result<&mut Child> {
+        self.child
+            .as_mut()
+            .context("gateway child is not available")
+    }
+}
+
+impl Drop for ManagedGatewayProcess {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
+
 fn validate_secret_env(name: &str) -> Result<()> {
     let value = env::var(name).with_context(|| format!("{name} is required"))?;
     if value.trim().is_empty() {
@@ -485,6 +872,219 @@ fn validate_secret_env(name: &str) -> Result<()> {
 
 fn toml_string(value: &str) -> String {
     serde_json::to_string(value).expect("string serialization cannot fail")
+}
+
+fn toml_array(values: &[String]) -> String {
+    let values = values
+        .iter()
+        .map(|value| toml_string(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{values}]")
+}
+
+fn default_gateway_allowed_origins() -> Vec<String> {
+    gateway_web_allowed_origins("127.0.0.1", 5173)
+}
+
+pub(crate) fn gateway_web_allowed_origins(host: &str, port: u16) -> Vec<String> {
+    let normalized = host.trim().trim_matches(['[', ']']);
+    let mut origins = Vec::new();
+    if matches!(normalized, "0.0.0.0" | "::") {
+        push_origin(&mut origins, "127.0.0.1", port);
+        push_origin(&mut origins, "localhost", port);
+        return origins;
+    }
+
+    push_origin(&mut origins, normalized, port);
+    match normalized {
+        "127.0.0.1" => push_origin(&mut origins, "localhost", port),
+        "localhost" => push_origin(&mut origins, "127.0.0.1", port),
+        _ => {}
+    }
+    origins
+}
+
+fn push_origin(origins: &mut Vec<String>, host: &str, port: u16) {
+    let origin = format!("http://{}:{port}", url_host(host));
+    if !origins.contains(&origin) {
+        origins.push(origin);
+    }
+}
+
+fn url_host(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    }
+}
+
+pub(crate) fn gateway_example_alias(case: RunGatewayExampleCase) -> &'static str {
+    match case {
+        RunGatewayExampleCase::Query | RunGatewayExampleCase::Chat => "local",
+        RunGatewayExampleCase::Embed => "local-embed",
+    }
+}
+
+pub(crate) fn rust_gateway_example_bin(case: RunGatewayExampleCase) -> &'static str {
+    match case {
+        RunGatewayExampleCase::Query => "gateway_query",
+        RunGatewayExampleCase::Chat => "gateway_chat",
+        RunGatewayExampleCase::Embed => "gateway_embed",
+    }
+}
+
+pub(crate) fn node_gateway_example_script(case: RunGatewayExampleCase) -> &'static str {
+    match case {
+        RunGatewayExampleCase::Query => "gateway_query.mjs",
+        RunGatewayExampleCase::Chat => "gateway_chat.mjs",
+        RunGatewayExampleCase::Embed => "gateway_embed.mjs",
+    }
+}
+
+pub(crate) fn python_gateway_example_script(case: RunGatewayExampleCase) -> &'static str {
+    match case {
+        RunGatewayExampleCase::Query => "gateway_query.py",
+        RunGatewayExampleCase::Chat => "gateway_chat.py",
+        RunGatewayExampleCase::Embed => "gateway_embed.py",
+    }
+}
+
+fn gateway_example_page(case: RunGatewayExampleCase) -> &'static str {
+    match case {
+        RunGatewayExampleCase::Query => "/gateway_query.html",
+        RunGatewayExampleCase::Chat => "/gateway_chat.html",
+        RunGatewayExampleCase::Embed => "/gateway_embed.html",
+    }
+}
+
+fn gateway_token_display(token: &str) -> &'static str {
+    if token == "dev-token" {
+        "dev-token"
+    } else {
+        "<redacted; use the value passed to --token>"
+    }
+}
+
+fn gateway_url(bind: &str) -> String {
+    format!("http://{}", gateway_client_addr(bind))
+}
+
+fn gateway_client_addr(bind: &str) -> String {
+    match bind.parse::<SocketAddr>() {
+        Ok(addr) => {
+            let host = if addr.ip().is_unspecified() {
+                "127.0.0.1".to_owned()
+            } else {
+                addr.ip().to_string()
+            };
+            format!("{}:{}", url_host(&host), addr.port())
+        }
+        Err(_) => bind.to_owned(),
+    }
+}
+
+fn build_python_gateway_run_wheel(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
+    let backend = Backend::Cpu;
+    let uv_exe = setup_uv(sh, ctx)?;
+    output::run_build_command(
+        "Ensuring Python 3.12 is available through uv",
+        apply_uv_env(ctx, cmd!(sh, "{uv_exe} python install 3.12")),
+    )?;
+
+    let python_dir = ctx.python_package_project_dir();
+    let dist_dir = ctx.python_artifacts_dir().join("gateway-run-wheels");
+    prepare_python_gateway_run_wheel_dir(sh, &dist_dir)?;
+    let target_dir = ctx
+        .cargo_python_target_dir(Some(&backend))
+        .join("gateway-run-wheel");
+    sh.create_dir(&target_dir)?;
+
+    let _dir = sh.push_dir(&python_dir);
+    let mut maturin_cmd = apply_uv_env(
+        ctx,
+        cmd!(
+            sh,
+            "{uv_exe} tool run maturin build --release --out {dist_dir}"
+        ),
+    )
+    .env("CARGO_TARGET_DIR", &target_dir);
+    maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, Some(&backend))?;
+    output::run_build_command("Building Python gateway run wheel", maturin_cmd)?;
+    find_python_wheel_artifact(&dist_dir)?.with_context(|| {
+        format!(
+            "maturin did not produce a wheel artifact in {}",
+            dist_dir.display()
+        )
+    })
+}
+
+fn install_python_gateway_run_venv(
+    sh: &Shell,
+    ctx: &BuildContext,
+    wheel: &Path,
+) -> Result<PathBuf> {
+    let uv_exe = setup_uv(sh, ctx)?;
+    let venv_dir = ctx.tmp_dir().join("python-gateway-run");
+    output::run_build_command(
+        "Creating Python gateway run virtual environment",
+        apply_uv_env(
+            ctx,
+            cmd!(sh, "{uv_exe} venv --clear --python 3.12 {venv_dir}"),
+        ),
+    )?;
+    let python_exe = python_venv_exe(&venv_dir);
+    output::run_build_command(
+        "Installing Python gateway run wheel",
+        apply_uv_env(
+            ctx,
+            cmd!(
+                sh,
+                "{uv_exe} pip install --python {python_exe} --force-reinstall {wheel}"
+            ),
+        ),
+    )?;
+    Ok(python_exe)
+}
+
+fn prepare_python_gateway_run_wheel_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
+    sh.create_dir(dist_dir)?;
+    for entry in
+        fs::read_dir(dist_dir).with_context(|| format!("failed to read {}", dist_dir.display()))?
+    {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("whl") {
+            sh.remove_path(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn find_python_wheel_artifact(dir: &Path) -> Result<Option<PathBuf>> {
+    for entry in fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("whl") {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
+}
+
+fn python_venv_exe(venv_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv_dir.join("Scripts").join("python.exe")
+    } else {
+        venv_dir.join("bin").join("python")
+    }
+}
+
+fn format_temperature(temperature: f32) -> String {
+    if temperature.fract() == 0.0 {
+        format!("{temperature:.0}")
+    } else {
+        temperature.to_string()
+    }
 }
 
 fn serve_vite_workspace(

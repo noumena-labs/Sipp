@@ -1,28 +1,44 @@
-# Gateway Examples
+# Minimal Gateway Proxy Example
 
-The gateway is the server-side boundary for remote inference. Apps call
-`/v1/query`, `/v1/chat`, and `/v1/embed` with a public alias and bearer token.
-Provider keys, upstream URLs, and local GGUF model paths stay in a server
-process.
+This example shows how to build a small HTTP gateway directly from
+`crates/gateway`. It is intentionally self-contained so developers can see how
+the gateway adapter, bearer auth, CORS, request bodies, JSON responses, and SSE
+streaming fit together in one file.
+
+For complete end-to-end Rust, Node, Python, and Web client workflows, see
+`examples/README.md`.
 
 ## Source Map
 
-- `crates/gateway`: reusable adapter, TOML config loader, alias policy, limits,
-  and backend contracts.
-- `examples/gateway/src/main.rs`: minimal application server that embeds the
-  gateway HTTP router next to an application route.
-- `apps/gateway-server`: ready-to-run Axum server with auth, CORS, health
-  probes, dashboard, bounded in-memory history, and protocol routes.
+- `crates/gateway`: framework-neutral config loading, alias policy, request
+  validation, backend contracts, and `GatewayAdapter`.
+- `examples/gateway/src/main.rs`: minimal Axum proxy built directly on
+  `GatewayAdapter`.
+- `apps/gateway-server`: full-featured gateway server with admin dashboard,
+  request history, production-style auth/CORS/probes, and reusable
+  `GatewayHttpService`.
 - `crates/providers`: OpenAI, Anthropic, and OpenAI-compatible provider
-  transports for server-side use.
+  transports used by gateway backends.
 
-## Run The Barebones Gateway Proxy
+## What This Example Does
 
-Use two terminals. The first terminal runs the gateway. The second terminal runs
-a client example that calls both a local GGUF endpoint and the gateway alias.
+`examples/gateway/src/main.rs`:
 
-For local GGUF inference, set a gateway token and let xtask generate a temporary
-config with your model path:
+1. Loads a `GatewayFileConfig` from TOML.
+2. Reads the configured gateway bearer token from the environment.
+3. Builds a framework-neutral `GatewayAdapter`.
+4. Creates local Axum routes for `/v1/query`, `/v1/chat`, and `/v1/embed`.
+5. Converts JSON request bodies into backend requests with `into_backend()`.
+6. Authenticates each request and passes a `GatewayCaller` into the adapter.
+7. Converts adapter outputs into the gateway JSON/SSE wire shape.
+
+It does not implement admin tokens, request history, or the production
+dashboard. Those belong to `apps/gateway-server`.
+
+## Run The Proxy
+
+For local GGUF inference, set the gateway token and let xtask generate a
+temporary config with your model path:
 
 ```bash
 export COGENTLM_GATEWAY_TOKEN="dev-token"
@@ -37,12 +53,10 @@ export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 ```
 
-The xtask serve commands use `COGENTLM_GATEWAY_TOKEN` for both client auth and
-dashboard admin auth. When running a copied config directly, set both secrets:
+You can also run a copied config directly:
 
 ```bash
 export COGENTLM_GATEWAY_TOKEN="dev-token"
-export COGENTLM_GATEWAY_ADMIN_TOKEN="admin-token"
 cargo run -p cogentlm-gateway-example -- --config <gateway.toml>
 ```
 
@@ -50,18 +64,21 @@ cargo run -p cogentlm-gateway-example -- --config <gateway.toml>
 `examples/gateway/openai-gateway.toml` are reference configs. Copy one and
 replace `model_path` or provider settings before running it directly.
 
+The reference configs still include `auth.admin_token_env` and
+`limits.history_capacity` so the same files can be adapted for
+`apps/gateway-server`; this minimal example ignores those fields.
+
 ## Observe And Verify
 
-Open `http://127.0.0.1:8787/` in a browser. The page shows gateway status,
-configured aliases, recent request history, and copyable manual verification
-commands. Enter the admin token to load protected status and history data.
+Open `http://127.0.0.1:8787/` in a browser. The page is served by this example
+binary and lists the minimal routes. It is not the production gateway dashboard.
 
 Manual probes:
 
 ```bash
 curl http://127.0.0.1:8787/healthz
 curl http://127.0.0.1:8787/readyz
-curl -H "Authorization: Bearer admin-token" http://127.0.0.1:8787/admin/api/status
+curl http://127.0.0.1:8787/app-healthz
 ```
 
 Manual query:
@@ -73,37 +90,11 @@ curl -X POST http://127.0.0.1:8787/v1/query \
   -d '{"model":"local","prompt":"Write one sentence about CogentLM."}'
 ```
 
-## Embed The Gateway In A Server
-
-`crates/gateway` exposes the adapter and config building blocks. Existing Axum
-servers can build a `GatewayHttpService` from `apps/gateway-server`, merge the
-router, and keep their own middleware, deployment, TLS, and application routes.
+Manual streaming chat:
 
 ```bash
-export COGENTLM_GATEWAY_TOKEN="dev-token"
-export COGENTLM_GATEWAY_ADMIN_TOKEN="admin-token"
-cargo run -p cogentlm-gateway-example -- --config <gateway.toml>
+curl -N -X POST http://127.0.0.1:8787/v1/chat \
+  -H "Authorization: Bearer dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"local","stream":true,"messages":[{"role":"user","content":"Say hello."}]}'
 ```
-
-The embedded example responds to `/app-healthz` and serves the gateway protocol
-and dashboard from the same listener.
-
-## Run Clients
-
-In a second terminal:
-
-```bash
-export COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
-export COGENTLM_GATEWAY_TOKEN="dev-token"
-cargo run -p cogentlm-rust-examples --features remote --bin gateway_query -- <model.gguf> local
-node examples/node/gateway_chat.mjs <model.gguf> local
-python examples/python/gateway_embed.py <model.gguf> local-embed
-```
-
-Use alias `local` for query/chat examples and `local-embed` for embedding
-examples. Embedding examples require a model/runtime that reports embedding
-support.
-
-OpenAI gateway aliases are `openai-chat` for query/chat and `openai-embed` for
-embeddings. OpenAI workflows are manual because they require a secret and spend
-provider quota.
