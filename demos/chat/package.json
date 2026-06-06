@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "bunx --bun vite",
     "build": "bunx --bun tsc && bunx --bun vite build",
-    "preview": "bunx --bun vite preview"
+    "preview": "bunx --bun vite preview",
+    "test": "bun test chat-state.test.ts"
   },
   "dependencies": {
     "@noumena-labs/cogentlm": "workspace:*"

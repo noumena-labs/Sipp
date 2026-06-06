@@ -1,30 +1,16 @@
-# CogentClient Examples
+# CogentLM Chat
 
-This directory contains minimal, developer-centric examples for the `@noumena-labs/cogentlm` library.
+A focused browser chat interface for testing local GGUF models with CogentLM
+and WebGPU.
 
-## Getting Started
+## Run
 
-1. **Install Dependencies**:
-   ```bash
-   cargo xtask setup --profile browser
-   ```
+```bash
+cargo xtask run demos serve chat
+```
 
-2. **Run the Dev Server**:
-   ```bash
-   cargo xtask run demos serve chat
-   ```
+Open the printed local URL, choose a curated text or vision model, and load it.
+Custom URL and local file imports support text GGUF models.
 
-3. **Open in Browser**:
-   Navigate to `http://localhost:5173`.
-
-## Included Examples
-
-- **Basic Chat**: Simple chat interface with visible token emission.
-- **Multimodal Vision**: Guide on how to use vision-language models with `Uint8Array` media.
-- **Structured Output**: Using GBNF grammars to extract typed JSON data.
-- **Observability**: Real-time performance monitoring (Tokens/sec, TTFT, etc.).
-- **Query**: Raw prompt completion through `client.query()`, including encoder-decoder models and the run-handle response API.
-- **Embeddings**: Vector extraction through `client.embed().response` for embedding-capable models.
-
-## Important Note: COOP/COEP
-CogentClient requires `SharedArrayBuffer` for multi-threaded WASM execution. The included `vite.config.ts` is configured with the necessary `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers.
+The interface streams generated tokens and reports request-level decode speed,
+time to first token, and output token count.

@@ -1,108 +1,278 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CogentClient - Minimal Examples</title>
-  <link rel="stylesheet" href="/src/style.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-</head>
-<body class="dark-theme">
-  <div id="app">
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="logo">
-          <span class="logo-text">Cogent</span><span class="logo-suffix">Client</span>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#f4f6f7">
+    <title>CogentLM Chat</title>
+    <link rel="stylesheet" href="/src/style.css">
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">C</span>
+          <div>
+            <strong>CogentLM</strong>
+            <span>WebGPU Chat</span>
+          </div>
         </div>
-      </div>
-      <nav class="example-nav">
-        <button class="nav-item active" data-example="01-basic-chat">
-          <span class="icon">💬</span>
-          <span class="label">Basic Chat</span>
-        </button>
-        <button class="nav-item" data-example="02-multimodal">
-          <span class="icon">👁️</span>
-          <span class="label">Multimodal Vision</span>
-        </button>
-        <button class="nav-item" data-example="03-structured-output">
-          <span class="icon">📋</span>
-          <span class="label">Structured Output</span>
-        </button>
-        <button class="nav-item" data-example="04-observability">
-          <span class="icon">📈</span>
-          <span class="label">Observability</span>
-        </button>
-        <button class="nav-item" data-example="05-query">
-          <span class="icon">Q</span>
-          <span class="label">Query</span>
-        </button>
-        <button class="nav-item" data-example="06-embeddings">
-          <span class="icon">E</span>
-          <span class="label">Embeddings</span>
-        </button>
-      </nav>
-      <div class="sidebar-footer">
-        <div class="status-indicator">
-          <div class="status-dot disconnected"></div>
-          <span class="status-text">Client Not Ready</span>
-        </div>
-      </div>
-    </aside>
 
-    <main class="main-content">
-      <header class="content-header">
-        <h1 id="example-title">Basic Chat</h1>
-        <p id="example-description">A simple demonstration of chat with visible token emission.</p>
+        <button id="model-button" class="model-button" type="button">
+          <span>
+            <span class="control-label">Model</span>
+            <strong id="model-name">Choose model</strong>
+          </span>
+          <span id="model-capability" class="capability-badge text" hidden>Text</span>
+        </button>
+
+        <div class="topbar-actions">
+          <div class="runtime-status" aria-live="polite">
+            <span id="status-dot" class="status-dot idle"></span>
+            <span id="status-text">No model loaded</span>
+          </div>
+          <button id="new-chat-button" class="button secondary" type="button" disabled>
+            New chat
+          </button>
+          <button id="settings-button" class="button secondary" type="button" disabled>
+            Settings
+          </button>
+        </div>
       </header>
 
-      <div class="interaction-container">
-        <div class="control-panel">
-          <div class="input-group">
-            <label for="model-url">Model URL</label>
-            <input type="text" id="model-url" placeholder="Model GGUF URL" value="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf">
-          </div>
-          <div class="input-group file-group">
-            <label for="model-file">Model File</label>
-            <input type="file" id="model-file" accept=".gguf">
-          </div>
-          <div class="input-group hidden" id="projector-group">
-            <label for="projector-url">Projector URL (Vision)</label>
-            <input type="text" id="projector-url" placeholder="Projector GGUF URL" value="https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-model-f16.gguf">
-            <input type="file" id="projector-file" accept=".gguf">
-          </div>
-          <button id="init-client-btn" class="btn primary">Initialize & Load</button>
-        </div>
-
-        <div class="console-wrapper">
-          <div class="console-header">
-            <span>Terminal Output</span>
-            <button id="clear-console-btn" class="btn text-btn">Clear</button>
-          </div>
-          <div id="console-output" class="console-content">
-            <div class="console-line system">Welcome to CogentClient Examples. Select an example and click "Initialize & Load" to begin.</div>
-          </div>
-          <div id="image-preview-area" class="hidden">
-            <div class="preview-item">
-              <img id="image-preview" src="" alt="Preview">
-              <button id="remove-image-btn" class="remove-btn">&times;</button>
+      <main class="chat-layout">
+        <section class="chat-surface" aria-label="Chat">
+          <div class="metrics-bar">
+            <div>
+              <span>Backend</span>
+              <strong id="backend-value">--</strong>
+            </div>
+            <div>
+              <span>Decode</span>
+              <strong id="throughput-value">--</strong>
             </div>
           </div>
-          <div class="console-input-area">
-            <input type="file" id="file-input" accept="image/*" class="hidden">
-            <button id="upload-btn" class="btn icon-btn secondary" title="Upload Image" disabled>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
-            </button>
-            <input type="text" id="user-input" placeholder="Type your message here..." disabled>
-            <button id="send-btn" class="btn icon-btn" disabled>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-            </button>
+
+          <div id="empty-state" class="empty-state">
+            <div class="empty-mark" aria-hidden="true">C</div>
+            <h1>Start a conversation</h1>
+            <p id="empty-model-name">Load a local model</p>
+            <div class="topic-grid" aria-label="Example topics">
+              <button
+                type="button"
+                data-topic="Explain how WebGPU accelerates local language models."
+              >
+                Explain WebGPU
+              </button>
+              <button
+                type="button"
+                data-topic="Write a small TypeScript function that groups objects by a key."
+              >
+                Write TypeScript
+              </button>
+              <button
+                type="button"
+                data-topic="Compare CPU and GPU inference for running a local model."
+              >
+                Compare inference
+              </button>
+            </div>
           </div>
+
+          <div id="transcript" class="transcript" aria-live="polite" hidden></div>
+
+          <form id="composer" class="composer">
+            <div id="attachment" class="attachment" hidden>
+              <img id="attachment-image" alt="">
+              <span id="attachment-name"></span>
+              <button
+                id="remove-attachment-button"
+                type="button"
+                aria-label="Remove attached image"
+                title="Remove image"
+              >
+                Remove
+              </button>
+            </div>
+            <div class="composer-row">
+              <input id="image-input" type="file" accept="image/*" hidden>
+              <button
+                id="image-button"
+                class="button secondary image-button"
+                type="button"
+                hidden
+              >
+                Add image
+              </button>
+              <textarea
+                id="prompt-input"
+                rows="1"
+                placeholder="Load a model to start chatting"
+                aria-label="Message"
+                disabled
+              ></textarea>
+              <button id="send-button" class="button primary" type="submit" disabled>
+                Send
+              </button>
+              <button id="stop-button" class="button danger" type="button" hidden>
+                Stop
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="model-dialog" class="dialog model-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="dialog-eyebrow">Local inference</span>
+          <h2>Choose a model</h2>
         </div>
+        <button
+          id="close-model-button"
+          class="dialog-close"
+          type="button"
+          aria-label="Close model picker"
+          title="Close"
+          hidden
+        >
+          Close
+        </button>
       </div>
-    </main>
-  </div>
-  <script type="module" src="/src/main.ts"></script>
-</body>
+
+      <div class="segmented-control" aria-label="Model source">
+        <button type="button" data-picker-mode="curated" aria-pressed="true">
+          Curated
+        </button>
+        <button type="button" data-picker-mode="custom" aria-pressed="false">
+          Custom
+        </button>
+      </div>
+
+      <section id="curated-panel">
+        <div id="model-options" class="model-options"></div>
+      </section>
+
+      <section id="custom-panel" class="custom-panel" hidden>
+        <div class="segmented-control compact" aria-label="Custom model source">
+          <button type="button" data-custom-source="url" aria-pressed="true">
+            URL
+          </button>
+          <button type="button" data-custom-source="file" aria-pressed="false">
+            Local file
+          </button>
+        </div>
+
+        <div id="custom-url-panel" class="field">
+          <label for="custom-model-url">GGUF model URL</label>
+          <input
+            id="custom-model-url"
+            type="url"
+            placeholder="https://.../model.gguf"
+            autocomplete="off"
+          >
+        </div>
+
+        <div id="custom-file-panel" class="field" hidden>
+          <label for="custom-model-file">GGUF model file</label>
+          <input id="custom-model-file" type="file" accept=".gguf">
+          <span id="custom-file-name" class="file-name">No file selected</span>
+        </div>
+
+        <p class="custom-note">
+          Custom imports support text models. Choose a curated bundle for vision.
+        </p>
+      </section>
+
+      <div class="dialog-footer">
+        <div class="load-feedback" aria-live="polite">
+          <p id="load-status" class="dialog-status">Select a model to begin.</p>
+          <progress id="load-progress" max="100" value="0" hidden></progress>
+        </div>
+        <button id="load-model-button" class="button primary" type="button">
+          Load model
+        </button>
+      </div>
+    </dialog>
+
+    <dialog id="settings-dialog" class="dialog settings-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="dialog-eyebrow">Generation</span>
+          <h2>Settings</h2>
+        </div>
+        <button
+          class="dialog-close"
+          type="button"
+          data-close-dialog
+          aria-label="Close settings"
+          title="Close"
+        >
+          Close
+        </button>
+      </div>
+
+      <div class="settings-fields">
+        <label class="setting-row" for="max-tokens-input">
+          <span>
+            <strong>Max tokens</strong>
+            <small>Maximum response length</small>
+          </span>
+          <input
+            id="max-tokens-input"
+            type="number"
+            min="16"
+            max="2048"
+            step="16"
+            value="256"
+          >
+        </label>
+
+        <label class="setting-row" for="temperature-input">
+          <span>
+            <strong>Temperature</strong>
+            <small>Higher values increase variation</small>
+          </span>
+          <span class="range-control">
+            <input
+              id="temperature-input"
+              type="range"
+              min="0"
+              max="2"
+              step="0.05"
+              value="0.7"
+            >
+            <output id="temperature-value" for="temperature-input">0.70</output>
+          </span>
+        </label>
+
+        <label class="setting-row" for="top-p-input">
+          <span>
+            <strong>Top-p</strong>
+            <small>Nucleus sampling threshold</small>
+          </span>
+          <span class="range-control">
+            <input
+              id="top-p-input"
+              type="range"
+              min="0.05"
+              max="1"
+              step="0.05"
+              value="0.9"
+            >
+            <output id="top-p-value" for="top-p-input">0.90</output>
+          </span>
+        </label>
+      </div>
+
+      <div class="dialog-footer settings-footer">
+        <button class="button primary" type="button" data-close-dialog>
+          Done
+        </button>
+      </div>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>
