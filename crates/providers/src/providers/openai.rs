@@ -1,3 +1,9 @@
+use crate::{
+    HttpTransport, OpenAiAdapterConfig, ProviderAuth, ProviderBackend, ProviderChatRequest,
+    ProviderChatResponse, ProviderEmbedRequest, ProviderEmbeddingResponse, ProviderGenerateRequest,
+    ProviderGenerateResponse, ProviderKind, ProviderModel, ProviderResult, ProviderStream,
+    ProviderStreamEvent,
+};
 use async_trait::async_trait;
 
 use super::openai_compat::{
@@ -6,77 +12,71 @@ use super::openai_compat::{
     openai_embedding_response_from_body, openai_model_from_value, openai_models_from_body,
     openai_stream_chat_body, openai_stream_completion_body, openai_stream_events,
 };
-use crate::{
-    GatewayBackendAdapter, HttpTransport, OpenAiCompatibleAdapterConfig, OpenAiCompatibleProtocol,
-    ProviderChatRequest, ProviderChatResponse, ProviderEmbedRequest, ProviderEmbeddingResponse,
-    ProviderGenerateRequest, ProviderGenerateResponse, ProviderKind, ProviderModel, ProviderResult,
-    ProviderStream, ProviderStreamEvent,
-};
 
-pub struct OpenAiCompatibleAdapter {
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "../tests/providers/openai_tests.rs"]
+mod openai_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+
+pub struct OpenAiAdapter {
     transport: HttpTransport,
 }
 
-impl OpenAiCompatibleAdapter {
-    pub fn new(config: OpenAiCompatibleAdapterConfig) -> ProviderResult<Self> {
-        let OpenAiCompatibleAdapterConfig {
-            base_url,
-            auth,
-            protocol,
-            static_headers,
-            timeout,
-        } = config;
-        match protocol {
-            OpenAiCompatibleProtocol::OpenAiCompatible => {}
-        }
-
+impl OpenAiAdapter {
+    pub fn new(config: OpenAiAdapterConfig) -> ProviderResult<Self> {
+        let base_url = config
+            .base_url
+            .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string());
         let transport = HttpTransport::new_with_options(
-            ProviderKind::OpenAiCompatible,
+            ProviderKind::OpenAi,
             base_url,
-            auth,
-            static_headers,
-            timeout,
+            ProviderAuth::Bearer(config.api_key),
+            Vec::new(),
+            config.timeout,
         )?;
         Ok(Self { transport })
     }
 }
 
 #[async_trait]
-impl GatewayBackendAdapter for OpenAiCompatibleAdapter {
+impl ProviderBackend for OpenAiAdapter {
     fn kind(&self) -> ProviderKind {
-        ProviderKind::OpenAiCompatible
+        ProviderKind::OpenAi
     }
 
     async fn list_models(&self) -> ProviderResult<Vec<ProviderModel>> {
         let response = self.transport.get_json("/models").await?;
-        openai_models_from_body(&response.body, ProviderKind::OpenAiCompatible)
+        openai_models_from_body(&response.body, ProviderKind::OpenAi)
     }
 
     async fn get_model(&self, model: &str) -> ProviderResult<ProviderModel> {
         let response = self.transport.get_json(&format!("/models/{model}")).await?;
-        openai_model_from_value(&response.body, ProviderKind::OpenAiCompatible)
+        openai_model_from_value(&response.body, ProviderKind::OpenAi)
     }
 
     async fn chat(&self, req: ProviderChatRequest) -> ProviderResult<ProviderChatResponse> {
-        let body = openai_chat_body(&req, ProviderKind::OpenAiCompatible)?;
+        let body = openai_chat_body(&req, ProviderKind::OpenAi)?;
         let response = self.transport.post_json("/chat/completions", &body).await?;
-        openai_chat_response_from_body(
-            response.request_id,
-            response.body,
-            ProviderKind::OpenAiCompatible,
-        )
+        openai_chat_response_from_body(response.request_id, response.body, ProviderKind::OpenAi)
     }
 
     async fn generate(
         &self,
         req: ProviderGenerateRequest,
     ) -> ProviderResult<ProviderGenerateResponse> {
-        let body = openai_completion_body(&req, ProviderKind::OpenAiCompatible)?;
+        let body = openai_completion_body(&req, ProviderKind::OpenAi)?;
         let response = self.transport.post_json("/completions", &body).await?;
         openai_completion_response_from_body(
             response.request_id,
             response.body,
-            ProviderKind::OpenAiCompatible,
+            ProviderKind::OpenAi,
         )
     }
 
@@ -84,7 +84,7 @@ impl GatewayBackendAdapter for OpenAiCompatibleAdapter {
         &self,
         req: ProviderGenerateRequest,
     ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
-        let body = openai_stream_completion_body(&req, ProviderKind::OpenAiCompatible)?;
+        let body = openai_stream_completion_body(&req, ProviderKind::OpenAi)?;
         let response = self
             .transport
             .post_json_stream("/completions", &body)
@@ -92,17 +92,17 @@ impl GatewayBackendAdapter for OpenAiCompatibleAdapter {
         Ok(openai_completion_stream_events(
             response.request_id,
             response.stream,
-            ProviderKind::OpenAiCompatible,
+            ProviderKind::OpenAi,
         ))
     }
 
     async fn embed(&self, req: ProviderEmbedRequest) -> ProviderResult<ProviderEmbeddingResponse> {
-        let body = openai_embedding_body(&req, ProviderKind::OpenAiCompatible)?;
+        let body = openai_embedding_body(&req, ProviderKind::OpenAi)?;
         let response = self.transport.post_json("/embeddings", &body).await?;
         openai_embedding_response_from_body(
             response.request_id,
             response.body,
-            ProviderKind::OpenAiCompatible,
+            ProviderKind::OpenAi,
         )
     }
 
@@ -110,7 +110,7 @@ impl GatewayBackendAdapter for OpenAiCompatibleAdapter {
         &self,
         req: ProviderChatRequest,
     ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
-        let body = openai_stream_chat_body(&req, ProviderKind::OpenAiCompatible)?;
+        let body = openai_stream_chat_body(&req, ProviderKind::OpenAi)?;
         let response = self
             .transport
             .post_json_stream("/chat/completions", &body)
@@ -118,11 +118,7 @@ impl GatewayBackendAdapter for OpenAiCompatibleAdapter {
         Ok(openai_stream_events(
             response.request_id,
             response.stream,
-            ProviderKind::OpenAiCompatible,
+            ProviderKind::OpenAi,
         ))
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/providers/openai_compatible_adapter_tests.rs"]
-mod openai_compatible_adapter_tests;

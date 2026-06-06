@@ -7,9 +7,10 @@ members = [
     "crates/engine",
     "crates/remote",
     "crates/gateway",
-    "crates/gateway-providers",
+    "crates/providers",
     "crates/client",
     "apps/cli",
+    "apps/gateway-server",
     "xtask",
     "bindings/python",
     "bindings/node",
@@ -39,7 +40,8 @@ cogentlm-sys = { path = "crates/sys", version = "0.1.0" }
 cogentlm-engine = { path = "crates/engine", version = "0.1.0", default-features = false }
 cogentlm-remote = { path = "crates/remote", version = "0.1.0" }
 cogentlm-gateway = { path = "crates/gateway", version = "0.1.0" }
-cogentlm-gateway-providers = { path = "crates/gateway-providers", version = "0.1.0" }
+cogentlm-providers = { path = "crates/providers", version = "0.1.0" }
+cogentlm-gateway-server = { path = "apps/gateway-server", version = "0.1.0" }
 cogentlm-client = { path = "crates/client", version = "0.1.0", default-features = false }
 futures = "0.3"
 futures-channel = "0.3"

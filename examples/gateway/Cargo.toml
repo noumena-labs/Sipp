@@ -11,9 +11,19 @@ autobins = false
 name = "cogentlm-gateway-example"
 path = "src/main.rs"
 
+[features]
+default = ["native"]
+native = ["cogentlm-gateway/native", "cogentlm-gateway-server/native"]
+backend-dl = ["cogentlm-gateway/backend-dl", "cogentlm-gateway-server/backend-dl"]
+cuda = ["cogentlm-gateway/cuda", "cogentlm-gateway-server/cuda"]
+metal = ["cogentlm-gateway/metal", "cogentlm-gateway-server/metal"]
+vulkan = ["cogentlm-gateway/vulkan", "cogentlm-gateway-server/vulkan"]
+openmp = ["cogentlm-gateway/openmp", "cogentlm-gateway-server/openmp"]
+
 [dependencies]
 anyhow.workspace = true
 axum = "0.8"
 clap.workspace = true
 cogentlm-gateway.workspace = true
+cogentlm-gateway-server.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }

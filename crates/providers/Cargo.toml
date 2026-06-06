@@ -1,6 +1,6 @@
 [package]
-name = "cogentlm-gateway-providers"
-description = "Provider adapters for CogentLM gateway servers"
+name = "cogentlm-providers"
+description = "Provider adapters for CogentLM server and direct-provider integrations"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

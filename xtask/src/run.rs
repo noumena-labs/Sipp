@@ -310,16 +310,18 @@ bind = {bind}
 
 [auth]
 token_env = {token_env}
+admin_token_env = {token_env}
 
 [limits]
 max_request_bytes = 1048576
+history_capacity = 200
 
 [cors]
 allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 [[aliases]]
 name = "local"
-operations = ["query", "chat", "embed"]
+operations = ["query", "chat"]
 
 [aliases.limits]
 max_concurrent_requests = 4
@@ -328,6 +330,40 @@ max_requests_per_minute = 60
 [aliases.backend]
 kind = "local_cogent_engine"
 model_path = {model_path}
+
+[aliases.backend.options]
+context_key = "gateway-local"
+
+[aliases.backend.runtime.context]
+n_ctx = 2048
+embeddings = false
+
+[aliases.backend.runtime.scheduler]
+continuous_batching = true
+prefill_chunk_size = 0
+
+[aliases.backend.runtime.cache]
+mode = "live_slot_prefix"
+
+[aliases.backend.runtime.observability]
+runtime_metrics = true
+backend_profiling = false
+
+[[aliases]]
+name = "local-embed"
+operations = ["embed"]
+
+[aliases.limits]
+max_concurrent_requests = 4
+max_requests_per_minute = 60
+
+[aliases.backend]
+kind = "local_cogent_engine"
+model_path = {model_path}
+
+[aliases.backend.options]
+embedding_context_key = "gateway-embed"
+normalize_embeddings = true
 
 [aliases.backend.runtime.context]
 n_ctx = 2048
@@ -368,9 +404,11 @@ bind = {bind}
 
 [auth]
 token_env = {token_env}
+admin_token_env = {token_env}
 
 [limits]
 max_request_bytes = 1048576
+history_capacity = 200
 
 [cors]
 allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
@@ -427,15 +465,11 @@ fn run_gateway_server(
     }
 
     let _dir = sh.push_dir(ctx.workspace_root());
-    let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway");
+    let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway-example");
     if *backend != Backend::Cpu {
         gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
     }
-    gateway_cmd = gateway_cmd
-        .arg("--")
-        .arg("serve")
-        .arg("--config")
-        .arg(config_path);
+    gateway_cmd = gateway_cmd.arg("--").arg("--config").arg(config_path);
     gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(backend))?;
     output::run_long_command(format!("Starting {label}"), gateway_cmd)
         .with_context(|| format!("{label} failed"))

@@ -3,9 +3,11 @@ bind = "127.0.0.1:8787"
 
 [auth]
 token_env = "COGENTLM_GATEWAY_TOKEN"
+admin_token_env = "COGENTLM_GATEWAY_ADMIN_TOKEN"
 
 [limits]
 max_request_bytes = 1048576
+history_capacity = 200
 
 [cors]
 allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]

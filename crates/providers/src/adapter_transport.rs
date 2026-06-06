@@ -10,9 +10,9 @@ use crate::{
     ProviderStreamEvent,
 };
 
-/// Server-side adapter contract used by the gateway provider package.
+/// Server-side adapter contract used by the provider package.
 #[async_trait]
-pub trait GatewayBackendAdapter: Send + Sync {
+pub trait ProviderBackend: Send + Sync {
     /// Return the provider kind implemented by this adapter.
     fn kind(&self) -> ProviderKind;
 
@@ -47,15 +47,15 @@ pub trait GatewayBackendAdapter: Send + Sync {
     ) -> ProviderResult<ProviderStream<ProviderStreamEvent>>;
 }
 
-/// Type-erased gateway adapter transport.
+/// Type-erased provider transport.
 #[derive(Clone)]
-pub struct GatewayAdapterTransport {
-    backend: Arc<dyn GatewayBackendAdapter>,
+pub struct ProviderTransport {
+    backend: Arc<dyn ProviderBackend>,
 }
 
-impl GatewayAdapterTransport {
+impl ProviderTransport {
     /// Create a transport from an adapter implementation.
-    pub fn from_backend(backend: Arc<dyn GatewayBackendAdapter>) -> Self {
+    pub fn from_backend(backend: Arc<dyn ProviderBackend>) -> Self {
         Self { backend }
     }
 

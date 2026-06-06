@@ -1,24 +1,25 @@
 use std::{
     collections::BTreeSet,
     fmt,
+    net::IpAddr,
     net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use axum::http::{HeaderName, HeaderValue, Uri};
 use cogentlm_engine::engine::NativeRuntimeConfig;
-use cogentlm_gateway_providers::{
-    AnthropicAdapterConfig, GatewayAdapterTransport, OpenAiAdapterConfig,
-    OpenAiCompatibleAdapterConfig, OpenAiCompatibleProtocol, ProviderAuth, SecretString,
+use cogentlm_providers::{
+    AnthropicAdapterConfig, OpenAiAdapterConfig, OpenAiCompatibleAdapterConfig,
+    OpenAiCompatibleProtocol, ProviderAuth, ProviderTransport, SecretString,
 };
+use http::{HeaderName, HeaderValue, Uri};
 use serde::Deserialize;
 
 use crate::{
-    server::{cors_origin_header, is_loopback_host, validate_gateway_bearer_secret},
-    GatewayAccess, GatewayAlias, GatewayAliasLimits, GatewayError, GatewayErrorKind, GatewayResult,
-    GatewayService, GatewayServiceLimits, GatewayState, GatewayToken, LocalCogentEngineBackend,
-    LocalCogentEngineOptions, MockBackend, Operation, OperationSet, ProviderGatewayBackend,
+    server::validate_gateway_bearer_secret, GatewayAccess, GatewayAdapter, GatewayAlias,
+    GatewayAliasLimits, GatewayError, GatewayErrorKind, GatewayRequestLimits, GatewayResult,
+    LocalCogentEngineBackend, LocalCogentEngineOptions, MockBackend, Operation, OperationSet,
+    ProviderGatewayBackend,
 };
 
 /// Runtime server configuration loaded from `gateway.toml`.
@@ -74,23 +75,39 @@ impl GatewayFileConfig {
         })
     }
 
-    /// Build the runnable gateway server configuration.
-    pub async fn build(self) -> GatewayResult<GatewayServerConfig> {
-        let service_limits = self.limits.service_limits()?;
+    /// Build the framework-agnostic gateway adapter.
+    ///
+    /// Server-specific settings such as bind address, bearer tokens, CORS, and
+    /// body limits remain available on this parsed config for host servers, but
+    /// they are not applied by the core adapter.
+    pub async fn build(self) -> GatewayResult<GatewayAdapter> {
+        self.build_adapter().await
+    }
+
+    /// Build the framework-agnostic gateway adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when alias configuration or backend construction fails.
+    pub async fn build_adapter(self) -> GatewayResult<GatewayAdapter> {
         let alias_names = validate_alias_configs(&self.aliases)?;
-        let access = self.auth.access.gateway_access(&alias_names)?;
+        self.auth.access.gateway_access(&alias_names)?;
         validate_alias_backend_configs(&self.aliases)?;
-        validate_cors_origins(&self.cors.allowed_origins)?;
-        let token = env_secret(&self.auth.token_env)?;
-        let mut state =
-            GatewayState::with_tokens([GatewayToken::new(token.expose().to_string(), access)?])?;
+        let mut adapter = GatewayAdapter::new();
         for alias in self.aliases {
-            state.add_alias(alias.build().await?)?;
+            adapter.add_alias(alias.build().await?)?;
         }
-        Ok(GatewayServerConfig {
-            bind: self.server.bind,
-            service: GatewayService::new(state, self.cors.allowed_origins, service_limits)?,
-        })
+        Ok(adapter)
+    }
+
+    /// Return the access scope configured for the standalone server token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when token access references unknown aliases.
+    pub fn gateway_access(&self) -> GatewayResult<GatewayAccess> {
+        let alias_names = validate_alias_configs(&self.aliases)?;
+        self.auth.access.clone().gateway_access(&alias_names)
     }
 }
 
@@ -108,6 +125,8 @@ pub struct ServerFileConfig {
 pub struct AuthFileConfig {
     /// Environment variable containing the gateway bearer token.
     pub token_env: String,
+    /// Environment variable containing the standalone server admin token.
+    pub admin_token_env: Option<String>,
     /// Access scope for the configured gateway token.
     #[serde(default)]
     pub access: TokenAccessFileConfig,
@@ -122,7 +141,16 @@ pub struct TokenAccessFileConfig {
 }
 
 impl TokenAccessFileConfig {
-    fn gateway_access(self, configured_aliases: &BTreeSet<String>) -> GatewayResult<GatewayAccess> {
+    /// Convert this config into a gateway access scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when access entries are invalid or reference unknown
+    /// aliases.
+    pub fn gateway_access(
+        self,
+        configured_aliases: &BTreeSet<String>,
+    ) -> GatewayResult<GatewayAccess> {
         match self.aliases {
             None => Ok(GatewayAccess::all()),
             Some(aliases) => {
@@ -216,20 +244,41 @@ impl AliasFileConfig {
 pub struct ServiceLimitsFileConfig {
     /// Maximum accepted request body bytes.
     pub max_request_bytes: Option<usize>,
+    /// Maximum redacted request history entries retained by the server.
+    pub history_capacity: Option<usize>,
 }
 
 impl ServiceLimitsFileConfig {
-    fn service_limits(&self) -> GatewayResult<GatewayServiceLimits> {
-        let max_request_bytes = self
-            .max_request_bytes
-            .unwrap_or(GatewayServiceLimits::default().max_request_bytes);
+    /// Return the configured maximum request body size.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the limit is zero.
+    pub fn max_request_bytes(&self) -> GatewayResult<usize> {
+        let max_request_bytes = self.max_request_bytes.unwrap_or(1 << 20);
         if max_request_bytes == 0 {
             return Err(GatewayError::new(
                 GatewayErrorKind::InvalidRequest,
                 "max_request_bytes must be greater than zero",
             ));
         }
-        Ok(GatewayServiceLimits { max_request_bytes })
+        Ok(max_request_bytes)
+    }
+
+    /// Return the configured request history capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the capacity is zero.
+    pub fn history_capacity(&self) -> GatewayResult<usize> {
+        let history_capacity = self.history_capacity.unwrap_or(200);
+        if history_capacity == 0 {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "history_capacity must be greater than zero",
+            ));
+        }
+        Ok(history_capacity)
     }
 }
 
@@ -237,9 +286,27 @@ impl ServiceLimitsFileConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AliasLimitsFileConfig {
-    /// Maximum concurrent requests for this alias.
+    /// Legacy maximum concurrent requests for this alias.
     pub max_concurrent_requests: Option<usize>,
-    /// Maximum requests per rolling minute for this alias.
+    /// Legacy maximum requests per rolling minute for this alias.
+    pub max_requests_per_minute: Option<u32>,
+    /// Legacy maximum total requests allowed since gateway startup.
+    pub max_requests_total: Option<u64>,
+    /// Limits that apply across every caller.
+    pub global: Option<RequestLimitsFileConfig>,
+    /// Limits that apply independently to each caller ID.
+    pub per_caller: Option<RequestLimitsFileConfig>,
+    /// Maximum caller IDs tracked for per-caller limits.
+    pub max_tracked_callers: Option<usize>,
+}
+
+/// Policy limits for one configured scope.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestLimitsFileConfig {
+    /// Maximum concurrent requests for the scope.
+    pub max_concurrent_requests: Option<usize>,
+    /// Maximum requests per rolling minute for the scope.
     pub max_requests_per_minute: Option<u32>,
     /// Maximum total requests allowed since gateway startup.
     pub max_requests_total: Option<u64>,
@@ -247,30 +314,41 @@ pub struct AliasLimitsFileConfig {
 
 impl AliasLimitsFileConfig {
     fn alias_limits(&self) -> GatewayResult<GatewayAliasLimits> {
-        let limits = GatewayAliasLimits {
+        let legacy = RequestLimitsFileConfig {
             max_concurrent_requests: self.max_concurrent_requests,
             max_requests_per_minute: self.max_requests_per_minute,
             max_requests_total: self.max_requests_total,
         };
-        if matches!(limits.max_concurrent_requests, Some(0)) {
+        let global = self.global.unwrap_or(legacy).request_limits();
+        validate_request_limits(global)?;
+        let per_caller = self.per_caller.map(RequestLimitsFileConfig::request_limits);
+        if let Some(limits) = per_caller {
+            validate_request_limits(limits)?;
+        }
+        let max_tracked_callers = self
+            .max_tracked_callers
+            .unwrap_or(GatewayAliasLimits::default().max_tracked_callers);
+        if max_tracked_callers == 0 {
             return Err(GatewayError::new(
                 GatewayErrorKind::InvalidRequest,
-                "max_concurrent_requests must be greater than zero",
+                "max_tracked_callers must be greater than zero",
             ));
         }
-        if matches!(limits.max_requests_per_minute, Some(0)) {
-            return Err(GatewayError::new(
-                GatewayErrorKind::InvalidRequest,
-                "max_requests_per_minute must be greater than zero",
-            ));
+        Ok(GatewayAliasLimits {
+            global,
+            per_caller,
+            max_tracked_callers,
+        })
+    }
+}
+
+impl RequestLimitsFileConfig {
+    const fn request_limits(self) -> GatewayRequestLimits {
+        GatewayRequestLimits {
+            max_concurrent_requests: self.max_concurrent_requests,
+            max_requests_per_minute: self.max_requests_per_minute,
+            max_requests_total: self.max_requests_total,
         }
-        if matches!(limits.max_requests_total, Some(0)) {
-            return Err(GatewayError::new(
-                GatewayErrorKind::InvalidRequest,
-                "max_requests_total must be greater than zero",
-            ));
-        }
-        Ok(limits)
     }
 }
 
@@ -421,7 +499,7 @@ impl BackendFileConfig {
                 if let Some(base_url) = base_url.as_deref() {
                     validate_provider_base_url(base_url)?;
                 }
-                let transport = GatewayAdapterTransport::openai(OpenAiAdapterConfig {
+                let transport = ProviderTransport::openai(OpenAiAdapterConfig {
                     api_key: env_secret(api_key_env)?,
                     base_url,
                     timeout: timeout_ms.map(Duration::from_millis),
@@ -442,7 +520,7 @@ impl BackendFileConfig {
                 if let Some(base_url) = base_url.as_deref() {
                     validate_provider_base_url(base_url)?;
                 }
-                let transport = GatewayAdapterTransport::anthropic(AnthropicAdapterConfig {
+                let transport = ProviderTransport::anthropic(AnthropicAdapterConfig {
                     api_key: env_secret(api_key_env)?,
                     base_url,
                     version,
@@ -464,7 +542,7 @@ impl BackendFileConfig {
                 validate_provider_base_url(&base_url)?;
                 let static_headers = provider_static_headers(static_headers)?;
                 let transport =
-                    GatewayAdapterTransport::openai_compatible(OpenAiCompatibleAdapterConfig {
+                    ProviderTransport::openai_compatible(OpenAiCompatibleAdapterConfig {
                         base_url,
                         auth: auth.provider_auth()?,
                         protocol: OpenAiCompatibleProtocol::OpenAiCompatible,
@@ -597,14 +675,6 @@ impl fmt::Debug for HeaderFileConfig {
     }
 }
 
-/// Runnable gateway service configuration.
-pub struct GatewayServerConfig {
-    /// Socket address the gateway binds to.
-    pub bind: SocketAddr,
-    /// Gateway service.
-    pub service: GatewayService,
-}
-
 fn env_secret(name: impl AsRef<str>) -> GatewayResult<SecretString> {
     let name = name.as_ref();
     let value = std::env::var(name).map_err(|error| {
@@ -623,7 +693,7 @@ fn env_secret(name: impl AsRef<str>) -> GatewayResult<SecretString> {
     Ok(SecretString::new(value))
 }
 
-fn provider_config_error(error: cogentlm_gateway_providers::ProviderError) -> GatewayError {
+fn provider_config_error(error: cogentlm_providers::ProviderError) -> GatewayError {
     GatewayError::new(
         GatewayErrorKind::InvalidRequest,
         format!("invalid provider config: {}", error.message),
@@ -683,7 +753,7 @@ fn validate_provider_base_url(base_url: &str) -> GatewayResult<()> {
     }
     if uri
         .path_and_query()
-        .and_then(axum::http::uri::PathAndQuery::query)
+        .and_then(http::uri::PathAndQuery::query)
         .is_some()
     {
         return Err(GatewayError::new(
@@ -698,6 +768,19 @@ fn validate_provider_base_url(base_url: &str) -> GatewayResult<()> {
         ));
     }
     Ok(())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host
+        .trim_matches(|character| character == '[' || character == ']')
+        .parse::<IpAddr>()
+    {
+        Ok(address) => address.is_loopback(),
+        Err(_) => false,
+    }
 }
 
 fn provider_static_headers(headers: Vec<HeaderFileConfig>) -> GatewayResult<Vec<(String, String)>> {
@@ -773,13 +856,6 @@ fn validate_alias_backend_configs(aliases: &[AliasFileConfig]) -> GatewayResult<
     Ok(())
 }
 
-fn validate_cors_origins(origins: &[String]) -> GatewayResult<()> {
-    for origin in origins {
-        cors_origin_header(origin)?;
-    }
-    Ok(())
-}
-
 fn validate_config_name(value: &str, field: &'static str) -> GatewayResult<()> {
     if value.trim().is_empty() {
         return Err(GatewayError::new(
@@ -819,6 +895,28 @@ fn operation_set_from_config(
         ));
     }
     Ok(OperationSet::new(values))
+}
+
+fn validate_request_limits(limits: GatewayRequestLimits) -> GatewayResult<()> {
+    if matches!(limits.max_concurrent_requests, Some(0)) {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "max_concurrent_requests must be greater than zero",
+        ));
+    }
+    if matches!(limits.max_requests_per_minute, Some(0)) {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "max_requests_per_minute must be greater than zero",
+        ));
+    }
+    if matches!(limits.max_requests_total, Some(0)) {
+        return Err(GatewayError::new(
+            GatewayErrorKind::InvalidRequest,
+            "max_requests_total must be greater than zero",
+        ));
+    }
+    Ok(())
 }
 
 fn toml_error_message(error: toml::de::Error) -> String {

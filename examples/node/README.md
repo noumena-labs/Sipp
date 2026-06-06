@@ -47,7 +47,7 @@ Run:
 ```powershell
 node examples/node/gateway_query.mjs <model.gguf> local [input]
 node examples/node/gateway_chat.mjs <model.gguf> local [input]
-node examples/node/gateway_embed.mjs <model.gguf> local [input]
+node examples/node/gateway_embed.mjs <model.gguf> local-embed [input]
 ```
 
 For the OpenAI gateway, use alias `openai-chat` for query/chat and

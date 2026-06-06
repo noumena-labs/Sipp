@@ -10,6 +10,7 @@ use axum::{
     Router,
 };
 use cogentlm_gateway::GatewayFileConfig;
+use cogentlm_gateway_server::http::{GatewayHttpLimits, GatewayHttpService, GatewayToken};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use wiremock::matchers::{body_json, header, method, path};
@@ -21,6 +22,7 @@ const COMPAT_KEY_ENV: &str = "COGENTLM_PROVIDER_GATEWAY_SMOKE_COMPAT_KEY";
 const ANTHROPIC_KEY_ENV: &str = "COGENTLM_PROVIDER_GATEWAY_SMOKE_ANTHROPIC_KEY";
 
 const GATEWAY_TOKEN: &str = "gateway-smoke-token";
+const ADMIN_TOKEN: &str = "gateway-admin-token";
 const OPENAI_TOKEN: &str = "openai-provider-token";
 const COMPAT_TOKEN: &str = "compatible-provider-token";
 const ANTHROPIC_TOKEN: &str = "anthropic-provider-token";
@@ -120,6 +122,26 @@ async fn provider_backends_work_through_gateway_routes() {
     assert!(body.contains(r#""total_tokens":5"#));
     assert!(body.contains("event: done"));
     assert!(body.contains(r#""finish_reason":"stop""#));
+
+    let dashboard = get(router.clone(), "/").await;
+    assert_eq!(dashboard.status(), StatusCode::OK);
+    assert!(response_text(dashboard).await.contains("CogentLM Gateway"));
+
+    let unauthenticated_status = get(router.clone(), "/admin/api/status").await;
+    assert_eq!(unauthenticated_status.status(), StatusCode::UNAUTHORIZED);
+
+    let status = get_admin_json(router.clone(), "/admin/api/status").await;
+    assert!(status["uptime_secs"].as_u64().is_some());
+    assert_eq!(status["aliases"][0]["name"], "anthropic-chat");
+
+    let history = get_admin_json(router.clone(), "/admin/api/history").await;
+    let entries = history["entries"].as_array().expect("history entries");
+    assert!(entries.len() >= 5);
+    assert!(entries.iter().any(|entry| {
+        entry["alias"] == "openai-query"
+            && entry["operation"] == "query"
+            && entry["outcome"] == "ok"
+    }));
 
     let openai_error = post_json(
         router,
@@ -404,10 +426,22 @@ base_url = "{anthropic_url}"
     );
     GatewayFileConfig::from_toml_str(&config)
         .expect("provider gateway config")
-        .build()
+        .build_adapter()
         .await
+        .and_then(|adapter| {
+            let access = GatewayFileConfig::from_toml_str(&config)
+                .expect("provider gateway config")
+                .gateway_access()?;
+            GatewayHttpService::new(
+                adapter,
+                vec![GatewayToken::new(GATEWAY_TOKEN, access)?],
+                ADMIN_TOKEN.to_string(),
+                Vec::new(),
+                GatewayHttpLimits::default(),
+                200,
+            )
+        })
         .expect("provider gateway service")
-        .service
         .router()
 }
 
@@ -429,6 +463,27 @@ async fn post_json(router: Router, path: &str, body: Value) -> axum::response::R
         )
         .await
         .expect("response")
+}
+
+async fn get(router: Router, path: &str) -> axum::response::Response {
+    router
+        .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+        .await
+        .expect("response")
+}
+
+async fn get_admin_json(router: Router, path: &str) -> Value {
+    let response = router
+        .oneshot(
+            Request::get(path)
+                .header(AUTHORIZATION, format!("Bearer {ADMIN_TOKEN}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    response_json(response).await
 }
 
 async fn response_json(response: axum::response::Response) -> Value {

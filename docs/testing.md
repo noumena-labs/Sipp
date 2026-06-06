@@ -85,7 +85,7 @@ browser example smoke accept repeated `--case query|chat|embed`.
 | `cargo xtask test smoke suite example-rust` | Rust `query`/`chat`/`embed` examples | `examples/rust` |
 | `cargo xtask test smoke suite example-node` | Node `query.mjs`/`chat.mjs`/`embed.mjs` examples | `examples/node` |
 | `cargo xtask test smoke suite example-python` | Python `query.py`/`chat.py`/`embed.py` examples | `examples/python` |
-| `cargo xtask test smoke suite example-gateway` | Real local gateway plus Rust/Node/Python gateway clients | `examples/gateway`, `examples/rust`, `examples/node`, `examples/python` |
+| `cargo xtask test smoke suite example-gateway` | Embedded local gateway proxy plus Rust/Node/Python local-and-gateway clients | `examples/gateway`, `examples/rust`, `examples/node`, `examples/python` |
 | `cargo xtask test smoke suite example-browser` | Browser `query.html`/`chat.html`/`embed.html` examples through Playwright | `examples/web` |
 | `cargo xtask test smoke suite playground-browser` | Browser playground runtime smoke through Playwright | `tools/playground` |
 | `cargo xtask test smoke suite llama-backend-ops` | llama.cpp backend operation correctness smoke | `third_party/llama.cpp` |
@@ -100,9 +100,10 @@ browser example smoke accept repeated `--case query|chat|embed`.
 
 Use `cargo xtask run examples serve browser` to manually serve browser examples.
 Use `cargo xtask run examples serve gateway-local --model <model.gguf>` or
-`cargo xtask run examples serve gateway-openai` to manually serve gateway
-examples. The OpenAI gateway requires `OPENAI_API_KEY` and is documented/manual
-rather than smoke-tested. Playground validation remains under
+`cargo xtask run examples serve gateway-openai` to manually serve the embedded
+gateway proxy. The dashboard is available at the configured bind address. The OpenAI
+gateway requires `OPENAI_API_KEY` and is documented/manual rather than
+smoke-tested. Playground validation remains under
 `test smoke suite playground-browser`.
 
 `test unit` and `test smoke` print a final suite and test/check summary, then

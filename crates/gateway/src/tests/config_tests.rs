@@ -39,9 +39,12 @@ embedding_dimensions = 4
     )
     .expect("config");
 
-    let server = config.build().await.expect("server config");
-    assert_eq!(server.bind.to_string(), "127.0.0.1:8787");
-    let _router = server.service.router();
+    assert_eq!(config.server.bind.to_string(), "127.0.0.1:8787");
+    assert_eq!(config.limits.max_request_bytes().expect("limit"), 1024);
+    let adapter = config.build().await.expect("gateway adapter");
+    let snapshot = adapter.snapshot().expect("snapshot");
+    assert_eq!(snapshot.aliases.len(), 1);
+    assert_eq!(snapshot.aliases[0].name, "mock");
 }
 
 #[tokio::test]
@@ -102,10 +105,10 @@ kind = "mock"
     )
     .expect("config");
 
-    let error = match config.build().await {
-        Ok(_) => panic!("service limit should fail before loading gateway token"),
-        Err(error) => error,
-    };
+    let error = config
+        .limits
+        .max_request_bytes()
+        .expect_err("service limit should fail before loading gateway token");
     assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
     assert_eq!(error.message, "max_request_bytes must be greater than zero");
 }
@@ -540,40 +543,6 @@ token_env = "COGENTLM_TEST_MISSING_PROVIDER_TOKEN_INVALID_BASE_URL"
     assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
     assert_eq!(error.message, "provider base_url must not include userinfo");
     assert!(!error.to_string().contains("provider-secret"));
-}
-
-#[tokio::test]
-async fn gateway_config_validates_cors_before_loading_gateway_token_env() {
-    std::env::remove_var("COGENTLM_TEST_MISSING_GATEWAY_TOKEN_INVALID_CORS");
-    let config: GatewayFileConfig = toml::from_str(
-        r#"
-[server]
-bind = "127.0.0.1:8787"
-
-[auth]
-token_env = "COGENTLM_TEST_MISSING_GATEWAY_TOKEN_INVALID_CORS"
-
-[cors]
-allowed_origins = [" https://app.example"]
-
-[[aliases]]
-name = "mock"
-
-[aliases.backend]
-kind = "mock"
-"#,
-    )
-    .expect("config");
-
-    let error = match config.build().await {
-        Ok(_) => panic!("invalid CORS origin should fail before loading gateway token"),
-        Err(error) => error,
-    };
-    assert_eq!(error.kind, GatewayErrorKind::InvalidRequest);
-    assert_eq!(
-        error.message,
-        "invalid CORS origin  https://app.example: surrounding whitespace is not allowed"
-    );
 }
 
 #[tokio::test]

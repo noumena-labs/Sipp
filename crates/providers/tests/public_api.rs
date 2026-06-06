@@ -1,4 +1,4 @@
-use cogentlm_gateway_providers::{
+use cogentlm_providers::{
     OpenAiCompatibleAdapterConfig, OpenAiCompatibleProtocol, ProviderAuth, ProviderKind,
     SecretString,
 };

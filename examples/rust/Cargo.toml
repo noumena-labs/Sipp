@@ -54,6 +54,6 @@ openmp = ["cogentlm/openmp"]
 
 [dependencies]
 cogentlm.workspace = true
-cogentlm-gateway-providers.workspace = true
+cogentlm-providers.workspace = true
 futures.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

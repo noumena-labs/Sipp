@@ -1,9 +1,9 @@
-//! Server-side CogentLM Remote Gateway Protocol implementation.
+//! Framework-agnostic CogentLM gateway adapter.
 //!
-//! This crate owns the HTTP boundary for remote inference. It accepts the
-//! CogentLM gateway protocol from app-facing clients, authenticates the caller,
-//! checks alias capabilities, and routes to server-side backends or provider
-//! adapters.
+//! This crate owns alias routing, request validation, backend execution, and
+//! gateway policy. Host applications authenticate callers and then pass a
+//! `GatewayCaller` into the adapter. Runnable HTTP server behavior lives in
+//! `apps/gateway-server`.
 
 mod backend;
 mod config;
@@ -17,9 +17,14 @@ pub use backend::{
     LocalCogentEngineBackend, LocalCogentEngineOptions, MockBackend, Operation, OperationSet,
     ProviderGatewayBackend,
 };
-pub use config::{GatewayFileConfig, GatewayServerConfig};
+pub use config::{GatewayFileConfig, OperationFileConfig};
 pub use error::{GatewayError, GatewayErrorKind, GatewayResult};
+pub use protocol::{
+    finish_reason, ChatMessageBody, ChatRequestBody, EmbedRequestBody, EmbeddingResponseBody,
+    GatewayOptions, QueryRequestBody, TextResponseBody, UsageBody,
+};
 pub use server::{
-    GatewayAccess, GatewayAlias, GatewayAliasLimits, GatewayService, GatewayServiceLimits,
-    GatewayState, GatewayToken,
+    constant_time_eq, validate_gateway_bearer_secret, GatewayAccess, GatewayAdapter, GatewayAlias,
+    GatewayAliasLimits, GatewayAliasSnapshot, GatewayBuilder, GatewayCaller, GatewayRequestLimits,
+    GatewaySnapshot, DEFAULT_MAX_TRACKED_CALLERS,
 };

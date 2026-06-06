@@ -1,4 +1,4 @@
-//! Tests the `stream` module in `cogentlm-gateway-providers`.
+//! Tests the `stream` module in `cogentlm-providers`.
 //!
 //! Covers provider stream batch construction and SSE payload parsing with
 //! deterministic byte fixtures rather than live provider streams.

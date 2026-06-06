@@ -1,11 +1,5 @@
 use std::time::Duration;
 
-use axum::{
-    http::{header::HeaderName, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
-    Json,
-};
-use serde::Serialize;
 use thiserror::Error;
 
 /// Result type returned by gateway server operations.
@@ -59,18 +53,19 @@ impl GatewayErrorKind {
         }
     }
 
-    pub(crate) const fn status_code(self) -> StatusCode {
+    /// HTTP status code commonly used by CogentLM gateway servers.
+    pub const fn http_status_code(self) -> u16 {
         match self {
-            Self::Authentication => StatusCode::UNAUTHORIZED,
-            Self::Authorization => StatusCode::FORBIDDEN,
-            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-            Self::QuotaExceeded => StatusCode::PAYMENT_REQUIRED,
-            Self::InvalidRequest | Self::UnsupportedFeature => StatusCode::BAD_REQUEST,
-            Self::RequestTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::ModelNotFound => StatusCode::NOT_FOUND,
-            Self::Timeout => StatusCode::REQUEST_TIMEOUT,
-            Self::Overloaded => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Transport | Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Authentication => 401,
+            Self::Authorization => 403,
+            Self::RateLimited => 429,
+            Self::QuotaExceeded => 402,
+            Self::InvalidRequest | Self::UnsupportedFeature => 400,
+            Self::RequestTooLarge => 413,
+            Self::ModelNotFound => 404,
+            Self::Timeout => 408,
+            Self::Overloaded => 503,
+            Self::Transport | Self::Internal => 500,
         }
     }
 }
@@ -102,52 +97,9 @@ impl GatewayError {
         self.kind.as_str()
     }
 
-    pub(crate) fn with_retry_after(mut self, retry_after: Option<Duration>) -> Self {
+    /// Attach retry-after metadata to the error.
+    pub fn with_retry_after(mut self, retry_after: Option<Duration>) -> Self {
         self.retry_after = retry_after;
         self
     }
-}
-
-impl IntoResponse for GatewayError {
-    fn into_response(self) -> Response {
-        let mut headers = HeaderMap::new();
-        if let Some(retry_after) = self.retry_after {
-            insert_header_if_valid(
-                &mut headers,
-                HeaderName::from_static("retry-after"),
-                retry_after.as_secs().to_string(),
-            );
-            insert_header_if_valid(
-                &mut headers,
-                HeaderName::from_static("retry-after-ms"),
-                retry_after.as_millis().to_string(),
-            );
-        }
-
-        let status = self.kind.status_code();
-        let body = Json(ErrorEnvelope {
-            error: ErrorBody {
-                code: self.code().to_string(),
-                message: self.message,
-            },
-        });
-        (status, headers, body).into_response()
-    }
-}
-
-fn insert_header_if_valid(headers: &mut HeaderMap, name: HeaderName, value: impl AsRef<str>) {
-    if let Ok(value) = HeaderValue::from_str(value.as_ref()) {
-        headers.insert(name, value);
-    }
-}
-
-#[derive(Serialize)]
-struct ErrorEnvelope {
-    error: ErrorBody,
-}
-
-#[derive(Serialize)]
-struct ErrorBody {
-    code: String,
-    message: String,
 }

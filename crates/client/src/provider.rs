@@ -1,9 +1,9 @@
 use std::fmt;
 use std::time::Duration;
 
-use cogentlm_gateway_providers::{
-    AnthropicAdapterConfig, GatewayAdapterTransport, OpenAiAdapterConfig,
-    OpenAiCompatibleAdapterConfig, OpenAiCompatibleProtocol, ProviderAuth, SecretString,
+use cogentlm_providers::{
+    AnthropicAdapterConfig, OpenAiAdapterConfig, OpenAiCompatibleAdapterConfig,
+    OpenAiCompatibleProtocol, ProviderAuth, ProviderTransport, SecretString,
 };
 
 use crate::{CogentError, CogentResult, ProviderEndpointError};
@@ -114,7 +114,7 @@ impl ProviderEndpointConfig {
         })
     }
 
-    pub(crate) fn build(self) -> CogentResult<(String, GatewayAdapterTransport, Vec<String>)> {
+    pub(crate) fn build(self) -> CogentResult<(String, ProviderTransport, Vec<String>)> {
         match self {
             Self::OpenAi(config) => build_openai_provider(config),
             Self::Anthropic(config) => build_anthropic_provider(config),
@@ -168,10 +168,10 @@ pub struct OpenAiCompatibleProviderConfig {
 
 fn build_openai_provider(
     config: OpenAiProviderConfig,
-) -> CogentResult<(String, GatewayAdapterTransport, Vec<String>)> {
+) -> CogentResult<(String, ProviderTransport, Vec<String>)> {
     let model = normalize_model(config.model)?;
     let secrets = vec![config.api_key.expose().to_string()];
-    let transport = GatewayAdapterTransport::openai(OpenAiAdapterConfig {
+    let transport = ProviderTransport::openai(OpenAiAdapterConfig {
         api_key: config.api_key.as_gateway_secret(),
         base_url: config.base_url,
         timeout: config.timeout,
@@ -184,10 +184,10 @@ fn build_openai_provider(
 
 fn build_anthropic_provider(
     config: AnthropicProviderConfig,
-) -> CogentResult<(String, GatewayAdapterTransport, Vec<String>)> {
+) -> CogentResult<(String, ProviderTransport, Vec<String>)> {
     let model = normalize_model(config.model)?;
     let secrets = vec![config.api_key.expose().to_string()];
-    let transport = GatewayAdapterTransport::anthropic(AnthropicAdapterConfig {
+    let transport = ProviderTransport::anthropic(AnthropicAdapterConfig {
         api_key: config.api_key.as_gateway_secret(),
         base_url: config.base_url,
         version: config.version,
@@ -201,7 +201,7 @@ fn build_anthropic_provider(
 
 fn build_openai_compatible_provider(
     config: OpenAiCompatibleProviderConfig,
-) -> CogentResult<(String, GatewayAdapterTransport, Vec<String>)> {
+) -> CogentResult<(String, ProviderTransport, Vec<String>)> {
     let model = normalize_model(config.model)?;
     let mut secrets = config.auth.secrets();
     secrets.extend(
@@ -215,7 +215,7 @@ fn build_openai_compatible_provider(
         .into_iter()
         .map(|(name, value)| (name, value.expose().to_string()))
         .collect();
-    let transport = GatewayAdapterTransport::openai_compatible(OpenAiCompatibleAdapterConfig {
+    let transport = ProviderTransport::openai_compatible(OpenAiCompatibleAdapterConfig {
         base_url: config.base_url,
         auth: config.auth.into_provider_auth(),
         protocol: OpenAiCompatibleProtocol::OpenAiCompatible,

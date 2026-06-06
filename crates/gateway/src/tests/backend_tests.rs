@@ -6,10 +6,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axum::response::IntoResponse;
 use cogentlm_core::{ChatMessage, ChatRole, FinishReason, TokenBatch};
-use cogentlm_gateway_providers::{
-    GatewayBackendAdapter, ProviderChatRequest, ProviderChatResponse, ProviderEmbedRequest,
+use cogentlm_providers::{
+    ProviderBackend, ProviderChatRequest, ProviderChatResponse, ProviderEmbedRequest,
     ProviderEmbeddingResponse, ProviderError, ProviderErrorKind, ProviderGenerateRequest,
     ProviderGenerateResponse, ProviderKind, ProviderModel, ProviderResult, ProviderStream,
     ProviderStreamEvent, TokenUsage,
@@ -242,8 +241,7 @@ fn provider_errors_are_normalized_before_gateway_boundary() {
     assert!(!gateway_error.to_string().contains("provider-secret"));
     assert!(!format!("{gateway_error:?}").contains("provider-secret"));
 
-    let response = gateway_error.into_response();
-    assert!(response.headers().get("x-request-id").is_none());
+    assert_eq!(gateway_error.kind.http_status_code(), 429);
 }
 
 #[test]
@@ -329,7 +327,7 @@ struct RecordingAdapter {
 }
 
 #[async_trait]
-impl GatewayBackendAdapter for RecordingAdapter {
+impl ProviderBackend for RecordingAdapter {
     fn kind(&self) -> ProviderKind {
         ProviderKind::OpenAiCompatible
     }
@@ -400,7 +398,7 @@ impl GatewayBackendAdapter for RecordingAdapter {
 struct StreamErrorAdapter;
 
 #[async_trait]
-impl GatewayBackendAdapter for StreamErrorAdapter {
+impl ProviderBackend for StreamErrorAdapter {
     fn kind(&self) -> ProviderKind {
         ProviderKind::OpenAiCompatible
     }

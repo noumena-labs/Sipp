@@ -3,9 +3,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use cogentlm_core::{FinishReason, TokenBatch, TokenUsage};
-use cogentlm_gateway_providers::{
-    GatewayAdapterTransport, ProviderChatRequest, ProviderEmbedRequest, ProviderGenerateRequest,
-    ProviderStreamEvent,
+use cogentlm_providers::{
+    ProviderChatRequest, ProviderEmbedRequest, ProviderGenerateRequest, ProviderStreamEvent,
+    ProviderTransport,
 };
 use futures::StreamExt;
 use futures_channel::mpsc;
@@ -26,7 +26,7 @@ pub(crate) struct ProviderEndpoint {
     endpoint: EndpointRef,
     capabilities: EndpointCapabilities,
     model: String,
-    transport: GatewayAdapterTransport,
+    transport: ProviderTransport,
     executor: RemoteExecutor,
     secrets: Vec<String>,
 }
@@ -36,7 +36,7 @@ impl ProviderEndpoint {
         endpoint: EndpointRef,
         model: String,
         capabilities: EndpointCapabilities,
-        transport: GatewayAdapterTransport,
+        transport: ProviderTransport,
         executor: RemoteExecutor,
         secrets: Vec<String>,
     ) -> Self {
@@ -207,7 +207,7 @@ impl<T> Drop for ProviderResponseFuture<T> {
 }
 
 async fn run_provider_query_stream(
-    transport: GatewayAdapterTransport,
+    transport: ProviderTransport,
     endpoint: EndpointRef,
     request: ProviderGenerateRequest,
     batch_tx: mpsc::UnboundedSender<TokenBatch>,
@@ -221,7 +221,7 @@ async fn run_provider_query_stream(
 }
 
 async fn run_provider_chat_stream(
-    transport: GatewayAdapterTransport,
+    transport: ProviderTransport,
     endpoint: EndpointRef,
     request: ProviderChatRequest,
     batch_tx: mpsc::UnboundedSender<TokenBatch>,
@@ -236,7 +236,7 @@ async fn run_provider_chat_stream(
 
 async fn collect_provider_stream(
     endpoint: EndpointRef,
-    mut stream: cogentlm_gateway_providers::ProviderStream<ProviderStreamEvent>,
+    mut stream: cogentlm_providers::ProviderStream<ProviderStreamEvent>,
     batch_tx: mpsc::UnboundedSender<TokenBatch>,
     secrets: Vec<String>,
 ) -> CogentResult<CogentTextResponse> {
@@ -266,9 +266,6 @@ async fn collect_provider_stream(
     })
 }
 
-fn provider_error(
-    error: cogentlm_gateway_providers::ProviderError,
-    secrets: &[String],
-) -> CogentError {
+fn provider_error(error: cogentlm_providers::ProviderError, secrets: &[String]) -> CogentError {
     CogentError::Provider(ProviderEndpointError::from_provider_error(error, secrets))
 }

@@ -42,8 +42,6 @@ fn main() -> support::ExampleResult<()> {
             .add("gateway", EndpointDescriptor::gateway(config))
             .await?;
 
-        // Local and gateway chat use the same app-facing request shape. The
-        // endpoint selects where the request runs.
         let local_run = client.chat(CogentChatRequest {
             endpoint: Some(local_endpoint),
             messages: chat_messages(args.input.clone()),

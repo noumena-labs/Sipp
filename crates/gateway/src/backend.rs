@@ -8,11 +8,10 @@ use cogentlm_engine::engine::{
     NativeRuntimeConfig, QueryOptions, QueryRequest, RequestSampling, RequestStats,
     SamplingRuntimePatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
-use cogentlm_gateway_providers::{
-    GatewayAdapterTransport, GatewayBackendAdapter, ProviderChatRequest, ProviderEmbedRequest,
-    ProviderEmbeddingResponse, ProviderError, ProviderErrorKind, ProviderGenerateRequest,
-    ProviderGenerationOptions, ProviderOptions, ProviderResponse, ProviderStreamEvent,
-    ProviderTextOutput,
+use cogentlm_providers::{
+    ProviderBackend, ProviderChatRequest, ProviderEmbedRequest, ProviderEmbeddingResponse,
+    ProviderError, ProviderErrorKind, ProviderGenerateRequest, ProviderGenerationOptions,
+    ProviderOptions, ProviderResponse, ProviderStreamEvent, ProviderTextOutput, ProviderTransport,
 };
 use futures_util::{stream, Stream, StreamExt};
 use serde_json::Value;
@@ -401,7 +400,7 @@ impl GatewayBackend for MockBackend {
 #[derive(Clone)]
 pub struct ProviderGatewayBackend {
     model: String,
-    transport: GatewayAdapterTransport,
+    transport: ProviderTransport,
 }
 
 impl ProviderGatewayBackend {
@@ -409,10 +408,7 @@ impl ProviderGatewayBackend {
     ///
     /// Returns an error when the private provider model is blank or has
     /// surrounding whitespace.
-    pub fn new(
-        model: impl Into<String>,
-        transport: GatewayAdapterTransport,
-    ) -> GatewayResult<Self> {
+    pub fn new(model: impl Into<String>, transport: ProviderTransport) -> GatewayResult<Self> {
         let model = model.into();
         validate_provider_model(&model)?;
         Ok(Self { model, transport })
@@ -424,9 +420,9 @@ impl ProviderGatewayBackend {
     /// surrounding whitespace.
     pub fn from_provider_backend(
         model: impl Into<String>,
-        backend: Arc<dyn GatewayBackendAdapter>,
+        backend: Arc<dyn ProviderBackend>,
     ) -> GatewayResult<Self> {
-        Self::new(model, GatewayAdapterTransport::from_backend(backend))
+        Self::new(model, ProviderTransport::from_backend(backend))
     }
 }
 

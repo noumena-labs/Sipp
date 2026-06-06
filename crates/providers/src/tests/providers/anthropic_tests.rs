@@ -1,4 +1,4 @@
-//! Tests the `providers::anthropic` module in `cogentlm-gateway-providers`.
+//! Tests the `providers::anthropic` module in `cogentlm-providers`.
 //!
 //! Covers Anthropic provider construction, request mapping, response parsing,
 //! usage handling, unsupported embeddings, and SSE stream behavior with

@@ -334,7 +334,7 @@ dependencies = [
  "async-trait",
  "cogentlm-core",
  "cogentlm-engine",
- "cogentlm-gateway-providers",
+ "cogentlm-providers",
  "cogentlm-remote",
  "futures",
  "futures-channel",
@@ -375,23 +375,17 @@ dependencies = [
 name = "cogentlm-gateway"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
- "axum",
- "clap",
  "cogentlm-core",
  "cogentlm-engine",
- "cogentlm-gateway-providers",
+ "cogentlm-providers",
  "futures-util",
+ "http",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
  "wiremock",
 ]
 
@@ -403,22 +397,28 @@ dependencies = [
  "axum",
  "clap",
  "cogentlm-gateway",
+ "cogentlm-gateway-server",
  "tokio",
 ]
 
 [[package]]
-name = "cogentlm-gateway-providers"
+name = "cogentlm-gateway-server"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "bytes",
+ "anyhow",
+ "axum",
+ "clap",
  "cogentlm-core",
+ "cogentlm-gateway",
  "futures-util",
- "reqwest",
+ "http",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
  "wiremock",
 ]
 
@@ -436,6 +436,22 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "cogentlm-providers"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cogentlm-core",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -472,7 +488,7 @@ name = "cogentlm-rust-examples"
 version = "0.1.0"
 dependencies = [
  "cogentlm",
- "cogentlm-gateway-providers",
+ "cogentlm-providers",
  "futures",
  "tokio",
 ]

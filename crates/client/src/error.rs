@@ -1,9 +1,7 @@
 use thiserror::Error;
 
 #[cfg(feature = "providers")]
-use cogentlm_gateway_providers::{
-    ProviderError as GatewayProviderError, ProviderErrorKind as GatewayProviderErrorKind,
-};
+use cogentlm_providers::{ProviderError, ProviderErrorKind};
 #[cfg(feature = "remote")]
 use cogentlm_remote::{GatewayError, GatewayErrorKind};
 
@@ -234,26 +232,22 @@ impl ProviderEndpointError {
         }
     }
 
-    pub(crate) fn from_provider_error(error: GatewayProviderError, secrets: &[String]) -> Self {
+    pub(crate) fn from_provider_error(error: ProviderError, secrets: &[String]) -> Self {
         Self {
             kind: match error.kind {
-                GatewayProviderErrorKind::Authentication => {
-                    ProviderEndpointErrorKind::Authentication
-                }
-                GatewayProviderErrorKind::Authorization => ProviderEndpointErrorKind::Authorization,
-                GatewayProviderErrorKind::RateLimited => ProviderEndpointErrorKind::RateLimited,
-                GatewayProviderErrorKind::QuotaExceeded => ProviderEndpointErrorKind::QuotaExceeded,
-                GatewayProviderErrorKind::InvalidRequest => {
-                    ProviderEndpointErrorKind::InvalidRequest
-                }
-                GatewayProviderErrorKind::UnsupportedFeature => {
+                ProviderErrorKind::Authentication => ProviderEndpointErrorKind::Authentication,
+                ProviderErrorKind::Authorization => ProviderEndpointErrorKind::Authorization,
+                ProviderErrorKind::RateLimited => ProviderEndpointErrorKind::RateLimited,
+                ProviderErrorKind::QuotaExceeded => ProviderEndpointErrorKind::QuotaExceeded,
+                ProviderErrorKind::InvalidRequest => ProviderEndpointErrorKind::InvalidRequest,
+                ProviderErrorKind::UnsupportedFeature => {
                     ProviderEndpointErrorKind::UnsupportedFeature
                 }
-                GatewayProviderErrorKind::ModelNotFound => ProviderEndpointErrorKind::ModelNotFound,
-                GatewayProviderErrorKind::Timeout => ProviderEndpointErrorKind::Timeout,
-                GatewayProviderErrorKind::Overloaded => ProviderEndpointErrorKind::Overloaded,
-                GatewayProviderErrorKind::Transport => ProviderEndpointErrorKind::Transport,
-                GatewayProviderErrorKind::Provider => ProviderEndpointErrorKind::Provider,
+                ProviderErrorKind::ModelNotFound => ProviderEndpointErrorKind::ModelNotFound,
+                ProviderErrorKind::Timeout => ProviderEndpointErrorKind::Timeout,
+                ProviderErrorKind::Overloaded => ProviderEndpointErrorKind::Overloaded,
+                ProviderErrorKind::Transport => ProviderEndpointErrorKind::Transport,
+                ProviderErrorKind::Provider => ProviderEndpointErrorKind::Provider,
             },
             provider: error.provider.as_str().to_string(),
             status: error.status,

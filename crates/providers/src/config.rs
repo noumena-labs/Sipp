@@ -57,7 +57,7 @@ impl fmt::Debug for SecretString {
     }
 }
 
-/// Provider authentication owned by gateway adapter configuration.
+/// Provider authentication owned by provider adapter configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderAuth {
     /// Bearer token authentication.
@@ -106,7 +106,7 @@ pub struct OpenAiCompatibleAdapterConfig {
     pub auth: ProviderAuth,
     /// Wire protocol.
     pub protocol: OpenAiCompatibleProtocol,
-    /// Static headers owned by gateway configuration.
+    /// Static headers owned by provider configuration.
     pub static_headers: Vec<(String, String)>,
     /// Request timeout.
     pub timeout: Option<Duration>,

@@ -155,7 +155,7 @@ Suites and code locations:
   example-rust        examples/rust query/chat/embed binaries
   example-node        examples/node query.mjs/chat.mjs/embed.mjs
   example-python      examples/python query.py/chat.py/embed.py
-  example-gateway     real local gateway plus examples/rust,node,python clients
+  example-gateway     embedded local gateway proxy plus local/gateway clients
   example-browser     examples/web query/chat/embed pages through Playwright
   playground-browser  tools/playground runtime smoke through Playwright
   llama-backend-ops   third_party/llama.cpp test-backend-ops";
@@ -658,7 +658,7 @@ pub enum TestSmokeSuiteTarget {
     #[command(name = "example-python")]
     #[command(after_long_help = BACKEND_HELP)]
     ExamplePython(TestSmokeCaseArgs),
-    /// Run real local gateway examples and Rust/Node/Python gateway clients.
+    /// Run embedded local gateway proxy examples and local/gateway clients.
     #[command(name = "example-gateway")]
     #[command(after_long_help = BACKEND_HELP)]
     ExampleGateway(TestSmokeCaseArgs),

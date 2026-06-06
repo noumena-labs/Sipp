@@ -32,7 +32,6 @@ const gateway = {
 };
 const gatewayEndpoint = await client.add('gateway', { kind: 'gateway', ...gateway });
 
-// Local and gateway chat use the same message and streaming shape.
 const localRun = client.chat({
   endpoint: localEndpoint,
   messages: chatMessages(input),

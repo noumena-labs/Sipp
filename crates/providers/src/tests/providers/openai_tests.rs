@@ -1,4 +1,4 @@
-//! Tests the `providers::openai` module in `cogentlm-gateway-providers`.
+//! Tests the `providers::openai` module in `cogentlm-providers`.
 //!
 //! Covers OpenAI provider construction, request mapping, response parsing,
 //! error paths, and stream routing with deterministic `wiremock` fixtures and

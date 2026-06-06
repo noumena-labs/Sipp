@@ -34,7 +34,7 @@ Run:
 ```powershell
 cargo run -p cogentlm-rust-examples --features remote --bin gateway_query -- <model.gguf> local [input]
 cargo run -p cogentlm-rust-examples --features remote --bin gateway_chat -- <model.gguf> local [input]
-cargo run -p cogentlm-rust-examples --features remote --bin gateway_embed -- <model.gguf> local [input]
+cargo run -p cogentlm-rust-examples --features remote --bin gateway_embed -- <model.gguf> local-embed [input]
 ```
 
 ## OpenAI Provider

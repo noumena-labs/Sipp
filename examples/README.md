@@ -9,8 +9,8 @@ Recommended learning order:
 1. `rust`, `node`, or `python`: direct local GGUF inference with `query`,
    `chat`, and `embed`.
 2. `web`: browser GGUF loading and the same local workflows in Vite.
-3. `gateway`: run a gateway process separately, then run app examples against
-   its public alias while also calling local inference from the same client.
+3. `gateway`: run a gateway proxy separately, then run app examples that call
+   both a local model endpoint and the gateway alias.
 4. `rust/openai_provider_chat.rs`: call a provider adapter directly when you
    need to inspect the server-side provider layer.
 
@@ -46,6 +46,10 @@ $env:COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
+Open `http://127.0.0.1:8787/` to inspect status, aliases, recent request
+history, and manual curl verification commands. The xtask gateway serve command
+uses `dev-token` as the dashboard admin token.
+
 In another terminal:
 
 ```powershell
@@ -55,6 +59,9 @@ cargo run -p cogentlm-rust-examples --features remote --bin gateway_query -- <mo
 node examples/node/gateway_query.mjs <model.gguf> local [input]
 python examples/python/gateway_query.py <model.gguf> local [input]
 ```
+
+Use alias `local` for `gateway_query` and `gateway_chat`; use `local-embed`
+for `gateway_embed`.
 
 OpenAI gateway examples require a real `OPENAI_API_KEY`:
 

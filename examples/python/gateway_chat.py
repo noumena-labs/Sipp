@@ -103,7 +103,6 @@ def main() -> None:
     )
     gateway_endpoint = client.add("gateway", gateway)
 
-    # Local and gateway chat use the same message and streaming shape.
     local_run = client.chat(
         chat_messages(prompt),
         endpoint=local_endpoint,

@@ -1,4 +1,4 @@
-//! Tests the `providers::openai_compat` module in `cogentlm-gateway-providers`.
+//! Tests the `providers::openai_compat` module in `cogentlm-providers`.
 //!
 //! Covers OpenAI-compatible request mapping, response parsing, usage and finish
 //! normalization, embedding validation, and SSE stream parsing with deterministic

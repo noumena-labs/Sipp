@@ -7,8 +7,8 @@ use futures_util::{stream as futures_stream, StreamExt};
 use crate::error::provider_error_kind_from_code;
 use crate::stream::{SseParser, TokenBatchBuilder};
 use crate::{
-    AnthropicAdapterConfig, CapabilitySupport, GatewayBackendAdapter, HttpByteStream,
-    HttpTransport, ProviderAuth, ProviderCapabilities, ProviderChatRequest, ProviderChatResponse,
+    AnthropicAdapterConfig, CapabilitySupport, HttpByteStream, HttpTransport, ProviderAuth,
+    ProviderBackend, ProviderCapabilities, ProviderChatRequest, ProviderChatResponse,
     ProviderEmbedRequest, ProviderEmbeddingResponse, ProviderError, ProviderErrorKind,
     ProviderGenerateRequest, ProviderGenerateResponse, ProviderKind, ProviderModel,
     ProviderResponse, ProviderResponseMetadata, ProviderResult, ProviderStream,
@@ -73,7 +73,7 @@ impl AnthropicAdapter {
 }
 
 #[async_trait]
-impl GatewayBackendAdapter for AnthropicAdapter {
+impl ProviderBackend for AnthropicAdapter {
     fn kind(&self) -> ProviderKind {
         ProviderKind::Anthropic
     }

@@ -9,8 +9,9 @@ The native engine is broken down into modular crates.
 - **`crates/engine`**: The primary inference engine logic, memory management, and model lifecycle.
 - **`crates/shard`**: GGUF cache planning and split-file writing utilities.
 - **`crates/remote`**: Client-side transport for the CogentLM Remote Gateway Protocol (`/v1/query`, `/v1/chat`, and `/v1/embed`). App-facing remote clients depend on this crate, not on provider adapters.
-- **`crates/gateway`**: Server-side CogentLM Remote Gateway implementation. Owns bearer auth, alias routing, normalized gateway routes, CORS setup, gateway-owned backends such as mock and hosted-local CogentEngine, and the `serve --config gateway.toml` binary.
-- **`crates/gateway-providers`**: Server-side external provider adapter code for gateway use. Provider keys, upstream URLs, provider headers, and routing policy belong behind a gateway boundary, not in `CogentClient` or distributed app packages.
+- **`crates/gateway`**: Server-side CogentLM Remote Gateway adapter layer. Owns alias routing, request validation, limits, TOML config loading, gateway-owned backends such as mock and hosted-local CogentEngine, and framework-neutral execution APIs for host servers.
+- **`crates/providers`**: External provider adapter code. Provider keys, upstream URLs, provider headers, and routing policy belong in server processes, not in `CogentClient` or distributed app packages.
+- **`apps/gateway-server`**: Ready-to-run Axum implementation for the gateway adapter. Owns bearer auth, CORS, health probes, dashboard/history observability, and the `cogentlm-gateway serve --config gateway.toml` binary.
 - **`lib/rust`**: The public Rust facade crate. Rust application examples and consumers should depend on this crate instead of internal runtime crates.
 - **`apps/cli`**: The command-line interface for running the engine directly.
 - **`xtask`**: The central build orchestrator (replaces `make`/`cmake` shell scripts).

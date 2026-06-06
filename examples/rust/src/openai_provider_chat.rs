@@ -3,9 +3,9 @@ mod support;
 use std::time::Duration;
 
 use cogentlm::core::{ChatMessage, ChatRole};
-use cogentlm_gateway_providers::{
-    GatewayAdapterTransport, OpenAiAdapterConfig, ProviderChatRequest, ProviderGenerationOptions,
-    ProviderOptions, SecretString,
+use cogentlm_providers::{
+    OpenAiAdapterConfig, ProviderChatRequest, ProviderGenerationOptions, ProviderOptions,
+    ProviderTransport, SecretString,
 };
 use futures::StreamExt;
 
@@ -21,7 +21,7 @@ async fn main() -> support::ExampleResult<()> {
     // This example calls OpenAI directly through the provider adapter. It does
     // not start or use a CogentLM gateway, so the OpenAI key lives in this
     // process.
-    let transport = GatewayAdapterTransport::openai(OpenAiAdapterConfig {
+    let transport = ProviderTransport::openai(OpenAiAdapterConfig {
         api_key: SecretString::new(support::required_env("OPENAI_API_KEY")?),
         base_url: support::optional_env("OPENAI_BASE_URL"),
         timeout: Some(Duration::from_millis(

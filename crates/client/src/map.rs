@@ -103,7 +103,7 @@ pub(crate) fn remote_embedding_response(
 #[cfg(feature = "providers")]
 pub(crate) fn provider_text_response(
     endpoint: EndpointRef,
-    response: cogentlm_gateway_providers::ProviderGenerateResponse,
+    response: cogentlm_providers::ProviderGenerateResponse,
 ) -> CogentTextResponse {
     provider_text_output(endpoint, response)
 }
@@ -111,7 +111,7 @@ pub(crate) fn provider_text_response(
 #[cfg(feature = "providers")]
 pub(crate) fn provider_chat_response(
     endpoint: EndpointRef,
-    response: cogentlm_gateway_providers::ProviderChatResponse,
+    response: cogentlm_providers::ProviderChatResponse,
 ) -> CogentTextResponse {
     provider_text_output(endpoint, response)
 }
@@ -119,7 +119,7 @@ pub(crate) fn provider_chat_response(
 #[cfg(feature = "providers")]
 pub(crate) fn provider_embedding_response(
     endpoint: EndpointRef,
-    response: cogentlm_gateway_providers::ProviderEmbeddingResponse,
+    response: cogentlm_providers::ProviderEmbeddingResponse,
 ) -> CogentEmbeddingResponse {
     CogentEmbeddingResponse {
         endpoint,
@@ -134,8 +134,8 @@ pub(crate) fn provider_embedding_response(
 #[cfg(feature = "providers")]
 pub(crate) fn provider_generation_options(
     options: crate::CogentTextOptions,
-) -> cogentlm_gateway_providers::ProviderGenerationOptions {
-    cogentlm_gateway_providers::ProviderGenerationOptions {
+) -> cogentlm_providers::ProviderGenerationOptions {
+    cogentlm_providers::ProviderGenerationOptions {
         max_tokens: options.max_tokens,
         temperature: options.temperature,
         top_p: options.top_p,
@@ -146,9 +146,7 @@ pub(crate) fn provider_generation_options(
 #[cfg(feature = "providers")]
 fn provider_text_output(
     endpoint: EndpointRef,
-    response: cogentlm_gateway_providers::ProviderResponse<
-        cogentlm_gateway_providers::ProviderTextOutput,
-    >,
+    response: cogentlm_providers::ProviderResponse<cogentlm_providers::ProviderTextOutput>,
 ) -> CogentTextResponse {
     CogentTextResponse {
         endpoint,

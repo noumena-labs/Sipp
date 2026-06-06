@@ -29,10 +29,6 @@ fn main() -> support::ExampleResult<()> {
                 EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
             )
             .await?;
-
-        // The remote endpoint uses only the public gateway URL, bearer token,
-        // and alias. Provider keys and gateway-hosted local model paths stay
-        // in the gateway process, not in app code.
         let config = RemoteGatewayConfig {
             alias: args.alias.clone(),
             base_url: support::required_env("COGENTLM_GATEWAY_URL")?,
