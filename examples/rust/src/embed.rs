@@ -8,7 +8,7 @@ use cogentlm::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
 };
-use cogentlm::{CogentClient, CogentEmbedRequest, LocalEmbedOptions};
+use cogentlm::{CogentClient, CogentEmbedRequest, EndpointDescriptor, LocalEmbedOptions};
 use futures::executor::block_on;
 
 fn main() -> support::ExampleResult<()> {
@@ -18,7 +18,10 @@ fn main() -> support::ExampleResult<()> {
 
         let mut client = CogentClient::new();
         client
-            .add_local("default", args.model_path, runtime_config(true, None))
+            .add(
+                "default",
+                EndpointDescriptor::local(args.model_path, runtime_config(true, None)),
+            )
             .await?;
 
         // Embeddings use the same client as text generation. The local runtime

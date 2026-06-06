@@ -11,7 +11,7 @@ use cogentlm::engine::{
 use cogentlm::engine::{ChatMessage, ChatRole};
 use cogentlm::{
     CogentChatRequest, CogentClient, CogentTextOptions, CogentTextResponse, CogentTextRun,
-    LocalTextOptions,
+    EndpointDescriptor, LocalTextOptions,
 };
 use cogentlm::{RemoteGatewayConfig, RemoteSecret};
 use futures::executor::block_on;
@@ -27,7 +27,10 @@ fn main() -> support::ExampleResult<()> {
 
         let mut client = CogentClient::new();
         let local_endpoint = client
-            .add_local("local", args.model_path, runtime_config(false, None))
+            .add(
+                "local",
+                EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
+            )
             .await?;
         let config = RemoteGatewayConfig {
             alias: args.alias.clone(),
@@ -35,7 +38,9 @@ fn main() -> support::ExampleResult<()> {
             token: RemoteSecret::new(support::required_env("COGENTLM_GATEWAY_TOKEN")?),
             timeout: None,
         };
-        let gateway_endpoint = client.add_remote("gateway", config)?;
+        let gateway_endpoint = client
+            .add("gateway", EndpointDescriptor::gateway(config))
+            .await?;
 
         // Local and gateway chat use the same app-facing request shape. The
         // endpoint selects where the request runs.

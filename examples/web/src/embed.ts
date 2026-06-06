@@ -27,7 +27,13 @@ elements.loadForm.addEventListener('submit', async (event) => {
 
   try {
     write(elements.output, 'Loading model...');
-    const info = await client.addLocal(source, { runtime: runtimeConfig() });
+    await client.add(EXAMPLE_LOCAL_ENDPOINT.id, {
+      kind: 'local',
+      source,
+      options: { runtime: runtimeConfig() },
+    });
+    const info = client.currentLocal();
+    if (info == null) throw new Error('Local model did not become active.');
     modelLoaded = true;
     write(elements.output, `Loaded ${info.name}.`);
   } catch (error) {

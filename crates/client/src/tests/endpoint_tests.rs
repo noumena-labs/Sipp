@@ -32,11 +32,20 @@ fn endpoint_ref_classifies_local_only() {
     let remote = EndpointRef::Remote {
         id: "remote".to_string(),
     };
+    let provider = EndpointRef::Provider {
+        id: "provider".to_string(),
+    };
 
     assert!(local.is_local());
     assert!(!remote.is_local());
+    assert!(!provider.is_local());
+    assert_eq!(local.id(), "local");
+    assert_eq!(local.kind(), "local");
+    assert_eq!(remote.kind(), "remote");
+    assert_eq!(provider.kind(), "provider");
     assert_eq!(local.clone(), local);
     assert_ne!(local, remote);
+    assert_ne!(remote, provider);
     assert!(format!("{remote:?}").contains("remote"));
 
     let mut hasher = DefaultHasher::new();

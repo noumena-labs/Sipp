@@ -5,6 +5,7 @@ from cogentlm import (
     CogentClient,
     ContextRuntimeConfig,
     LocalEmbedOptions,
+    LocalModelDescriptor,
     ModelPlacementConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
@@ -54,7 +55,10 @@ def main() -> None:
     set_llama_log_quiet(True)
 
     client = CogentClient()
-    client.add_local("default", model, runtime_config(embeddings=True))
+    client.add(
+        "default",
+        LocalModelDescriptor(model, runtime_config(embeddings=True)),
+    )
 
     # Embeddings use the same local endpoint. The runtime is loaded with
     # embeddings enabled, and the request asks for a normalized vector.

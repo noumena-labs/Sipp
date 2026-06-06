@@ -65,7 +65,14 @@ const LOCAL_ONLY_GATEWAY_FIELDS = new Set([
   'normalize',
   'local',
 ]);
-const REMOTE_CONFIG_FIELDS = new Set(['alias', 'baseUrl', 'token', 'tokenProvider', 'timeoutMs']);
+const REMOTE_CONFIG_FIELDS = new Set([
+  'kind',
+  'alias',
+  'baseUrl',
+  'token',
+  'tokenProvider',
+  'timeoutMs',
+]);
 const MAX_GATEWAY_ERROR_BYTES = 1 << 20;
 const MAX_GATEWAY_SSE_EVENT_BYTES = 1 << 20;
 const GATEWAY_REQUEST_TIMEOUT_MESSAGE = 'remote gateway request timed out';
@@ -85,22 +92,18 @@ const UTF8_DECODER = new TextDecoder();
 export class RemoteGatewayRegistry {
   readonly #remotes = new Map<string, RemoteEndpoint>();
 
-  public add(id: string, config: RemoteGatewayConfig): EndpointRef {
+  public prepare(id: string, config: RemoteGatewayConfig): RemoteEndpoint {
     const normalizedId = normalizeId(id, 'remote id');
-    if (this.#remotes.has(normalizedId)) {
-      throw new QueryError('QUERY_FAILED', 'remote endpoint already registered');
-    }
-    this.#remotes.set(normalizedId, normalizeConfig(normalizedId, config));
-    return { kind: 'remote', id: normalizedId };
+    return normalizeConfig(normalizedId, config);
   }
 
-  public update(id: string, config: RemoteGatewayConfig): EndpointRef {
-    const normalizedId = normalizeId(id, 'remote id');
-    if (!this.#remotes.has(normalizedId)) {
-      throw new QueryError('MODEL_NOT_FOUND', `remote endpoint not found: ${normalizedId}`);
-    }
-    this.#remotes.set(normalizedId, normalizeConfig(normalizedId, config));
-    return { kind: 'remote', id: normalizedId };
+  public commit(remote: RemoteEndpoint): EndpointRef {
+    this.#remotes.set(remote.id, remote);
+    return { kind: 'remote', id: remote.id };
+  }
+
+  public remove(id: string): void {
+    this.#remotes.delete(id);
   }
 
   public get(endpoint: EndpointRef | undefined): RemoteEndpoint | null {

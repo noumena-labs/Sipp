@@ -16,7 +16,7 @@ export interface ModelVariant {
   sizeBytes: number;
   /** Approximate projector file size in bytes */
   projectorSizeBytes?: number;
-  /** Source consumed by client.addLocal(...). */
+  /** Source consumed by a local client.add(...) descriptor. */
   source: ModelSource;
 }
 

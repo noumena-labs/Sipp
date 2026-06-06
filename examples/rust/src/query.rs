@@ -8,7 +8,9 @@ use cogentlm::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
 };
-use cogentlm::{CogentClient, CogentQueryRequest, CogentTextOptions, LocalTextOptions};
+use cogentlm::{
+    CogentClient, CogentQueryRequest, CogentTextOptions, EndpointDescriptor, LocalTextOptions,
+};
 use futures::executor::block_on;
 
 fn main() -> support::ExampleResult<()> {
@@ -22,7 +24,10 @@ fn main() -> support::ExampleResult<()> {
         // GGUF model and lets requests use it as the default endpoint.
         let mut client = CogentClient::new();
         client
-            .add_local("default", args.model_path, runtime_config(false, None))
+            .add(
+                "default",
+                EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
+            )
             .await?;
 
         // `query` is the simplest text-generation call: one prompt in, one

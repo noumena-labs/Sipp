@@ -6,6 +6,7 @@ from cogentlm import (
     CogentClient,
     CogentTextOptions,
     ContextRuntimeConfig,
+    LocalModelDescriptor,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
@@ -66,7 +67,10 @@ def main() -> None:
     set_llama_log_quiet(True)
 
     client = CogentClient()
-    client.add_local("default", model, runtime_config(embeddings=False))
+    client.add(
+        "default",
+        LocalModelDescriptor(model, runtime_config(embeddings=False)),
+    )
 
     # `chat` sends role-tagged messages and can stream partial token batches.
     run = client.chat(

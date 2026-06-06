@@ -8,7 +8,7 @@ repository.workspace = true
 readme = "../../README.md"
 
 [features]
-default = ["native", "remote"]
+default = ["native", "remote", "providers"]
 native = ["cogentlm-engine/native"]
 backend-dl = ["cogentlm-engine/backend-dl"]
 cuda = ["cogentlm-engine/cuda"]
@@ -16,10 +16,12 @@ metal = ["cogentlm-engine/metal"]
 vulkan = ["cogentlm-engine/vulkan"]
 openmp = ["cogentlm-engine/openmp"]
 remote = ["dep:cogentlm-remote", "dep:tokio"]
+providers = ["dep:cogentlm-gateway-providers", "dep:tokio"]
 
 [dependencies]
 cogentlm-core.workspace = true
 cogentlm-engine = { workspace = true, default-features = false }
+cogentlm-gateway-providers = { workspace = true, optional = true }
 cogentlm-remote = { workspace = true, optional = true }
 futures.workspace = true
 futures-channel.workspace = true

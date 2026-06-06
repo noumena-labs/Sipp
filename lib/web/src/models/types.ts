@@ -61,7 +61,7 @@ export type ModelSource =
   };
 
 export interface ModelInfo {
-  /** Installed model id persisted in OPFS. Pass this back to client.addLocal(id) to reload it. */
+  /** Installed model id persisted in OPFS. Pass this to a local `client.add(...)` descriptor. */
   id: string;
   name: string;
   modality: ModelModality;
@@ -195,6 +195,8 @@ export interface QueryOptions {
   grammar?: string;
   /** Gateway-specific request options passed only to remote gateway endpoints. */
   gatewayOptions?: GatewayOptions;
+  /** Provider-specific request options passed only to direct provider endpoints. */
+  providerOptions?: ProviderOptions;
 }
 
 export type ChatInput =
@@ -206,6 +208,9 @@ export type ChatInput =
 
 /** Gateway-specific options merged into remote request bodies after typed fields. */
 export type GatewayOptions = Record<string, unknown>;
+
+/** Direct provider-specific options merged into provider request bodies after typed fields. */
+export type ProviderOptions = Record<string, unknown>;
 
 export type ChatOptions = QueryOptions;
 
@@ -369,6 +374,8 @@ export interface EmbedOptions {
   signal?: AbortSignal;
   /** Gateway-specific request options passed only to remote gateway endpoints. */
   gatewayOptions?: GatewayOptions;
+  /** Provider-specific request options passed only to direct provider endpoints. */
+  providerOptions?: ProviderOptions;
 }
 
 export interface EmbeddingResult {
@@ -392,7 +399,7 @@ export interface BrowserEmbeddingRun {
   cancel(reason?: unknown): void;
 }
 
-/** Stable reference returned by local and remote endpoint registration. */
+/** Stable reference returned by local, remote gateway, and provider registration. */
 export type EndpointRef =
   | {
       readonly kind: 'local';
@@ -401,7 +408,14 @@ export type EndpointRef =
   | {
       readonly kind: 'remote';
       readonly id: string;
+    }
+  | {
+      readonly kind: 'provider';
+      readonly id: string;
     };
+
+/** Supplies a short-lived direct provider key for BYOK browser calls. */
+export type ProviderKeyProvider = () => string | Promise<string>;
 
 /** Supplies a short-lived gateway bearer token for browser remote calls. */
 export type RemoteTokenProvider = () => string | Promise<string>;
@@ -419,6 +433,41 @@ export interface RemoteGatewayConfig {
   /** Request timeout in milliseconds. */
   readonly timeoutMs?: number;
 }
+
+export interface LocalEndpointDescriptor {
+  readonly kind: 'local';
+  readonly source: ModelSource;
+  readonly options?: ModelLoadOptions;
+}
+
+export interface GatewayEndpointDescriptor extends RemoteGatewayConfig {
+  readonly kind: 'gateway' | 'remote';
+}
+
+export interface ProviderStaticHeader {
+  readonly name: string;
+  readonly value: string;
+}
+
+export interface ProviderEndpointDescriptor {
+  readonly kind: 'provider';
+  readonly provider: 'openai' | 'anthropic' | 'openai_compatible' | 'openai-compatible';
+  readonly model: string;
+  readonly apiKey?: string;
+  readonly keyProvider?: ProviderKeyProvider;
+  readonly baseUrl?: string;
+  readonly timeoutMs?: number;
+  readonly version?: string;
+  readonly authHeaderName?: string;
+  readonly authHeaderValue?: string;
+  readonly authHeaderValueProvider?: ProviderKeyProvider;
+  readonly staticHeaders?: readonly ProviderStaticHeader[];
+}
+
+export type EndpointDescriptor =
+  | LocalEndpointDescriptor
+  | GatewayEndpointDescriptor
+  | ProviderEndpointDescriptor;
 
 export type EngineEvent =
   | { type: 'state'; state: EngineState }
@@ -474,18 +523,14 @@ export interface ModelLifecycleService {
 
 export interface CogentClient {
   readonly observability: EngineObservability;
-  /** Load a local model and make it the current local endpoint. */
-  addLocal(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
+  /** Register or replace a local, gateway, or direct provider endpoint. */
+  add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef>;
   /** Return the currently loaded local model, if one is active. */
   currentLocal(): ModelInfo | null;
   /** List installed local models. */
   listLocal(): Promise<ModelInfo[]>;
   /** Remove an installed local model by id. */
   removeLocal(id: string): Promise<void>;
-  /** Register a remote gateway endpoint. */
-  addRemote(id: string, config: RemoteGatewayConfig): EndpointRef;
-  /** Replace the config for an existing remote gateway endpoint. */
-  updateRemote(id: string, config: RemoteGatewayConfig): EndpointRef;
   query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
   chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
   embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;
@@ -516,6 +561,10 @@ export class QueryError extends Error {
   public readonly status?: number;
   /** Gateway error code returned by the normalized gateway protocol. */
   public readonly gatewayCode?: string;
+  /** Direct provider label for provider endpoint failures. */
+  public readonly provider?: string;
+  /** Provider error code returned by the upstream provider. */
+  public readonly providerCode?: string;
   /** Gateway request id returned by `x-request-id` or a stream response. */
   public readonly requestId?: string;
   /** Retry delay in milliseconds returned by `retry-after-ms` or `retry-after`. */
@@ -527,6 +576,8 @@ export class QueryError extends Error {
     this.code = code;
     this.status = options?.status;
     this.gatewayCode = options?.gatewayCode;
+    this.provider = options?.provider;
+    this.providerCode = options?.providerCode;
     this.requestId = options?.requestId;
     this.retryAfterMs = options?.retryAfterMs;
   }
@@ -539,6 +590,10 @@ export interface QueryErrorOptions {
   readonly status?: number;
   /** Gateway error code returned by the normalized gateway protocol. */
   readonly gatewayCode?: string;
+  /** Direct provider label for provider endpoint failures. */
+  readonly provider?: string;
+  /** Provider error code returned by the upstream provider. */
+  readonly providerCode?: string;
   /** Gateway request id returned by `x-request-id` or a stream response. */
   readonly requestId?: string;
   /** Retry delay in milliseconds returned by `retry-after-ms` or `retry-after`. */

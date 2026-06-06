@@ -20,11 +20,11 @@ const { model, alias, input } = readGatewayArgs(
 );
 setLlamaLogQuiet(true);
 const client = new CogentClient();
-const localEndpoint = await client.addLocal(
-  'local',
-  model,
-  runtimeConfig({ embeddings: false }),
-);
+const localEndpoint = await client.add('local', {
+  kind: 'local',
+  modelPath: model,
+  config: runtimeConfig({ embeddings: false }),
+});
 
 // The app only needs the gateway URL, gateway bearer token, and public alias.
 // Provider credentials or local model paths stay in the gateway process.
@@ -33,7 +33,7 @@ const gateway = {
   baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
   token: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
 };
-const gatewayEndpoint = client.addRemote('gateway', gateway);
+const gatewayEndpoint = await client.add('gateway', { kind: 'gateway', ...gateway });
 
 const local = await client.query({
   endpoint: localEndpoint,

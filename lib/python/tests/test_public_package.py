@@ -12,6 +12,10 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert callable(cogentlm.backend_observability_json)
     assert callable(cogentlm.set_llama_log_quiet)
     assert cogentlm.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
+    assert hasattr(cogentlm.CogentClient, "add")
+    assert not hasattr(cogentlm.CogentClient, "add_" + "local")
+    assert not hasattr(cogentlm.CogentClient, "add_" + "remote")
+    assert not hasattr(cogentlm.CogentClient, "update_" + "remote")
 
 
 def test_invalid_backend_environment_is_rejected() -> None:
@@ -44,12 +48,16 @@ class CogentTextRun: pass
 class CogentTokenIterator: pass
 class ContextRuntimeConfig: pass
 class EndpointRef: pass
+class GatewayDescriptor: pass
 class LocalEmbedOptions: pass
+class LocalModelDescriptor: pass
 class LocalTextOptions: pass
 class ModelPlacementConfig: pass
 class MultimodalRuntimeConfig: pass
 class NativeRuntimeConfig: pass
 class ObservabilityRuntimeConfig: pass
+class ProviderDescriptor: pass
+class ProviderError(Exception): pass
 class RemoteGatewayConfig: pass
 class RemoteError(Exception): pass
 class ResidencyRuntimeConfig: pass

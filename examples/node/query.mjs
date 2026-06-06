@@ -21,7 +21,11 @@ console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 
 // The app owns a client and loads one local GGUF endpoint.
 const client = new CogentClient();
-await client.addLocal('default', model, runtimeConfig({ embeddings: false }));
+await client.add('default', {
+  kind: 'local',
+  modelPath: model,
+  config: runtimeConfig({ embeddings: false }),
+});
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // `query` is the simplest text-generation call: one prompt in, one response out.

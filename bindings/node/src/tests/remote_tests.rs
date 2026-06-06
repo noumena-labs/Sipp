@@ -3,6 +3,43 @@
 use super::*;
 use serde_json::json;
 
+fn gateway_descriptor(alias: &str, base_url: &str, token: &str) -> EndpointDescriptor {
+    EndpointDescriptor {
+        kind: "gateway".to_string(),
+        model_path: None,
+        config: None,
+        alias: Some(alias.to_string()),
+        base_url: Some(base_url.to_string()),
+        token: Some(token.to_string()),
+        provider: None,
+        model: None,
+        api_key: None,
+        timeout_ms: None,
+        version: None,
+        auth_header_name: None,
+        auth_header_value: None,
+        static_headers: None,
+    }
+}
+
+fn add_gateway(
+    client: &CogentClient,
+    id: &str,
+    alias: &str,
+    base_url: &str,
+    token: &str,
+) -> Result<EndpointRef> {
+    let descriptor = gateway_descriptor(alias, base_url, token).to_core()?;
+    let endpoint = client
+        .inner
+        .lock()
+        .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))
+        .and_then(|mut client| {
+            block_on(client.add(id, descriptor)).map_err(client_error_without_env)
+        })?;
+    Ok(endpoint_ref_to_node(endpoint))
+}
+
 #[test]
 fn remote_gateway_config_maps_core_fields() {
     let config = RemoteGatewayConfig {
@@ -21,68 +58,14 @@ fn remote_gateway_config_maps_core_fields() {
 }
 
 #[test]
-fn remote_gateway_config_from_value_rejects_direct_provider_fields() {
-    for field in [
-        "apiKey",
-        "providerApiKey",
-        "providerBaseUrl",
-        "headers",
-        "authorization",
-    ] {
-        let error = match remote_gateway_config_from_value(json!({
-            "alias": "pro-chat",
-            "baseUrl": "https://gateway.example.test",
-            "token": "provider-secret",
-            field: "provider-secret"
-        })) {
-            Ok(_) => panic!("direct-provider field must fail"),
-            Err(error) => error,
-        };
-        let message = error.reason.as_str();
-
-        assert_eq!(
-            message,
-            format!("unsupported remote gateway config field: {field}")
-        );
-        assert!(!message.contains("provider-secret"));
-    }
-}
-
-#[test]
-fn remote_gateway_config_from_value_requires_gateway_shape() {
-    assert!(remote_gateway_config_from_value(json!("not-object")).is_err());
-    assert!(remote_gateway_config_from_value(json!({
-        "alias": "pro-chat",
-        "baseUrl": "https://gateway.example.test",
-        "token": "token",
-        "timeoutMs": 0
-    }))
-    .is_err());
-
-    let config = remote_gateway_config_from_value(json!({
-        "alias": "pro-chat",
-        "baseUrl": "https://gateway.example.test",
-        "token": "token",
-        "timeoutMs": 1500
-    }))
-    .expect("gateway config");
-
-    assert_eq!(config.alias, "pro-chat");
-    assert_eq!(config.base_url, "https://gateway.example.test");
-    assert_eq!(config.token, "token");
-    assert_eq!(config.timeout_ms, Some(1500));
-}
-
-#[test]
-fn add_remote_rejects_empty_alias_before_gateway_transport_config() {
+fn add_rejects_empty_alias_before_gateway_transport_config() {
     let client = CogentClient::new().expect("client");
-    let error = match client.add_remote(
-        "pro".to_string(),
-        json!({
-            "alias": "   ",
-            "baseUrl": "https://user:gateway-secret@gateway.example.test",
-            "token": "gateway-token"
-        }),
+    let error = match add_gateway(
+        &client,
+        "pro",
+        "   ",
+        "https://user:gateway-secret@gateway.example.test",
+        "gateway-token",
     ) {
         Ok(_) => panic!("blank alias must reject before transport config"),
         Err(error) => error,
@@ -96,15 +79,14 @@ fn add_remote_rejects_empty_alias_before_gateway_transport_config() {
 }
 
 #[test]
-fn add_remote_rejects_id_whitespace_before_gateway_transport_config() {
+fn add_rejects_id_whitespace_before_gateway_transport_config() {
     let client = CogentClient::new().expect("client");
-    let error = match client.add_remote(
-        " pro ".to_string(),
-        json!({
-            "alias": "pro-chat",
-            "baseUrl": "https://user:gateway-secret@gateway.example.test",
-            "token": "gateway-token"
-        }),
+    let error = match add_gateway(
+        &client,
+        " pro ",
+        "pro-chat",
+        "https://user:gateway-secret@gateway.example.test",
+        "gateway-token",
     ) {
         Ok(_) => panic!("whitespace id must reject before transport config"),
         Err(error) => error,
@@ -118,15 +100,14 @@ fn add_remote_rejects_id_whitespace_before_gateway_transport_config() {
 }
 
 #[test]
-fn add_remote_rejects_alias_surrounding_whitespace() {
+fn add_rejects_alias_surrounding_whitespace() {
     let client = CogentClient::new().expect("client");
-    let error = match client.add_remote(
-        "pro".to_string(),
-        json!({
-            "alias": " pro-chat ",
-            "baseUrl": "https://gateway.example.test",
-            "token": "gateway-token"
-        }),
+    let error = match add_gateway(
+        &client,
+        "pro",
+        " pro-chat ",
+        "https://gateway.example.test",
+        "gateway-token",
     ) {
         Ok(_) => panic!("whitespace alias must reject"),
         Err(error) => error,
@@ -140,15 +121,14 @@ fn add_remote_rejects_alias_surrounding_whitespace() {
 }
 
 #[test]
-fn add_remote_rejects_gateway_base_url_userinfo() {
+fn add_rejects_gateway_base_url_userinfo() {
     let client = CogentClient::new().expect("client");
-    let error = match client.add_remote(
-        "pro".to_string(),
-        json!({
-            "alias": "pro-chat",
-            "baseUrl": "https://user:gateway-secret@gateway.example.test",
-            "token": "gateway-token"
-        }),
+    let error = match add_gateway(
+        &client,
+        "pro",
+        "pro-chat",
+        "https://user:gateway-secret@gateway.example.test",
+        "gateway-token",
     ) {
         Ok(_) => panic!("gateway URL userinfo must fail"),
         Err(error) => error,
@@ -176,16 +156,14 @@ fn gateway_options_must_be_json_object() {
 #[test]
 fn remote_request_rejects_local_only_gateway_options() {
     let client = CogentClient::new().expect("client");
-    let endpoint = client
-        .add_remote(
-            "pro".to_string(),
-            json!({
-                "alias": "pro-chat",
-                "baseUrl": "https://gateway.example.test",
-                "token": "gateway-token"
-            }),
-        )
-        .expect("add remote");
+    let endpoint = add_gateway(
+        &client,
+        "pro",
+        "pro-chat",
+        "https://gateway.example.test",
+        "gateway-token",
+    )
+    .expect("add remote");
 
     let run = client
         .query(CogentQueryRequest {
@@ -194,6 +172,7 @@ fn remote_request_rejects_local_only_gateway_options() {
             options: None,
             local: None,
             gateway_options: Some(json!({ "grammar": "root ::= \"ok\"" })),
+            provider_options: None,
             emit_tokens: None,
         })
         .expect("query run");

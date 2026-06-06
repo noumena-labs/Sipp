@@ -5,6 +5,16 @@ and gateway calls. Shared code in `src/common.ts` handles DOM wiring and output
 formatting; each page module owns its `CogentClient`, endpoint registration,
 request construction, streaming, and cleanup.
 
+Browser endpoints use the same unified descriptor API:
+
+```ts
+const endpoint = await client.add('local', {
+  kind: 'local',
+  source,
+  options: { runtime },
+});
+```
+
 Start the app:
 
 ```powershell

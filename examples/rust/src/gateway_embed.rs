@@ -8,8 +8,10 @@ use cogentlm::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
 };
-use cogentlm::{CogentClient, CogentEmbedRequest, LocalEmbedOptions};
-use cogentlm::{RemoteGatewayConfig, RemoteSecret};
+use cogentlm::{
+    CogentClient, CogentEmbedRequest, EndpointDescriptor, LocalEmbedOptions, RemoteGatewayConfig,
+    RemoteSecret,
+};
 use futures::executor::block_on;
 
 fn main() -> support::ExampleResult<()> {
@@ -22,7 +24,10 @@ fn main() -> support::ExampleResult<()> {
 
         let mut client = CogentClient::new();
         let local_endpoint = client
-            .add_local("local", args.model_path, runtime_config(true, None))
+            .add(
+                "local",
+                EndpointDescriptor::local(args.model_path, runtime_config(true, None)),
+            )
             .await?;
         let config = RemoteGatewayConfig {
             alias: args.alias.clone(),
@@ -30,7 +35,9 @@ fn main() -> support::ExampleResult<()> {
             token: RemoteSecret::new(support::required_env("COGENTLM_GATEWAY_TOKEN")?),
             timeout: None,
         };
-        let gateway_endpoint = client.add_remote("gateway", config)?;
+        let gateway_endpoint = client
+            .add("gateway", EndpointDescriptor::gateway(config))
+            .await?;
 
         let local = client
             .embed(CogentEmbedRequest {

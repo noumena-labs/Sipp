@@ -145,21 +145,25 @@ export default function App() {
       const client = new CogentClient();
 
       setStatus('Downloading and loading model?');
-      await client.addLocal(args.modelUrl, {
-        onProgress: (progress: { phase: string; percent: any; }) => {
-          if (progress.phase === 'download') {
-            setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);
-          } else if (progress.phase === 'load') {
-            setStatus('Loading into memory...');
-          }
-        },
-        runtime: {
-          sampling: {
-            temperature: 0.6,
-            top_p: 0.9,
-            top_k: 40,
-            min_p: 0.05,
-            repeat_penalty: 1.05,
+      await client.add('local', {
+        kind: 'local',
+        source: args.modelUrl,
+        options: {
+          onProgress: (progress: { phase: string; percent: any; }) => {
+            if (progress.phase === 'download') {
+              setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);
+            } else if (progress.phase === 'load') {
+              setStatus('Loading into memory...');
+            }
+          },
+          runtime: {
+            sampling: {
+              temperature: 0.6,
+              top_p: 0.9,
+              top_k: 40,
+              min_p: 0.05,
+              repeat_penalty: 1.05,
+            },
           },
         },
       });

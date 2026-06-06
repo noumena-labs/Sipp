@@ -30,7 +30,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
   const client = new CogentClient();
   try {
-    const endpoint = client.addRemote(config.alias, config);
+    const endpoint = await client.add(config.alias, { kind: 'gateway', ...config });
     // Gateway chat uses the same message and streaming shape as local chat.
     const run = client.chat(chatMessages(prompt), {
       endpoint,

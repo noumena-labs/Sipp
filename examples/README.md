@@ -14,6 +14,11 @@ Recommended learning order:
 4. `rust/openai_provider_chat.rs`: call a provider adapter directly when you
    need to inspect the server-side provider layer.
 
+All client examples register local models, gateways, and direct providers
+through `add(key, descriptor)`. The returned `EndpointRef` is passed to
+`query`, `chat`, or `embed` when explicit routing is required. Reusing a key
+replaces its endpoint configuration.
+
 ## Direct Local Examples
 
 Local examples take a GGUF model path followed by optional input:

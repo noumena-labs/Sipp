@@ -8,8 +8,10 @@ use cogentlm::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
 };
-use cogentlm::{CogentClient, CogentQueryRequest, CogentTextOptions, LocalTextOptions};
-use cogentlm::{RemoteGatewayConfig, RemoteSecret};
+use cogentlm::{
+    CogentClient, CogentQueryRequest, CogentTextOptions, EndpointDescriptor, LocalTextOptions,
+    RemoteGatewayConfig, RemoteSecret,
+};
 use futures::executor::block_on;
 
 fn main() -> support::ExampleResult<()> {
@@ -22,7 +24,10 @@ fn main() -> support::ExampleResult<()> {
 
         let mut client = CogentClient::new();
         let local_endpoint = client
-            .add_local("local", args.model_path, runtime_config(false, None))
+            .add(
+                "local",
+                EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
+            )
             .await?;
 
         // The remote endpoint uses only the public gateway URL, bearer token,
@@ -34,7 +39,9 @@ fn main() -> support::ExampleResult<()> {
             token: RemoteSecret::new(support::required_env("COGENTLM_GATEWAY_TOKEN")?),
             timeout: None,
         };
-        let gateway_endpoint = client.add_remote("gateway", config)?;
+        let gateway_endpoint = client
+            .add("gateway", EndpointDescriptor::gateway(config))
+            .await?;
 
         let local = client
             .query(CogentQueryRequest {

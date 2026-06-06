@@ -2,7 +2,8 @@
 //!
 //! This crate is the intended single dependency for Rust applications. It
 //! re-exports the high-level client API together with the native engine config
-//! and shared value types needed to run local or gateway-backed inference.
+//! and shared value types needed to run local, gateway-backed, or direct
+//! provider inference.
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -15,7 +16,7 @@ mod root_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-/// High-level client API for local models and remote gateway endpoints.
+/// High-level client API for local, remote gateway, and provider endpoints.
 pub use cogentlm_client::*;
 
 /// Native backend helpers.

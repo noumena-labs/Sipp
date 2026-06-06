@@ -6,6 +6,9 @@ use crate::EndpointRef;
 /// Gateway free-form options carried by request envelopes.
 pub type GatewayOptions = serde_json::Map<String, serde_json::Value>;
 
+/// Direct provider free-form options carried by request envelopes.
+pub type ProviderOptions = serde_json::Map<String, serde_json::Value>;
+
 /// Text generation options shared by local and remote endpoints.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CogentTextOptions {
@@ -35,7 +38,7 @@ pub struct LocalTextOptions {
 }
 
 impl LocalTextOptions {
-    #[cfg(feature = "remote")]
+    #[cfg(any(feature = "remote", feature = "providers"))]
     pub(crate) fn has_fields(&self) -> bool {
         self.context_key.is_some()
             || self.grammar.is_some()
@@ -55,7 +58,7 @@ pub struct LocalEmbedOptions {
 }
 
 impl LocalEmbedOptions {
-    #[cfg(feature = "remote")]
+    #[cfg(any(feature = "remote", feature = "providers"))]
     pub(crate) fn has_fields(&self) -> bool {
         self.context_key.is_some() || self.normalize.is_some()
     }
@@ -74,6 +77,8 @@ pub struct CogentQueryRequest {
     pub local: LocalTextOptions,
     /// Gateway-only request options passed to the remote transport.
     pub gateway_options: GatewayOptions,
+    /// Direct-provider-only request options passed to provider adapters.
+    pub provider_options: ProviderOptions,
     /// Whether the returned run handle emits token batches.
     pub emit_tokens: bool,
 }
@@ -91,6 +96,8 @@ pub struct CogentChatRequest {
     pub local: LocalTextOptions,
     /// Gateway-only request options passed to the remote transport.
     pub gateway_options: GatewayOptions,
+    /// Direct-provider-only request options passed to provider adapters.
+    pub provider_options: ProviderOptions,
     /// Whether the returned run handle emits token batches.
     pub emit_tokens: bool,
 }
@@ -106,4 +113,6 @@ pub struct CogentEmbedRequest {
     pub local: LocalEmbedOptions,
     /// Gateway-only request options passed to the remote transport.
     pub gateway_options: GatewayOptions,
+    /// Direct-provider-only request options passed to provider adapters.
+    pub provider_options: ProviderOptions,
 }

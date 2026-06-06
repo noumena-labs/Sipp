@@ -26,7 +26,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   const client = new CogentClient();
   try {
     // The app registers a remote endpoint from gateway URL, bearer token, and alias.
-    const endpoint = client.addRemote(config.alias, config);
+    const endpoint = await client.add(config.alias, { kind: 'gateway', ...config });
     const run = client.query(prompt, {
       endpoint,
       emitTokens: true,

@@ -5,9 +5,9 @@ import { CogentClient } from '../../src/engine/browser-client.js';
 import {
   QueryError,
   type ChatInput,
+  type EndpointDescriptor,
   type GatewayOptions,
   type QueryInput,
-  type RemoteGatewayConfig,
   type TokenBatch,
 } from '../../src/models/types.js';
 import { MainThreadEngineRuntime } from '../../src/runtime/main-thread/engine-runtime.js';
@@ -325,9 +325,11 @@ test('CogentClient exposes the minimal browser API', async () => {
     executionMode: 'main-thread',
   });
 
-  assert.equal(typeof client.addLocal, 'function');
-  assert.equal(typeof client.addRemote, 'function');
-  assert.equal(typeof client.updateRemote, 'function');
+  assert.equal(typeof client.add, 'function');
+  const legacyApi = client as unknown as Record<string, unknown>;
+  assert.equal(legacyApi['add' + 'Local'], undefined);
+  assert.equal(legacyApi['add' + 'Remote'], undefined);
+  assert.equal(legacyApi['update' + 'Remote'], undefined);
   assert.equal(typeof client.currentLocal, 'function');
   assert.equal(typeof client.listLocal, 'function');
   assert.equal(typeof client.removeLocal, 'function');
@@ -380,7 +382,8 @@ test('query() routes explicit remote endpoint through gateway fetch', async () =
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro', {
+      const endpoint = await client.add('pro', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -423,6 +426,109 @@ test('query() routes explicit remote endpoint through gateway fetch', async () =
   );
 });
 
+test('query() routes explicit provider endpoint through direct provider fetch', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  await withGlobalFetch(
+    async (input, init) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({
+          id: 'cmpl_1',
+          model: 'direct-model',
+          choices: [{ text: 'provider answer', finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 2,
+            completion_tokens: 3,
+            total_tokens: 5,
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    },
+    async () => {
+      const client = new CogentClient({ executionMode: 'main-thread' });
+      const endpoint = await client.add('direct', {
+        kind: 'provider',
+        provider: 'openai_compatible',
+        model: 'direct-model',
+        baseUrl: 'https://provider.example.test',
+        apiKey: 'provider-secret',
+      });
+
+      const output = await client
+        .query('hello', {
+          endpoint,
+          maxTokens: 7,
+          providerOptions: { seed: 9 },
+        })
+        .response;
+      const call = calls[0];
+      const body = JSON.parse(String(call.init?.body)) as Record<string, unknown>;
+      const headers = call.init?.headers as Headers;
+
+      assert.deepEqual(endpoint, { kind: 'provider', id: 'direct' });
+      assert.equal(output.text, 'provider answer');
+      assert.equal(output.stats.inputTokens, 2);
+      assert.equal(output.stats.outputTokens, 3);
+      assert.equal(call.url, 'https://provider.example.test/completions');
+      assert.equal(headers.get('Authorization'), 'Bearer provider-secret');
+      assert.deepEqual(body, {
+        model: 'direct-model',
+        prompt: 'hello',
+        max_tokens: 7,
+        seed: 9,
+      });
+
+      await client.close();
+    }
+  );
+});
+
+test('local browser inference rejects providerOptions before local dispatch', async () => {
+  const client = new CogentClient({ executionMode: 'main-thread' });
+
+  assert.throws(
+    () => client.query('hello', { providerOptions: { seed: 9 } }),
+    (error) =>
+      error instanceof QueryError &&
+      error.code === 'UNSUPPORTED_OPERATION' &&
+      error.message === 'providerOptions are not valid for local endpoints'
+  );
+
+  await client.close();
+});
+
+test('unified add replaces endpoint keys across families', async () => {
+  const client = new CogentClient({ executionMode: 'main-thread' });
+  const remote = await client.add('shared', {
+    kind: 'gateway',
+    alias: 'pro-chat',
+    baseUrl: 'https://gateway.example.test',
+    token: 'secret-token',
+  });
+
+  const provider = await client.add('shared', {
+    kind: 'provider',
+    provider: 'openai',
+    model: 'gpt-test',
+    apiKey: 'provider-secret',
+  });
+
+  assert.deepEqual(provider, { kind: 'provider', id: 'shared' });
+  assert.throws(
+    () => client.query('hello', { endpoint: remote }),
+    (error) =>
+      error instanceof QueryError &&
+      error.code === 'MODEL_NOT_FOUND' &&
+      error.message === 'remote endpoint not found: shared'
+  );
+
+  await client.close();
+});
+
 test('remote gateway text responses require text and finishReason fields', async () => {
   const cases = [
     {
@@ -463,7 +569,8 @@ test('remote gateway text responses require text and finishReason fields', async
         }),
       async () => {
         const client = new CogentClient({ executionMode: 'main-thread' });
-        const endpoint = client.addRemote(item.id, {
+        const endpoint = await client.add(item.id, {
+          kind: 'gateway',
           alias: 'pro-chat',
           baseUrl: 'https://gateway.example.test',
           token: 'secret-token',
@@ -503,7 +610,8 @@ test('remote gateway text responses reject malformed usage fields', async () => 
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-bad-text-usage', {
+      const endpoint = await client.add('pro-bad-text-usage', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -541,7 +649,8 @@ test('remote gateway text responses require usage to be a JSON object', async ()
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-array-text-usage', {
+      const endpoint = await client.add('pro-array-text-usage', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -586,7 +695,8 @@ test('chat() routes explicit remote endpoint through gateway fetch', async () =>
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-chat', {
+      const endpoint = await client.add('pro-chat', {
+        kind: 'gateway',
         alias: 'team-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -649,7 +759,8 @@ test('embed() routes explicit remote endpoint through gateway fetch', async () =
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-embed', {
+      const endpoint = await client.add('pro-embed', {
+        kind: 'gateway',
         alias: 'team-embed',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -709,7 +820,8 @@ test('remote gateway embedding responses require model and embedding fields', as
         }),
       async () => {
         const client = new CogentClient({ executionMode: 'main-thread' });
-        const endpoint = client.addRemote(`pro-embed-${item.id}`, {
+        const endpoint = await client.add(`pro-embed-${item.id}`, {
+          kind: 'gateway',
           alias: 'team-embed',
           baseUrl: 'https://gateway.example.test',
           token: 'secret-token',
@@ -742,7 +854,8 @@ test('remote gateway embedding responses require a JSON object body', async () =
         }),
       async () => {
         const client = new CogentClient({ executionMode: 'main-thread' });
-        const endpoint = client.addRemote(`pro-${id}-embed`, {
+        const endpoint = await client.add(`pro-${id}-embed`, {
+          kind: 'gateway',
           alias: 'team-embed',
           baseUrl: 'https://gateway.example.test',
           token: 'secret-token',
@@ -782,7 +895,8 @@ test('remote gateway embedding responses reject malformed usage fields', async (
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-bad-embed-usage', {
+      const endpoint = await client.add('pro-bad-embed-usage', {
+        kind: 'gateway',
         alias: 'team-embed',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -817,7 +931,8 @@ test('remote gateway embedding responses reject values outside f32 range', async
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-embed-out-of-range', {
+      const endpoint = await client.add('pro-embed-out-of-range', {
+        kind: 'gateway',
         alias: 'team-embed',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -838,7 +953,8 @@ test('remote gateway embedding responses reject values outside f32 range', async
 
 test('remote browser calls reject local-only options', async () => {
   const client = new CogentClient({ executionMode: 'main-thread' });
-  const endpoint = client.addRemote('pro', {
+  const endpoint = await client.add('pro', {
+    kind: 'gateway',
     alias: 'team-model',
     baseUrl: 'https://gateway.example.test',
     token: 'secret-token',
@@ -883,7 +999,8 @@ test('remote query rejects blank prompts before fetch', async () => {
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-blank-query', {
+      const endpoint = await client.add('pro-blank-query', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -912,7 +1029,8 @@ test('remote chat rejects empty messages before fetch', async () => {
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-empty-chat', {
+      const endpoint = await client.add('pro-empty-chat', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -952,7 +1070,8 @@ test('remote browser text inputs validate shape before fetch', async () => {
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-invalid-input', {
+      const endpoint = await client.add('pro-invalid-input', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -996,7 +1115,8 @@ test('remote embed rejects blank input before fetch', async () => {
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-blank-embed', {
+      const endpoint = await client.add('pro-blank-embed', {
+        kind: 'gateway',
         alias: 'pro-embed',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1025,7 +1145,8 @@ test('remote browser embed input validates shape before fetch', async () => {
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-invalid-embed-input', {
+      const endpoint = await client.add('pro-invalid-embed-input', {
+        kind: 'gateway',
         alias: 'pro-embed',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1047,7 +1168,8 @@ test('remote browser embed input validates shape before fetch', async () => {
 
 test('remote browser gatewayOptions reject local-only field names', async () => {
   const client = new CogentClient({ executionMode: 'main-thread' });
-  const endpoint = client.addRemote('pro', {
+  const endpoint = await client.add('pro', {
+    kind: 'gateway',
     alias: 'team-model',
     baseUrl: 'https://gateway.example.test',
     token: 'secret-token',
@@ -1095,7 +1217,8 @@ test('remote browser gatewayOptions must be JSON objects', async () => {
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-invalid-gateway-options', {
+      const endpoint = await client.add('pro-invalid-gateway-options', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1158,7 +1281,8 @@ test('remote browser gatewayOptions reject non-JSON values before fetch', async 
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-non-json-gateway-options', {
+      const endpoint = await client.add('pro-non-json-gateway-options', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1219,7 +1343,8 @@ test('remote browser gatewayOptions snapshot nested values before token provider
       const stops = ['first'];
       const gatewayOptions: GatewayOptions = { route, stops };
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-snapshot-gateway-options', {
+      const endpoint = await client.add('pro-snapshot-gateway-options', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         tokenProvider: () => {
@@ -1261,7 +1386,8 @@ test('remote browser text options validate numeric fields before fetch', async (
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-invalid-text-options', {
+      const endpoint = await client.add('pro-invalid-text-options', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1335,7 +1461,8 @@ test('remote browser text options validate stop before fetch', async () => {
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-invalid-stop', {
+      const endpoint = await client.add('pro-invalid-stop', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1369,7 +1496,7 @@ test('remote browser text options validate stop before fetch', async () => {
   );
 });
 
-test('updateRemote rotates gateway token without changing endpoint id', async () => {
+test('repeated add rotates gateway token without changing endpoint ref', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   await withGlobalFetch(
     async (input, init) => {
@@ -1389,14 +1516,16 @@ test('updateRemote rotates gateway token without changing endpoint id', async ()
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro', {
+      const endpoint = await client.add('pro', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'first-token',
       });
 
       assert.deepEqual(
-        client.updateRemote('pro', {
+        await client.add('pro', {
+          kind: 'gateway',
           alias: 'pro-chat',
           baseUrl: 'https://gateway.example.test',
           token: 'second-token',
@@ -1410,6 +1539,50 @@ test('updateRemote rotates gateway token without changing endpoint id', async ()
       assert.equal(output.text, 'updated token');
       assert.equal(headers.Authorization, 'Bearer second-token');
 
+      await client.close();
+    }
+  );
+});
+
+test('failed gateway replacement preserves the registered endpoint', async () => {
+  await withGlobalFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          id: 'gw_preserved',
+          model: 'pro-chat',
+          text: 'preserved',
+          finish_reason: 'stop',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      ),
+    async () => {
+      const client = new CogentClient({ executionMode: 'main-thread' });
+      const endpoint = await client.add('pro', {
+        kind: 'gateway',
+        alias: 'pro-chat',
+        baseUrl: 'https://gateway.example.test',
+        token: 'first-token',
+      });
+
+      await assert.rejects(
+        client.add('pro', {
+          kind: 'gateway',
+          alias: 'replacement',
+          baseUrl: 'https://user:gateway-secret@gateway.example.test',
+          token: 'replacement-token',
+        }),
+        (error) =>
+          error instanceof QueryError &&
+          error.code === 'QUERY_FAILED' &&
+          error.message === 'remote gateway baseUrl must not include userinfo'
+      );
+
+      const output = await client.query('hello', { endpoint }).response;
+      assert.equal(output.text, 'preserved');
       await client.close();
     }
   );
@@ -1448,7 +1621,8 @@ test('query() streams remote gateway SSE events through token batches', async ()
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-stream', {
+      const endpoint = await client.add('pro-stream', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         tokenProvider: () => 'rotated-token',
@@ -1513,7 +1687,8 @@ test('remote gateway streams reject malformed usage events', async () => {
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-bad-stream-usage', {
+      const endpoint = await client.add('pro-bad-stream-usage', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1546,7 +1721,8 @@ test('remote gateway streams require JSON object payloads', async () => {
       }),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-array-stream-payload', {
+      const endpoint = await client.add('pro-array-stream-payload', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1579,7 +1755,8 @@ test('remote gateway streams require a terminal done event', async () => {
       }),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-truncated-stream', {
+      const endpoint = await client.add('pro-truncated-stream', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1618,7 +1795,8 @@ test('remote gateway streams require finishReason in done events', async () => {
       }),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-missing-stream-finish', {
+      const endpoint = await client.add('pro-missing-stream-finish', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1660,7 +1838,8 @@ test('remote gateway streams reject events after done', async () => {
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-late-stream-event', {
+      const endpoint = await client.add('pro-late-stream-event', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1731,7 +1910,8 @@ test('remote gateway streams respect abort signals after response headers', asyn
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-stream-abort', {
+      const endpoint = await client.add('pro-stream-abort', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1819,7 +1999,8 @@ test('remote gateway stream timeout is an idle deadline', async () => {
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-stream-idle-timeout', {
+      const endpoint = await client.add('pro-stream-idle-timeout', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1854,7 +2035,8 @@ test('query() maps remote gateway stream error events', async () => {
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-error', {
+      const endpoint = await client.add('pro-error', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1893,7 +2075,8 @@ test('query() maps remote gateway stream error event types', async () => {
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-type-error', {
+      const endpoint = await client.add('pro-type-error', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1928,7 +2111,8 @@ test('remote gateway stream parser rejects oversized SSE events', async () => {
       }),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-oversized-stream', {
+      const endpoint = await client.add('pro-oversized-stream', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -1968,7 +2152,8 @@ test('remote gateway stream error events redact bearer token echoes', async () =
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-stream-redaction', {
+      const endpoint = await client.add('pro-stream-redaction', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2004,7 +2189,8 @@ test('remote gateway stream protocol errors redact bearer token echoes', async (
       }),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-stream-protocol', {
+      const endpoint = await client.add('pro-stream-protocol', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2037,7 +2223,8 @@ test('remote gateway stream invalid JSON does not keep secret-bearing causes', a
       }),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-stream-invalid-json', {
+      const endpoint = await client.add('pro-stream-invalid-json', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2067,7 +2254,8 @@ test('remote gateway fetch failures do not expose bearer tokens', async () => {
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-fetch-failure', {
+      const endpoint = await client.add('pro-fetch-failure', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2105,7 +2293,8 @@ test('remote gateway calls respect pre-aborted signals before fetch', async () =
     }) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-aborted', {
+      const endpoint = await client.add('pro-aborted', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2144,7 +2333,8 @@ test('remote gateway timeout aborts fetch without exposing bearer tokens', async
       })) as typeof fetch,
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-timeout', {
+      const endpoint = await client.add('pro-timeout', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2175,7 +2365,8 @@ test('remote gateway token provider failures do not expose bearer tokens', async
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-token-failure', {
+      const endpoint = await client.add('pro-token-failure', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         tokenProvider: () => {
@@ -2209,7 +2400,8 @@ test('remote gateway token provider is bounded by request timeout', async () => 
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
       try {
-        const endpoint = client.addRemote('pro-token-timeout', {
+        const endpoint = await client.add('pro-token-timeout', {
+          kind: 'gateway',
           alias: 'pro-chat',
           baseUrl: 'https://gateway.example.test',
           tokenProvider: () => new Promise<string>(() => {}),
@@ -2250,7 +2442,8 @@ test('remote gateway token provider respects abort signals before fetch', async 
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
       try {
-        const endpoint = client.addRemote('pro-token-abort', {
+        const endpoint = await client.add('pro-token-abort', {
+          kind: 'gateway',
           alias: 'pro-chat',
           baseUrl: 'https://gateway.example.test',
           tokenProvider: () => new Promise<string>(() => {}),
@@ -2284,7 +2477,8 @@ test('remote gateway token provider must return a string token', async () => {
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-token-type', {
+      const endpoint = await client.add('pro-token-type', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         tokenProvider: () => 7,
@@ -2313,7 +2507,8 @@ test('remote gateway token provider rejects whitespace tokens before fetch', asy
     },
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-token-whitespace', {
+      const endpoint = await client.add('pro-token-whitespace', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         tokenProvider: () => 'secret token',
@@ -2354,7 +2549,8 @@ test('remote gateway HTTP errors redact bearer token echoes', async () => {
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-http-error', {
+      const endpoint = await client.add('pro-http-error', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2398,7 +2594,8 @@ test('remote gateway body errors redact bearer token echoes', async () => {
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-body-error', {
+      const endpoint = await client.add('pro-body-error', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2433,7 +2630,8 @@ test('remote gateway HTTP error bodies are capped', async () => {
       }),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-huge-error', {
+      const endpoint = await client.add('pro-huge-error', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2476,7 +2674,8 @@ test('remote gateway HTTP errors expose structured gateway metadata', async () =
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-metadata-error', {
+      const endpoint = await client.add('pro-metadata-error', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2520,7 +2719,8 @@ test('remote gateway HTTP errors expose error type metadata', async () => {
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-type-metadata-error', {
+      const endpoint = await client.add('pro-type-metadata-error', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2563,7 +2763,8 @@ test('remote gateway HTTP errors parse retry-after seconds', async () => {
       ),
     async () => {
       const client = new CogentClient({ executionMode: 'main-thread' });
-      const endpoint = client.addRemote('pro-retry-seconds', {
+      const endpoint = await client.add('pro-retry-seconds', {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         token: 'secret-token',
@@ -2582,40 +2783,40 @@ test('remote gateway HTTP errors parse retry-after seconds', async () => {
   );
 });
 
-test('addRemote requires HTTPS except loopback gateway URLs', async () => {
+test('gateway descriptors require HTTPS except loopback URLs', async () => {
   const client = new CogentClient({ executionMode: 'main-thread' });
 
-  assert.throws(
-    () =>
-      client.addRemote('public-http', {
-        alias: 'pro-chat',
-        baseUrl: 'http://gateway.example.test',
-        token: 'secret-token',
-      }),
+  await assert.rejects(
+    client.add('public-http', {
+      kind: 'gateway',
+      alias: 'pro-chat',
+      baseUrl: 'http://gateway.example.test',
+      token: 'secret-token',
+    }),
     (error) =>
       error instanceof QueryError &&
       error.code === 'QUERY_FAILED' &&
       error.message.includes('must use HTTPS')
   );
-  assert.throws(
-    () =>
-      client.addRemote('relative', {
-        alias: 'pro-chat',
-        baseUrl: '/gateway',
-        token: 'secret-token',
-      }),
+  await assert.rejects(
+    client.add('relative', {
+      kind: 'gateway',
+      alias: 'pro-chat',
+      baseUrl: '/gateway',
+      token: 'secret-token',
+    }),
     (error) =>
       error instanceof QueryError &&
       error.code === 'QUERY_FAILED' &&
       error.message.includes('baseUrl is invalid')
   );
-  assert.throws(
-    () =>
-      client.addRemote('malformed-secret-url', {
-        alias: 'pro-chat',
-        baseUrl: 'https://gateway-secret invalid',
-        token: 'secret-token',
-      }),
+  await assert.rejects(
+    client.add('malformed-secret-url', {
+      kind: 'gateway',
+      alias: 'pro-chat',
+      baseUrl: 'https://gateway-secret invalid',
+      token: 'secret-token',
+    }),
     (error) =>
       error instanceof QueryError &&
       error.code === 'QUERY_FAILED' &&
@@ -2623,25 +2824,25 @@ test('addRemote requires HTTPS except loopback gateway URLs', async () => {
       error.cause == null &&
       !error.message.includes('gateway-secret')
   );
-  assert.throws(
-    () =>
-      client.addRemote('loopback-prefix-hostname', {
-        alias: 'pro-chat',
-        baseUrl: 'http://127.evil.example',
-        token: 'secret-token',
-      }),
+  await assert.rejects(
+    client.add('loopback-prefix-hostname', {
+      kind: 'gateway',
+      alias: 'pro-chat',
+      baseUrl: 'http://127.evil.example',
+      token: 'secret-token',
+    }),
     (error) =>
       error instanceof QueryError &&
       error.code === 'QUERY_FAILED' &&
       error.message.includes('must use HTTPS')
   );
-  assert.throws(
-    () =>
-      client.addRemote('userinfo', {
-        alias: 'pro-chat',
-        baseUrl: 'https://user:gateway-secret@gateway.example.test',
-        token: 'secret-token',
-      }),
+  await assert.rejects(
+    client.add('userinfo', {
+      kind: 'gateway',
+      alias: 'pro-chat',
+      baseUrl: 'https://user:gateway-secret@gateway.example.test',
+      token: 'secret-token',
+    }),
     (error) =>
       error instanceof QueryError &&
       error.code === 'QUERY_FAILED' &&
@@ -2652,13 +2853,13 @@ test('addRemote requires HTTPS except loopback gateway URLs', async () => {
     ['query', 'https://gateway.example.test/v1?token=gateway-secret'],
     ['fragment', 'https://gateway.example.test/v1#gateway-secret'],
   ] as const) {
-    assert.throws(
-      () =>
-        client.addRemote(id, {
-          alias: 'pro-chat',
-          baseUrl,
-          token: 'secret-token',
-        }),
+    await assert.rejects(
+      client.add(id, {
+        kind: 'gateway',
+        alias: 'pro-chat',
+        baseUrl,
+        token: 'secret-token',
+      }),
       (error) =>
         error instanceof QueryError &&
         error.code === 'QUERY_FAILED' &&
@@ -2668,7 +2869,8 @@ test('addRemote requires HTTPS except loopback gateway URLs', async () => {
   }
 
   assert.deepEqual(
-    client.addRemote('localhost', {
+    await client.add('localhost', {
+      kind: 'gateway',
       alias: 'local-gateway',
       baseUrl: 'http://localhost:8080',
       token: 'secret-token',
@@ -2676,7 +2878,8 @@ test('addRemote requires HTTPS except loopback gateway URLs', async () => {
     { kind: 'remote', id: 'localhost' }
   );
   assert.deepEqual(
-    client.addRemote('ipv4-loopback', {
+    await client.add('ipv4-loopback', {
+      kind: 'gateway',
       alias: 'local-gateway',
       baseUrl: 'http://127.10.0.1:8080',
       token: 'secret-token',
@@ -2684,7 +2887,8 @@ test('addRemote requires HTTPS except loopback gateway URLs', async () => {
     { kind: 'remote', id: 'ipv4-loopback' }
   );
   assert.deepEqual(
-    client.addRemote('ipv6-loopback', {
+    await client.add('ipv6-loopback', {
+      kind: 'gateway',
       alias: 'local-gateway',
       baseUrl: 'http://[::1]:8080',
       token: 'secret-token',
@@ -2695,77 +2899,79 @@ test('addRemote requires HTTPS except loopback gateway URLs', async () => {
   await client.close();
 });
 
-test('addRemote validates browser remote config runtime field types', async () => {
+test('add validates browser gateway descriptor runtime field types', async () => {
   const client = new CogentClient({ executionMode: 'main-thread' });
 
   const valid = {
+    kind: 'gateway' as const,
     alias: 'pro-chat',
     baseUrl: 'https://gateway.example.test',
     token: 'secret-token',
   };
   const cases: Array<{
     readonly id: string;
-    readonly config: unknown;
+    readonly descriptor: unknown;
     readonly message: string;
   }> = [
     {
-      id: 'null-config',
-      config: null,
-      message: 'remote gateway config must be an object',
+      id: 'null-descriptor',
+      descriptor: null,
+      message: 'endpoint descriptor must be an object',
     },
     {
       id: 'bad-alias',
-      config: { ...valid, alias: 7 },
+      descriptor: { ...valid, alias: 7 },
       message: 'remote alias must be a string',
     },
     {
       id: 'blank-alias',
-      config: { ...valid, alias: '   ' },
+      descriptor: { ...valid, alias: '   ' },
       message: 'remote alias must not be empty',
     },
     {
       id: 'whitespace-alias',
-      config: { ...valid, alias: ' pro-chat ' },
+      descriptor: { ...valid, alias: ' pro-chat ' },
       message: 'remote alias must not contain surrounding whitespace',
     },
     {
       id: 'bad-base-url',
-      config: { ...valid, baseUrl: 7 },
+      descriptor: { ...valid, baseUrl: 7 },
       message: 'remote gateway baseUrl must be a string',
     },
     {
       id: 'blank-base-url',
-      config: { ...valid, baseUrl: '   ' },
+      descriptor: { ...valid, baseUrl: '   ' },
       message: 'remote gateway baseUrl must not be empty',
     },
     {
       id: 'whitespace-base-url',
-      config: { ...valid, baseUrl: ' https://gateway.example.test ' },
+      descriptor: { ...valid, baseUrl: ' https://gateway.example.test ' },
       message: 'remote gateway baseUrl must not contain surrounding whitespace',
     },
     {
       id: 'bad-token',
-      config: { ...valid, token: 7 },
+      descriptor: { ...valid, token: 7 },
       message: 'remote gateway token must be a string',
     },
     {
       id: 'empty-token',
-      config: { ...valid, token: '' },
+      descriptor: { ...valid, token: '' },
       message: 'remote gateway token must not be empty',
     },
     {
       id: 'blank-token',
-      config: { ...valid, token: '   ' },
+      descriptor: { ...valid, token: '   ' },
       message: 'remote gateway token must not be empty',
     },
     {
       id: 'whitespace-token',
-      config: { ...valid, token: 'secret token' },
+      descriptor: { ...valid, token: 'secret token' },
       message: 'remote gateway token must not contain whitespace',
     },
     {
       id: 'bad-token-provider',
-      config: {
+      descriptor: {
+        kind: 'gateway',
         alias: 'pro-chat',
         baseUrl: 'https://gateway.example.test',
         tokenProvider: 'secret-token',
@@ -2774,29 +2980,29 @@ test('addRemote validates browser remote config runtime field types', async () =
     },
     {
       id: 'bad-timeout',
-      config: { ...valid, timeoutMs: '1000' },
+      descriptor: { ...valid, timeoutMs: '1000' },
       message: 'remote gateway timeoutMs must be positive',
     },
   ];
 
-  assert.throws(
-    () => client.addRemote(7 as unknown as string, valid),
+  await assert.rejects(
+    client.add(7 as unknown as string, valid),
     (error) =>
       error instanceof QueryError &&
       error.code === 'QUERY_FAILED' &&
-      error.message === 'remote id must be a string'
+      error.message === 'endpoint id must be a string'
   );
-  assert.throws(
-    () => client.addRemote(' pro ', valid),
+  await assert.rejects(
+    client.add(' pro ', valid),
     (error) =>
       error instanceof QueryError &&
       error.code === 'QUERY_FAILED' &&
-      error.message === 'remote id must not contain surrounding whitespace'
+      error.message === 'endpoint id must not contain surrounding whitespace'
   );
 
   for (const item of cases) {
-    assert.throws(
-      () => client.addRemote(item.id, item.config as RemoteGatewayConfig),
+    await assert.rejects(
+      client.add(item.id, item.descriptor as EndpointDescriptor),
       (error) =>
         error instanceof QueryError &&
         error.code === 'QUERY_FAILED' &&
@@ -2808,7 +3014,7 @@ test('addRemote validates browser remote config runtime field types', async () =
   await client.close();
 });
 
-test('addRemote rejects direct-provider fields in browser config', async () => {
+test('gateway descriptors reject direct-provider fields', async () => {
   const client = new CogentClient({ executionMode: 'main-thread' });
   const blockedFields: Array<{ readonly field: string; readonly value: unknown }> = [
     { field: 'apiKey', value: 'provider-secret' },
@@ -2819,15 +3025,16 @@ test('addRemote rejects direct-provider fields in browser config', async () => {
   ];
 
   for (const { field, value } of blockedFields) {
-    const config = {
+    const descriptor = {
+      kind: 'gateway',
       alias: 'pro-chat',
       baseUrl: 'https://gateway.example.test',
       token: 'secret-token',
       [field]: value,
-    } as unknown as RemoteGatewayConfig;
+    } as unknown as EndpointDescriptor;
 
-    assert.throws(
-      () => client.addRemote(`blocked-${field}`, config),
+    await assert.rejects(
+      client.add(`blocked-${field}`, descriptor),
       (error) =>
         error instanceof QueryError &&
         error.code === 'QUERY_FAILED' &&
@@ -2901,13 +3108,40 @@ test('worker mode defaults to pthread wasm when shared memory is available', asy
   });
 });
 
+test('adding a second browser-local key invalidates the previous local ref', async () => {
+  await withGlobalWorker(FakeWorker as unknown as typeof Worker, async () => {
+    const client = new CogentClient({ executionMode: 'worker' });
+    const first = await client.add('first-local', {
+      kind: 'local',
+      source: 'model-fake',
+    });
+    const second = await client.add('second-local', {
+      kind: 'local',
+      source: 'model-fake',
+    });
+
+    assert.deepEqual(first, { kind: 'local', id: 'first-local' });
+    assert.deepEqual(second, { kind: 'local', id: 'second-local' });
+    assert.equal(client.currentLocal()?.id, 'model-fake');
+    assert.throws(
+      () => client.query('hello', { endpoint: first }),
+      (error) =>
+        error instanceof QueryError &&
+        error.code === 'MODEL_NOT_FOUND' &&
+        error.message === 'local endpoint not found: first-local'
+    );
+
+    await client.close();
+  });
+});
+
 test('chat() renders messages through the worker service and sanitizes assistant boundaries', async () => {
   await withGlobalWorker(FakeWorker as unknown as typeof Worker, async () => {
     const client = new CogentClient({
       executionMode: 'worker',
     });
 
-    await client.addLocal('model-fake');
+    await client.add('local', { kind: 'local', source: 'model-fake' });
     const chunks: string[] = [];
     const run = client.chat([{ role: 'user', content: 'hello' }], {
       emitTokens: true,
@@ -2945,7 +3179,7 @@ test('worker shared token ring preserves records drained before native request c
           executionMode: 'worker',
         });
 
-        await client.addLocal('model-fake');
+        await client.add('local', { kind: 'local', source: 'model-fake' });
         const chunks: string[] = [];
         const run = client.chat([{ role: 'user', content: 'hello' }], {
           emitTokens: true,
@@ -2970,7 +3204,7 @@ test('embed() routes through the worker service', async () => {
       executionMode: 'worker',
     });
 
-    await client.addLocal('model-fake');
+    await client.add('local', { kind: 'local', source: 'model-fake' });
     const output = await client.embed('hello', { normalize: false, contextKey: 'embeddings' }).response;
     const worker = FakeWorker.lastInstance;
     const embed = worker?.messages.find((message) => message.kind === 'embed');

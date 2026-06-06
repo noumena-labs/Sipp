@@ -3,12 +3,8 @@
 /** Client facade for local CogentLM models and remote gateway aliases. */
 export declare class CogentClient {
   constructor()
-  /** Load a local GGUF model under `id` and return its endpoint reference. */
-  addLocal(id: string, modelPath: string, config?: NativeRuntimeConfig | undefined | null): Promise<EndpointRef>
-  /** Register a remote gateway alias without loading a local model. */
-  addRemote(id: string, config: RemoteGatewayConfig): EndpointRef
-  /** Replace the configuration for an existing remote gateway alias. */
-  updateRemote(id: string, config: RemoteGatewayConfig): EndpointRef
+  /** Register or replace a local model, remote gateway, or direct provider endpoint. */
+  add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef>
   /** Start raw-prompt text generation and return the run handle. */
   query(request: CogentQueryRequest): CogentTextRun
   /** Start chat generation from ordered role/content messages. */
@@ -57,6 +53,10 @@ export type EndpointRef =
       kind: 'remote'
       id: string
     }
+  | {
+      kind: 'provider'
+      id: string
+    }
 
 /** Shared generation options for text-producing requests. */
 export interface CogentTextOptions {
@@ -88,6 +88,7 @@ export interface CogentQueryRequest {
   options?: CogentTextOptions
   local?: LocalTextOptions
   gatewayOptions?: Record<string, unknown>
+  providerOptions?: Record<string, unknown>
   emitTokens?: boolean
 }
 
@@ -98,6 +99,7 @@ export interface CogentChatRequest {
   options?: CogentTextOptions
   local?: LocalTextOptions
   gatewayOptions?: Record<string, unknown>
+  providerOptions?: Record<string, unknown>
   emitTokens?: boolean
 }
 
@@ -107,6 +109,7 @@ export interface CogentEmbedRequest {
   input: string
   local?: LocalEmbedOptions
   gatewayOptions?: Record<string, unknown>
+  providerOptions?: Record<string, unknown>
 }
 
 /** Token accounting returned by a local or remote request. */
@@ -234,6 +237,43 @@ export interface RemoteGatewayConfig {
   readonly token: string
   readonly timeoutMs?: number
 }
+
+export interface ProviderStaticHeader {
+  name: string
+  value: string
+}
+
+export type LocalEndpointDescriptor = {
+  kind: 'local'
+  modelPath: string
+  config?: NativeRuntimeConfig
+}
+
+export type GatewayEndpointDescriptor = {
+  kind: 'gateway' | 'remote'
+  alias: string
+  baseUrl: string
+  token: string
+  timeoutMs?: number
+}
+
+export type ProviderEndpointDescriptor = {
+  kind: 'provider'
+  provider: 'openai' | 'anthropic' | 'openai_compatible' | 'openai-compatible'
+  model: string
+  apiKey?: string
+  baseUrl?: string
+  timeoutMs?: number
+  version?: string
+  authHeaderName?: string
+  authHeaderValue?: string
+  staticHeaders?: Array<ProviderStaticHeader>
+}
+
+export type EndpointDescriptor =
+  | LocalEndpointDescriptor
+  | GatewayEndpointDescriptor
+  | ProviderEndpointDescriptor
 
 /** Local runtime timing, cache, and throughput statistics. */
 export interface RequestStats {

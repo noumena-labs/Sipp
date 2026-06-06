@@ -16,7 +16,11 @@ const { model, input } = readLocalArgs('embed', 'CogentClient embedding example 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new CogentClient();
-await client.addLocal('default', model, runtimeConfig({ embeddings: true }));
+await client.add('default', {
+  kind: 'local',
+  modelPath: model,
+  config: runtimeConfig({ embeddings: true }),
+});
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // Embeddings use the same local endpoint. The runtime is loaded with

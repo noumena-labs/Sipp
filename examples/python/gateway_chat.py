@@ -7,11 +7,12 @@ from cogentlm import (
     CogentTextOptions,
     CogentTextRun,
     ContextRuntimeConfig,
+    GatewayDescriptor,
+    LocalModelDescriptor,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
-    RemoteGatewayConfig,
     ResidencyRuntimeConfig,
     SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
@@ -91,13 +92,16 @@ def main() -> None:
     set_llama_log_quiet(True)
 
     client = CogentClient()
-    local_endpoint = client.add_local("local", model, runtime_config(embeddings=False))
-    gateway = RemoteGatewayConfig(
+    local_endpoint = client.add(
+        "local",
+        LocalModelDescriptor(model, runtime_config(embeddings=False)),
+    )
+    gateway = GatewayDescriptor(
         alias,
         required_env("COGENTLM_GATEWAY_URL"),
         required_env("COGENTLM_GATEWAY_TOKEN"),
     )
-    gateway_endpoint = client.add_remote("gateway", gateway)
+    gateway_endpoint = client.add("gateway", gateway)
 
     # Local and gateway chat use the same message and streaming shape.
     local_run = client.chat(

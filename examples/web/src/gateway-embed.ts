@@ -22,7 +22,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
   const client = new CogentClient();
   try {
-    const endpoint = client.addRemote(config.alias, config);
+    const endpoint = await client.add(config.alias, { kind: 'gateway', ...config });
     const run = client.embed(input, { endpoint });
     await printEmbeddingRun(elements.output, endpoint, run);
   } catch (error) {

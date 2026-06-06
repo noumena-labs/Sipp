@@ -32,7 +32,13 @@ elements.loadForm.addEventListener('submit', async (event) => {
 
   try {
     write(elements.localOutput, 'Loading browser model...');
-    const info = await localClient.addLocal(source, { runtime: runtimeConfig() });
+    await localClient.add(EXAMPLE_LOCAL_ENDPOINT.id, {
+      kind: 'local',
+      source,
+      options: { runtime: runtimeConfig() },
+    });
+    const info = localClient.currentLocal();
+    if (info == null) throw new Error('Local model did not become active.');
     localModelLoaded = true;
     write(elements.localOutput, `Loaded ${info.name}.`);
   } catch (error) {
@@ -53,7 +59,10 @@ elements.runForm.addEventListener('submit', async (event) => {
 
   const gatewayClient = new CogentClient();
   try {
-    const gatewayEndpoint = gatewayClient.addRemote(gateway.alias, gateway);
+    const gatewayEndpoint = await gatewayClient.add(
+      gateway.alias,
+      { kind: 'gateway', ...gateway }
+    );
     const maxTokens = readMaxTokens(elements.maxTokensInput);
 
     if (localModelLoaded) {

@@ -599,26 +599,34 @@ export default function App() {
     setInstalledModels(await targetClient.listLocal());
   };
 
-  const addLocalSelection = async (
+  const loadLocalSelection = async (
     targetClient: CogentClient,
     source: ModelSource
   ): Promise<ModelInfo> => {
     const start = performance.now();
-    const info = await targetClient.addLocal(source, {
-      observability: 'profile',
-      runtime: getDefaultRuntimeOptions(),
-      onProgress: (progress) => {
-        if (progress.phase === 'download') {
-          setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
-        } else if (progress.phase === 'store') {
-          setStatus(`Storing model ${Math.floor(progress.percent ?? 0)}%`);
-        } else if (progress.phase === 'split') {
-          setStatus(`Preparing model shards ${Math.floor(progress.percent ?? 0)}%`);
-        } else if (progress.phase === 'load') {
-          setStatus('Loading into memory');
-        }
+    await targetClient.add('playground-local', {
+      kind: 'local',
+      source,
+      options: {
+        observability: 'profile',
+        runtime: getDefaultRuntimeOptions(),
+        onProgress: (progress) => {
+          if (progress.phase === 'download') {
+            setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
+          } else if (progress.phase === 'store') {
+            setStatus(`Storing model ${Math.floor(progress.percent ?? 0)}%`);
+          } else if (progress.phase === 'split') {
+            setStatus(`Preparing model shards ${Math.floor(progress.percent ?? 0)}%`);
+          } else if (progress.phase === 'load') {
+            setStatus('Loading into memory');
+          }
+        },
       },
     });
+    const info = targetClient.currentLocal();
+    if (info == null) {
+      throw new Error('Local model did not become active.');
+    }
     setLastLoadMs(round(performance.now() - start));
     setSourceInfo({ label: sourceLabel(source), bytes: info.bytes });
     loadedSourceKeyRef.current = sourceKey(source);
@@ -646,7 +654,7 @@ export default function App() {
     }
     setIsBusy(true);
     try {
-      const info = await addLocalSelection(client, source);
+      const info = await loadLocalSelection(client, source);
       setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -677,7 +685,7 @@ export default function App() {
         loadedModel.status !== 'ready' ||
         (loadedSourceKeyRef.current != null && loadedSourceKeyRef.current !== nextSourceKey)
       ) {
-        const info = await addLocalSelection(client, source);
+        const info = await loadLocalSelection(client, source);
         if (!modelSupportsOperation(info, requestOperation)) {
           requestOperation = defaultOperationForModel(info);
         }
@@ -786,7 +794,7 @@ export default function App() {
     let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
     try {
-      const info = await addLocalSelection(client, source);
+      const info = await loadLocalSelection(client, source);
       if (!modelSupportsOperation(info, benchmarkOperation)) {
         benchmarkOperation = defaultOperationForModel(info);
       }

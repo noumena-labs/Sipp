@@ -8,7 +8,9 @@ use cogentlm::engine::{
     ModelPlacementConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig,
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
-use cogentlm::{CogentChatRequest, CogentClient, CogentTextOptions, LocalTextOptions};
+use cogentlm::{
+    CogentChatRequest, CogentClient, CogentTextOptions, EndpointDescriptor, LocalTextOptions,
+};
 use futures::executor::block_on;
 use futures::StreamExt;
 
@@ -19,7 +21,10 @@ fn main() -> support::ExampleResult<()> {
 
         let mut client = CogentClient::new();
         client
-            .add_local("default", args.model_path, runtime_config(false, None))
+            .add(
+                "default",
+                EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
+            )
             .await?;
 
         // `chat` accepts structured messages. Token streaming is enabled here

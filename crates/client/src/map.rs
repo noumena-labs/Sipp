@@ -100,6 +100,65 @@ pub(crate) fn remote_embedding_response(
     }
 }
 
+#[cfg(feature = "providers")]
+pub(crate) fn provider_text_response(
+    endpoint: EndpointRef,
+    response: cogentlm_gateway_providers::ProviderGenerateResponse,
+) -> CogentTextResponse {
+    provider_text_output(endpoint, response)
+}
+
+#[cfg(feature = "providers")]
+pub(crate) fn provider_chat_response(
+    endpoint: EndpointRef,
+    response: cogentlm_gateway_providers::ProviderChatResponse,
+) -> CogentTextResponse {
+    provider_text_output(endpoint, response)
+}
+
+#[cfg(feature = "providers")]
+pub(crate) fn provider_embedding_response(
+    endpoint: EndpointRef,
+    response: cogentlm_gateway_providers::ProviderEmbeddingResponse,
+) -> CogentEmbeddingResponse {
+    CogentEmbeddingResponse {
+        endpoint,
+        values: response.result.values,
+        usage: response.usage,
+        local_stats: None,
+        pooling: None,
+        normalized: None,
+    }
+}
+
+#[cfg(feature = "providers")]
+pub(crate) fn provider_generation_options(
+    options: crate::CogentTextOptions,
+) -> cogentlm_gateway_providers::ProviderGenerationOptions {
+    cogentlm_gateway_providers::ProviderGenerationOptions {
+        max_tokens: options.max_tokens,
+        temperature: options.temperature,
+        top_p: options.top_p,
+        stop: options.stop,
+    }
+}
+
+#[cfg(feature = "providers")]
+fn provider_text_output(
+    endpoint: EndpointRef,
+    response: cogentlm_gateway_providers::ProviderResponse<
+        cogentlm_gateway_providers::ProviderTextOutput,
+    >,
+) -> CogentTextResponse {
+    CogentTextResponse {
+        endpoint,
+        text: response.result.text,
+        finish_reason: response.result.finish_reason,
+        usage: response.usage,
+        local_stats: None,
+    }
+}
+
 pub(crate) fn usage_from_stats(stats: RequestStats) -> TokenUsage {
     let input_tokens = nonnegative_i32_to_u32(stats.input_tokens);
     let output_tokens = nonnegative_i32_to_u32(stats.output_tokens);

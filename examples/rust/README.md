@@ -3,6 +3,14 @@
 Each file in `src/` is a focused tutorial. `support.rs` only handles argument
 parsing, environment helpers, and output formatting.
 
+Endpoints use the unified descriptor API:
+
+```rust
+let endpoint = client
+    .add("local", EndpointDescriptor::local(model_path, runtime))
+    .await?;
+```
+
 ## Local GGUF
 
 ```powershell

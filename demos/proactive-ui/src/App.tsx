@@ -290,9 +290,10 @@ export default function App() {
       });
 
       setStatus('Downloading vision model and projector...');
-      await nextClient.addLocal(
-        { model: trimmedModel, projector: trimmedProjector },
-        {
+      await nextClient.add('local', {
+        kind: 'local',
+        source: { model: trimmedModel, projector: trimmedProjector },
+        options: {
           observability: 'runtime',
           onProgress: (progress) => {
             const overallPercent = ingestProgress(progressAgg, progress.phase, progress.assetName, progress.percent);
@@ -342,8 +343,8 @@ export default function App() {
               repeat_penalty: 1.05,
             },
           },
-        }
-      );
+        },
+      });
 
       void clientRef.current?.close();
       clientRef.current = nextClient;

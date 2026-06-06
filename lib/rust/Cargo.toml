@@ -4,15 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Unified Rust facade for CogentLM local and gateway inference"
+description = "Unified Rust facade for CogentLM local, gateway, and provider inference"
 readme = "../../README.md"
 keywords = ["ai", "llm", "inference", "gguf"]
 categories = ["api-bindings", "science"]
 
 [features]
-default = ["native", "remote"]
+default = ["native", "remote", "providers"]
 native = ["cogentlm-client/native", "cogentlm-engine/native"]
 remote = ["cogentlm-client/remote"]
+providers = ["cogentlm-client/providers"]
 backend-dl = ["native", "cogentlm-client/backend-dl", "cogentlm-engine/backend-dl"]
 cuda = ["native", "cogentlm-client/cuda", "cogentlm-engine/cuda"]
 metal = ["native", "cogentlm-client/metal", "cogentlm-engine/metal"]

@@ -4,6 +4,12 @@ Each `.py` file demonstrates one workflow with client creation, endpoint
 registration, request construction, and streaming visible in the file.
 `_support.py` only parses inputs and prints results.
 
+Endpoints use the unified descriptor API:
+
+```python
+endpoint = client.add("local", LocalModelDescriptor(model_path, runtime))
+```
+
 ## Local GGUF
 
 Build/install the Python package with xtask when needed:

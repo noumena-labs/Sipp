@@ -573,31 +573,35 @@ export default function App() {
         nextClient = new CogentClient();
 
         setStatus('Downloading model');
-        await nextClient.addLocal(url, {
-          onProgress: (progress: any) => {
-            if (progress.phase === 'download') {
-              setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
-            } else if (progress.phase === 'load') {
-              setStatus('Loading into memory');
-            }
-          },
-          observability: 'profile',
-          runtime: {
-            cache: {
-              snapshot_interval_tokens: 64,
-              max_snapshot_entries: 64,
+        await nextClient.add('local', {
+          kind: 'local',
+          source: url,
+          options: {
+            onProgress: (progress: any) => {
+              if (progress.phase === 'download') {
+                setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
+              } else if (progress.phase === 'load') {
+                setStatus('Loading into memory');
+              }
             },
-            scheduler: {
-              policy: {
-                mode: 'latency_first' as const,
+            observability: 'profile',
+            runtime: {
+              cache: {
+                snapshot_interval_tokens: 64,
+                max_snapshot_entries: 64,
               },
-            },
-            sampling: {
-              temperature: 0.5,
-              top_p: 0.9,
-              top_k: 40,
-              min_p: 0.05,
-              repeat_penalty: 1.05,
+              scheduler: {
+                policy: {
+                  mode: 'latency_first' as const,
+                },
+              },
+              sampling: {
+                temperature: 0.5,
+                top_p: 0.9,
+                top_k: 40,
+                min_p: 0.05,
+                repeat_penalty: 1.05,
+              },
             },
           },
         });

@@ -9,6 +9,7 @@ use std::{
 };
 
 use cogentlm_client::{
+    AnthropicProviderConfig as CoreAnthropicProviderConfig,
     CogentChatRequest as CoreClientChatRequest, CogentClient as CoreClient,
     CogentEmbedRequest as CoreClientEmbedRequest,
     CogentEmbeddingResponse as CoreClientEmbeddingResponse,
@@ -17,9 +18,15 @@ use cogentlm_client::{
     CogentQueryRequest as CoreClientQueryRequest, CogentTextOptions as CoreClientTextOptions,
     CogentTextResponse as CoreClientTextResponse,
     CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
-    CogentTokenBatches as CoreClientTokenBatches, EndpointRef as CoreEndpointRef,
-    LocalEmbedOptions as CoreClientLocalEmbedOptions,
-    LocalTextOptions as CoreClientLocalTextOptions, RemoteError as CoreRemoteError,
+    CogentTokenBatches as CoreClientTokenBatches, EndpointDescriptor as CoreEndpointDescriptor,
+    EndpointRef as CoreEndpointRef, LocalEmbedOptions as CoreClientLocalEmbedOptions,
+    LocalTextOptions as CoreClientLocalTextOptions,
+    OpenAiCompatibleProviderConfig as CoreOpenAiCompatibleProviderConfig,
+    OpenAiProviderConfig as CoreOpenAiProviderConfig, ProviderAuthConfig as CoreProviderAuthConfig,
+    ProviderEndpointConfig as CoreProviderEndpointConfig,
+    ProviderEndpointError as CoreProviderEndpointError,
+    ProviderEndpointErrorKind as CoreProviderEndpointErrorKind,
+    ProviderSecret as CoreProviderSecret, RemoteError as CoreRemoteError,
     RemoteErrorKind as CoreRemoteErrorKind, RemoteGatewayConfig as CoreRemoteGatewayConfig,
     RemoteSecret as CoreRemoteSecret,
 };
@@ -581,7 +588,7 @@ impl NativeRuntimeConfig {
     }
 }
 
-/// Address of a local model or remote gateway endpoint registered in a client.
+/// Address of a registered local, remote gateway, or direct provider endpoint.
 #[napi(object)]
 pub struct EndpointRef {
     pub kind: String,
@@ -597,7 +604,12 @@ impl EndpointRef {
             "remote" => Ok(CoreEndpointRef::Remote {
                 id: self.id.clone(),
             }),
-            _ => Err(invalid_arg("endpoint kind must be local or remote")),
+            "provider" => Ok(CoreEndpointRef::Provider {
+                id: self.id.clone(),
+            }),
+            _ => Err(invalid_arg(
+                "endpoint kind must be local, remote, or provider",
+            )),
         }
     }
 }
@@ -693,6 +705,8 @@ pub struct CogentQueryRequest {
     pub local: Option<LocalTextOptions>,
     #[napi(js_name = "gatewayOptions")]
     pub gateway_options: Option<serde_json::Value>,
+    #[napi(js_name = "providerOptions")]
+    pub provider_options: Option<serde_json::Value>,
     #[napi(js_name = "emitTokens")]
     pub emit_tokens: Option<bool>,
 }
@@ -705,6 +719,7 @@ impl CogentQueryRequest {
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
             gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
+            provider_options: provider_options_or_empty(self.provider_options.clone())?,
             emit_tokens: self.emit_tokens.unwrap_or(false),
         })
     }
@@ -719,6 +734,8 @@ pub struct CogentChatRequest {
     pub local: Option<LocalTextOptions>,
     #[napi(js_name = "gatewayOptions")]
     pub gateway_options: Option<serde_json::Value>,
+    #[napi(js_name = "providerOptions")]
+    pub provider_options: Option<serde_json::Value>,
     #[napi(js_name = "emitTokens")]
     pub emit_tokens: Option<bool>,
 }
@@ -731,6 +748,7 @@ impl CogentChatRequest {
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
             gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
+            provider_options: provider_options_or_empty(self.provider_options.clone())?,
             emit_tokens: self.emit_tokens.unwrap_or(false),
         })
     }
@@ -744,6 +762,8 @@ pub struct CogentEmbedRequest {
     pub local: Option<LocalEmbedOptions>,
     #[napi(js_name = "gatewayOptions")]
     pub gateway_options: Option<serde_json::Value>,
+    #[napi(js_name = "providerOptions")]
+    pub provider_options: Option<serde_json::Value>,
 }
 
 impl CogentEmbedRequest {
@@ -757,6 +777,7 @@ impl CogentEmbedRequest {
                 .map(LocalEmbedOptions::to_core)
                 .unwrap_or_default(),
             gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
+            provider_options: provider_options_or_empty(self.provider_options.clone())?,
         })
     }
 }
@@ -794,62 +815,243 @@ impl RemoteGatewayConfig {
     }
 }
 
-const REMOTE_GATEWAY_CONFIG_FIELDS: &[&str] = &["alias", "baseUrl", "token", "timeoutMs"];
+/// Static header entry for an OpenAI-compatible provider descriptor.
+#[napi(object)]
+pub struct ProviderStaticHeader {
+    pub name: String,
+    pub value: String,
+}
 
-fn remote_gateway_config_from_value(value: serde_json::Value) -> Result<RemoteGatewayConfig> {
-    let mut config = match value {
-        serde_json::Value::Object(config) => config,
-        _ => return Err(napi_error("RemoteGatewayConfig must be a JSON object")),
-    };
+/// Local, gateway, or direct provider endpoint descriptor accepted by add.
+#[napi(object)]
+pub struct EndpointDescriptor {
+    pub kind: String,
+    #[napi(js_name = "modelPath")]
+    pub model_path: Option<String>,
+    pub config: Option<NativeRuntimeConfig>,
+    pub alias: Option<String>,
+    #[napi(js_name = "baseUrl")]
+    pub base_url: Option<String>,
+    pub token: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    #[napi(js_name = "apiKey")]
+    pub api_key: Option<String>,
+    #[napi(js_name = "timeoutMs")]
+    pub timeout_ms: Option<u32>,
+    pub version: Option<String>,
+    #[napi(js_name = "authHeaderName")]
+    pub auth_header_name: Option<String>,
+    #[napi(js_name = "authHeaderValue")]
+    pub auth_header_value: Option<String>,
+    #[napi(js_name = "staticHeaders")]
+    pub static_headers: Option<Vec<ProviderStaticHeader>>,
+}
 
-    for key in config.keys() {
-        if !REMOTE_GATEWAY_CONFIG_FIELDS.contains(&key.as_str()) {
-            return Err(napi_error(format!(
-                "unsupported remote gateway config field: {key}"
-            )));
+impl EndpointDescriptor {
+    fn to_core(&self) -> Result<CoreEndpointDescriptor> {
+        match self.kind.as_str() {
+            "local" => self.local_to_core(),
+            "gateway" | "remote" => self.gateway_to_core(),
+            "provider" => self.provider_to_core(),
+            _ => Err(invalid_arg(
+                "endpoint descriptor kind must be local, gateway, remote, or provider",
+            )),
         }
     }
 
-    let timeout_ms = match config.remove("timeoutMs") {
-        Some(serde_json::Value::Number(value)) => {
-            let timeout_ms = value.as_u64().ok_or_else(|| {
-                napi_error("RemoteGatewayConfig.timeoutMs must be a positive integer")
-            })?;
-            if timeout_ms == 0 || timeout_ms > u64::from(u32::MAX) {
-                return Err(napi_error(
-                    "RemoteGatewayConfig.timeoutMs must be a positive integer",
+    fn local_to_core(&self) -> Result<CoreEndpointDescriptor> {
+        reject_endpoint_descriptor_fields(
+            &[
+                ("alias", self.alias.is_some()),
+                ("baseUrl", self.base_url.is_some()),
+                ("token", self.token.is_some()),
+                ("provider", self.provider.is_some()),
+                ("model", self.model.is_some()),
+                ("apiKey", self.api_key.is_some()),
+                ("timeoutMs", self.timeout_ms.is_some()),
+                ("version", self.version.is_some()),
+                ("authHeaderName", self.auth_header_name.is_some()),
+                ("authHeaderValue", self.auth_header_value.is_some()),
+                ("staticHeaders", self.static_headers.is_some()),
+            ],
+            "local",
+        )?;
+        let model_path = self
+            .model_path
+            .clone()
+            .ok_or_else(|| invalid_arg("local descriptor modelPath is required"))?;
+        let config = self
+            .config
+            .as_ref()
+            .map(NativeRuntimeConfig::to_core)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(CoreEndpointDescriptor::local(model_path, config))
+    }
+
+    fn gateway_to_core(&self) -> Result<CoreEndpointDescriptor> {
+        reject_endpoint_descriptor_fields(
+            &[
+                ("modelPath", self.model_path.is_some()),
+                ("config", self.config.is_some()),
+                ("provider", self.provider.is_some()),
+                ("model", self.model.is_some()),
+                ("apiKey", self.api_key.is_some()),
+                ("version", self.version.is_some()),
+                ("authHeaderName", self.auth_header_name.is_some()),
+                ("authHeaderValue", self.auth_header_value.is_some()),
+                ("staticHeaders", self.static_headers.is_some()),
+            ],
+            "gateway",
+        )?;
+        Ok(CoreEndpointDescriptor::gateway(CoreRemoteGatewayConfig {
+            alias: required_descriptor_string(self.alias.as_ref(), "gateway alias")?,
+            base_url: required_descriptor_string(self.base_url.as_ref(), "gateway baseUrl")?,
+            token: CoreRemoteSecret::new(required_descriptor_string(
+                self.token.as_ref(),
+                "gateway token",
+            )?),
+            timeout: endpoint_timeout(self.timeout_ms)?,
+        }))
+    }
+
+    fn provider_to_core(&self) -> Result<CoreEndpointDescriptor> {
+        reject_endpoint_descriptor_fields(
+            &[
+                ("modelPath", self.model_path.is_some()),
+                ("config", self.config.is_some()),
+                ("alias", self.alias.is_some()),
+                ("token", self.token.is_some()),
+            ],
+            "provider",
+        )?;
+        let model = required_descriptor_string(self.model.as_ref(), "provider model")?;
+        let provider = required_descriptor_string(self.provider.as_ref(), "provider")?;
+        let timeout = endpoint_timeout(self.timeout_ms)?;
+        let config = match provider.as_str() {
+            "openai" => {
+                reject_endpoint_descriptor_fields(
+                    &[
+                        ("version", self.version.is_some()),
+                        ("authHeaderName", self.auth_header_name.is_some()),
+                        ("authHeaderValue", self.auth_header_value.is_some()),
+                        ("staticHeaders", self.static_headers.is_some()),
+                    ],
+                    "OpenAI provider",
+                )?;
+                CoreProviderEndpointConfig::OpenAi(CoreOpenAiProviderConfig {
+                    model,
+                    api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
+                    base_url: self.base_url.clone(),
+                    timeout,
+                })
+            }
+            "anthropic" => {
+                reject_endpoint_descriptor_fields(
+                    &[
+                        ("authHeaderName", self.auth_header_name.is_some()),
+                        ("authHeaderValue", self.auth_header_value.is_some()),
+                        ("staticHeaders", self.static_headers.is_some()),
+                    ],
+                    "Anthropic provider",
+                )?;
+                CoreProviderEndpointConfig::Anthropic(CoreAnthropicProviderConfig {
+                    model,
+                    api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
+                    base_url: self.base_url.clone(),
+                    version: self.version.clone(),
+                    timeout,
+                })
+            }
+            "openai_compatible" | "openai-compatible" => {
+                reject_endpoint_descriptor_fields(
+                    &[("version", self.version.is_some())],
+                    "OpenAI-compatible provider",
+                )?;
+                CoreProviderEndpointConfig::OpenAiCompatible(CoreOpenAiCompatibleProviderConfig {
+                    model,
+                    base_url: required_descriptor_string(
+                        self.base_url.as_ref(),
+                        "provider baseUrl",
+                    )?,
+                    auth: provider_auth(self)?,
+                    static_headers: self
+                        .static_headers
+                        .as_ref()
+                        .map(|headers| {
+                            headers
+                                .iter()
+                                .map(|header| {
+                                    (
+                                        header.name.clone(),
+                                        CoreProviderSecret::new(header.value.clone()),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    timeout,
+                })
+            }
+            _ => {
+                return Err(invalid_arg(
+                    "provider must be one of: openai, anthropic, openai_compatible",
                 ));
             }
-            Some(timeout_ms as u32)
-        }
-        Some(_) => {
-            return Err(napi_error(
-                "RemoteGatewayConfig.timeoutMs must be a positive integer",
-            ));
-        }
-        None => None,
-    };
-
-    Ok(RemoteGatewayConfig {
-        alias: required_remote_config_string(&mut config, "alias")?,
-        base_url: required_remote_config_string(&mut config, "baseUrl")?,
-        token: required_remote_config_string(&mut config, "token")?,
-        timeout_ms,
-    })
+        };
+        Ok(CoreEndpointDescriptor::provider(config))
+    }
 }
 
-fn required_remote_config_string(
-    config: &mut serde_json::Map<String, serde_json::Value>,
-    field: &'static str,
-) -> Result<String> {
-    match config.remove(field) {
-        Some(serde_json::Value::String(value)) => Ok(value),
-        Some(_) => Err(napi_error(format!(
-            "RemoteGatewayConfig.{field} must be a string"
+fn reject_endpoint_descriptor_fields(
+    fields: &[(&'static str, bool)],
+    kind: &'static str,
+) -> Result<()> {
+    for (field, present) in fields {
+        if *present {
+            return Err(invalid_arg(format!(
+                "{field} is not valid for {kind} endpoint descriptors"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn required_descriptor_string(value: Option<&String>, name: &'static str) -> Result<String> {
+    value
+        .cloned()
+        .ok_or_else(|| invalid_arg(format!("{name} is required")))
+}
+
+fn endpoint_timeout(timeout_ms: Option<u32>) -> Result<Option<Duration>> {
+    match timeout_ms {
+        Some(0) => Err(invalid_arg("timeoutMs must be a positive integer")),
+        Some(timeout_ms) => Ok(Some(Duration::from_millis(u64::from(timeout_ms)))),
+        None => Ok(None),
+    }
+}
+
+fn provider_secret(value: Option<&String>, name: &'static str) -> Result<CoreProviderSecret> {
+    required_descriptor_string(value, name).map(CoreProviderSecret::new)
+}
+
+fn provider_auth(descriptor: &EndpointDescriptor) -> Result<CoreProviderAuthConfig> {
+    match (
+        descriptor.api_key.as_ref(),
+        descriptor.auth_header_name.as_ref(),
+        descriptor.auth_header_value.as_ref(),
+    ) {
+        (Some(key), None, None) => Ok(CoreProviderAuthConfig::Bearer(CoreProviderSecret::new(
+            key.clone(),
         ))),
-        None => Err(napi_error(format!(
-            "RemoteGatewayConfig.{field} is required"
-        ))),
+        (None, Some(name), Some(value)) => Ok(CoreProviderAuthConfig::Header {
+            name: name.clone(),
+            value: CoreProviderSecret::new(value.clone()),
+        }),
+        _ => Err(invalid_arg(
+            "OpenAI-compatible provider requires either apiKey or authHeaderName/authHeaderValue",
+        )),
     }
 }
 
@@ -969,6 +1171,10 @@ fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
             kind: "remote".to_string(),
             id,
         },
+        CoreEndpointRef::Provider { id } => EndpointRef {
+            kind: "provider".to_string(),
+            id,
+        },
     }
 }
 
@@ -1040,55 +1246,18 @@ impl CogentClient {
         })
     }
 
+    /// Register or replace an endpoint and return its current reference.
     #[napi(ts_return_type = "Promise<EndpointRef>")]
-    pub fn add_local(
+    pub fn add(
         &self,
         id: String,
-        model_path: String,
-        config: Option<NativeRuntimeConfig>,
-    ) -> Result<AsyncTask<ClientAddLocalTask>> {
-        let config = config
-            .as_ref()
-            .map(NativeRuntimeConfig::to_core)
-            .transpose()?
-            .unwrap_or_default();
-        Ok(AsyncTask::new(ClientAddLocalTask {
+        descriptor: EndpointDescriptor,
+    ) -> Result<AsyncTask<ClientAddTask>> {
+        Ok(AsyncTask::new(ClientAddTask {
             client: self.inner.clone(),
             id,
-            model_path,
-            config,
+            descriptor: descriptor.to_core()?,
         }))
-    }
-
-    #[napi(
-        ts_args_type = "id: string, config: RemoteGatewayConfig",
-        ts_return_type = "EndpointRef"
-    )]
-    pub fn add_remote(&self, id: String, config: serde_json::Value) -> Result<EndpointRef> {
-        let config = remote_gateway_config_from_value(config)?;
-        let endpoint = self
-            .inner
-            .lock()
-            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .add_remote(id, config.to_core())
-            .map_err(client_error_without_env)?;
-        Ok(endpoint_ref_to_node(endpoint))
-    }
-
-    #[napi(
-        js_name = "updateRemote",
-        ts_args_type = "id: string, config: RemoteGatewayConfig",
-        ts_return_type = "EndpointRef"
-    )]
-    pub fn update_remote(&self, id: String, config: serde_json::Value) -> Result<EndpointRef> {
-        let config = remote_gateway_config_from_value(config)?;
-        let endpoint = self
-            .inner
-            .lock()
-            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .update_remote(id, config.to_core())
-            .map_err(client_error_without_env)?;
-        Ok(endpoint_ref_to_node(endpoint))
     }
 
     #[napi(ts_return_type = "CogentTextRun")]
@@ -1186,14 +1355,13 @@ impl CogentEmbeddingRun {
     }
 }
 
-pub struct ClientAddLocalTask {
+pub struct ClientAddTask {
     client: SharedCogentClient,
     id: String,
-    model_path: String,
-    config: CoreNativeRuntimeConfig,
+    descriptor: CoreEndpointDescriptor,
 }
 
-impl Task for ClientAddLocalTask {
+impl Task for ClientAddTask {
     type Output = ClientTaskOutput<CoreEndpointRef>;
     type JsValue = EndpointRef;
 
@@ -1202,11 +1370,9 @@ impl Task for ClientAddLocalTask {
             .client
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
-        Ok(block_on(client.add_local(
-            self.id.clone(),
-            self.model_path.clone(),
-            self.config.clone(),
-        )))
+        Ok(block_on(
+            client.add(self.id.clone(), self.descriptor.clone()),
+        ))
     }
 
     fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -1309,9 +1475,22 @@ pub fn set_llama_log_quiet(quiet: bool) {
 fn gateway_options_or_empty(
     value: Option<serde_json::Value>,
 ) -> Result<serde_json::Map<String, serde_json::Value>> {
+    json_options_or_empty(value, "gatewayOptions")
+}
+
+fn provider_options_or_empty(
+    value: Option<serde_json::Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    json_options_or_empty(value, "providerOptions")
+}
+
+fn json_options_or_empty(
+    value: Option<serde_json::Value>,
+    name: &'static str,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
     match value {
         Some(serde_json::Value::Object(options)) => Ok(options),
-        Some(_) => Err(napi_error("gatewayOptions must be a JSON object")),
+        Some(_) => Err(napi_error(format!("{name} must be a JSON object"))),
         None => Ok(serde_json::Map::new()),
     }
 }
@@ -1506,6 +1685,23 @@ fn remote_error_status(kind: CoreRemoteErrorKind) -> Status {
     }
 }
 
+fn provider_error_message(error: &CoreProviderEndpointError) -> String {
+    format!(
+        "provider error ({} {}): {}",
+        error.kind.as_str(),
+        error.provider,
+        error.message
+    )
+}
+
+fn provider_error_status(kind: CoreProviderEndpointErrorKind) -> Status {
+    match kind {
+        CoreProviderEndpointErrorKind::InvalidRequest
+        | CoreProviderEndpointErrorKind::UnsupportedFeature => Status::InvalidArg,
+        _ => Status::GenericFailure,
+    }
+}
+
 fn remote_error_to_node(env: Env, error: CoreRemoteError) -> Error {
     match remote_error_to_node_result(env, error) {
         Ok(error) => error,
@@ -1536,12 +1732,47 @@ fn remote_error_to_node_result(env: Env, error: CoreRemoteError) -> Result<Error
     Ok(Error::from(object.to_unknown()))
 }
 
+fn provider_error_to_node(env: Env, error: CoreProviderEndpointError) -> Error {
+    match provider_error_to_node_result(env, error) {
+        Ok(error) => error,
+        Err(error) => error,
+    }
+}
+
+fn provider_error_to_node_result(env: Env, error: CoreProviderEndpointError) -> Result<Error> {
+    let status = provider_error_status(error.kind);
+    let message = provider_error_message(&error);
+    let mut object = env.create_error(Error::new(status, message))?;
+    let retry_after_ms = error
+        .retry_after
+        .map(|duration| duration.as_secs_f64() * 1000.0);
+    let raw_body = error
+        .raw
+        .map(|value| *value)
+        .unwrap_or(serde_json::Value::Null);
+
+    object.set("name", "ProviderError")?;
+    object.set("kind", error.kind.as_str())?;
+    object.set("provider", error.provider)?;
+    object.set("status", error.status)?;
+    object.set("code", error.code)?;
+    object.set("requestId", error.request_id)?;
+    object.set("retryAfterMs", retry_after_ms)?;
+    object.set("rawBody", raw_body)?;
+
+    Ok(Error::from(object.to_unknown()))
+}
+
 fn client_error_without_env(error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
         CoreClientError::Remote(error) => Error::new(
             remote_error_status(error.kind),
             remote_error_message(&error),
+        ),
+        CoreClientError::Provider(error) => Error::new(
+            provider_error_status(error.kind),
+            provider_error_message(&error),
         ),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),
         CoreClientError::UnsupportedOperation {
@@ -1558,6 +1789,7 @@ fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
         CoreClientError::Remote(error) => remote_error_to_node(env, error),
+        CoreClientError::Provider(error) => provider_error_to_node(env, error),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),
         CoreClientError::UnsupportedOperation {
             endpoint,

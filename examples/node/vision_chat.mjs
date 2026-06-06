@@ -20,7 +20,11 @@ const { CogentClient, backendObservabilityJson, setLlamaLogQuiet } = native;
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new CogentClient();
-await client.addLocal('default', model, runtimeConfig({ embeddings: false, projectorPath: projector }));
+await client.add('default', {
+  kind: 'local',
+  modelPath: model,
+  config: runtimeConfig({ embeddings: false, projectorPath: projector }),
+});
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // Multimodal chat uses the same chat API. The projector is in runtime config;

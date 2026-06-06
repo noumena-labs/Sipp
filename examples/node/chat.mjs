@@ -18,7 +18,11 @@ const { model, input } = readLocalArgs('chat', 'Explain the CogentClient API in 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new CogentClient();
-await client.addLocal('default', model, runtimeConfig({ embeddings: false }));
+await client.add('default', {
+  kind: 'local',
+  modelPath: model,
+  config: runtimeConfig({ embeddings: false }),
+});
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // `chat` sends role-tagged messages and can stream partial token batches.

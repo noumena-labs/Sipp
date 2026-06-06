@@ -4,6 +4,16 @@ Each `.mjs` file demonstrates one workflow with the `CogentClient` construction,
 endpoint registration, request construction, and streaming visible in the file.
 `_support.mjs` only parses inputs and prints results.
 
+Endpoints use the unified descriptor API:
+
+```js
+const endpoint = await client.add('local', {
+  kind: 'local',
+  modelPath,
+  config: runtime,
+});
+```
+
 ## Local GGUF
 
 Build the Node binding if needed:

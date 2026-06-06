@@ -3,6 +3,26 @@
 use super::*;
 use cogentlm_client::RemoteErrorKind as CoreRemoteErrorKind;
 
+fn add_gateway(
+    py: Python<'_>,
+    client: &PyCogentClient,
+    id: &str,
+    alias: &str,
+    base_url: &str,
+    token: &str,
+) -> PyResult<PyEndpointRef> {
+    let descriptor = Py::new(
+        py,
+        PyGatewayDescriptor::new(
+            alias.to_string(),
+            base_url.to_string(),
+            token.to_string(),
+            None,
+        )?,
+    )?;
+    client.add(py, id.to_string(), descriptor.into_py(py))
+}
+
 #[test]
 fn py_remote_gateway_config_maps_core_fields() {
     let config = PyRemoteGatewayConfig::new(
@@ -44,22 +64,18 @@ fn py_remote_gateway_config_rejects_zero_timeout() {
 }
 
 #[test]
-fn py_add_remote_rejects_empty_alias_before_gateway_transport_config() {
+fn py_add_rejects_empty_alias_before_gateway_transport_config() {
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
         let client = PyCogentClient::new().expect("client");
-        let config = Py::new(
+        let error = match add_gateway(
             py,
-            PyRemoteGatewayConfig::new(
-                "   ".to_string(),
-                "https://user:gateway-secret@gateway.example.test".to_string(),
-                "gateway-token".to_string(),
-                None,
-            )
-            .expect("config"),
-        )
-        .expect("config");
-        let error = match client.add_remote(py, "pro".to_string(), config) {
+            &client,
+            "pro",
+            "   ",
+            "https://user:gateway-secret@gateway.example.test",
+            "gateway-token",
+        ) {
             Ok(_) => panic!("blank alias must reject before transport config"),
             Err(error) => error,
         };
@@ -72,22 +88,18 @@ fn py_add_remote_rejects_empty_alias_before_gateway_transport_config() {
 }
 
 #[test]
-fn py_add_remote_rejects_id_whitespace_before_gateway_transport_config() {
+fn py_add_rejects_id_whitespace_before_gateway_transport_config() {
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
         let client = PyCogentClient::new().expect("client");
-        let config = Py::new(
+        let error = match add_gateway(
             py,
-            PyRemoteGatewayConfig::new(
-                "pro-chat".to_string(),
-                "https://user:gateway-secret@gateway.example.test".to_string(),
-                "gateway-token".to_string(),
-                None,
-            )
-            .expect("config"),
-        )
-        .expect("config");
-        let error = match client.add_remote(py, " pro ".to_string(), config) {
+            &client,
+            " pro ",
+            "pro-chat",
+            "https://user:gateway-secret@gateway.example.test",
+            "gateway-token",
+        ) {
             Ok(_) => panic!("whitespace id must reject before transport config"),
             Err(error) => error,
         };
@@ -100,22 +112,18 @@ fn py_add_remote_rejects_id_whitespace_before_gateway_transport_config() {
 }
 
 #[test]
-fn py_add_remote_rejects_alias_surrounding_whitespace() {
+fn py_add_rejects_alias_surrounding_whitespace() {
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
         let client = PyCogentClient::new().expect("client");
-        let config = Py::new(
+        let error = match add_gateway(
             py,
-            PyRemoteGatewayConfig::new(
-                " pro-chat ".to_string(),
-                "https://gateway.example.test".to_string(),
-                "gateway-token".to_string(),
-                None,
-            )
-            .expect("config"),
-        )
-        .expect("config");
-        let error = match client.add_remote(py, "pro".to_string(), config) {
+            &client,
+            "pro",
+            " pro-chat ",
+            "https://gateway.example.test",
+            "gateway-token",
+        ) {
             Ok(_) => panic!("whitespace alias must reject"),
             Err(error) => error,
         };
@@ -128,22 +136,18 @@ fn py_add_remote_rejects_alias_surrounding_whitespace() {
 }
 
 #[test]
-fn py_add_remote_rejects_gateway_base_url_userinfo() {
+fn py_add_rejects_gateway_base_url_userinfo() {
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
         let client = PyCogentClient::new().expect("client");
-        let config = Py::new(
+        let error = match add_gateway(
             py,
-            PyRemoteGatewayConfig::new(
-                "pro-chat".to_string(),
-                "https://user:gateway-secret@gateway.example.test".to_string(),
-                "gateway-token".to_string(),
-                None,
-            )
-            .expect("config"),
-        )
-        .expect("config");
-        let error = match client.add_remote(py, "pro".to_string(), config) {
+            &client,
+            "pro",
+            "pro-chat",
+            "https://user:gateway-secret@gateway.example.test",
+            "gateway-token",
+        ) {
             Ok(_) => panic!("gateway URL userinfo must fail"),
             Err(error) => error,
         };
@@ -185,7 +189,7 @@ fn py_gateway_options_reject_non_string_keys_with_gateway_error() {
             .expect_err("non-string keys must fail");
         let message = error.value_bound(py).to_string();
 
-        assert_eq!(message, "gateway_options object keys must be strings");
+        assert_eq!(message, "JSON option object keys must be strings");
         assert!(!message.contains("provider-secret"));
     });
 }
@@ -202,10 +206,7 @@ fn py_gateway_options_reject_recursive_containers() {
             .expect_err("recursive containers must fail");
         let message = error.value_bound(py).to_string();
 
-        assert_eq!(
-            message,
-            "gateway_options must contain JSON-compatible values"
-        );
+        assert_eq!(message, "JSON options must contain JSON-compatible values");
     });
 }
 
@@ -214,20 +215,15 @@ fn py_remote_request_rejects_local_only_gateway_options() {
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
         let client = PyCogentClient::new().expect("client");
-        let config = Py::new(
+        let endpoint = add_gateway(
             py,
-            PyRemoteGatewayConfig::new(
-                "pro-chat".to_string(),
-                "https://gateway.example.test".to_string(),
-                "gateway-token".to_string(),
-                None,
-            )
-            .expect("config"),
+            &client,
+            "pro",
+            "pro-chat",
+            "https://gateway.example.test",
+            "gateway-token",
         )
-        .expect("config");
-        let endpoint = client
-            .add_remote(py, "pro".to_string(), config)
-            .expect("add remote");
+        .expect("add remote");
         let endpoint = Py::new(py, endpoint).expect("endpoint");
         let gateway_options = PyDict::new_bound(py);
         gateway_options
@@ -242,6 +238,7 @@ fn py_remote_request_rejects_local_only_gateway_options() {
                 None,
                 None,
                 Some(gateway_options.into_py(py)),
+                None,
                 false,
             )
             .expect("query run");

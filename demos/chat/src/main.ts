@@ -104,13 +104,21 @@ async function initClient() {
 
     if (projectorSource != null) {
       log('Loading model pair...', 'dim');
-      await client.addLocal({
-        model: modelSource,
-        projector: projectorSource
-      }, loadOptions);
+      await client.add('local', {
+        kind: 'local',
+        source: {
+          model: modelSource,
+          projector: projectorSource
+        },
+        options: loadOptions
+      });
     } else {
       log('Loading model...', 'dim');
-      await client.addLocal(modelSource, loadOptions);
+      await client.add('local', {
+        kind: 'local',
+        source: modelSource,
+        options: loadOptions
+      });
     }
 
     log('Assets loaded successfully!', 'system');

@@ -4,11 +4,12 @@ from cogentlm import (
     CacheRuntimeConfig,
     CogentClient,
     ContextRuntimeConfig,
+    GatewayDescriptor,
     LocalEmbedOptions,
+    LocalModelDescriptor,
     ModelPlacementConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
-    RemoteGatewayConfig,
     ResidencyRuntimeConfig,
     SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
@@ -58,13 +59,16 @@ def main() -> None:
     set_llama_log_quiet(True)
 
     client = CogentClient()
-    local_endpoint = client.add_local("local", model, runtime_config(embeddings=True))
-    gateway = RemoteGatewayConfig(
+    local_endpoint = client.add(
+        "local",
+        LocalModelDescriptor(model, runtime_config(embeddings=True)),
+    )
+    gateway = GatewayDescriptor(
         alias,
         required_env("COGENTLM_GATEWAY_URL"),
         required_env("COGENTLM_GATEWAY_TOKEN"),
     )
-    gateway_endpoint = client.add_remote("gateway", gateway)
+    gateway_endpoint = client.add("gateway", gateway)
 
     local = client.embed(
         input_text,

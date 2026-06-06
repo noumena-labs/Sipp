@@ -40,16 +40,19 @@ pub(crate) fn common_text_options(options: &CogentTextOptions) -> Result<(), Cog
 
 pub(crate) fn local_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
-    reject_gateway_options(&request.gateway_options)
+    reject_gateway_options(&request.gateway_options, "local endpoints")?;
+    reject_provider_options(&request.provider_options, "local endpoints")
 }
 
 pub(crate) fn local_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
-    reject_gateway_options(&request.gateway_options)
+    reject_gateway_options(&request.gateway_options, "local endpoints")?;
+    reject_provider_options(&request.provider_options, "local endpoints")
 }
 
 pub(crate) fn local_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
-    reject_gateway_options(&request.gateway_options)
+    reject_gateway_options(&request.gateway_options, "local endpoints")?;
+    reject_provider_options(&request.provider_options, "local endpoints")
 }
 
 #[cfg(feature = "remote")]
@@ -60,6 +63,7 @@ pub(crate) fn remote_query(request: &CogentQueryRequest) -> Result<(), CogentErr
             "local text options are not valid for remote endpoints".to_string(),
         ));
     }
+    reject_provider_options(&request.provider_options, "remote endpoints")?;
     reject_local_only_gateway_options(&request.gateway_options)?;
     Ok(())
 }
@@ -72,6 +76,7 @@ pub(crate) fn remote_chat(request: &CogentChatRequest) -> Result<(), CogentError
             "local text options are not valid for remote endpoints".to_string(),
         ));
     }
+    reject_provider_options(&request.provider_options, "remote endpoints")?;
     reject_local_only_gateway_options(&request.gateway_options)?;
     Ok(())
 }
@@ -83,19 +88,66 @@ pub(crate) fn remote_embed(request: &CogentEmbedRequest) -> Result<(), CogentErr
             "local embed options are not valid for remote endpoints".to_string(),
         ));
     }
+    reject_provider_options(&request.provider_options, "remote endpoints")?;
     reject_local_only_gateway_options(&request.gateway_options)?;
     Ok(())
 }
 
+#[cfg(feature = "providers")]
+pub(crate) fn provider_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
+    common_text_options(&request.options)?;
+    if request.local.has_fields() {
+        return Err(CogentError::InvalidRequest(
+            "local text options are not valid for provider endpoints".to_string(),
+        ));
+    }
+    reject_gateway_options(&request.gateway_options, "provider endpoints")
+}
+
+#[cfg(feature = "providers")]
+pub(crate) fn provider_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
+    common_text_options(&request.options)?;
+    if request.local.has_fields() {
+        return Err(CogentError::InvalidRequest(
+            "local text options are not valid for provider endpoints".to_string(),
+        ));
+    }
+    reject_gateway_options(&request.gateway_options, "provider endpoints")
+}
+
+#[cfg(feature = "providers")]
+pub(crate) fn provider_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
+    if request.local.has_fields() {
+        return Err(CogentError::InvalidRequest(
+            "local embed options are not valid for provider endpoints".to_string(),
+        ));
+    }
+    reject_gateway_options(&request.gateway_options, "provider endpoints")
+}
+
 fn reject_gateway_options(
     gateway_options: &serde_json::Map<String, serde_json::Value>,
+    endpoint_label: &'static str,
 ) -> Result<(), CogentError> {
     if gateway_options.is_empty() {
         Ok(())
     } else {
-        Err(CogentError::InvalidRequest(
-            "gateway_options are not valid for local endpoints".to_string(),
-        ))
+        Err(CogentError::InvalidRequest(format!(
+            "gateway_options are not valid for {endpoint_label}"
+        )))
+    }
+}
+
+fn reject_provider_options(
+    provider_options: &serde_json::Map<String, serde_json::Value>,
+    endpoint_label: &'static str,
+) -> Result<(), CogentError> {
+    if provider_options.is_empty() {
+        Ok(())
+    } else {
+        Err(CogentError::InvalidRequest(format!(
+            "provider_options are not valid for {endpoint_label}"
+        )))
     }
 }
 

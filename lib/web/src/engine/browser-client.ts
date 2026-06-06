@@ -9,17 +9,16 @@ import {
   type ChatInput,
   type ChatOptions,
   type EmbedOptions,
+  type EndpointDescriptor,
   type EndpointRef,
   type EngineEvent,
   type EngineObservability,
   type EngineState,
   type ModelLifecycleService,
   type ModelInfo,
-  type ModelLoadOptions,
-  type ModelSource,
   type QueryInput,
   type QueryOptions,
-  type RemoteGatewayConfig,
+  type ProviderEndpointDescriptor,
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
@@ -30,6 +29,12 @@ import {
   runRemoteEmbedding,
   runRemoteQuery,
 } from './remote-gateway.js';
+import {
+  ProviderEndpointRegistry,
+  runProviderChat,
+  runProviderEmbedding,
+  runProviderQuery,
+} from './provider-endpoint.js';
 
 export interface EngineModuleOptions {
   locateFile?: (path: string, prefix?: string) => string;
@@ -96,6 +101,8 @@ export class CogentClient implements CogentClientShape {
   public readonly observability: EngineObservability;
   #service: ModelLifecycleService;
   #remotes = new RemoteGatewayRegistry();
+  #providers = new ProviderEndpointRegistry();
+  #localEndpoint: EndpointRef | null = null;
   #closed = false;
 
   public constructor(options: CogentClientOptions = {}) {
@@ -133,11 +140,36 @@ export class CogentClient implements CogentClientShape {
   }
 
   /**
-   * Load a local model and make it the current local endpoint.
+   * Registers or replaces an endpoint after its descriptor is validated.
+   *
+   * Replacing an endpoint with a different kind invalidates prior references
+   * for the same id.
    */
-  public addLocal(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo> {
+  public async add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef> {
     this.assertOpen();
-    return this.#service.load(source, options);
+    const normalizedId = normalizeEndpointId(id, 'endpoint id');
+    assertEndpointDescriptor(descriptor);
+    if (descriptor.kind === 'local') {
+      await this.#service.load(descriptor.source, descriptor.options);
+      this.#remotes.remove(normalizedId);
+      this.#providers.remove(normalizedId);
+      const endpoint = { kind: 'local', id: normalizedId } as const;
+      this.#localEndpoint = endpoint;
+      return endpoint;
+    }
+    if (descriptor.kind === 'gateway' || descriptor.kind === 'remote') {
+      const remote = this.#remotes.prepare(normalizedId, descriptor);
+      await this.removeLocalEndpoint(normalizedId);
+      this.#providers.remove(normalizedId);
+      return this.#remotes.commit(remote);
+    }
+    const provider = this.#providers.prepare(
+      normalizedId,
+      descriptor as ProviderEndpointDescriptor
+    );
+    await this.removeLocalEndpoint(normalizedId);
+    this.#remotes.remove(normalizedId);
+    return this.#providers.commit(provider);
   }
 
   /**
@@ -164,16 +196,6 @@ export class CogentClient implements CogentClientShape {
     await this.#service.remove(id);
   }
 
-  public addRemote(id: string, config: RemoteGatewayConfig): EndpointRef {
-    this.assertOpen();
-    return this.#remotes.add(id, config);
-  }
-
-  public updateRemote(id: string, config: RemoteGatewayConfig): EndpointRef {
-    this.assertOpen();
-    return this.#remotes.update(id, config);
-  }
-
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
     this.assertOpen();
     const remote = this.#remotes.get(options.endpoint);
@@ -182,6 +204,13 @@ export class CogentClient implements CogentClientShape {
         runRemoteQuery(remote, input, options, tokenBatchSink, signal)
       );
     }
+    const provider = this.#providers.get(options.endpoint);
+    if (provider != null) {
+      return createBrowserTextRun(options, (tokenBatchSink, signal) =>
+        runProviderQuery(provider, input, options, tokenBatchSink, signal)
+      );
+    }
+    this.ensureLocalEndpoint(options.endpoint);
     const localOptions = localQueryOptions(options);
     return createBrowserTextRun(localOptions, (tokenBatchSink, signal) =>
       this.#service.runQuery(input, { ...localOptions, signal, tokenBatchSink })
@@ -196,6 +225,13 @@ export class CogentClient implements CogentClientShape {
         runRemoteChat(remote, input, options, tokenBatchSink, signal)
       );
     }
+    const provider = this.#providers.get(options.endpoint);
+    if (provider != null) {
+      return createBrowserTextRun(options, (tokenBatchSink, signal) =>
+        runProviderChat(provider, input, options, tokenBatchSink, signal)
+      );
+    }
+    this.ensureLocalEndpoint(options.endpoint);
     const localOptions = localQueryOptions(options);
     return createBrowserTextRun(localOptions, (tokenBatchSink, signal) =>
       this.#service.runChat(input, { ...localOptions, signal, tokenBatchSink })
@@ -210,6 +246,13 @@ export class CogentClient implements CogentClientShape {
         runRemoteEmbedding(remote, input, options, signal)
       );
     }
+    const provider = this.#providers.get(options.endpoint);
+    if (provider != null) {
+      return createBrowserEmbeddingRun(options.signal, (signal) =>
+        runProviderEmbedding(provider, input, options, signal)
+      );
+    }
+    this.ensureLocalEndpoint(options.endpoint);
     const localOptions = localEmbedOptions(options);
     return createBrowserEmbeddingRun(localOptions.signal, (signal) =>
       this.#service.runEmbedding(input, { ...localOptions, signal })
@@ -237,14 +280,81 @@ export class CogentClient implements CogentClientShape {
       throw new QueryError('ENGINE_CLOSED', 'CogentClient is closed.');
     }
   }
+
+  private async removeLocalEndpoint(id: string): Promise<void> {
+    if (this.#localEndpoint?.id === id) {
+      await this.#service.unload();
+      this.#localEndpoint = null;
+    }
+  }
+
+  private ensureLocalEndpoint(endpoint: EndpointRef | undefined): void {
+    if (endpoint == null) {
+      return;
+    }
+    if (endpoint.kind !== 'local') {
+      throw new QueryError('MODEL_NOT_FOUND', `${endpoint.kind} endpoint not found: ${endpoint.id}`);
+    }
+    if (this.#localEndpoint == null || this.#localEndpoint.id !== endpoint.id) {
+      throw new QueryError('MODEL_NOT_FOUND', `local endpoint not found: ${endpoint.id}`);
+    }
+  }
 }
 
 function localQueryOptions(options: QueryOptions): QueryOptions {
-  const { endpoint: _endpoint, gatewayOptions: _gatewayOptions, ...localOptions } = options;
+  rejectLocalGatewayProviderOptions(options.gatewayOptions, options.providerOptions);
+  const {
+    endpoint: _endpoint,
+    gatewayOptions: _gatewayOptions,
+    providerOptions: _providerOptions,
+    ...localOptions
+  } = options;
   return localOptions;
 }
 
 function localEmbedOptions(options: EmbedOptions): EmbedOptions {
-  const { endpoint: _endpoint, gatewayOptions: _gatewayOptions, ...localOptions } = options;
+  rejectLocalGatewayProviderOptions(options.gatewayOptions, options.providerOptions);
+  const {
+    endpoint: _endpoint,
+    gatewayOptions: _gatewayOptions,
+    providerOptions: _providerOptions,
+    ...localOptions
+  } = options;
   return localOptions;
+}
+
+function rejectLocalGatewayProviderOptions(gatewayOptions: unknown, providerOptions: unknown): void {
+  if (gatewayOptions != null) {
+    throw new QueryError('UNSUPPORTED_OPERATION', 'gatewayOptions are not valid for local endpoints');
+  }
+  if (providerOptions != null) {
+    throw new QueryError('UNSUPPORTED_OPERATION', 'providerOptions are not valid for local endpoints');
+  }
+}
+
+function normalizeEndpointId(value: unknown, name: string): string {
+  if (typeof value !== 'string') {
+    throw new QueryError('QUERY_FAILED', `${name} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new QueryError('QUERY_FAILED', `${name} must not be empty`);
+  }
+  if (trimmed !== value) {
+    throw new QueryError('QUERY_FAILED', `${name} must not contain surrounding whitespace`);
+  }
+  return value;
+}
+
+function assertEndpointDescriptor(value: unknown): asserts value is EndpointDescriptor {
+  if (typeof value !== 'object' || value == null || Array.isArray(value)) {
+    throw new QueryError('QUERY_FAILED', 'endpoint descriptor must be an object');
+  }
+  const kind = (value as { readonly kind?: unknown }).kind;
+  if (kind !== 'local' && kind !== 'gateway' && kind !== 'remote' && kind !== 'provider') {
+    throw new QueryError(
+      'QUERY_FAILED',
+      'endpoint descriptor kind must be local, gateway, remote, or provider'
+    );
+  }
 }

@@ -26,9 +26,30 @@ pub enum EndpointRef {
         /// Client-scoped endpoint id.
         id: String,
     },
+    /// Direct provider endpoint registered in the client.
+    Provider {
+        /// Client-scoped endpoint id.
+        id: String,
+    },
 }
 
 impl EndpointRef {
+    /// Return the stable client-scoped endpoint id.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Local { id } | Self::Remote { id } | Self::Provider { id } => id,
+        }
+    }
+
+    /// Return the stable endpoint kind label.
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::Remote { .. } => "remote",
+            Self::Provider { .. } => "provider",
+        }
+    }
+
     pub(crate) fn is_local(&self) -> bool {
         matches!(self, Self::Local { .. })
     }
@@ -54,7 +75,7 @@ impl EndpointCapabilities {
         }
     }
 
-    #[cfg(feature = "remote")]
+    #[cfg(any(feature = "remote", feature = "providers"))]
     pub(crate) const fn unknown() -> Self {
         Self {
             query: CapabilitySupport::Unknown,

@@ -334,6 +334,7 @@ dependencies = [
  "async-trait",
  "cogentlm-core",
  "cogentlm-engine",
+ "cogentlm-gateway-providers",
  "cogentlm-remote",
  "futures",
  "futures-channel",

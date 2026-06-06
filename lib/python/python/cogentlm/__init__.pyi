@@ -188,9 +188,10 @@ class TokenUsage(TypedDict):
     total_tokens: Optional[int]
 
 GatewayOptions = dict[str, Any]
+ProviderOptions = dict[str, Any]
 
 class EndpointRefDict(TypedDict):
-    kind: Literal["local", "remote"]
+    kind: Literal["local", "remote", "provider"]
     id: str
 
 class CogentTextResponse(TypedDict):
@@ -218,6 +219,15 @@ class RemoteError(Exception):
     retry_after_ms: Optional[float]
     raw_body: Any
 
+class ProviderError(Exception):
+    kind: str
+    provider: str
+    status: Optional[int]
+    code: Optional[str]
+    request_id: Optional[str]
+    retry_after_ms: Optional[float]
+    raw_body: Any
+
 class RemoteGatewayConfig:
     def __init__(
         self,
@@ -232,8 +242,49 @@ class EndpointRef:
     def local(id: str) -> EndpointRef: ...
     @staticmethod
     def remote(id: str) -> EndpointRef: ...
+    @staticmethod
+    def provider(id: str) -> EndpointRef: ...
     @property
-    def kind(self) -> Literal["local", "remote"]: ...
+    def kind(self) -> Literal["local", "remote", "provider"]: ...
+
+class LocalModelDescriptor:
+    def __init__(
+        self,
+        model_path: PathLike,
+        config: Optional[NativeRuntimeConfig] = None,
+    ) -> None: ...
+
+class GatewayDescriptor:
+    def __init__(
+        self,
+        alias: str,
+        base_url: str,
+        token: str,
+        *,
+        timeout_ms: Optional[int] = None,
+    ) -> None: ...
+
+class ProviderDescriptor:
+    def __init__(
+        self,
+        provider: Literal["openai", "anthropic", "openai_compatible", "openai-compatible"],
+        model: str,
+        *,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+        version: Optional[str] = None,
+        auth_header_name: Optional[str] = None,
+        auth_header_value: Optional[str] = None,
+        static_headers: Optional[Sequence[tuple[str, str]]] = None,
+    ) -> None: ...
+
+EndpointDescriptor = Union[
+    LocalModelDescriptor,
+    GatewayDescriptor,
+    RemoteGatewayConfig,
+    ProviderDescriptor,
+]
 
 class CogentTextOptions:
     def __init__(
@@ -275,21 +326,10 @@ class CogentEmbeddingRun:
 
 class CogentClient:
     def __init__(self) -> None: ...
-    def add_local(
+    def add(
         self,
         id: str,
-        model_path: PathLike,
-        config: Optional[NativeRuntimeConfig] = None,
-    ) -> EndpointRef: ...
-    def add_remote(
-        self,
-        id: str,
-        config: RemoteGatewayConfig,
-    ) -> EndpointRef: ...
-    def update_remote(
-        self,
-        id: str,
-        config: RemoteGatewayConfig,
+        descriptor: EndpointDescriptor,
     ) -> EndpointRef: ...
     def query(
         self,
@@ -299,6 +339,7 @@ class CogentClient:
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
         gateway_options: Optional[GatewayOptions] = None,
+        provider_options: Optional[ProviderOptions] = None,
         emit_tokens: bool = False,
     ) -> CogentTextRun: ...
     def chat(
@@ -309,6 +350,7 @@ class CogentClient:
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
         gateway_options: Optional[GatewayOptions] = None,
+        provider_options: Optional[ProviderOptions] = None,
         emit_tokens: bool = False,
     ) -> CogentTextRun: ...
     def embed(
@@ -318,6 +360,7 @@ class CogentClient:
         endpoint: Optional[EndpointRef] = None,
         local: Optional[LocalEmbedOptions] = None,
         gateway_options: Optional[GatewayOptions] = None,
+        provider_options: Optional[ProviderOptions] = None,
     ) -> CogentEmbeddingRun: ...
 
 def backend_observability_json(include_details: bool = True) -> str: ...

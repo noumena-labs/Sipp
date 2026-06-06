@@ -1,21 +1,24 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use cogentlm_core::CapabilitySupport;
-use cogentlm_engine::engine::{CogentEngine, NativeRuntimeConfig};
+use cogentlm_engine::engine::CogentEngine;
 
 use crate::dispatch::InferenceEndpoint;
 use crate::local_endpoint::LocalEndpoint;
+#[cfg(feature = "providers")]
+use crate::provider_endpoint::ProviderEndpoint;
 #[cfg(feature = "remote")]
 use crate::remote_endpoint::RemoteEndpoint;
-#[cfg(feature = "remote")]
+#[cfg(any(feature = "remote", feature = "providers"))]
 use crate::remote_executor::RemoteExecutor;
+#[cfg(feature = "providers")]
+use crate::ProviderEndpointConfig;
 #[cfg(feature = "remote")]
 use crate::RemoteGatewayConfig;
 use crate::{
     CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError, CogentQueryRequest,
-    CogentResult, CogentTextRun, EndpointCapabilities, EndpointRef,
+    CogentResult, CogentTextRun, EndpointCapabilities, EndpointDescriptor, EndpointRef,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -30,10 +33,10 @@ mod client_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-/// Public inference facade over registered local and remote endpoints.
+/// Public inference facade over registered local, gateway, and provider endpoints.
 pub struct CogentClient {
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
-    #[cfg(feature = "remote")]
+    #[cfg(any(feature = "remote", feature = "providers"))]
     remote_executor: Option<RemoteExecutor>,
 }
 
@@ -42,8 +45,35 @@ impl CogentClient {
     pub fn new() -> Self {
         Self {
             endpoints: HashMap::new(),
-            #[cfg(feature = "remote")]
+            #[cfg(any(feature = "remote", feature = "providers"))]
             remote_executor: None,
+        }
+    }
+
+    /// Register or replace a local, gateway, or direct provider endpoint.
+    ///
+    /// Reusing an id replaces the existing endpoint after the new descriptor
+    /// has been validated and constructed. Changing endpoint kind invalidates
+    /// previously returned references for that id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the id or descriptor is invalid, endpoint
+    /// construction fails, or the requested endpoint feature is unavailable.
+    pub async fn add(
+        &mut self,
+        id: impl Into<String>,
+        descriptor: EndpointDescriptor,
+    ) -> CogentResult<EndpointRef> {
+        match descriptor {
+            EndpointDescriptor::LocalModel(descriptor) => {
+                let engine = CogentEngine::load(descriptor.model_path, descriptor.config).await?;
+                self.register_local(id, engine).await
+            }
+            #[cfg(feature = "remote")]
+            EndpointDescriptor::Gateway(config) => self.register_remote(id, config),
+            #[cfg(feature = "providers")]
+            EndpointDescriptor::Provider(config) => self.register_provider(id, config),
         }
     }
 
@@ -54,44 +84,30 @@ impl CogentClient {
     ) -> CogentResult<EndpointRef> {
         let id = normalize_id(id, "local id")?;
         let endpoint = EndpointRef::Local { id };
-        self.reject_duplicate(&endpoint)?;
 
         let state = engine.state().await?;
         let model = state
             .model
             .ok_or_else(|| CogentError::Internal("loaded engine has no model state".to_string()))?;
         let capabilities = EndpointCapabilities::from_local(&model.capabilities);
-        self.endpoints.insert(
+        self.replace_endpoint(
             endpoint.clone(),
             Arc::new(LocalEndpoint::new(endpoint.clone(), capabilities, engine)),
         );
         Ok(endpoint)
     }
 
-    /// Load a local model and register it under the provided endpoint id.
-    pub async fn add_local(
-        &mut self,
-        id: impl Into<String>,
-        model_path: impl Into<PathBuf>,
-        config: NativeRuntimeConfig,
-    ) -> CogentResult<EndpointRef> {
-        let engine = CogentEngine::load(model_path.into(), config).await?;
-        self.register_local(id, engine).await
-    }
-
-    /// Register a remote model endpoint.
     #[cfg(feature = "remote")]
-    pub fn add_remote(
+    fn register_remote(
         &mut self,
         id: impl Into<String>,
         config: RemoteGatewayConfig,
     ) -> CogentResult<EndpointRef> {
         let id = normalize_id(id, "remote id")?;
         let endpoint = EndpointRef::Remote { id };
-        self.reject_duplicate(&endpoint)?;
         let (model, client) = config.build()?;
         let executor = self.remote_executor()?;
-        self.endpoints.insert(
+        self.replace_endpoint(
             endpoint.clone(),
             Arc::new(RemoteEndpoint::new(
                 endpoint.clone(),
@@ -104,31 +120,38 @@ impl CogentClient {
         Ok(endpoint)
     }
 
-    /// Replace the gateway config for an existing remote endpoint.
-    #[cfg(feature = "remote")]
-    pub fn update_remote(
+    #[cfg(feature = "providers")]
+    fn register_provider(
         &mut self,
         id: impl Into<String>,
-        config: RemoteGatewayConfig,
+        config: ProviderEndpointConfig,
     ) -> CogentResult<EndpointRef> {
-        let id = normalize_id(id, "remote id")?;
-        let endpoint = EndpointRef::Remote { id };
-        if !self.endpoints.contains_key(&endpoint) {
-            return Err(CogentError::EndpointNotFound(endpoint));
-        }
-        let (model, client) = config.build()?;
+        let id = normalize_id(id, "provider id")?;
+        let endpoint = EndpointRef::Provider { id };
+        let (model, transport, secrets) = config.build()?;
         let executor = self.remote_executor()?;
-        self.endpoints.insert(
+        self.replace_endpoint(
             endpoint.clone(),
-            Arc::new(RemoteEndpoint::new(
+            Arc::new(ProviderEndpoint::new(
                 endpoint.clone(),
                 model,
                 EndpointCapabilities::unknown(),
-                client,
+                transport,
                 executor,
+                secrets,
             )),
         );
         Ok(endpoint)
+    }
+
+    fn replace_endpoint(
+        &mut self,
+        endpoint: EndpointRef,
+        implementation: Arc<dyn InferenceEndpoint>,
+    ) {
+        let id = endpoint.id();
+        self.endpoints.retain(|registered, _| registered.id() != id);
+        self.endpoints.insert(endpoint, implementation);
     }
 
     /// Submit a raw-prompt text generation request.
@@ -195,17 +218,7 @@ impl CogentClient {
         Ok(endpoint)
     }
 
-    fn reject_duplicate(&self, endpoint: &EndpointRef) -> CogentResult<()> {
-        if self.endpoints.contains_key(endpoint) {
-            Err(CogentError::InvalidRequest(
-                "endpoint already registered".to_string(),
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    #[cfg(feature = "remote")]
+    #[cfg(any(feature = "remote", feature = "providers"))]
     fn remote_executor(&mut self) -> CogentResult<RemoteExecutor> {
         if let Some(executor) = &self.remote_executor {
             return Ok(executor.clone());
