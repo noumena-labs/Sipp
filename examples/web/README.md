@@ -17,7 +17,7 @@ const endpoint = await client.add('local', {
 
 Start the app:
 
-```powershell
+```bash
 cargo xtask run examples serve browser
 ```
 
@@ -33,8 +33,8 @@ Open:
 
 For gateway pages, start a gateway separately:
 
-```powershell
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 

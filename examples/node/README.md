@@ -18,13 +18,13 @@ const endpoint = await client.add('local', {
 
 Build the Node binding if needed:
 
-```powershell
+```bash
 cargo xtask build node --backend cpu
 ```
 
 Run:
 
-```powershell
+```bash
 node examples/node/query.mjs <model.gguf> [input]
 node examples/node/chat.mjs <model.gguf> [input]
 node examples/node/embed.mjs <model.gguf> [input]
@@ -37,14 +37,14 @@ Set `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a built backend.
 
 Start a gateway first, then set:
 
-```powershell
-$env:COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 ```
 
 Run:
 
-```powershell
+```bash
 node examples/node/gateway_query.mjs <model.gguf> local [input]
 node examples/node/gateway_chat.mjs <model.gguf> local [input]
 node examples/node/gateway_embed.mjs <model.gguf> local-embed [input]

@@ -14,13 +14,13 @@ endpoint = client.add("local", LocalModelDescriptor(model_path, runtime))
 
 Build/install the Python package with xtask when needed:
 
-```powershell
+```bash
 cargo xtask build python --backend cpu
 ```
 
 Run:
 
-```powershell
+```bash
 python examples/python/query.py <model.gguf> [input]
 python examples/python/chat.py <model.gguf> [input]
 python examples/python/embed.py <model.gguf> [input]
@@ -33,14 +33,14 @@ Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a built backend.
 
 Start a gateway first, then set:
 
-```powershell
-$env:COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 ```
 
 Run:
 
-```powershell
+```bash
 python examples/python/gateway_query.py <model.gguf> local [input]
 python examples/python/gateway_chat.py <model.gguf> local [input]
 python examples/python/gateway_embed.py <model.gguf> local-embed [input]

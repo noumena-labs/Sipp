@@ -24,25 +24,25 @@ a client example that calls both a local GGUF endpoint and the gateway alias.
 For local GGUF inference, set a gateway token and let xtask generate a temporary
 config with your model path:
 
-```powershell
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
 For an OpenAI-backed gateway, keep `OPENAI_API_KEY` in the gateway process:
 
-```powershell
-$env:OPENAI_API_KEY="<openai-api-key>"
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export OPENAI_API_KEY="<openai-api-key>"
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 ```
 
 The xtask serve commands use `COGENTLM_GATEWAY_TOKEN` for both client auth and
 dashboard admin auth. When running a copied config directly, set both secrets:
 
-```powershell
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
-$env:COGENTLM_GATEWAY_ADMIN_TOKEN="admin-token"
+```bash
+export COGENTLM_GATEWAY_TOKEN="dev-token"
+export COGENTLM_GATEWAY_ADMIN_TOKEN="admin-token"
 cargo run -p cogentlm-gateway-example -- --config <gateway.toml>
 ```
 
@@ -58,19 +58,19 @@ commands. Enter the admin token to load protected status and history data.
 
 Manual probes:
 
-```powershell
-curl.exe http://127.0.0.1:8787/healthz
-curl.exe http://127.0.0.1:8787/readyz
-curl.exe -H "Authorization: Bearer admin-token" http://127.0.0.1:8787/admin/api/status
+```bash
+curl http://127.0.0.1:8787/healthz
+curl http://127.0.0.1:8787/readyz
+curl -H "Authorization: Bearer admin-token" http://127.0.0.1:8787/admin/api/status
 ```
 
 Manual query:
 
-```powershell
-curl.exe -X POST http://127.0.0.1:8787/v1/query `
-  -H "Authorization: Bearer dev-token" `
-  -H "Content-Type: application/json" `
-  -d "{\"model\":\"local\",\"prompt\":\"Write one sentence about CogentLM.\"}"
+```bash
+curl -X POST http://127.0.0.1:8787/v1/query \
+  -H "Authorization: Bearer dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"local","prompt":"Write one sentence about CogentLM."}'
 ```
 
 ## Embed The Gateway In A Server
@@ -79,9 +79,9 @@ curl.exe -X POST http://127.0.0.1:8787/v1/query `
 servers can build a `GatewayHttpService` from `apps/gateway-server`, merge the
 router, and keep their own middleware, deployment, TLS, and application routes.
 
-```powershell
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
-$env:COGENTLM_GATEWAY_ADMIN_TOKEN="admin-token"
+```bash
+export COGENTLM_GATEWAY_TOKEN="dev-token"
+export COGENTLM_GATEWAY_ADMIN_TOKEN="admin-token"
 cargo run -p cogentlm-gateway-example -- --config <gateway.toml>
 ```
 
@@ -92,9 +92,9 @@ and dashboard from the same listener.
 
 In a second terminal:
 
-```powershell
-$env:COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo run -p cogentlm-rust-examples --features remote --bin gateway_query -- <model.gguf> local
 node examples/node/gateway_chat.mjs <model.gguf> local
 python examples/python/gateway_embed.py <model.gguf> local-embed

@@ -23,6 +23,5 @@ Python, and Rust applications.
 * `examples/node`, `examples/python`, `examples/rust`, `examples/web`: runnable examples; serve browser examples with `cargo xtask run examples serve browser`; see `examples/README.md`.
 
 Use `cargo xtask` commands from this repository to build native artifacts and
-language packages. After running `source setup.sh` on Unix-like shells or
-`. .\setup.ps1` in PowerShell, use `clm` as the short repo-local alias for
-`cargo xtask`.
+language packages. After running `source setup.sh`, use `clm` as the short
+repo-local alias for `cargo xtask`.

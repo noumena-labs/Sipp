@@ -13,7 +13,7 @@ let endpoint = client
 
 ## Local GGUF
 
-```powershell
+```bash
 cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> [input]
 cargo run -p cogentlm-rust-examples --bin chat -- <model.gguf> [input]
 cargo run -p cogentlm-rust-examples --bin embed -- <model.gguf> [input]
@@ -24,14 +24,14 @@ cargo run -p cogentlm-rust-examples --bin vision_chat -- <model.gguf> <projector
 
 Start a gateway first, then set:
 
-```powershell
-$env:COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 ```
 
 Run:
 
-```powershell
+```bash
 cargo run -p cogentlm-rust-examples --features remote --bin gateway_query -- <model.gguf> local [input]
 cargo run -p cogentlm-rust-examples --features remote --bin gateway_chat -- <model.gguf> local [input]
 cargo run -p cogentlm-rust-examples --features remote --bin gateway_embed -- <model.gguf> local-embed [input]
@@ -43,8 +43,8 @@ cargo run -p cogentlm-rust-examples --features remote --bin gateway_embed -- <mo
 
 These examples require `OPENAI_API_KEY`:
 
-```powershell
-$env:OPENAI_API_KEY="<openai-api-key>"
+```bash
+export OPENAI_API_KEY="<openai-api-key>"
 cargo run -p cogentlm-rust-examples --bin openai_provider_chat -- [input]
 ```
 

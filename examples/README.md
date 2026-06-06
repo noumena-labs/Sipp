@@ -23,7 +23,7 @@ replaces its endpoint configuration.
 
 Local examples take a GGUF model path followed by optional input:
 
-```powershell
+```bash
 cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> [input]
 node examples/node/query.mjs <model.gguf> [input]
 python examples/python/query.py <model.gguf> [input]
@@ -41,8 +41,8 @@ Gateway examples are intentionally two-process:
 
 Local GGUF gateway:
 
-```powershell
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
@@ -52,9 +52,9 @@ uses `dev-token` as the dashboard admin token.
 
 In another terminal:
 
-```powershell
-$env:COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo run -p cogentlm-rust-examples --features remote --bin gateway_query -- <model.gguf> local [input]
 node examples/node/gateway_query.mjs <model.gguf> local [input]
 python examples/python/gateway_query.py <model.gguf> local [input]
@@ -66,9 +66,9 @@ embedding support.
 
 OpenAI gateway examples require a real `OPENAI_API_KEY`:
 
-```powershell
-$env:OPENAI_API_KEY="<openai-api-key>"
-$env:COGENTLM_GATEWAY_TOKEN="dev-token"
+```bash
+export OPENAI_API_KEY="<openai-api-key>"
+export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 ```
 
@@ -77,7 +77,7 @@ Use alias `openai-chat` for `gateway_query` and `gateway_chat`; use
 
 ## Browser Examples
 
-```powershell
+```bash
 cargo xtask run examples serve browser
 ```
 
@@ -96,7 +96,7 @@ browser code cannot read process environment variables.
 
 ## Smoke Coverage
 
-```powershell
+```bash
 cargo xtask test smoke suite example-rust --case query
 cargo xtask test smoke suite example-node --case embed
 cargo xtask test smoke suite example-python --case chat
