@@ -1,49 +1,42 @@
 # Installation
 
-CogentLM documents source-based development first. Public package names are the
-user-facing package targets for each language surface.
+Install the published package for the runtime your application uses. All
+public client packages use the same endpoint model: register an endpoint, keep
+the returned endpoint reference, and choose that endpoint for `query`, `chat`,
+or `embed`.
 
-## Prerequisites
+## Package Installs
 
-- Rust stable and Cargo.
-- Node.js 22 and Bun 1.3.11 for browser and Node package work.
-- Python 3.9 or newer for Python package work.
-- CMake and Ninja for native builds.
-- A GGUF model file for local model-backed examples.
-
-Run setup from the repository root when bootstrapping a checkout:
-
-```bash
-./setup.sh
-# or on Windows
-.\setup.ps1
-```
-
-After setup, `clm` is a short repo-local alias for `cargo xtask`.
-
-## Build From Source
-
-Use the xtask orchestrator instead of direct build commands when compiling
-CogentLM targets. The orchestrator manages native dependencies, backend
-toolchains, and package staging.
-
-```bash
-cargo xtask build core
-cargo xtask build node --backend cpu
-cargo xtask build python --backend cpu
-cargo xtask build wasm
-```
-
-Use `cargo xtask doctor --target core` when diagnosing local toolchain issues.
-
-## Package Targets
-
-| Surface | Public package target | Source location |
+| Surface | Install | Use for |
 | --- | --- | --- |
-| Browser | `cogentlm` | `lib/web` |
-| Node.js | `cogentlm-server` | `lib/node` |
-| Python | `cogentlm` | `lib/python` |
-| Rust | `cogentlm` | `lib/rust` |
-| Gateway toolkit | `cogentlm-gateway` | `lib/gateway` |
+| Browser | `npm install cogentlm` | Browser-local GGUF inference and browser gateway clients. |
+| Node.js | `npm install cogentlm-server` | Server-side local inference and framework route handlers. |
+| Python | `pip install cogentlm` | Python scripts, services, and gateway clients. |
+| Rust | `cargo add cogentlm` | Rust applications and services. |
 
-Use the source checkout and xtask build commands above for local development.
+The current release workflow publishes browser npm, Node npm, Python wheel,
+and Rust source artifacts. It does not yet publish a standalone gateway-server
+binary, container image, or `cargo install` target. Use the source checkout and
+Dockerfile when deploying the gateway server until a public server artifact is
+added.
+
+## Runtime Requirements
+
+- Local inference needs a compatible GGUF model file or browser-served GGUF
+  asset.
+- Browser-local inference needs a modern browser with WebAssembly support;
+  WebGPU acceleration depends on the browser and device.
+- Node and Python native packages select a backend from packaged native
+  artifacts. Use `COGENTLM_NODE_BACKEND` or `COGENTLM_PYTHON_BACKEND` when you
+  need to force `cpu`, `vulkan`, `cuda`, or `metal`.
+- Gateway clients need only the gateway base URL, public target name, and
+  application-owned authentication value.
+
+## Next Steps
+
+- [Browser package](../packages/browser.md)
+- [Node.js package](../packages/node.md)
+- [Python package](../packages/python.md)
+- [Rust package](../packages/rust.md)
+- [Gateway Server](../packages/gateway-server.md)
+- [Maintainer source builds](../maintainers/source-builds.md)

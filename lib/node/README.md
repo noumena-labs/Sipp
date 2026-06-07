@@ -9,14 +9,16 @@ Source builds use the workspace manifest in this directory. Public docs use the
 `cogentlm-server` package target. Applications own framework routes and call
 `client.query()`, `client.chat()`, or `client.embed()` inside those routes.
 
-## Source Build
+## Source Checkout
 
-From the repository root:
+From the repository root, after `source ./setup.sh`:
 
 ```bash
-cargo xtask build node --backend cpu
-node examples/node/query.mjs <model.gguf> "Explain CogentLM."
+clm build node --backend cpu && node examples/node/query.mjs <model.gguf> "Explain CogentLM."
 ```
+
+`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+if the launcher is not active.
 
 Set `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 

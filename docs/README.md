@@ -5,20 +5,26 @@ Node.js, Python, and Rust applications. The project is organized around one
 client model: register endpoints with `CogentClient.add`, keep the returned
 endpoint reference, and choose that reference for `query`, `chat`, or `embed`.
 
-This book is the public documentation for the repository. It starts with
-source-based development workflows and documents the public package names used
-by the browser, Node.js, Python, Rust, and gateway surfaces.
+This book starts with the published packages that application developers use.
+Source checkout, build orchestration, repository architecture, and contribution
+workflow live in the maintainer section.
 
 ## Start Here
 
-- [Installation](getting-started/installation.md) explains repository setup and
-  source builds.
-- [Quickstarts](getting-started/quickstarts.md) shows the shortest local,
-  gateway, and browser paths.
-- [Packages](packages/browser.md) describes the public package surfaces.
+- [Installation](getting-started/installation.md) lists the published package
+  install commands.
+- [Quickstarts](getting-started/quickstarts.md) shows short Browser, Node.js,
+  Python, Rust, and gateway paths.
+- [Using Published Packages](packages/README.md) describes the public package
+  surfaces in depth.
+- [Gateway Server](packages/gateway-server.md) explains how to deploy the
+  first-party gateway and call it from the core clients.
+- [Frameworks](packages/frameworks/README.md) covers Next.js, TanStack, and
+  React/Vite integration patterns.
 - [Gateway And Hybrid Inference](guides/gateway-hybrid.md) explains when to use
   local endpoints, gateway endpoints, and provider endpoints.
-- [Examples And Demos](examples-demos.md) maps the runnable examples and demos.
+- [Maintainers](maintainers/README.md) covers source builds, tests, repo
+  structure, and contribution workflow.
 
 ## Build The Book Locally
 

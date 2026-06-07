@@ -6,15 +6,16 @@ vision chat workflows need both a model GGUF and a projector GGUF.
 
 ## Model Sources
 
-The example and smoke workflows can use a cached sample model under
-`.build/models`. For manual local inference, pass an explicit model path:
+For local package usage, pass an explicit GGUF model path in Node.js, Python,
+or Rust, or serve a GGUF model URL to browser code:
 
-```bash
-cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> "Hello"
-```
+- Browser: `source: '/models/model.gguf'`
+- Node.js: `modelPath: '/path/to/model.gguf'`
+- Python: `LocalModelDescriptor('/path/to/model.gguf')`
+- Rust: `EndpointDescriptor::local(model_path, config)`
 
-Browser demos can also load model URLs, then cache data in browser storage when
-the runtime path supports it.
+Source examples and smoke workflows can use a cached sample model under
+`.build/models`; see [Source Builds](../maintainers/source-builds.md).
 
 ## Native Backends
 
@@ -25,14 +26,6 @@ Backend names are shared across build and runtime selection:
 - `cuda`: NVIDIA CUDA backend.
 - `metal`: Apple Metal backend on macOS.
 
-Build native artifacts with xtask:
-
-```bash
-cargo xtask build node --backend cpu
-cargo xtask build python --backend vulkan
-cargo xtask build cli --backend all
-```
-
 Runtime selection is package-specific:
 
 - Node.js: `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal`
@@ -40,3 +33,6 @@ Runtime selection is package-specific:
 - CLI: `--backend auto|cpu|cuda|metal|vulkan`
 
 Leave runtime backend variables unset for automatic selection.
+
+Maintainer builds can produce backend-specific artifacts with `clm` or
+`cargo xtask`; see [Source Builds](../maintainers/source-builds.md).

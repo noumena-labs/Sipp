@@ -7,14 +7,16 @@ caching, and browser runtime lifecycle management through `CogentClient`.
 Source builds use the workspace manifest in this directory. Public docs use the
 `cogentlm` package target.
 
-## Source Build
+## Source Checkout
 
-From the repository root:
+From the repository root, after `source ./setup.sh`:
 
 ```bash
-cargo xtask build wasm
-cargo xtask run examples serve browser
+clm build wasm && clm run examples serve browser
 ```
+
+`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+if the launcher is not active.
 
 ## Local GGUF Query
 

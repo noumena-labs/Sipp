@@ -3,12 +3,18 @@
 The Python package target is `cogentlm`. It exposes native descriptor classes,
 run handles, token streaming, and the same endpoint model as the Rust client.
 
+## Install
+
+```bash
+pip install cogentlm
+```
+
 ## Use It For
 
 - Python applications that need local GGUF inference.
 - Gateway-backed inference from Python services or scripts.
 - Direct provider descriptors where server-side credentials are appropriate.
-- Source-based package validation through maturin and xtask.
+- Runtime metrics and backend selection in Python services.
 
 ## Local GGUF Query
 
@@ -56,13 +62,39 @@ print(run.result()["text"])
 Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native
 backend.
 
-## Gateway
+## Gateway Query
 
-Register `GatewayDescriptor` when a Python service or script calls a separate
-CogentLM gateway. Gateway examples live under `examples/python`.
+```python
+import os
+
+from cogentlm import CogentClient, CogentTextOptions, GatewayDescriptor
+
+
+client = CogentClient()
+endpoint = client.add(
+    "gateway",
+    GatewayDescriptor(
+        os.environ["COGENTLM_GATEWAY_TARGET"],
+        os.environ["COGENTLM_GATEWAY_URL"],
+        authentication_kind="bearer",
+        authentication_value=os.environ["COGENTLM_GATEWAY_TOKEN"],
+    ),
+)
+run = client.query(
+    "Explain gateway inference.",
+    endpoint=endpoint,
+    options=CogentTextOptions(max_tokens=64),
+)
+print(run.result()["text"])
+```
+
+Gateway clients need only the gateway URL, bearer token, and public target.
+Provider credentials and local model paths stay in the gateway process.
 
 ## Related Docs
 
+- [Gateway Server](gateway-server.md)
 - [Installation](../getting-started/installation.md)
 - [Local Inference](../guides/local-inference.md)
 - [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
+- [Maintainer source builds](../maintainers/source-builds.md)

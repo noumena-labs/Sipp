@@ -4,6 +4,20 @@
 is built from `cogentlm-gateway-core` and `cogentlm-gateway`, then adds
 application-owned policy and deployment behavior.
 
+For user-facing setup and client examples, start with
+[Gateway Server](../packages/gateway-server.md).
+
+## Source Checkout
+
+From the repository root, after `source ./setup.sh`:
+
+```bash
+clm build core && cargo run -p cogentlm-gateway-server -- check --config apps/gateway-server/config/production.toml
+```
+
+`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+if the launcher is not active.
+
 ## Responsibilities
 
 - Public and management listeners.

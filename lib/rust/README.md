@@ -8,14 +8,16 @@ and shared CogentLM value types.
 The facade re-exports the high-level `CogentClient` API plus selected engine,
 backend, lifecycle, shard, provider, and gateway modules.
 
-## Source Build
+## Source Checkout
 
-From the repository root:
+From the repository root, after `source ./setup.sh`:
 
 ```bash
-cargo xtask build core
-cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> "Explain CogentLM."
+clm build core && cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> "Explain CogentLM."
 ```
+
+`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+if the launcher is not active.
 
 ## Local GGUF Query
 

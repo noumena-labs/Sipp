@@ -13,7 +13,18 @@ The server owns:
 - Application-wide concurrency admission.
 - CORS, body limits, metrics, logging, TOML, and container policy.
 
-## Run
+## Source Checkout
+
+From the repository root, after `source ./setup.sh`:
+
+```bash
+clm build core && cargo run -p cogentlm-gateway-server -- check --config apps/gateway-server/config/production.toml
+```
+
+`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+if the launcher is not active.
+
+## Run The Server
 
 ```bash
 export COGENTLM_GATEWAY_TOKEN="replace-me"

@@ -2,7 +2,17 @@
 
 The browser package target is `cogentlm`. It exposes `CogentClient` for
 browser-local GGUF inference, gateway calls, provider descriptors where
-supported, token streaming, and browser runtime lifecycle management.
+supported, token streaming, OPFS-backed model caching, and browser runtime
+lifecycle management.
+
+## Install
+
+```bash
+npm install cogentlm
+```
+
+Use this package in browser code. For server routes or Node services, use
+[`cogentlm-server`](node.md).
 
 ## Use It For
 
@@ -18,7 +28,7 @@ supported, token streaming, and browser runtime lifecycle management.
 import { CogentClient } from 'cogentlm';
 
 const client = new CogentClient();
-await client.add('default', {
+const endpoint = await client.add('default', {
   kind: 'local',
   source: '/models/model.gguf',
   options: {
@@ -32,6 +42,7 @@ await client.add('default', {
 });
 
 const run = client.query('Explain CogentLM in one sentence.', {
+  endpoint,
   emitTokens: true,
   maxTokens: 64,
   session: 'browser-local',
@@ -46,6 +57,31 @@ console.log(streamed || response.text);
 await client.close();
 ```
 
+## Gateway Query
+
+Use gateway endpoints when a separate server owns model paths, provider
+credentials, target policy, and metrics.
+
+```ts
+const endpoint = await client.add('gateway', {
+  kind: 'gateway',
+  target: 'local',
+  baseUrl: 'https://gateway.example.com',
+  authentication: {
+    kind: 'bearer',
+    valueProvider: getShortLivedGatewayToken,
+  },
+});
+const run = client.query('Explain gateway inference.', {
+  endpoint,
+  maxTokens: 64,
+});
+```
+
+Browser apps should use short-lived gateway tokens or proxy through an
+application server route. Do not ship provider credentials or long-lived
+gateway tokens in browser bundles.
+
 ## WebGPU Engine
 
 The browser runtime links CogentLM's Rust WASM ABI with llama.cpp and ggml
@@ -53,6 +89,11 @@ through Emscripten. It runs GGUF text and vision models with WebGPU when the
 browser exposes a compatible adapter, and falls back to CPU execution for
 compatible local workflows. OPFS-backed model caching keeps repeated browser
 loads local after the first model fetch or file import.
+
+The package resolves its packaged JavaScript and WASM runtime assets at
+runtime. Override `moduleUrl` and `wasmUrl` only when your bundler or
+deployment moves package assets. The pthread runtime requires
+`SharedArrayBuffer` and cross-origin isolation.
 
 <!--
 Future benchmark graph placeholder:
@@ -63,14 +104,13 @@ Add the graph only with checked-in benchmark methodology, model names, browser
 versions, hardware, and raw measurements.
 -->
 
-## Gateway
-
-Gateway endpoints use the same `CogentClient.add` endpoint model with a base
-URL, target name, and authentication provider. Browser applications provide
-short-lived gateway tokens at runtime.
-
 ## Related Docs
 
+- [Gateway Server](gateway-server.md)
+- [Next.js](frameworks/nextjs.md)
+- [TanStack](frameworks/tanstack.md)
+- [React And Vite](frameworks/vite-react.md)
 - [Browser Caching](../guides/browser-caching.md)
 - [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
 - [Examples And Demos](../examples-demos.md)
+- [Maintainer source builds](../maintainers/source-builds.md)

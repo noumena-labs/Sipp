@@ -1,57 +1,125 @@
 # Quickstarts
 
-These commands assume a source checkout at the repository root.
+These examples use the published client packages. Use a local GGUF path or a
+browser-served model URL for local inference.
 
-## Run A Local Example
-
-Local examples take a GGUF model path and optional input:
-
-```bash
-cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> "Explain local inference."
-node examples/node/query.mjs <model.gguf> "Explain local inference."
-python examples/python/query.py <model.gguf> "Explain local inference."
-```
-
-Use the matching `chat` or `embed` example for chat and embedding workflows.
-
-## Run A Gateway Workflow
-
-The one-command gateway workflow starts a local gateway, runs a client example,
-and stops the gateway when the client exits.
+## Browser Local Query
 
 ```bash
-cargo xtask run examples gateway rust --case query
-cargo xtask run examples gateway node --case chat
-cargo xtask run examples gateway python --case embed
+npm install cogentlm
 ```
 
-The workflow uses token `dev-token`, binds the gateway to `127.0.0.1:8787`,
-and uses the cached sample model under `.build/models` unless `--model` is
-provided.
+```ts
+import { CogentClient } from 'cogentlm';
 
-## Serve Browser Examples
+const client = new CogentClient();
+const endpoint = await client.add('default', {
+  kind: 'local',
+  source: '/models/model.gguf',
+});
+const run = client.query('Explain local inference in one sentence.', {
+  endpoint,
+  maxTokens: 64,
+});
+console.log((await run.response).text);
+await client.close();
+```
+
+## Node.js Local Query
 
 ```bash
-cargo xtask run examples serve browser
+npm install cogentlm-server
 ```
 
-Open the printed local URL and choose one of the example pages:
+```ts
+import { CogentClient } from 'cogentlm-server';
 
-- `/query.html`
-- `/chat.html`
-- `/embed.html`
-- `/gateway_query.html`
-- `/gateway_chat.html`
-- `/gateway_embed.html`
+const client = new CogentClient();
+const endpoint = await client.add('default', {
+  kind: 'local',
+  modelPath: process.argv[2],
+});
+const run = client.query({
+  endpoint,
+  prompt: 'Explain local inference in one sentence.',
+  options: { maxTokens: 64 },
+});
+console.log((await run.response).text);
+```
 
-## Serve A Demo
+## Python Local Query
 
 ```bash
-cargo xtask run demos serve chat
-cargo xtask run demos serve avatar
-cargo xtask run demos serve simulation
-cargo xtask run tools serve playground
+pip install cogentlm
 ```
 
-Use demos for exploratory workflows and examples for small, copyable
-integrations.
+```python
+from cogentlm import CogentClient, CogentTextOptions, LocalModelDescriptor
+
+client = CogentClient()
+endpoint = client.add("default", LocalModelDescriptor("model.gguf"))
+run = client.query(
+    "Explain local inference in one sentence.",
+    endpoint=endpoint,
+    options=CogentTextOptions(max_tokens=64),
+)
+print(run.result()["text"])
+```
+
+## Rust Local Query
+
+```bash
+cargo add cogentlm
+```
+
+```rust
+use cogentlm::{
+    CogentClient, CogentQueryRequest, CogentTextOptions, EndpointDescriptor,
+};
+
+let mut client = CogentClient::new();
+let endpoint = client
+    .add("default", EndpointDescriptor::local("model.gguf", Default::default()))
+    .await?;
+let response = client
+    .query(CogentQueryRequest {
+        endpoint: Some(endpoint),
+        prompt: "Explain local inference in one sentence.".to_string(),
+        options: CogentTextOptions {
+            max_tokens: Some(64),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .await?;
+println!("{}", response.text);
+```
+
+## Gateway Query
+
+Gateway clients use the same `query`, `chat`, and `embed` calls after
+registering a gateway endpoint. The gateway owns local model paths, provider
+credentials, target policy, and metrics.
+
+```ts
+import { CogentClient } from 'cogentlm';
+
+const client = new CogentClient();
+const endpoint = await client.add('gateway', {
+  kind: 'gateway',
+  target: 'local',
+  baseUrl: 'https://gateway.example.com',
+  authentication: { kind: 'bearer', value: await getGatewayToken() },
+});
+const run = client.query('Explain gateway inference.', {
+  endpoint,
+  maxTokens: 64,
+});
+console.log((await run.response).text);
+await client.close();
+```
+
+## Source Checkout Examples
+
+Runnable source examples and demos live in the maintainer lane:
+[Source Builds](../maintainers/source-builds.md).

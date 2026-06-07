@@ -7,14 +7,16 @@ local GGUF models, gateway endpoints, and provider endpoints.
 Text and embedding calls return run handles. Call `.result()` for the final
 response and `.tokens()` for streamed text batches.
 
-## Source Build
+## Source Checkout
 
-From the repository root:
+From the repository root, after `source ./setup.sh`:
 
 ```bash
-cargo xtask build python --backend cpu
-python examples/python/query.py <model.gguf> "Explain CogentLM."
+clm build python --backend cpu && python examples/python/query.py <model.gguf> "Explain CogentLM."
 ```
+
+`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+if the launcher is not active.
 
 Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 

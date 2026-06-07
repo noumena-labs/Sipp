@@ -8,14 +8,16 @@ CogentLM clients.
 Applications bind sockets, choose routes, load configuration, define deployment
 policy, and call `CogentClient` after decoding a request.
 
-## Source Build
+## Source Checkout
 
-From the repository root:
+From the repository root, after `source ./setup.sh`:
 
 ```bash
-cargo xtask build core
-cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
+clm build core && clm run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
+
+`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+if the launcher is not active.
 
 ## Minimal Handler Shape
 
