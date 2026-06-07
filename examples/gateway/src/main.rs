@@ -1,42 +1,34 @@
-use std::{
-    convert::Infallible,
-    net::SocketAddr,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
+use std::collections::VecDeque;
+use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use anyhow::Context;
-use axum::{
-    extract::State,
-    http::{HeaderName, HeaderValue, StatusCode},
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        Html, IntoResponse, Response,
-    },
-    routing::{get, post},
-    Json, Router,
-};
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
+use axum::response::Html;
+use axum::routing::{get, post};
+use axum::Router;
+use bytes::Bytes;
 use clap::Parser;
-use cogentlm_client::{CogentClient, EndpointDescriptor};
-use cogentlm_engine::engine::NativeRuntimeConfig;
-use cogentlm_gateway::{
-    finish_reason, ChatRequestBody, CogentClientExecutor, EmbedRequestBody, EmbeddingResponseBody,
-    ErrorEnvelope, GatewayAdapter, GatewayAlias, GatewayAliasLimits, GatewayCaller, GatewayError,
-    GatewayRequestContext, GatewayStreamEvent, OperationSet, QueryRequestBody, TextResponseBody,
-    UsageBody,
+use cogentlm_client::{
+    CogentClient, CogentRequestContext, CogentTextResponseFuture, CogentTokenBatches,
+    EndpointDescriptor, EndpointRef,
 };
-use futures_util::StreamExt;
-use serde_json::json;
+use cogentlm_engine::engine::{NativeRuntimeConfig, PoolingType};
+use cogentlm_gateway::{request_id, GatewayCodec, GatewayHttpError, ProtocolCodec};
+use cogentlm_gateway_core::{GatewayStreamEvent, Operation};
+use futures_util::future::{select, Either};
+use futures_util::{stream, Stream, StreamExt};
 
-const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const INDEX_HTML: &str = include_str!("../assets/index.html");
 
 #[derive(Debug, Parser)]
 #[command(name = "cogentlm-gateway-example")]
-#[command(about = "Run the minimal CogentLM Axum gateway example")]
+#[command(about = "Run an explicit Axum gateway route example")]
 struct Cli {
     /// Local GGUF model to load.
     #[arg(long)]
@@ -46,40 +38,42 @@ struct Cli {
     bind: SocketAddr,
 }
 
-struct AppState {
-    adapter: GatewayAdapter,
-    next_request_id: AtomicU64,
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let mut client = CogentClient::new();
-    let mut runtime = NativeRuntimeConfig::default();
-    runtime.context.embeddings = Some(true);
-    let endpoint = client
-        .add("local", EndpointDescriptor::local(cli.model, runtime))
+    let text_endpoint = client
+        .add(
+            "local-text",
+            EndpointDescriptor::local(cli.model.clone(), NativeRuntimeConfig::default()),
+        )
         .await
-        .context("failed to load local model")?;
-    let adapter = GatewayAdapter::builder(CogentClientExecutor::new(client))
-        .alias(GatewayAlias::new(
-            "local",
-            endpoint,
-            OperationSet::all(),
-            GatewayAliasLimits::default(),
-        )?)?
-        .build()?;
-    let state = Arc::new(AppState {
-        adapter,
-        next_request_id: AtomicU64::new(1),
-    });
+        .context("failed to load local text model")?;
+    let mut embedding_runtime = NativeRuntimeConfig::default();
+    embedding_runtime.context.embeddings = Some(true);
+    embedding_runtime.context.pooling = Some(PoolingType::Mean);
+    let embedding_endpoint = client
+        .add(
+            "local-embed",
+            EndpointDescriptor::local(cli.model, embedding_runtime),
+        )
+        .await
+        .context("failed to load local embedding model")?;
 
+    let state = AppState {
+        client: Arc::new(client),
+        text_endpoint,
+        embedding_endpoint,
+        next_request_id: Arc::new(AtomicU64::new(1)),
+        codec: GatewayCodec,
+    };
     let app = Router::new()
-        .route("/", get(index))
+        .route("/", get(|| async { Html(INDEX_HTML) }))
         .route("/v1/query", post(query))
         .route("/v1/chat", post(chat))
         .route("/v1/embed", post(embed))
         .with_state(state);
+
     let listener = tokio::net::TcpListener::bind(cli.bind)
         .await
         .with_context(|| format!("failed to bind {}", cli.bind))?;
@@ -92,133 +86,283 @@ async fn main() -> anyhow::Result<()> {
         .context("gateway example stopped")
 }
 
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+#[derive(Clone)]
+struct AppState {
+    client: Arc<CogentClient>,
+    text_endpoint: EndpointRef,
+    embedding_endpoint: EndpointRef,
+    next_request_id: Arc<AtomicU64>,
+    codec: GatewayCodec,
 }
 
-async fn query(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<QueryRequestBody>,
-) -> Result<Response, HttpError> {
-    let (request_id, context) = request_context(&state)?;
-    let alias = body.model.clone();
-    if body.stream {
-        let stream = state.adapter.stream_query(&context, body)?;
-        return Ok(with_request_id(
-            &request_id,
-            Sse::new(stream.map(sse_event)).keep_alive(KeepAlive::default()),
-        ));
-    }
-    let output = state.adapter.query(&context, body).await?;
-    Ok(with_request_id(
-        &request_id,
-        Json(TextResponseBody {
-            id: request_id.clone(),
-            model: alias,
-            text: output.text,
-            finish_reason: finish_reason(output.finish_reason),
-            usage: output.usage.map(UsageBody::from),
-        }),
-    ))
-}
-
-async fn chat(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<ChatRequestBody>,
-) -> Result<Response, HttpError> {
-    let (request_id, context) = request_context(&state)?;
-    let alias = body.model.clone();
-    if body.stream {
-        let stream = state.adapter.stream_chat(&context, body)?;
-        return Ok(with_request_id(
-            &request_id,
-            Sse::new(stream.map(sse_event)).keep_alive(KeepAlive::default()),
-        ));
-    }
-    let output = state.adapter.chat(&context, body).await?;
-    Ok(with_request_id(
-        &request_id,
-        Json(TextResponseBody {
-            id: request_id.clone(),
-            model: alias,
-            text: output.text,
-            finish_reason: finish_reason(output.finish_reason),
-            usage: output.usage.map(UsageBody::from),
-        }),
-    ))
-}
-
-async fn embed(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<EmbedRequestBody>,
-) -> Result<Response, HttpError> {
-    let (request_id, context) = request_context(&state)?;
-    let alias = body.model.clone();
-    let output = state.adapter.embed(&context, body).await?;
-    Ok(with_request_id(
-        &request_id,
-        Json(EmbeddingResponseBody {
-            id: request_id.clone(),
-            model: alias,
-            embedding: output.values,
-            usage: output.usage.map(UsageBody::from),
-        }),
-    ))
-}
-
-fn request_context(state: &AppState) -> Result<(String, GatewayRequestContext), GatewayError> {
-    let id = state.next_request_id.fetch_add(1, Ordering::Relaxed);
-    let request_id = format!("example_{id:016x}");
-    let context = GatewayRequestContext::new(&request_id, GatewayCaller::anonymous())?;
-    Ok((request_id, context))
-}
-
-fn sse_event(event: Result<GatewayStreamEvent, GatewayError>) -> Result<Event, Infallible> {
-    let event = match event {
-        Ok(GatewayStreamEvent::TokenBatch(batch)) => {
-            Event::default().event("token").json_data(json!({
-                "text": batch.text,
-                "sequence": batch.sequence_start,
-            }))
+async fn query(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response<Body> {
+    let request_id = request_id(&headers)
+        .map(str::to_string)
+        .unwrap_or_else(|| state.next_request_id());
+    let decoded = match state.codec.decode_query(&body) {
+        Ok(decoded) => decoded,
+        Err(error) => return error_response(&state, Some(&request_id), error),
+    };
+    let endpoint = match state.resolve(&decoded.target, Operation::Query) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error_response(&state, Some(&request_id), error),
+    };
+    let mut request = decoded.request;
+    request.endpoint = Some(endpoint);
+    request.emit_tokens = decoded.stream;
+    let run = state.client.query_with_context(
+        CogentRequestContext {
+            request_id: Some(request_id.clone()),
+        },
+        request,
+    );
+    if decoded.stream {
+        stream_response(&state, Some(&request_id), run.into_parts())
+    } else {
+        match run.await {
+            Ok(response) => match state.codec.encode_text(&decoded.target, &response) {
+                Ok(body) => success_response(&state, Some(&request_id), false, body),
+                Err(error) => error_response(&state, Some(&request_id), error),
+            },
+            Err(error) => error_response(
+                &state,
+                Some(&request_id),
+                GatewayHttpError::from_gateway_error(error.into()),
+            ),
         }
-        Ok(GatewayStreamEvent::Usage { usage }) => Event::default()
-            .event("usage")
-            .json_data(UsageBody::from(usage)),
-        Ok(GatewayStreamEvent::Finished { finish_reason, .. }) => Event::default()
-            .event("done")
-            .json_data(json!({ "finish_reason": finish_reason.as_str() })),
-        Err(error) => Event::default()
-            .event("error")
-            .json_data(ErrorEnvelope::from(&error)),
     }
-    .unwrap_or_else(|_| {
-        Event::default()
-            .event("error")
-            .data(r#"{"error":{"code":"internal","message":"SSE encoding failed"}}"#)
+}
+
+async fn chat(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response<Body> {
+    let request_id = request_id(&headers)
+        .map(str::to_string)
+        .unwrap_or_else(|| state.next_request_id());
+    let decoded = match state.codec.decode_chat(&body) {
+        Ok(decoded) => decoded,
+        Err(error) => return error_response(&state, Some(&request_id), error),
+    };
+    let endpoint = match state.resolve(&decoded.target, Operation::Chat) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error_response(&state, Some(&request_id), error),
+    };
+    let mut request = decoded.request;
+    request.endpoint = Some(endpoint);
+    request.emit_tokens = decoded.stream;
+    let run = state.client.chat_with_context(
+        CogentRequestContext {
+            request_id: Some(request_id.clone()),
+        },
+        request,
+    );
+    if decoded.stream {
+        stream_response(&state, Some(&request_id), run.into_parts())
+    } else {
+        match run.await {
+            Ok(response) => match state.codec.encode_text(&decoded.target, &response) {
+                Ok(body) => success_response(&state, Some(&request_id), false, body),
+                Err(error) => error_response(&state, Some(&request_id), error),
+            },
+            Err(error) => error_response(
+                &state,
+                Some(&request_id),
+                GatewayHttpError::from_gateway_error(error.into()),
+            ),
+        }
+    }
+}
+
+async fn embed(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response<Body> {
+    let request_id = request_id(&headers)
+        .map(str::to_string)
+        .unwrap_or_else(|| state.next_request_id());
+    let decoded = match state.codec.decode_embed(&body) {
+        Ok(decoded) => decoded,
+        Err(error) => return error_response(&state, Some(&request_id), error),
+    };
+    let endpoint = match state.resolve(&decoded.target, Operation::Embed) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error_response(&state, Some(&request_id), error),
+    };
+    let mut request = decoded.request;
+    request.endpoint = Some(endpoint);
+    let run = state.client.embed_with_context(
+        CogentRequestContext {
+            request_id: Some(request_id.clone()),
+        },
+        request,
+    );
+    match run.await {
+        Ok(response) => match state.codec.encode_embedding(&decoded.target, &response) {
+            Ok(body) => success_response(&state, Some(&request_id), false, body),
+            Err(error) => error_response(&state, Some(&request_id), error),
+        },
+        Err(error) => error_response(
+            &state,
+            Some(&request_id),
+            GatewayHttpError::from_gateway_error(error.into()),
+        ),
+    }
+}
+
+impl AppState {
+    fn next_request_id(&self) -> String {
+        let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        format!("example_{id:016x}")
+    }
+
+    fn resolve(&self, target: &str, operation: Operation) -> Result<EndpointRef, GatewayHttpError> {
+        if target != "local" {
+            return Err(GatewayHttpError::new(
+                StatusCode::NOT_FOUND,
+                "resolution",
+                "target not found",
+            ));
+        }
+        Ok(match operation {
+            Operation::Query | Operation::Chat => self.text_endpoint.clone(),
+            Operation::Embed => self.embedding_endpoint.clone(),
+        })
+    }
+}
+
+fn stream_response(
+    state: &AppState,
+    request_id: Option<&str>,
+    run: (CogentTokenBatches, CogentTextResponseFuture),
+) -> Response<Body> {
+    let stream = text_event_stream(run).map({
+        let codec = state.codec;
+        move |event| {
+            let bytes = match event {
+                Ok(event) => codec
+                    .encode_stream_event(&event)
+                    .unwrap_or_else(|error| codec.encode_stream_error(&error)),
+                Err(error) => codec.encode_stream_error(&error),
+            };
+            Ok::<Bytes, Infallible>(bytes)
+        }
     });
-    Ok(event)
+    response(
+        StatusCode::OK,
+        state.codec.content_type(true),
+        Body::from_stream(stream),
+        request_id,
+    )
 }
 
-fn with_request_id(request_id: &str, response: impl IntoResponse) -> Response {
-    let mut response = response.into_response();
-    if let Ok(value) = HeaderValue::from_str(request_id) {
-        response.headers_mut().insert(X_REQUEST_ID.clone(), value);
+struct TextStreamState {
+    tokens: CogentTokenBatches,
+    response: Option<CogentTextResponseFuture>,
+    pending: VecDeque<Result<GatewayStreamEvent, GatewayHttpError>>,
+    terminal: bool,
+}
+
+fn text_event_stream(
+    (tokens, response): (CogentTokenBatches, CogentTextResponseFuture),
+) -> impl Stream<Item = Result<GatewayStreamEvent, GatewayHttpError>> + Send {
+    let state = TextStreamState {
+        tokens,
+        response: Some(response),
+        pending: VecDeque::new(),
+        terminal: false,
+    };
+    stream::unfold(state, |mut state| async move {
+        if let Some(event) = state.pending.pop_front() {
+            return Some((event, state));
+        }
+        if state.terminal {
+            return None;
+        }
+        let response = state.response.take()?;
+        match select(state.tokens.next(), response).await {
+            Either::Left((Some(batch), response)) => {
+                state.response = Some(response);
+                Some((Ok(GatewayStreamEvent::TokenBatch(batch)), state))
+            }
+            Either::Left((None, response)) => {
+                finish_text_stream(&mut state, response.await);
+                state.pending.pop_front().map(|event| (event, state))
+            }
+            Either::Right((response, tokens)) => {
+                drop(tokens);
+                finish_text_stream(&mut state, response);
+                state.pending.pop_front().map(|event| (event, state))
+            }
+        }
+    })
+}
+
+fn finish_text_stream(
+    state: &mut TextStreamState,
+    response: cogentlm_client::CogentResult<cogentlm_client::CogentTextResponse>,
+) {
+    state.terminal = true;
+    match response {
+        Ok(response) => {
+            if let Some(usage) = response.usage {
+                state
+                    .pending
+                    .push_back(Ok(GatewayStreamEvent::Usage(usage)));
+            }
+            state.pending.push_back(Ok(GatewayStreamEvent::Finished {
+                finish_reason: response.finish_reason,
+                metadata: response.metadata,
+            }));
+        }
+        Err(error) => {
+            state
+                .pending
+                .push_back(Err(GatewayHttpError::from_gateway_error(error.into())));
+        }
     }
-    response
 }
 
-struct HttpError(GatewayError);
+fn success_response(
+    state: &AppState,
+    request_id: Option<&str>,
+    streaming: bool,
+    body: Bytes,
+) -> Response<Body> {
+    response(
+        StatusCode::OK,
+        state.codec.content_type(streaming),
+        Body::from(body),
+        request_id,
+    )
+}
 
-impl From<GatewayError> for HttpError {
-    fn from(error: GatewayError) -> Self {
-        Self(error)
+fn error_response(
+    state: &AppState,
+    request_id: Option<&str>,
+    error: GatewayHttpError,
+) -> Response<Body> {
+    let body = state.codec.encode_error(&error);
+    response(
+        error.status,
+        state.codec.content_type(false),
+        Body::from(body),
+        request_id,
+    )
+}
+
+fn response(
+    status: StatusCode,
+    content_type: &'static str,
+    body: Body,
+    request_id: Option<&str>,
+) -> Response<Body> {
+    let mut builder = Response::builder()
+        .status(status)
+        .header("content-type", content_type);
+    if let Some(request_id) = request_id.and_then(|value| HeaderValue::from_str(value).ok()) {
+        builder = builder.header("x-request-id", request_id);
     }
-}
-
-impl IntoResponse for HttpError {
-    fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.0.kind.http_status_code())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        (status, Json(ErrorEnvelope::from(&self.0))).into_response()
+    match builder.body(body) {
+        Ok(response) => response,
+        Err(_) => {
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            response
+        }
     }
 }

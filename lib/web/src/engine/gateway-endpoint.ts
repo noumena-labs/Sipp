@@ -10,18 +10,29 @@ import {
   type QueryInput,
   type QueryOptions,
   type RequestStats,
-  type RemoteGatewayConfig,
+  type GatewayEndpointDescriptor,
 } from '../models/types.js';
 import { createTimedAbortController } from '../utils/abort.js';
 
-/** Normalized remote gateway endpoint stored by the browser client. */
-export interface RemoteEndpoint {
+/** Normalized gateway endpoint stored by the browser client. */
+export interface GatewayEndpoint {
   readonly id: string;
-  readonly alias: string;
+  readonly target: string;
   readonly baseUrl: string;
-  readonly token?: string;
-  readonly tokenProvider?: () => string | Promise<string>;
+  readonly routes: {
+    readonly query: string;
+    readonly chat: string;
+    readonly embed: string;
+  };
+  readonly authentication: {
+    readonly kind: 'none' | 'bearer' | 'header';
+    readonly headerName?: string;
+    readonly value?: string;
+    readonly valueProvider?: () => string | Promise<string>;
+  };
+  readonly staticHeaders: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
+  readonly protocolOptions: Readonly<Record<string, unknown>>;
 }
 
 interface GatewayUsage {
@@ -65,22 +76,24 @@ const LOCAL_ONLY_GATEWAY_FIELDS = new Set([
   'normalize',
   'local',
 ]);
-const REMOTE_CONFIG_FIELDS = new Set([
+const ENDPOINT_CONFIG_FIELDS = new Set([
   'kind',
-  'alias',
+  'target',
   'baseUrl',
-  'token',
-  'tokenProvider',
+  'routes',
+  'authentication',
+  'staticHeaders',
   'timeoutMs',
+  'protocolOptions',
 ]);
 const MAX_GATEWAY_ERROR_BYTES = 1 << 20;
 const MAX_GATEWAY_SSE_EVENT_BYTES = 1 << 20;
-const GATEWAY_REQUEST_TIMEOUT_MESSAGE = 'remote gateway request timed out';
-const GATEWAY_REQUEST_ABORTED_MESSAGE = 'remote gateway request aborted';
-const GATEWAY_REQUEST_FAILED_MESSAGE = 'remote gateway request failed';
-const GATEWAY_TOKEN_PROVIDER_FAILED_MESSAGE = 'remote gateway token provider failed';
+const GATEWAY_REQUEST_TIMEOUT_MESSAGE = 'gateway endpoint request timed out';
+const GATEWAY_REQUEST_ABORTED_MESSAGE = 'gateway endpoint request aborted';
+const GATEWAY_REQUEST_FAILED_MESSAGE = 'gateway endpoint request failed';
+const GATEWAY_TOKEN_PROVIDER_FAILED_MESSAGE = 'gateway endpoint secret provider failed';
 const GATEWAY_ERROR_BODY_TOO_LARGE_MESSAGE =
-  'remote gateway error response exceeded body limit';
+  'gateway endpoint error response exceeded body limit';
 const GATEWAY_SSE_EVENT_TOO_LARGE_MESSAGE =
   'gateway stream event exceeded buffer limit';
 const U32_MAX = 0xffffffff;
@@ -88,39 +101,39 @@ const F32_MAX = 3.4028234663852886e38;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
 
-/** Registry for browser remote gateway endpoints. */
-export class RemoteGatewayRegistry {
-  readonly #remotes = new Map<string, RemoteEndpoint>();
+/** Registry for browser gateway endpoints. */
+export class GatewayEndpointRegistry {
+  readonly #endpoints = new Map<string, GatewayEndpoint>();
 
-  public prepare(id: string, config: RemoteGatewayConfig): RemoteEndpoint {
-    const normalizedId = normalizeId(id, 'remote id');
+  public prepare(id: string, config: GatewayEndpointDescriptor): GatewayEndpoint {
+    const normalizedId = normalizeId(id, 'endpoint id');
     return normalizeConfig(normalizedId, config);
   }
 
-  public commit(remote: RemoteEndpoint): EndpointRef {
-    this.#remotes.set(remote.id, remote);
-    return { kind: 'remote', id: remote.id };
+  public commit(endpoint: GatewayEndpoint): EndpointRef {
+    this.#endpoints.set(endpoint.id, endpoint);
+    return { kind: 'gateway', id: endpoint.id };
   }
 
   public remove(id: string): void {
-    this.#remotes.delete(id);
+    this.#endpoints.delete(id);
   }
 
-  public get(endpoint: EndpointRef | undefined): RemoteEndpoint | null {
-    if (endpoint == null || endpoint.kind !== 'remote') {
+  public get(endpoint: EndpointRef | undefined): GatewayEndpoint | null {
+    if (endpoint == null || endpoint.kind !== 'gateway') {
       return null;
     }
-    const remote = this.#remotes.get(endpoint.id);
-    if (remote == null) {
-      throw new QueryError('MODEL_NOT_FOUND', `remote endpoint not found: ${endpoint.id}`);
+    const registered = this.#endpoints.get(endpoint.id);
+    if (registered == null) {
+      throw new QueryError('MODEL_NOT_FOUND', `gateway endpoint not found: ${endpoint.id}`);
     }
-    return remote;
+    return registered;
   }
 }
 
-/** Run a browser query request through a CogentLM remote gateway. */
-export async function runRemoteQuery(
-  remote: RemoteEndpoint,
+/** Run a browser query through a gateway endpoint. */
+export async function runGatewayQuery(
+  endpoint: GatewayEndpoint,
   input: QueryInput,
   options: QueryOptions,
   tokenBatchSink: ((batch: TokenBatch) => void) | undefined,
@@ -138,26 +151,26 @@ export async function runRemoteQuery(
   if (prompt.trim().length === 0) {
     throw new QueryError('QUERY_FAILED', 'prompt must not be empty');
   }
-  rejectRemoteTextLocalOptions(options, hasMedia);
+  rejectGatewayTextLocalOptions(options, hasMedia);
   const body = textBody(
-    remote.alias,
+    endpoint.target,
     options,
-    options.gatewayOptions,
+    combineEndpointOptions(endpoint.protocolOptions, options.endpointOptions),
     { prompt },
     tokenBatchSink != null
   );
   return tokenBatchSink == null
-    ? gatewayRequest(remote, '/v1/query', body, signal, async (response, token) =>
+    ? gatewayRequest(endpoint, endpoint.routes.query, body, signal, async (response, token) =>
         parseTextResponse(await gatewayJsonBody(response, token))
       )
-    : gatewayRequest(remote, '/v1/query', body, signal, (response, token, resetTimeout) =>
+    : gatewayRequest(endpoint, endpoint.routes.query, body, signal, (response, token, resetTimeout) =>
         readTextStream(response, token, tokenBatchSink, resetTimeout)
       );
 }
 
-/** Run a browser chat request through a CogentLM remote gateway. */
-export async function runRemoteChat(
-  remote: RemoteEndpoint,
+/** Run a browser chat request through a gateway endpoint. */
+export async function runGatewayChat(
+  endpoint: GatewayEndpoint,
   input: ChatInput,
   options: QueryOptions,
   tokenBatchSink: ((batch: TokenBatch) => void) | undefined,
@@ -168,29 +181,29 @@ export async function runRemoteChat(
   if (messages.length === 0) {
     throw new QueryError('QUERY_FAILED', 'messages must not be empty');
   }
-  rejectRemoteTextLocalOptions(
+  rejectGatewayTextLocalOptions(
     options,
     structuredInput?.media != null && mediaHasEntries(structuredInput.media)
   );
   const body = textBody(
-    remote.alias,
+    endpoint.target,
     options,
-    options.gatewayOptions,
+    combineEndpointOptions(endpoint.protocolOptions, options.endpointOptions),
     { messages: messages.map(gatewayMessage) },
     tokenBatchSink != null
   );
   return tokenBatchSink == null
-    ? gatewayRequest(remote, '/v1/chat', body, signal, async (response, token) =>
+    ? gatewayRequest(endpoint, endpoint.routes.chat, body, signal, async (response, token) =>
         parseTextResponse(await gatewayJsonBody(response, token))
       )
-    : gatewayRequest(remote, '/v1/chat', body, signal, (response, token, resetTimeout) =>
+    : gatewayRequest(endpoint, endpoint.routes.chat, body, signal, (response, token, resetTimeout) =>
         readTextStream(response, token, tokenBatchSink, resetTimeout)
       );
 }
 
-/** Run a browser embedding request through a CogentLM remote gateway. */
-export async function runRemoteEmbedding(
-  remote: RemoteEndpoint,
+/** Run a browser embedding request through a gateway endpoint. */
+export async function runGatewayEmbedding(
+  endpoint: GatewayEndpoint,
   input: string,
   options: EmbedOptions,
   signal: AbortSignal
@@ -199,108 +212,140 @@ export async function runRemoteEmbedding(
   if (embedInput.trim().length === 0) {
     throw new QueryError('QUERY_FAILED', 'input must not be empty');
   }
-  rejectRemoteEmbedLocalOptions(options);
-  const body = mergeGatewayOptions(
+  rejectGatewayEmbedLocalOptions(options);
+  const body = mergeEndpointOptions(
     {
-      model: remote.alias,
+      model: endpoint.target,
       input: embedInput,
     },
-    options.gatewayOptions,
+    combineEndpointOptions(endpoint.protocolOptions, options.endpointOptions),
     EMBED_TYPED_FIELDS
   );
-  return gatewayRequest(remote, '/v1/embed', body, signal, async (response, token) =>
+  return gatewayRequest(endpoint, endpoint.routes.embed, body, signal, async (response, token) =>
     parseEmbeddingResponse(await gatewayJsonBody(response, token))
   );
 }
 
-function normalizeConfig(id: string, config: RemoteGatewayConfig): RemoteEndpoint {
+function normalizeConfig(id: string, config: GatewayEndpointDescriptor): GatewayEndpoint {
   if (typeof config !== 'object' || config == null || Array.isArray(config)) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway config must be an object');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint config must be an object');
   }
-  rejectUnknownRemoteConfigFields(config);
-  const alias = normalizeId(config.alias, 'remote alias');
+  rejectUnknownEndpointConfigFields(config);
+  const target = normalizeId(config.target, 'endpoint target');
   if (typeof config.baseUrl !== 'string') {
-    throw new QueryError('QUERY_FAILED', 'remote gateway baseUrl must be a string');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint baseUrl must be a string');
   }
   const trimmedBaseUrl = config.baseUrl.trim();
   if (trimmedBaseUrl.length === 0) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway baseUrl must not be empty');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint baseUrl must not be empty');
   }
   if (trimmedBaseUrl !== config.baseUrl) {
     throw new QueryError(
       'QUERY_FAILED',
-      'remote gateway baseUrl must not contain surrounding whitespace'
+      'gateway endpoint baseUrl must not contain surrounding whitespace'
     );
   }
   const baseUrl = config.baseUrl.replace(/\/+$/, '');
   if (baseUrl.length === 0) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway baseUrl must not be empty');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint baseUrl must not be empty');
   }
-  validateGatewayBaseUrl(baseUrl);
-  if (config.token == null && config.tokenProvider == null) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway token or tokenProvider is required');
-  }
-  if (config.token != null && config.tokenProvider != null) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway must set token or tokenProvider, not both');
-  }
-  if (config.token != null && typeof config.token !== 'string') {
-    throw new QueryError('QUERY_FAILED', 'remote gateway token must be a string');
-  }
-  if (config.token != null) {
-    validateGatewayToken(config.token);
-  }
-  if (config.tokenProvider != null && typeof config.tokenProvider !== 'function') {
-    throw new QueryError('QUERY_FAILED', 'remote gateway tokenProvider must be a function');
-  }
+  validateEndpointBaseUrl(baseUrl);
+  const authentication = normalizeAuthentication(config.authentication);
   if (
     config.timeoutMs != null &&
     (typeof config.timeoutMs !== 'number' ||
       !Number.isFinite(config.timeoutMs) ||
       config.timeoutMs <= 0)
   ) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway timeoutMs must be positive');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint timeoutMs must be positive');
   }
   return {
     id,
-    alias,
+    target,
     baseUrl,
-    token: config.token,
-    tokenProvider: config.tokenProvider,
+    routes: {
+      query: config.routes?.query ?? '/v1/query',
+      chat: config.routes?.chat ?? '/v1/chat',
+      embed: config.routes?.embed ?? '/v1/embed',
+    },
+    authentication,
+    staticHeaders: config.staticHeaders ?? {},
     timeoutMs: config.timeoutMs,
+    protocolOptions: config.protocolOptions ?? {},
   };
 }
 
-function rejectUnknownRemoteConfigFields(config: RemoteGatewayConfig): void {
+function rejectUnknownEndpointConfigFields(config: GatewayEndpointDescriptor): void {
   for (const field of Object.keys(config)) {
-    if (!REMOTE_CONFIG_FIELDS.has(field)) {
-      throw new QueryError('QUERY_FAILED', `unsupported remote gateway config field: ${field}`);
+    if (!ENDPOINT_CONFIG_FIELDS.has(field)) {
+      throw new QueryError('QUERY_FAILED', `unsupported gateway endpoint field: ${field}`);
     }
   }
 }
 
-function validateGatewayBaseUrl(baseUrl: string): void {
+function normalizeAuthentication(
+  authentication: GatewayEndpointDescriptor['authentication']
+): GatewayEndpoint['authentication'] {
+  if (authentication == null || authentication.kind === 'none') {
+    return { kind: 'none' };
+  }
+  if (authentication.kind === 'bearer') {
+    if (authentication.value == null && authentication.valueProvider == null) {
+      throw new QueryError('QUERY_FAILED', 'bearer authentication requires a value or valueProvider');
+    }
+    return authentication;
+  }
+  if (authentication.kind === 'header') {
+    if (authentication.headerName == null) {
+      throw new QueryError('QUERY_FAILED', 'header authentication requires headerName');
+    }
+    if (authentication.value == null && authentication.valueProvider == null) {
+      throw new QueryError('QUERY_FAILED', 'header authentication requires a value or valueProvider');
+    }
+    return authentication;
+  }
+  throw new QueryError('QUERY_FAILED', 'unsupported authentication strategy');
+}
+
+function combineEndpointOptions(
+  profileOptions: Readonly<Record<string, unknown>>,
+  requestOptions: unknown
+): Record<string, unknown> {
+  if (requestOptions == null) {
+    return { ...profileOptions };
+  }
+  if (typeof requestOptions !== 'object' || Array.isArray(requestOptions)) {
+    throw new QueryError('QUERY_FAILED', 'endpointOptions must be a JSON object');
+  }
+  return { ...profileOptions, ...(requestOptions as Record<string, unknown>) };
+}
+
+function validateEndpointBaseUrl(baseUrl: string): void {
   let url: URL;
   try {
     url = new URL(baseUrl);
   } catch {
-    throw new QueryError('QUERY_FAILED', 'remote gateway baseUrl is invalid');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint baseUrl is invalid');
   }
   if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.hostname.length === 0) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway baseUrl must be an absolute http(s) URL');
+    throw new QueryError(
+      'QUERY_FAILED',
+      'gateway endpoint baseUrl must be an absolute http(s) URL'
+    );
   }
   if (url.username.length > 0 || url.password.length > 0) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway baseUrl must not include userinfo');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint baseUrl must not include userinfo');
   }
   if (url.search.length > 0 || url.hash.length > 0) {
     throw new QueryError(
       'QUERY_FAILED',
-      'remote gateway baseUrl must not include query or fragment'
+      'gateway endpoint baseUrl must not include query or fragment'
     );
   }
   if (url.protocol === 'http:' && !isLoopbackHostname(url.hostname)) {
     throw new QueryError(
       'QUERY_FAILED',
-      'remote gateway baseUrl must use HTTPS unless it targets loopback'
+      'gateway endpoint baseUrl must use HTTPS unless it targets loopback'
     );
   }
 }
@@ -344,22 +389,28 @@ function normalizeId(value: unknown, name: string): string {
   return value;
 }
 
-function rejectRemoteTextLocalOptions(options: QueryOptions, hasMedia: boolean): void {
+function rejectGatewayTextLocalOptions(options: QueryOptions, hasMedia: boolean): void {
   if (options.session != null || options.grammar != null || hasMedia) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'local text options are not valid for remote endpoints');
+    throw new QueryError(
+      'UNSUPPORTED_OPERATION',
+      'local text options are not valid for gateway endpoints'
+    );
   }
 }
 
-function rejectRemoteEmbedLocalOptions(options: EmbedOptions): void {
+function rejectGatewayEmbedLocalOptions(options: EmbedOptions): void {
   if (options.contextKey != null || options.normalize != null) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'local embed options are not valid for remote endpoints');
+    throw new QueryError(
+      'UNSUPPORTED_OPERATION',
+      'local embed options are not valid for gateway endpoints'
+    );
   }
 }
 
 function textBody(
-  alias: string,
+  target: string,
   options: QueryOptions,
-  gatewayOptions: unknown,
+  endpointOptions: unknown,
   payload: { readonly prompt: string } | { readonly messages: readonly unknown[] },
   stream: boolean
 ): Record<string, unknown> {
@@ -367,9 +418,9 @@ function textBody(
   const temperature = optionalTemperature(options.temperature);
   const topP = optionalTopP(options.topP);
   const stop = optionalStringArray(options.stop, 'stop');
-  return mergeGatewayOptions(
+  return mergeEndpointOptions(
     {
-      model: alias,
+      model: target,
       ...payload,
       ...(maxTokens == null ? {} : { max_tokens: maxTokens }),
       ...(temperature == null ? {} : { temperature }),
@@ -377,7 +428,7 @@ function textBody(
       ...(stop == null ? {} : { stop }),
       stream,
     },
-    gatewayOptions,
+    endpointOptions,
     TEXT_TYPED_FIELDS
   );
 }
@@ -431,26 +482,26 @@ function optionalStringArray(value: unknown, key: string): readonly string[] | u
   return [...value];
 }
 
-function mergeGatewayOptions(
+function mergeEndpointOptions(
   body: Record<string, unknown>,
-  gatewayOptions: unknown,
+  endpointOptions: unknown,
   typedFields: ReadonlySet<string>
 ): Record<string, unknown> {
-  if (gatewayOptions == null) {
+  if (endpointOptions == null) {
     return body;
   }
-  if (typeof gatewayOptions !== 'object' || Array.isArray(gatewayOptions)) {
-    throw new QueryError('QUERY_FAILED', 'gatewayOptions must be a JSON object');
+  if (typeof endpointOptions !== 'object' || Array.isArray(endpointOptions)) {
+    throw new QueryError('QUERY_FAILED', 'endpointOptions must be a JSON object');
   }
-  if (!isJsonObject(gatewayOptions)) {
-    throw new QueryError('QUERY_FAILED', 'gatewayOptions must be a JSON object');
+  if (!isJsonObject(endpointOptions)) {
+    throw new QueryError('QUERY_FAILED', 'endpointOptions must be a JSON object');
   }
-  for (const [key, value] of Object.entries(gatewayOptions)) {
+  for (const [key, value] of Object.entries(endpointOptions)) {
     if (typedFields.has(key)) {
-      throw new QueryError('QUERY_FAILED', `gatewayOptions cannot override typed field: ${key}`);
+      throw new QueryError('QUERY_FAILED', `endpointOptions cannot override typed field: ${key}`);
     }
     if (LOCAL_ONLY_GATEWAY_FIELDS.has(key)) {
-      throw new QueryError('QUERY_FAILED', `gatewayOptions cannot contain local-only field: ${key}`);
+      throw new QueryError('QUERY_FAILED', `endpointOptions cannot contain local-only field: ${key}`);
     }
     body[key] = snapshotJsonCompatibleGatewayOption(value);
   }
@@ -467,16 +518,16 @@ function snapshotJsonCompatibleValue(value: unknown, ancestors: WeakSet<object>)
   }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new QueryError('QUERY_FAILED', 'gatewayOptions cannot contain non-finite numbers');
+      throw new QueryError('QUERY_FAILED', 'endpointOptions cannot contain non-finite numbers');
     }
     return value;
   }
   if (typeof value !== 'object') {
-    throw new QueryError('QUERY_FAILED', 'gatewayOptions must contain JSON-compatible values');
+    throw new QueryError('QUERY_FAILED', 'endpointOptions must contain JSON-compatible values');
   }
 
   if (ancestors.has(value)) {
-    throw new QueryError('QUERY_FAILED', 'gatewayOptions must contain JSON-compatible values');
+    throw new QueryError('QUERY_FAILED', 'endpointOptions must contain JSON-compatible values');
   }
   ancestors.add(value);
   try {
@@ -484,7 +535,7 @@ function snapshotJsonCompatibleValue(value: unknown, ancestors: WeakSet<object>)
       return value.map((item) => snapshotJsonCompatibleValue(item, ancestors));
     }
     if (!isJsonObject(value)) {
-      throw new QueryError('QUERY_FAILED', 'gatewayOptions must contain JSON-compatible values');
+      throw new QueryError('QUERY_FAILED', 'endpointOptions must contain JSON-compatible values');
     }
     const snapshot: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
@@ -555,22 +606,23 @@ function chatMessageFromValue(value: unknown): ChatMessage {
 }
 
 async function gatewayRequest<T>(
-  remote: RemoteEndpoint,
+  endpoint: GatewayEndpoint,
   path: string,
   body: Record<string, unknown>,
   signal: AbortSignal,
   read: (response: Response, token: string, resetTimeout: () => void) => Promise<T>
 ): Promise<T> {
-  const abort = createTimedAbortController(signal, remote.timeoutMs);
+  const abort = createTimedAbortController(signal, endpoint.timeoutMs);
 
   try {
-    throwIfGatewayAborted(abort.signal, abort.timedOut());
-    const token = await remoteToken(remote, abort.signal);
-    throwIfGatewayAborted(abort.signal, abort.timedOut());
-    const response = await fetch(`${remote.baseUrl}${path}`, {
+    throwIfEndpointAborted(abort.signal, abort.timedOut());
+    const token = await endpointSecret(endpoint, abort.signal);
+    const headers = await endpointHeaders(endpoint, token);
+    throwIfEndpointAborted(abort.signal, abort.timedOut());
+    const response = await fetch(`${endpoint.baseUrl}${path}`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...headers,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -599,38 +651,46 @@ async function gatewayRequest<T>(
   }
 }
 
-async function remoteToken(remote: RemoteEndpoint, signal: AbortSignal): Promise<string> {
+async function endpointSecret(
+  endpoint: GatewayEndpoint,
+  signal: AbortSignal
+): Promise<string> {
+  if (endpoint.authentication.kind === 'none') {
+    return '';
+  }
   let token: unknown;
   try {
-    token = remote.token ?? (await remoteProviderToken(remote.tokenProvider, signal));
+    token =
+      endpoint.authentication.value ??
+      (await endpointValueProvider(endpoint.authentication.valueProvider, signal));
   } catch {
     if (signal.aborted) {
-      throw new Error('remote gateway token provider aborted');
+      throw new Error('gateway endpoint secret provider aborted');
     }
     throw new QueryError('QUERY_FAILED', GATEWAY_TOKEN_PROVIDER_FAILED_MESSAGE);
   }
   if (typeof token !== 'string') {
-    throw new QueryError('QUERY_FAILED', 'remote gateway token must be a string');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint secret must be a string');
   }
-  validateGatewayToken(token);
+  validateEndpointSecret(token);
   return token;
 }
 
-async function remoteProviderToken(
-  tokenProvider: RemoteEndpoint['tokenProvider'],
+async function endpointValueProvider(
+  tokenProvider: GatewayEndpoint['authentication']['valueProvider'],
   signal: AbortSignal
 ): Promise<unknown> {
   if (tokenProvider == null) {
     return undefined;
   }
   if (signal.aborted) {
-    throw new Error('remote gateway token provider aborted');
+    throw new Error('gateway endpoint secret provider aborted');
   }
 
   let removeAbortListener = (): void => {};
   const abortPromise = new Promise<never>((_resolve, reject) => {
     const abortListener = (): void => {
-      reject(new Error('remote gateway token provider aborted'));
+      reject(new Error('gateway endpoint secret provider aborted'));
     };
     signal.addEventListener('abort', abortListener, { once: true });
     removeAbortListener = () => {
@@ -646,16 +706,29 @@ async function remoteProviderToken(
   }
 }
 
-function validateGatewayToken(token: string): void {
+async function endpointHeaders(
+  endpoint: GatewayEndpoint,
+  secret: string
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { ...endpoint.staticHeaders };
+  if (endpoint.authentication.kind === 'bearer') {
+    headers.Authorization = `Bearer ${secret}`;
+  } else if (endpoint.authentication.kind === 'header') {
+    headers[endpoint.authentication.headerName ?? 'Authorization'] = secret;
+  }
+  return headers;
+}
+
+function validateEndpointSecret(token: string): void {
   if (token.trim().length === 0) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway token must not be empty');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint secret must not be empty');
   }
   if (/\s/u.test(token)) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway token must not contain whitespace');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint secret must not contain whitespace');
   }
 }
 
-function throwIfGatewayAborted(signal: AbortSignal, timedOut: boolean): void {
+function throwIfEndpointAborted(signal: AbortSignal, timedOut: boolean): void {
   if (!signal.aborted) {
     return;
   }
@@ -670,10 +743,10 @@ async function gatewayError(response: Response, token: string): Promise<QueryErr
   const message =
     typeof body === 'object' && body != null && 'error' in body
       ? errorMessage((body as { readonly error?: { readonly message?: unknown } }).error?.message)
-      : response.statusText || 'remote gateway error';
+      : response.statusText || 'gateway endpoint error';
   return new QueryError('QUERY_FAILED', redactSecret(message, token), {
     status: response.status,
-    gatewayCode: redactOptionalSecret(gatewayErrorCode(body), token),
+    protocolCode: redactOptionalSecret(gatewayErrorCode(body), token),
     requestId: redactOptionalSecret(gatewayRequestId(response.headers), token),
     retryAfterMs: retryAfterMs(response.headers),
   });
@@ -780,7 +853,7 @@ function rejectGatewayBodyError(
     return;
   }
   throw new QueryError('QUERY_FAILED', redactSecret(gatewayBodyErrorMessage(body), token), {
-    gatewayCode: redactOptionalSecret(gatewayErrorCode(body), token),
+    protocolCode: redactOptionalSecret(gatewayErrorCode(body), token),
     requestId: redactOptionalSecret(requestId, token),
   });
 }
@@ -846,7 +919,10 @@ async function readTextStream(
   resetTimeout: () => void
 ): Promise<GenerationResult> {
   if (response.body == null) {
-    throw new QueryError('STREAMING_UNAVAILABLE', 'remote gateway response body is not streamable');
+    throw new QueryError(
+      'STREAMING_UNAVAILABLE',
+      'gateway endpoint response body is not streamable'
+    );
   }
   const state: TextStreamState = {
     requestId: response.headers.get('x-request-id') ?? '',
@@ -920,7 +996,7 @@ function pushStreamEvent(state: TextStreamState, raw: string): void {
   } else if (event.event === 'error') {
     const data = parseStreamJson(event.data);
     throw new QueryError('QUERY_FAILED', redactSecret(streamErrorMessage(data), state.token), {
-      gatewayCode: redactOptionalSecret(gatewayErrorCode(data), state.token),
+      protocolCode: redactOptionalSecret(gatewayErrorCode(data), state.token),
       requestId: redactOptionalSecret(state.requestId || undefined, state.token),
     });
   } else {
@@ -1057,7 +1133,7 @@ function requestStats(usage: GatewayUsage | undefined): RequestStats {
 
 function objectValue(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value == null || Array.isArray(value)) {
-    throw new QueryError('QUERY_FAILED', 'remote gateway response must be a JSON object');
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint response must be a JSON object');
   }
   return value as Record<string, unknown>;
 }
@@ -1070,7 +1146,7 @@ function stringField(body: Record<string, unknown>, key: string, fallback: strin
 function requiredStringField(
   body: Record<string, unknown>,
   key: string,
-  context = 'remote gateway response'
+  context = 'gateway endpoint response'
 ): string {
   const value = body[key];
   if (typeof value !== 'string') {
@@ -1082,16 +1158,16 @@ function requiredStringField(
 function numericArrayField(body: Record<string, unknown>, key: string): number[] {
   const value = body[key];
   if (!Array.isArray(value)) {
-    throw new QueryError('QUERY_FAILED', `remote gateway response missing ${key}`);
+    throw new QueryError('QUERY_FAILED', `gateway endpoint response missing ${key}`);
   }
   return value.map((item) => {
     if (typeof item !== 'number' || !Number.isFinite(item)) {
-      throw new QueryError('QUERY_FAILED', `remote gateway ${key} contains non-finite value`);
+      throw new QueryError('QUERY_FAILED', `gateway endpoint ${key} contains non-finite value`);
     }
     if (item < -F32_MAX || item > F32_MAX) {
       throw new QueryError(
         'QUERY_FAILED',
-        `remote gateway ${key} contains value outside f32 range`
+        `gateway endpoint ${key} contains value outside f32 range`
       );
     }
     return item;
@@ -1119,7 +1195,9 @@ function finishReason(value: unknown): FinishReason {
 }
 
 function errorMessage(value: unknown): string {
-  return typeof value === 'string' && value.length > 0 ? value : 'remote gateway error';
+  return typeof value === 'string' && value.length > 0
+    ? value
+    : 'gateway endpoint error';
 }
 
 function emptyTokenEmissionStats(): TokenEmissionStats {

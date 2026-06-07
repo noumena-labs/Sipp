@@ -11,7 +11,7 @@ use futures::StreamExt;
 use futures_channel::mpsc;
 
 use crate::dispatch::InferenceEndpoint;
-use crate::remote_executor::RemoteExecutor;
+use crate::io_executor::IoExecutor;
 use crate::{
     map, validate, CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError,
     CogentQueryRequest, CogentRequestContext, CogentResponseMetadata, CogentResult,
@@ -28,7 +28,7 @@ pub(crate) struct ProviderEndpoint {
     capabilities: EndpointCapabilities,
     model: String,
     transport: ProviderTransport,
-    executor: RemoteExecutor,
+    executor: IoExecutor,
     secrets: Vec<String>,
 }
 
@@ -38,7 +38,7 @@ impl ProviderEndpoint {
         model: String,
         capabilities: EndpointCapabilities,
         transport: ProviderTransport,
-        executor: RemoteExecutor,
+        executor: IoExecutor,
         secrets: Vec<String>,
     ) -> Self {
         Self {
@@ -215,11 +215,11 @@ impl InferenceEndpoint for ProviderEndpoint {
 
 struct ProviderResponseFuture<T> {
     join: tokio::task::JoinHandle<CogentResult<T>>,
-    _executor: RemoteExecutor,
+    _executor: IoExecutor,
 }
 
 impl<T> ProviderResponseFuture<T> {
-    fn new(join: tokio::task::JoinHandle<CogentResult<T>>, executor: RemoteExecutor) -> Self {
+    fn new(join: tokio::task::JoinHandle<CogentResult<T>>, executor: IoExecutor) -> Self {
         Self {
             join,
             _executor: executor,

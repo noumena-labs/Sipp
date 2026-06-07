@@ -2,19 +2,17 @@ use std::path::PathBuf;
 
 use cogentlm_engine::engine::NativeRuntimeConfig;
 
+use crate::GatewayEndpointConfig;
 #[cfg(feature = "providers")]
 use crate::ProviderEndpointConfig;
-#[cfg(feature = "remote")]
-use crate::RemoteGatewayConfig;
 
 /// Configuration used by `CogentClient::add` to register an endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EndpointDescriptor {
     /// Local GGUF model loaded into this process.
     LocalModel(LocalModelDescriptor),
-    /// CogentLM Gateway endpoint.
-    #[cfg(feature = "remote")]
-    Gateway(RemoteGatewayConfig),
+    /// First-party HTTP gateway endpoint.
+    Gateway(GatewayEndpointConfig),
     /// Direct provider endpoint using caller-owned credentials.
     #[cfg(feature = "providers")]
     Provider(ProviderEndpointConfig),
@@ -29,9 +27,8 @@ impl EndpointDescriptor {
         })
     }
 
-    /// Create a gateway descriptor.
-    #[cfg(feature = "remote")]
-    pub fn gateway(config: RemoteGatewayConfig) -> Self {
+    /// Create a gateway endpoint descriptor.
+    pub fn gateway(config: GatewayEndpointConfig) -> Self {
         Self::Gateway(config)
     }
 

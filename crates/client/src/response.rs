@@ -14,7 +14,7 @@ pub struct CogentResponseMetadata {
     pub upstream_response_id: Option<String>,
 }
 
-/// Final text response from a local or remote endpoint.
+/// Final text response from an inference endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CogentTextResponse {
     /// Endpoint that produced the response.
@@ -31,7 +31,7 @@ pub struct CogentTextResponse {
     pub metadata: CogentResponseMetadata,
 }
 
-/// Final embedding response from a local or remote endpoint.
+/// Final embedding response from an inference endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CogentEmbeddingResponse {
     /// Endpoint that produced the response.

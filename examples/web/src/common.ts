@@ -2,6 +2,7 @@ import {
   QueryError,
   type EmbeddingResult,
   type EndpointRef,
+  type GatewayEndpointDescriptor,
   type GenerationResult,
   type ModelSource,
 } from '@noumena-labs/cogentlm';
@@ -22,9 +23,9 @@ export interface LocalPageElements {
   readonly output: HTMLPreElement;
 }
 
-export interface RemoteGatewayPageElements {
+export interface GatewayPageElements {
   readonly runForm: HTMLFormElement;
-  readonly aliasInput: HTMLInputElement;
+  readonly targetInput: HTMLInputElement;
   readonly baseUrlInput: HTMLInputElement;
   readonly tokenInput: HTMLInputElement;
   readonly promptInput: HTMLTextAreaElement;
@@ -37,7 +38,7 @@ export interface GatewayLocalPageElements {
   readonly runForm: HTMLFormElement;
   readonly modelInput: HTMLInputElement;
   readonly modelFileInput: HTMLInputElement;
-  readonly aliasInput: HTMLInputElement;
+  readonly targetInput: HTMLInputElement;
   readonly baseUrlInput: HTMLInputElement;
   readonly tokenInput: HTMLInputElement;
   readonly promptInput: HTMLTextAreaElement;
@@ -46,14 +47,10 @@ export interface GatewayLocalPageElements {
   readonly gatewayOutput: HTMLPreElement;
 }
 
-export interface GatewayInputs {
-  readonly alias: string;
-  readonly baseUrl: string;
-  readonly token: string;
-}
+export type GatewayInputs = Omit<GatewayEndpointDescriptor, 'kind'>;
 
 export interface GatewayInputElements {
-  readonly aliasInput: HTMLInputElement;
+  readonly targetInput: HTMLInputElement;
   readonly baseUrlInput: HTMLInputElement;
   readonly tokenInput: HTMLInputElement;
   readonly output: HTMLPreElement;
@@ -122,11 +119,11 @@ export function renderLocalPage(
   };
 }
 
-export function renderRemoteGatewayPage(
+export function renderGatewayPage(
   title: string,
   defaultPrompt: string,
   includeMaxTokens: boolean
-): RemoteGatewayPageElements {
+): GatewayPageElements {
   const app = appRoot();
   app.innerHTML = `
     <section class="shell">
@@ -134,8 +131,8 @@ export function renderRemoteGatewayPage(
       <form id="run-form" class="panel">
         <div class="field-row">
           <label>
-            Gateway alias
-            <input id="alias" value="local" autocomplete="off" />
+            Gateway target
+            <input id="target" value="local" autocomplete="off" />
           </label>
           <label>
             Gateway base URL
@@ -158,7 +155,7 @@ export function renderRemoteGatewayPage(
   `;
   return {
     runForm: element('run-form'),
-    aliasInput: element('alias'),
+    targetInput: element('target'),
     baseUrlInput: element('base-url'),
     tokenInput: element('token'),
     promptInput: element('prompt'),
@@ -188,8 +185,8 @@ export function renderGatewayLocalPage(defaultPrompt: string): GatewayLocalPageE
       <form id="run-form" class="panel">
         <div class="field-row">
           <label>
-            Gateway alias
-            <input id="alias" value="local" autocomplete="off" />
+            Gateway target
+            <input id="target" value="local" autocomplete="off" />
           </label>
           <label>
             Gateway base URL
@@ -218,7 +215,7 @@ export function renderGatewayLocalPage(defaultPrompt: string): GatewayLocalPageE
     runForm: element('run-form'),
     modelInput: element('model'),
     modelFileInput: element('model-file'),
-    aliasInput: element('alias'),
+    targetInput: element('target'),
     baseUrlInput: element('base-url'),
     tokenInput: element('token'),
     promptInput: element('prompt'),
@@ -253,17 +250,21 @@ export function readMaxTokens(input: HTMLInputElement | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_TOKENS;
 }
 
-export function readRemoteGatewayConfig(
+export function readGatewayConfig(
   elements: GatewayInputElements
 ): GatewayInputs | null {
-  const alias = elements.aliasInput.value.trim();
+  const target = elements.targetInput.value.trim();
   const baseUrl = elements.baseUrlInput.value.trim();
   const token = elements.tokenInput.value;
-  if (alias === '' || baseUrl === '' || token === '') {
-    write(elements.output, 'Enter a gateway alias, base URL, and token.');
+  if (target === '' || baseUrl === '' || token === '') {
+    write(elements.output, 'Enter a gateway target, base URL, and token.');
     return null;
   }
-  return { alias, baseUrl, token };
+  return {
+    target,
+    baseUrl,
+    authentication: { kind: 'bearer', value: token },
+  };
 }
 
 export function write(output: HTMLPreElement, message: string): void {

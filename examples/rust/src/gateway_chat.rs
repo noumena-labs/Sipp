@@ -11,9 +11,9 @@ use cogentlm::engine::{
 use cogentlm::engine::{ChatMessage, ChatRole};
 use cogentlm::{
     CogentChatRequest, CogentClient, CogentTextOptions, CogentTextResponse, CogentTextRun,
-    EndpointDescriptor, LocalTextOptions,
+    EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
+    GatewayTimeoutPolicy, LocalTextOptions,
 };
-use cogentlm::{RemoteGatewayConfig, RemoteSecret};
 use futures::executor::block_on;
 use futures::StreamExt;
 
@@ -32,11 +32,16 @@ fn main() -> support::ExampleResult<()> {
                 EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
             )
             .await?;
-        let config = RemoteGatewayConfig {
-            alias: args.alias.clone(),
+        let config = GatewayEndpointConfig {
+            target: args.target.clone(),
             base_url: support::required_env("COGENTLM_GATEWAY_URL")?,
-            token: RemoteSecret::new(support::required_env("COGENTLM_GATEWAY_TOKEN")?),
-            timeout: None,
+            routes: GatewayRoutes::default(),
+            authentication: GatewayAuthentication::Bearer(GatewaySecret::new(
+                support::required_env("COGENTLM_GATEWAY_TOKEN")?,
+            )),
+            static_headers: Default::default(),
+            timeouts: GatewayTimeoutPolicy::default(),
+            protocol_options: Default::default(),
         };
         let gateway_endpoint = client
             .add("gateway", EndpointDescriptor::gateway(config))

@@ -12,7 +12,7 @@ import {
   readMaxTokens,
   readModelSource,
   readPrompt,
-  readRemoteGatewayConfig,
+  readGatewayConfig,
   renderGatewayLocalPage,
   reportError,
   write,
@@ -54,13 +54,13 @@ elements.runForm.addEventListener('submit', async (event) => {
     write(elements.gatewayOutput, 'Enter input.');
     return;
   }
-  const gateway = readRemoteGatewayConfig({ ...elements, output: elements.gatewayOutput });
+  const gateway = readGatewayConfig({ ...elements, output: elements.gatewayOutput });
   if (gateway == null) return;
 
   const gatewayClient = new CogentClient();
   try {
     const gatewayEndpoint = await gatewayClient.add(
-      gateway.alias,
+      'gateway',
       { kind: 'gateway', ...gateway }
     );
     const maxTokens = readMaxTokens(elements.maxTokensInput);

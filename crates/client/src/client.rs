@@ -5,17 +5,15 @@ use cogentlm_core::CapabilitySupport;
 use cogentlm_engine::engine::CogentEngine;
 
 use crate::dispatch::InferenceEndpoint;
+#[cfg(not(target_family = "wasm"))]
+use crate::gateway_endpoint::GatewayEndpoint;
+#[cfg(not(target_family = "wasm"))]
+use crate::io_executor::IoExecutor;
 use crate::local_endpoint::LocalEndpoint;
-#[cfg(feature = "providers")]
+#[cfg(all(feature = "providers", not(target_family = "wasm")))]
 use crate::provider_endpoint::ProviderEndpoint;
-#[cfg(feature = "remote")]
-use crate::remote_endpoint::RemoteEndpoint;
-#[cfg(any(feature = "remote", feature = "providers"))]
-use crate::remote_executor::RemoteExecutor;
 #[cfg(feature = "providers")]
 use crate::ProviderEndpointConfig;
-#[cfg(feature = "remote")]
-use crate::RemoteGatewayConfig;
 use crate::{
     CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError, CogentQueryRequest,
     CogentRequestContext, CogentResult, CogentTextRun, EndpointCapabilities, EndpointDescriptor,
@@ -37,8 +35,8 @@ mod client_tests;
 /// Public inference facade over registered local, gateway, and provider endpoints.
 pub struct CogentClient {
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
-    #[cfg(any(feature = "remote", feature = "providers"))]
-    remote_executor: Option<RemoteExecutor>,
+    #[cfg(not(target_family = "wasm"))]
+    io_executor: Option<IoExecutor>,
 }
 
 impl CogentClient {
@@ -46,8 +44,8 @@ impl CogentClient {
     pub fn new() -> Self {
         Self {
             endpoints: HashMap::new(),
-            #[cfg(any(feature = "remote", feature = "providers"))]
-            remote_executor: None,
+            #[cfg(not(target_family = "wasm"))]
+            io_executor: None,
         }
     }
 
@@ -71,8 +69,7 @@ impl CogentClient {
                 let engine = CogentEngine::load(descriptor.model_path, descriptor.config).await?;
                 self.register_local(id, engine).await
             }
-            #[cfg(feature = "remote")]
-            EndpointDescriptor::Gateway(config) => self.register_remote(id, config),
+            EndpointDescriptor::Gateway(config) => self.register_gateway(id, config),
             #[cfg(feature = "providers")]
             EndpointDescriptor::Provider(config) => self.register_provider(id, config),
         }
@@ -98,30 +95,36 @@ impl CogentClient {
         Ok(endpoint)
     }
 
-    #[cfg(feature = "remote")]
-    fn register_remote(
+    #[cfg(not(target_family = "wasm"))]
+    fn register_gateway(
         &mut self,
         id: impl Into<String>,
-        config: RemoteGatewayConfig,
+        config: crate::GatewayEndpointConfig,
     ) -> CogentResult<EndpointRef> {
-        let id = normalize_id(id, "remote id")?;
-        let endpoint = EndpointRef::Remote { id };
-        let (model, client) = config.build()?;
-        let executor = self.remote_executor()?;
+        let id = normalize_id(id, "gateway id")?;
+        let endpoint = EndpointRef::Gateway { id };
+        let executor = self.io_executor()?;
         self.replace_endpoint(
             endpoint.clone(),
-            Arc::new(RemoteEndpoint::new(
-                endpoint.clone(),
-                model,
-                EndpointCapabilities::unknown(),
-                client,
-                executor,
-            )),
+            Arc::new(GatewayEndpoint::new(endpoint.clone(), config, executor)?),
         );
         Ok(endpoint)
     }
 
-    #[cfg(feature = "providers")]
+    #[cfg(target_family = "wasm")]
+    fn register_gateway(
+        &mut self,
+        id: impl Into<String>,
+        _config: crate::GatewayEndpointConfig,
+    ) -> CogentResult<EndpointRef> {
+        let id = normalize_id(id, "gateway id")?;
+        Err(CogentError::UnsupportedOperation {
+            endpoint: EndpointRef::Gateway { id },
+            operation: "gateway endpoint registration",
+        })
+    }
+
+    #[cfg(all(feature = "providers", not(target_family = "wasm")))]
     fn register_provider(
         &mut self,
         id: impl Into<String>,
@@ -130,7 +133,7 @@ impl CogentClient {
         let id = normalize_id(id, "provider id")?;
         let endpoint = EndpointRef::Provider { id };
         let (model, transport, secrets) = config.build()?;
-        let executor = self.remote_executor()?;
+        let executor = self.io_executor()?;
         self.replace_endpoint(
             endpoint.clone(),
             Arc::new(ProviderEndpoint::new(
@@ -143,6 +146,19 @@ impl CogentClient {
             )),
         );
         Ok(endpoint)
+    }
+
+    #[cfg(all(feature = "providers", target_family = "wasm"))]
+    fn register_provider(
+        &mut self,
+        id: impl Into<String>,
+        _config: ProviderEndpointConfig,
+    ) -> CogentResult<EndpointRef> {
+        let id = normalize_id(id, "provider id")?;
+        Err(CogentError::UnsupportedOperation {
+            endpoint: EndpointRef::Provider { id },
+            operation: "provider endpoint registration",
+        })
     }
 
     fn replace_endpoint(
@@ -246,14 +262,14 @@ impl CogentClient {
         Ok(endpoint)
     }
 
-    #[cfg(any(feature = "remote", feature = "providers"))]
-    fn remote_executor(&mut self) -> CogentResult<RemoteExecutor> {
-        if let Some(executor) = &self.remote_executor {
+    #[cfg(not(target_family = "wasm"))]
+    fn io_executor(&mut self) -> CogentResult<IoExecutor> {
+        if let Some(executor) = &self.io_executor {
             return Ok(executor.clone());
         }
 
-        let executor = RemoteExecutor::new()?;
-        self.remote_executor = Some(executor.clone());
+        let executor = IoExecutor::new()?;
+        self.io_executor = Some(executor.clone());
         Ok(executor)
     }
 }

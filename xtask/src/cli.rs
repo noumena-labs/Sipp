@@ -1333,11 +1333,11 @@ pub struct RunGatewayOpenAiServeArgs {
     #[arg(long, default_value = "OPENAI_API_KEY")]
     pub api_key_env: String,
 
-    /// OpenAI model used by the query/chat alias.
+    /// OpenAI model used by the query/chat target.
     #[arg(long, default_value = "gpt-5-mini")]
     pub chat_model: String,
 
-    /// OpenAI embedding model used by the embed alias.
+    /// OpenAI embedding model used by the embed target.
     #[arg(long, default_value = "text-embedding-3-small")]
     pub embed_model: String,
 }

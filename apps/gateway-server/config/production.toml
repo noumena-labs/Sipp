@@ -1,28 +1,24 @@
 public_bind = "0.0.0.0:8080"
 management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
-drain_timeout_seconds = 120
-force_close_timeout_seconds = 5
+max_concurrent_requests = 4
 allowed_origins = []
+
+[routes]
+query = "/v1/query"
+chat = "/v1/chat"
+embed = "/v1/embed"
+index = "/"
+health = "/healthz"
+readiness = "/readyz"
+metrics = "/metrics"
 
 [[tokens]]
 env = "COGENTLM_GATEWAY_TOKEN"
 caller = "production-client"
+targets = ["local"]
 
-[[aliases]]
+[[targets]]
 name = "local"
 type = "local"
 model = "/models/model.gguf"
-
-[aliases.operations]
-query = true
-chat = true
-embed = true
-
-[aliases.limits.global]
-max_concurrent_requests = 4
-max_requests_per_minute = 120
-
-[aliases.limits.per_caller]
-max_concurrent_requests = 2
-max_requests_per_minute = 60

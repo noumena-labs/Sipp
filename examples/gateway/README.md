@@ -1,18 +1,18 @@
-# Minimal Gateway Example
+# Gateway Route Example
 
-This example is the smallest Axum proxy built from `cogentlm-gateway`.
-It deliberately has no authentication, CORS, TOML configuration, dashboard,
-history, or deployment policy.
+This Axum example shows the canonical gateway composition pattern:
 
-It demonstrates:
+- Create a `CogentClient`.
+- Register endpoints with `client.add(...)`.
+- Define Axum routes in application code.
+- Decode each request body with `GatewayCodec`.
+- Select the endpoint and call `client.query()`, `client.chat()`, or `client.embed()`.
+- Encode JSON or SSE responses explicitly.
 
-1. Loading one local GGUF model into `CogentClient`.
-2. Publishing it as the `local` gateway alias.
-3. Mounting `/v1/query`, `/v1/chat`, and `/v1/embed`.
-4. Returning finite JSON or SSE responses.
-5. Stopping on Ctrl-C.
+The example exposes `/v1/query`, `/v1/chat`, and `/v1/embed`. CogentLM does not
+own those routes; they are ordinary application handlers.
 
-Run it with:
+Run:
 
 ```bash
 cargo xtask run examples serve gateway-local \
@@ -20,16 +20,5 @@ cargo xtask run examples serve gateway-local \
   --bind 127.0.0.1:8787
 ```
 
-Or directly:
-
-```bash
-cargo run -p cogentlm-gateway-example -- \
-  --model path/to/model.gguf \
-  --bind 127.0.0.1:8787
-```
-
-The page served at `/` is stored in `assets/index.html`; no HTML is embedded in
-the Rust source.
-
-Use `apps/gateway-server` when you need authentication, readiness during model
-loading, metrics, graceful draining, or container deployment.
+Use `apps/gateway-server` for the first-party authenticated application, or
+compose `lib/gateway` helpers in your own framework routes.

@@ -14,7 +14,7 @@ import {
 } from './_support.mjs';
 
 const { CogentClient, setLlamaLogQuiet } = native;
-const { model, alias, input } = readGatewayArgs(
+const { model, target, input } = readGatewayArgs(
   'gateway_query',
   'Write one sentence about gateway inference.',
 );
@@ -26,14 +26,17 @@ const localEndpoint = await client.add('local', {
   config: runtimeConfig({ embeddings: false }),
 });
 
-// The app only needs the gateway URL, gateway bearer token, and public alias.
+// The app only needs the gateway URL, gateway bearer token, and public target.
 // Provider credentials or local model paths stay in the gateway process.
-const gateway = {
-  alias,
+const gatewayEndpoint = await client.add('gateway', {
+  kind: 'gateway',
+  target,
   baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-  token: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-};
-const gatewayEndpoint = await client.add('gateway', { kind: 'gateway', ...gateway });
+  authentication: {
+    kind: 'bearer',
+    value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
+  },
+});
 
 const local = await client.query({
   endpoint: localEndpoint,
@@ -44,7 +47,7 @@ const local = await client.query({
   },
 }).response;
 
-const remote = await client.query({
+const gateway = await client.query({
   endpoint: gatewayEndpoint,
   prompt: input,
   options: textOptions(),
@@ -53,7 +56,7 @@ const remote = await client.query({
 console.log('local:');
 printText(local);
 console.log('gateway:');
-printText(remote);
+printText(gateway);
 
 function runtimeConfig({ embeddings, projectorPath = undefined }) {
   const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };

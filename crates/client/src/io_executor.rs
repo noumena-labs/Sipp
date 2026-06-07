@@ -4,25 +4,22 @@ use std::thread;
 
 use crate::{CogentError, CogentResult};
 
-/// Owned remote I/O executor used by remote endpoints.
+/// Owned asynchronous I/O executor used by built-in gateway endpoints.
 #[derive(Clone)]
-pub(crate) struct RemoteExecutor {
-    inner: Arc<RemoteRuntimeThread>,
+pub(crate) struct IoExecutor {
+    inner: Arc<IoRuntimeThread>,
 }
 
-struct RemoteRuntimeThread {
+struct IoRuntimeThread {
     handle: tokio::runtime::Handle,
-    // Only `Drop` touches this, and `Arc` gives `Drop` exclusive access at the
-    // last reference, so no lock is needed.
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     _thread: thread::JoinHandle<()>,
 }
 
-impl RemoteExecutor {
-    /// Start a dedicated remote I/O runtime thread.
-    pub fn new() -> CogentResult<Self> {
+impl IoExecutor {
+    pub(crate) fn new() -> CogentResult<Self> {
         Ok(Self {
-            inner: Arc::new(start_remote_runtime_thread()?),
+            inner: Arc::new(start_io_runtime_thread()?),
         })
     }
 
@@ -35,7 +32,7 @@ impl RemoteExecutor {
     }
 }
 
-impl Drop for RemoteRuntimeThread {
+impl Drop for IoRuntimeThread {
     fn drop(&mut self) {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
@@ -43,10 +40,10 @@ impl Drop for RemoteRuntimeThread {
     }
 }
 
-fn start_remote_runtime_thread() -> CogentResult<RemoteRuntimeThread> {
+fn start_io_runtime_thread() -> CogentResult<IoRuntimeThread> {
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let thread = thread::Builder::new()
-        .name("cogentlm-remote-runtime".to_string())
+        .name("cogentlm-io-runtime".to_string())
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -65,18 +62,14 @@ fn start_remote_runtime_thread() -> CogentResult<RemoteRuntimeThread> {
             }
             let _ = runtime.block_on(shutdown_rx);
         })
-        .map_err(|error| {
-            CogentError::Internal(format!("failed to spawn remote runtime: {error}"))
-        })?;
+        .map_err(|error| CogentError::Internal(format!("failed to spawn I/O runtime: {error}")))?;
 
     let (handle, shutdown_tx) = ready_rx
         .recv()
-        .map_err(|_| CogentError::Internal("remote runtime stopped before startup".to_string()))?
-        .map_err(|error| {
-            CogentError::Internal(format!("failed to build remote runtime: {error}"))
-        })?;
+        .map_err(|_| CogentError::Internal("I/O runtime stopped before startup".to_string()))?
+        .map_err(|error| CogentError::Internal(format!("failed to build I/O runtime: {error}")))?;
 
-    Ok(RemoteRuntimeThread {
+    Ok(IoRuntimeThread {
         handle,
         shutdown_tx: Some(shutdown_tx),
         _thread: thread,

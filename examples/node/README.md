@@ -14,6 +14,17 @@ const endpoint = await client.add('local', {
 });
 ```
 
+Gateway endpoints use the same descriptor API:
+
+```js
+const endpoint = await client.add('gateway', {
+  kind: 'gateway',
+  target: 'local',
+  baseUrl,
+  authentication: { kind: 'bearer', value: token },
+});
+```
+
 ## Local GGUF
 
 Build the Node binding if needed:
@@ -62,6 +73,6 @@ node examples/node/gateway_embed.mjs <model.gguf> local [input]
 
 `gateway_embed` requires a model/runtime that reports embedding support.
 
-For the OpenAI gateway, use alias `openai-chat` for query/chat and
+For the OpenAI gateway, use target `openai-chat` for query/chat and
 `openai-embed` for embeddings. The OpenAI gateway requires `OPENAI_API_KEY` in
 the gateway process.

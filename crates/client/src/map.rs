@@ -78,49 +78,6 @@ pub(crate) fn embedding_response(
     }
 }
 
-#[cfg(feature = "remote")]
-pub(crate) fn remote_text_response(
-    endpoint: EndpointRef,
-    request_id: Option<String>,
-    response: cogentlm_remote::GatewayTextResponse,
-) -> CogentTextResponse {
-    let metadata = response.metadata;
-    CogentTextResponse {
-        endpoint,
-        text: response.result.text,
-        finish_reason: response.result.finish_reason,
-        usage: response.usage,
-        local_stats: None,
-        metadata: CogentResponseMetadata {
-            request_id,
-            upstream_request_id: metadata.request_id,
-            upstream_response_id: metadata.response_id,
-        },
-    }
-}
-
-#[cfg(feature = "remote")]
-pub(crate) fn remote_embedding_response(
-    endpoint: EndpointRef,
-    request_id: Option<String>,
-    response: cogentlm_remote::GatewayEmbeddingResponse,
-) -> CogentEmbeddingResponse {
-    let metadata = response.metadata;
-    CogentEmbeddingResponse {
-        endpoint,
-        values: response.result.values,
-        usage: response.usage,
-        local_stats: None,
-        pooling: None,
-        normalized: None,
-        metadata: CogentResponseMetadata {
-            request_id,
-            upstream_request_id: metadata.request_id,
-            upstream_response_id: metadata.response_id,
-        },
-    }
-}
-
 #[cfg(feature = "providers")]
 pub(crate) fn provider_text_response(
     endpoint: EndpointRef,

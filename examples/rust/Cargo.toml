@@ -26,17 +26,17 @@ path = "src/vision_chat.rs"
 [[bin]]
 name = "gateway_query"
 path = "src/gateway_query.rs"
-required-features = ["remote"]
+required-features = ["gateway"]
 
 [[bin]]
 name = "gateway_chat"
 path = "src/gateway_chat.rs"
-required-features = ["remote"]
+required-features = ["gateway"]
 
 [[bin]]
 name = "gateway_embed"
 path = "src/gateway_embed.rs"
-required-features = ["remote"]
+required-features = ["gateway"]
 
 [[bin]]
 name = "openai_provider_chat"
@@ -45,7 +45,7 @@ path = "src/openai_provider_chat.rs"
 [features]
 default = ["native"]
 native = ["cogentlm/native"]
-remote = ["cogentlm/remote"]
+gateway = ["cogentlm/gateway"]
 backend-dl = ["cogentlm/backend-dl"]
 cuda = ["cogentlm/cuda"]
 metal = ["cogentlm/metal"]

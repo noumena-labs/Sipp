@@ -67,7 +67,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
 function runtimeConfig(): NativeRuntimeConfig {
   return {
-    context: { n_ctx: 2048 },
+    context: { n_ctx: 2048, embeddings: true, pooling: 'mean' },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },
     observability: { runtime_metrics: true },

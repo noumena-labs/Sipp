@@ -5,17 +5,21 @@ import {
   formatTextResult,
   readMaxTokens,
   readPrompt,
-  readRemoteGatewayConfig,
-  renderRemoteGatewayPage,
+  readGatewayConfig,
+  renderGatewayPage,
   reportError,
   write,
 } from './common.js';
 
-const elements = renderRemoteGatewayPage('Gateway Query', 'Write one sentence about gateway inference.', true);
+const elements = renderGatewayPage(
+  'Gateway Query',
+  'Write one sentence about gateway inference.',
+  true
+);
 
 elements.runForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const config = readRemoteGatewayConfig(elements);
+  const config = readGatewayConfig(elements);
   if (config == null) return;
   const prompt = readPrompt(elements.promptInput);
   if (prompt == null) {
@@ -25,8 +29,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
   const client = new CogentClient();
   try {
-    // The app registers a remote endpoint from gateway URL, bearer token, and alias.
-    const endpoint = await client.add(config.alias, { kind: 'gateway', ...config });
+    const endpoint = await client.add('gateway', { kind: 'gateway', ...config });
     const run = client.query(prompt, {
       endpoint,
       emitTokens: true,

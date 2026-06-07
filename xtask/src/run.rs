@@ -312,18 +312,18 @@ fn run_rust_gateway_example_client(
     let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model)?;
     wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
 
-    let alias = gateway_example_alias(args.common.case);
+    let target = gateway_example_target(args.common.case);
     let bin = rust_gateway_example_bin(args.common.case);
     let gateway_url = gateway_url(&args.common.bind);
     let _dir = sh.push_dir(ctx.workspace_root());
     let mut client_cmd = cmd!(sh, "cargo run -p cogentlm-rust-examples")
         .arg("--features")
-        .arg("remote")
+        .arg("gateway")
         .arg("--bin")
         .arg(bin)
         .arg("--")
         .arg(&model)
-        .arg(alias)
+        .arg(target)
         .arg(&args.prompt)
         .env("COGENTLM_GATEWAY_URL", gateway_url)
         .env(GATEWAY_RUN_TOKEN_ENV, &args.common.token)
@@ -351,7 +351,7 @@ fn run_node_gateway_example_client(
     let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model)?;
     wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
 
-    let alias = gateway_example_alias(args.common.case);
+    let target = gateway_example_target(args.common.case);
     let script = node_gateway_example_script(args.common.case);
     let gateway_url = gateway_url(&args.common.bind);
     let node_dir = ctx.examples_root().join("node");
@@ -359,7 +359,7 @@ fn run_node_gateway_example_client(
     let mut client_cmd = cmd!(sh, "node")
         .arg(script)
         .arg(&model)
-        .arg(alias)
+        .arg(target)
         .arg(&args.prompt)
         .env("COGENTLM_NODE_BACKEND", "cpu")
         .env("COGENTLM_GATEWAY_URL", gateway_url)
@@ -392,7 +392,7 @@ fn run_python_gateway_example_client(
     let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model)?;
     wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
 
-    let alias = gateway_example_alias(args.common.case);
+    let target = gateway_example_target(args.common.case);
     let script = python_gateway_example_script(args.common.case);
     let gateway_url = gateway_url(&args.common.bind);
     let python_dir = ctx.examples_root().join("python");
@@ -400,7 +400,7 @@ fn run_python_gateway_example_client(
     let mut client_cmd = cmd!(sh, "{python_exe}")
         .arg(script)
         .arg(&model)
-        .arg(alias)
+        .arg(target)
         .arg(&args.prompt)
         .env("COGENTLM_PYTHON_BACKEND", "cpu")
         .env("COGENTLM_GATEWAY_URL", gateway_url)
@@ -445,7 +445,7 @@ fn run_web_gateway_example(
     wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
 
     output::detail("Gateway URL", gateway_url(&args.common.bind));
-    output::detail("Gateway alias", gateway_example_alias(args.common.case));
+    output::detail("Gateway target", gateway_example_target(args.common.case));
     output::detail("Gateway token", gateway_token_display(&args.common.token));
     output::detail("Open page", gateway_example_page(args.common.case));
 
@@ -756,7 +756,7 @@ fn url_host(host: &str) -> String {
     }
 }
 
-pub(crate) fn gateway_example_alias(case: RunGatewayExampleCase) -> &'static str {
+pub(crate) fn gateway_example_target(case: RunGatewayExampleCase) -> &'static str {
     let _ = case;
     "local"
 }

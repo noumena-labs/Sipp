@@ -312,6 +312,7 @@ dependencies = [
  "cogentlm-client",
  "cogentlm-core",
  "cogentlm-engine",
+ "cogentlm-gateway",
  "cogentlm-shard",
  "futures",
 ]
@@ -335,10 +336,11 @@ dependencies = [
  "cogentlm-core",
  "cogentlm-engine",
  "cogentlm-providers",
- "cogentlm-remote",
  "futures",
  "futures-channel",
  "futures-core",
+ "reqwest",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -375,10 +377,24 @@ dependencies = [
 name = "cogentlm-gateway"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "cogentlm-client",
+ "cogentlm-core",
+ "cogentlm-gateway-core",
+ "http",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "cogentlm-gateway-core"
+version = "0.1.0"
+dependencies = [
  "cogentlm-client",
  "cogentlm-core",
  "futures-util",
- "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -390,11 +406,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bytes",
  "clap",
  "cogentlm-client",
  "cogentlm-engine",
  "cogentlm-gateway",
+ "cogentlm-gateway-core",
  "futures-util",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -405,11 +424,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bytes",
  "clap",
  "cogentlm-client",
  "cogentlm-core",
  "cogentlm-engine",
  "cogentlm-gateway",
+ "cogentlm-gateway-core",
  "futures-util",
  "http",
  "serde",
@@ -467,21 +488,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "cogentlm-remote"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "cogentlm-core",
- "futures-util",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "wiremock",
 ]
 
 [[package]]

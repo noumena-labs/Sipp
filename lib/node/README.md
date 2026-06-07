@@ -1,51 +1,34 @@
 # CogentLM Server for Node.js
 
-The package exposes the native `CogentClient` API and a Next.js App Router
-gateway adapter.
+This package exposes the native `CogentClient` API for Node.js server
+processes. It does not provide framework route handlers.
 
-## Next.js App Router
-
-```ts
-// app/api/cogentlm/[operation]/route.ts
-import { createNextGateway } from '@noumena-labs/cogentlm-server/next'
-
-export const runtime = 'nodejs'
-
-const handler = createNextGateway({
-  aliases: {
-    local: {
-      kind: 'local',
-      modelPath: process.env.COGENTLM_MODEL_PATH!,
-    },
-  },
-  auth: async (request) => {
-    return request.headers.get('authorization') === `Bearer ${process.env.COGENTLM_TOKEN}`
-  },
-  maxRequestBytes: 1 << 20,
-})
-
-export const POST = handler
-```
-
-For local development, authentication must still be explicit:
+Register local, provider, and gateway endpoints through the same method:
 
 ```ts
-const handler = createNextGateway({
-  aliases,
-  auth: 'none',
+import { CogentClient } from '@noumena-labs/cogentlm-server'
+
+const client = new CogentClient()
+
+const gateway = await client.add('gateway', {
+  kind: 'gateway',
+  target: 'local',
+  baseUrl: 'http://127.0.0.1:8787',
+  authentication: {
+    kind: 'bearer',
+    value: process.env.COGENTLM_GATEWAY_TOKEN,
+  },
 })
+
+const run = client.chat({
+  endpoint: gateway,
+  messages: [{ role: 'user', content: 'Explain gateway-backed inference.' }],
+})
+const response = await run.response
 ```
 
-Configure the native package as external:
-
-```js
-// next.config.js
-module.exports = {
-  serverExternalPackages: ['@noumena-labs/cogentlm-server'],
-}
-```
-
-The adapter supports finite JSON responses, SSE, request body limits,
-`x-request-id`, typed gateway errors, and `Request.signal` cancellation. It
-supports App Router on the Node.js runtime only; Edge runtime and Pages Router
-are intentionally unsupported.
+Framework integrations should define their own routes and call
+`client.query()`, `client.chat()`, or `client.embed()` directly inside those
+routes. CogentLM supplies the endpoint client and request shapes; the
+application owns request parsing, authentication, routing, and response
+encoding.

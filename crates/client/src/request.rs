@@ -3,20 +3,20 @@ use cogentlm_engine::engine::SamplingRuntimeConfig;
 
 use crate::EndpointRef;
 
-/// Request-scoped metadata propagated through local and remote execution.
+/// Request-scoped metadata propagated through endpoint execution.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CogentRequestContext {
     /// Canonical request identifier assigned by the application boundary.
     pub request_id: Option<String>,
 }
 
-/// Gateway free-form options carried by request envelopes.
-pub type GatewayOptions = serde_json::Map<String, serde_json::Value>;
+/// Endpoint-specific free-form options carried by request envelopes.
+pub type EndpointOptions = serde_json::Map<String, serde_json::Value>;
 
 /// Direct provider free-form options carried by request envelopes.
 pub type ProviderOptions = serde_json::Map<String, serde_json::Value>;
 
-/// Text generation options shared by local and remote endpoints.
+/// Text generation options shared by inference endpoints.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CogentTextOptions {
     /// Maximum output tokens requested from the endpoint.
@@ -45,7 +45,6 @@ pub struct LocalTextOptions {
 }
 
 impl LocalTextOptions {
-    #[cfg(any(feature = "remote", feature = "providers"))]
     pub(crate) fn has_fields(&self) -> bool {
         self.context_key.is_some()
             || self.grammar.is_some()
@@ -65,7 +64,6 @@ pub struct LocalEmbedOptions {
 }
 
 impl LocalEmbedOptions {
-    #[cfg(any(feature = "remote", feature = "providers"))]
     pub(crate) fn has_fields(&self) -> bool {
         self.context_key.is_some() || self.normalize.is_some()
     }
@@ -82,8 +80,8 @@ pub struct CogentQueryRequest {
     pub options: CogentTextOptions,
     /// Local-only request options.
     pub local: LocalTextOptions,
-    /// Gateway-only request options passed to the remote transport.
-    pub gateway_options: GatewayOptions,
+    /// Endpoint-specific options passed to gateway endpoint implementations.
+    pub endpoint_options: EndpointOptions,
     /// Direct-provider-only request options passed to provider adapters.
     pub provider_options: ProviderOptions,
     /// Whether the returned run handle emits token batches.
@@ -101,8 +99,8 @@ pub struct CogentChatRequest {
     pub options: CogentTextOptions,
     /// Local-only request options.
     pub local: LocalTextOptions,
-    /// Gateway-only request options passed to the remote transport.
-    pub gateway_options: GatewayOptions,
+    /// Endpoint-specific options passed to gateway endpoint implementations.
+    pub endpoint_options: EndpointOptions,
     /// Direct-provider-only request options passed to provider adapters.
     pub provider_options: ProviderOptions,
     /// Whether the returned run handle emits token batches.
@@ -118,8 +116,8 @@ pub struct CogentEmbedRequest {
     pub input: String,
     /// Local-only embedding options.
     pub local: LocalEmbedOptions,
-    /// Gateway-only request options passed to the remote transport.
-    pub gateway_options: GatewayOptions,
+    /// Endpoint-specific options passed to gateway endpoint implementations.
+    pub endpoint_options: EndpointOptions,
     /// Direct-provider-only request options passed to provider adapters.
     pub provider_options: ProviderOptions,
 }

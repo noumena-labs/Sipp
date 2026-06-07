@@ -6,7 +6,6 @@ use std::task::{Context, Poll};
 use cogentlm_core::TokenBatch;
 use cogentlm_engine::engine::EngineTokenBatches;
 use futures::future::{select, Either};
-#[cfg(any(feature = "remote", feature = "providers"))]
 use futures_channel::mpsc;
 use futures_channel::oneshot;
 use futures_core::Stream;
@@ -96,6 +95,11 @@ impl CogentTextRun {
     /// Create a finite text run from a response future.
     pub fn from_response(response: CogentTextResponseFuture) -> Self {
         Self::new(response, CogentTokenBatches::closed())
+    }
+
+    /// Create a text run from token batches and a final response future.
+    pub fn from_parts(tokens: CogentTokenBatches, response: CogentTextResponseFuture) -> Self {
+        Self::new(response, tokens)
     }
 
     pub(crate) fn ready_err(error: CogentError) -> Self {
@@ -206,8 +210,8 @@ pub struct CogentTokenBatches {
 enum TokenBatchSource {
     Empty,
     Local(EngineTokenBatches),
-    #[cfg(any(feature = "remote", feature = "providers"))]
     Receiver(mpsc::UnboundedReceiver<TokenBatch>),
+    External(Pin<Box<dyn Stream<Item = TokenBatch> + Send>>),
 }
 
 impl CogentTokenBatches {
@@ -226,10 +230,16 @@ impl CogentTokenBatches {
         }
     }
 
-    #[cfg(any(feature = "remote", feature = "providers"))]
     pub(crate) fn from_receiver(receiver: mpsc::UnboundedReceiver<TokenBatch>) -> Self {
         Self {
             inner: TokenBatchSource::Receiver(receiver),
+        }
+    }
+
+    /// Create token batches from an endpoint-owned stream.
+    pub fn from_stream(stream: Pin<Box<dyn Stream<Item = TokenBatch> + Send>>) -> Self {
+        Self {
+            inner: TokenBatchSource::External(stream),
         }
     }
 }
@@ -241,8 +251,8 @@ impl Stream for CogentTokenBatches {
         match &mut self.inner {
             TokenBatchSource::Empty => Poll::Ready(None),
             TokenBatchSource::Local(stream) => Pin::new(stream).poll_next(cx),
-            #[cfg(any(feature = "remote", feature = "providers"))]
             TokenBatchSource::Receiver(receiver) => Pin::new(receiver).poll_next(cx),
+            TokenBatchSource::External(stream) => stream.as_mut().poll_next(cx),
         }
     }
 }

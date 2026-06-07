@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use cogentlm::backend::set_llama_log_quiet;
 use cogentlm::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, GpuLayerConfig, KvReuseMode, ModelPlacementConfig,
-    NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
-    SchedulerRuntimeConfig,
+    NativeRuntimeConfig, ObservabilityRuntimeConfig, PoolingType, ResidencyRuntimeConfig,
+    SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
 use cogentlm::{CogentClient, CogentEmbedRequest, EndpointDescriptor, LocalEmbedOptions};
 use futures::executor::block_on;
@@ -56,6 +56,7 @@ fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRu
             n_threads: support::env_parse("COGENTLM_THREADS"),
             n_threads_batch: support::env_parse("COGENTLM_THREADS"),
             embeddings: embeddings.then_some(true),
+            pooling: embeddings.then_some(PoolingType::Mean),
             ..Default::default()
         },
         sampling: SamplingRuntimeConfig {

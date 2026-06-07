@@ -12,13 +12,13 @@ services:
     ports:
       - "8080:8080"
       - "127.0.0.1:9090:9090"
-    stop_grace_period: 130s
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9090/readyz"]
       interval: 10s
       timeout: 3s
       retries: 6
-      start_period: 120s
+      start_period: 30s
     read_only: true
     tmpfs:
       - /tmp

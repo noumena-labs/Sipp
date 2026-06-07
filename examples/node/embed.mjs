@@ -43,6 +43,7 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
       n_threads: intEnv('COGENTLM_THREADS'),
       n_threads_batch: intEnv('COGENTLM_THREADS'),
       embeddings,
+      pooling: embeddings ? 'mean' : undefined,
     },
     sampling: {
       temperature: numberEnv('COGENTLM_TEMPERATURE', DEFAULT_TEMPERATURE),

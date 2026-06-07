@@ -60,10 +60,9 @@ const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::lib("cogentlm-shard"),
     RustTestTarget::lib("cogentlm-sys"),
     RustTestTarget::lib("cogentlm-engine"),
-    RustTestTarget::lib("cogentlm-remote"),
+    RustTestTarget::lib("cogentlm-gateway-core"),
     RustTestTarget::lib("cogentlm-gateway"),
     RustTestTarget::package("cogentlm-gateway-server"),
-    RustTestTarget::test("cogentlm-gateway-server", "provider_gateway_smoke"),
     RustTestTarget::lib("cogentlm-providers"),
     RustTestTarget::lib("cogentlm-client"),
     RustTestTarget::bin("cogentlm-cli", "cogentlm"),
@@ -90,8 +89,8 @@ const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
     "crates/shard/src",
     "crates/sys/src",
     "crates/engine/src",
-    "crates/remote/src",
-    "crates/gateway/src",
+    "crates/gateway-core/src",
+    "lib/gateway/src",
     "apps/gateway-server/src",
     "crates/providers/src",
     "crates/client/src",
@@ -128,7 +127,8 @@ const GATEWAY_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &[
     "examples/rust/src",
     "examples/node",
     "examples/python",
-    "crates/gateway/src",
+    "crates/gateway-core/src",
+    "lib/gateway/src",
     "apps/gateway-server/src",
     "crates/providers/src",
 ];
@@ -1416,7 +1416,7 @@ fn run_rust_gateway_smoke(
     for example in selected_rust_gateway_smoke_examples(options.cases) {
         let mut gateway = GatewaySmokeProcess::start(sh, ctx, model, &options.backend)?;
         wait_for_gateway_smoke(gateway.child_mut())?;
-        let mut features = vec!["remote"];
+        let mut features = vec!["gateway"];
         if options.backend != Backend::Cpu {
             features.push(options.backend.as_str());
         }
@@ -1427,7 +1427,7 @@ fn run_rust_gateway_smoke(
             .arg(example)
             .arg("--")
             .arg(model)
-            .arg(gateway_smoke_alias(example))
+            .arg(gateway_smoke_target(example))
             .arg(options.prompt)
             .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
             .env("COGENTLM_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
@@ -1461,7 +1461,7 @@ fn run_node_gateway_smoke(
         let mut smoke_cmd = cmd!(sh, "node")
             .arg(script)
             .arg(model)
-            .arg(gateway_smoke_alias(script))
+            .arg(gateway_smoke_target(script))
             .arg(options.prompt)
             .env("COGENTLM_NODE_BACKEND", "cpu")
             .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
@@ -1516,7 +1516,7 @@ fn run_python_gateway_smoke(
         let mut smoke_cmd = cmd!(sh, "{python_exe}")
             .arg(script)
             .arg(model)
-            .arg(gateway_smoke_alias(script))
+            .arg(gateway_smoke_target(script))
             .arg(options.prompt)
             .env("COGENTLM_PYTHON_BACKEND", "cpu")
             .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
@@ -1562,7 +1562,7 @@ fn gateway_smoke_url() -> String {
     format!("http://{GATEWAY_SMOKE_BIND}")
 }
 
-fn gateway_smoke_alias(case_name: &str) -> &'static str {
+fn gateway_smoke_target(case_name: &str) -> &'static str {
     let _ = case_name;
     "local"
 }
@@ -3597,8 +3597,8 @@ fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
         "cogentlm-shard" => &["crates", "shard"],
         "cogentlm-sys" => &["crates", "sys"],
         "cogentlm-engine" => &["crates", "engine"],
-        "cogentlm-remote" => &["crates", "remote"],
-        "cogentlm-gateway" => &["crates", "gateway"],
+        "cogentlm-gateway-core" => &["crates", "gateway-core"],
+        "cogentlm-gateway" => &["lib", "gateway"],
         "cogentlm-providers" => &["crates", "providers"],
         "cogentlm-gateway-server" => &["apps", "gateway-server"],
         "cogentlm-client" => &["crates", "client"],

@@ -15,6 +15,17 @@ const endpoint = await client.add('local', {
 });
 ```
 
+Gateway pages register an explicit first-party endpoint:
+
+```ts
+const endpoint = await client.add('gateway', {
+  kind: 'gateway',
+  target: 'local',
+  baseUrl,
+  authentication: { kind: 'bearer', value: token },
+});
+```
+
 Start the app:
 
 ```bash
@@ -38,7 +49,7 @@ export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
-Then enter URL `http://127.0.0.1:8787`, any non-empty token, and alias `local`.
+Then enter URL `http://127.0.0.1:8787`, any non-empty token, and target `local`.
 
 To start the local gateway and the web example from one terminal instead, run:
 

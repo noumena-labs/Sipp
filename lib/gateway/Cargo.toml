@@ -1,0 +1,31 @@
+[package]
+name = "cogentlm-gateway"
+description = "Route-free gateway helpers and first-party JSON/SSE profile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[features]
+default = ["native", "providers"]
+native = ["cogentlm-client/native", "cogentlm-gateway-core/native"]
+backend-dl = ["cogentlm-client/backend-dl", "cogentlm-gateway-core/backend-dl"]
+cuda = ["cogentlm-client/cuda", "cogentlm-gateway-core/cuda"]
+metal = ["cogentlm-client/metal", "cogentlm-gateway-core/metal"]
+vulkan = ["cogentlm-client/vulkan", "cogentlm-gateway-core/vulkan"]
+openmp = ["cogentlm-client/openmp", "cogentlm-gateway-core/openmp"]
+providers = ["cogentlm-client/providers", "cogentlm-gateway-core/providers"]
+
+[dependencies]
+bytes = "1"
+cogentlm-client.workspace = true
+cogentlm-core.workspace = true
+cogentlm-gateway-core.workspace = true
+http = "1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

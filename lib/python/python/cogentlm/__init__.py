@@ -272,8 +272,7 @@ NativeRuntimeConfig = _native.NativeRuntimeConfig
 ObservabilityRuntimeConfig = _native.ObservabilityRuntimeConfig
 ProviderDescriptor = _native.ProviderDescriptor
 ProviderError = _native.ProviderError
-RemoteGatewayConfig = _native.RemoteGatewayConfig
-RemoteError = _native.RemoteError
+EndpointError = _native.EndpointError
 ResidencyRuntimeConfig = _native.ResidencyRuntimeConfig
 SamplingRuntimeConfig = _native.SamplingRuntimeConfig
 SchedulerPolicyConfig = _native.SchedulerPolicyConfig
@@ -304,8 +303,7 @@ __all__ = [
     "ObservabilityRuntimeConfig",
     "ProviderDescriptor",
     "ProviderError",
-    "RemoteGatewayConfig",
-    "RemoteError",
+    "EndpointError",
     "ResidencyRuntimeConfig",
     "SamplingRuntimeConfig",
     "SchedulerPolicyConfig",

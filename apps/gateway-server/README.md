@@ -1,23 +1,17 @@
 # CogentLM Gateway Server
 
-`cogentlm-gateway-server` is the production, headless middle layer for hosting
-local or provider-backed CogentLM aliases.
+`cogentlm-gateway-server` is a first-party application built from `cogentlm-gateway-core` and `cogentlm-gateway`. 
 
-Public listener:
+The application owns:
 
-- `POST /v1/query`
-- `POST /v1/chat`
-- `POST /v1/embed`
+- Public and management listeners.
+- Typed query, chat, embed, index, health, readiness, and metrics routes.
+- Environment-backed bearer tokens and per-token target access.
+- Local and provider-backed target construction.
+- Application-wide concurrency admission.
+- CORS, body limits, metrics, logging, TOML, and container policy.
 
-Management listener:
-
-- `GET /healthz`
-- `GET /readyz`
-- `GET /metrics`
-
-The management listener binds before endpoint loading. `/healthz` remains 200
-while the process is responsive; `/readyz` remains 503 until every configured
-alias is loaded, and becomes 503 again during draining.
+The shipped config uses `/v1/query`, `/v1/chat`, and `/v1/embed`.
 
 ## Run
 
@@ -29,28 +23,17 @@ cargo run -p cogentlm-gateway-server -- \
   serve --config apps/gateway-server/config/production.toml
 ```
 
-`check` only parses and validates configuration. It does not read secrets,
-load models, or contact providers.
+`check` validates TOML without reading secrets or loading endpoints. `serve` loads endpoints before binding either listener, then applies graceful HTTP shutdown on Ctrl-C.
 
-## Shutdown
+## Configuration
 
-The defaults allow 120 seconds for active inference to finish, then cancel
-remaining work and allow 5 seconds for terminal stream errors to flush.
-Uncommitted unary requests receive HTTP 503. Committed SSE responses receive a
-terminal `error` event with code `server_restarting`.
-
-Client disconnects cancel the associated native or provider execution
-immediately.
+`[routes]` selects all paths. `[[tokens]]` selects bearer-token environment variables, caller labels, and allowed targets. `[[targets]]` selects local, OpenAI, OpenAI-compatible, or Anthropic endpoints. Custom codecs and authentication schemes belong in a separate application composed from `lib/gateway`.
 
 ## Deployment
-
-Build the CPU image from the repository root:
 
 ```bash
 docker build -f apps/gateway-server/Dockerfile -t cogentlm-gateway:cpu .
 docker compose -f apps/gateway-server/compose.yaml up
 ```
 
-The image runs as a non-root user. Mount models read-only and expose the
-management listener only to the monitoring network. See
-`deploy/nginx.conf` for reverse-proxy timeout and buffering guidance.
+The image runs as a non-root user. Mount model files read-only and keep the management listener private.

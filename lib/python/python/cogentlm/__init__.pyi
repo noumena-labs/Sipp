@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Final, Iterator, Literal, Optional, Sequence, TypedDict, Union
+from typing import Any, Final, Iterator, Literal, Mapping, Optional, Sequence, TypedDict, Union
 
 PathLike = Union[str, Path]
 GpuLayerConfig = Union[str, dict[str, int]]
@@ -187,11 +187,11 @@ class TokenUsage(TypedDict):
     output_tokens: Optional[int]
     total_tokens: Optional[int]
 
-GatewayOptions = dict[str, Any]
+EndpointOptions = dict[str, Any]
 ProviderOptions = dict[str, Any]
 
 class EndpointRefDict(TypedDict):
-    kind: Literal["local", "remote", "provider"]
+    kind: str
     id: str
 
 class CogentTextResponse(TypedDict):
@@ -211,7 +211,7 @@ class CogentEmbeddingResponse(TypedDict):
 
 class UnsupportedOperationError(Exception): ...
 
-class RemoteError(Exception):
+class EndpointError(Exception):
     kind: str
     status: Optional[int]
     code: Optional[str]
@@ -228,40 +228,37 @@ class ProviderError(Exception):
     retry_after_ms: Optional[float]
     raw_body: Any
 
-class RemoteGatewayConfig:
+class GatewayDescriptor:
     def __init__(
         self,
-        alias: str,
+        target: str,
         base_url: str,
-        token: str,
         *,
+        authentication_kind: Literal["none", "bearer", "header"] = "none",
+        authentication_value: Optional[str] = None,
+        authentication_header: Optional[str] = None,
+        static_headers: Optional[Mapping[str, str]] = None,
         timeout_ms: Optional[int] = None,
+        query_route: Optional[str] = None,
+        chat_route: Optional[str] = None,
+        embed_route: Optional[str] = None,
+        protocol_options: Optional[Mapping[str, Any]] = None,
     ) -> None: ...
 class EndpointRef:
     @staticmethod
     def local(id: str) -> EndpointRef: ...
     @staticmethod
-    def remote(id: str) -> EndpointRef: ...
+    def gateway(id: str) -> EndpointRef: ...
     @staticmethod
     def provider(id: str) -> EndpointRef: ...
     @property
-    def kind(self) -> Literal["local", "remote", "provider"]: ...
+    def kind(self) -> str: ...
 
 class LocalModelDescriptor:
     def __init__(
         self,
         model_path: PathLike,
         config: Optional[NativeRuntimeConfig] = None,
-    ) -> None: ...
-
-class GatewayDescriptor:
-    def __init__(
-        self,
-        alias: str,
-        base_url: str,
-        token: str,
-        *,
-        timeout_ms: Optional[int] = None,
     ) -> None: ...
 
 class ProviderDescriptor:
@@ -281,9 +278,8 @@ class ProviderDescriptor:
 
 EndpointDescriptor = Union[
     LocalModelDescriptor,
-    GatewayDescriptor,
-    RemoteGatewayConfig,
     ProviderDescriptor,
+    GatewayDescriptor,
 ]
 
 class CogentTextOptions:
@@ -338,7 +334,7 @@ class CogentClient:
         endpoint: Optional[EndpointRef] = None,
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
-        gateway_options: Optional[GatewayOptions] = None,
+        endpoint_options: Optional[EndpointOptions] = None,
         provider_options: Optional[ProviderOptions] = None,
         emit_tokens: bool = False,
     ) -> CogentTextRun: ...
@@ -349,7 +345,7 @@ class CogentClient:
         endpoint: Optional[EndpointRef] = None,
         options: Optional[CogentTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
-        gateway_options: Optional[GatewayOptions] = None,
+        endpoint_options: Optional[EndpointOptions] = None,
         provider_options: Optional[ProviderOptions] = None,
         emit_tokens: bool = False,
     ) -> CogentTextRun: ...
@@ -359,7 +355,7 @@ class CogentClient:
         *,
         endpoint: Optional[EndpointRef] = None,
         local: Optional[LocalEmbedOptions] = None,
-        gateway_options: Optional[GatewayOptions] = None,
+        endpoint_options: Optional[EndpointOptions] = None,
         provider_options: Optional[ProviderOptions] = None,
     ) -> CogentEmbeddingRun: ...
 

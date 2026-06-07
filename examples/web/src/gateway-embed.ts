@@ -2,17 +2,21 @@ import { CogentClient, type BrowserEmbeddingRun, type EndpointRef } from '@noume
 import {
   formatEmbeddingResult,
   readPrompt,
-  readRemoteGatewayConfig,
-  renderRemoteGatewayPage,
+  readGatewayConfig,
+  renderGatewayPage,
   reportError,
   write,
 } from './common.js';
 
-const elements = renderRemoteGatewayPage('Gateway Embed', 'CogentClient gateway embedding example input.', false);
+const elements = renderGatewayPage(
+  'Gateway Embed',
+  'CogentClient gateway embedding example input.',
+  false
+);
 
 elements.runForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const config = readRemoteGatewayConfig(elements);
+  const config = readGatewayConfig(elements);
   if (config == null) return;
   const input = readPrompt(elements.promptInput);
   if (input == null) {
@@ -22,7 +26,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
   const client = new CogentClient();
   try {
-    const endpoint = await client.add(config.alias, { kind: 'gateway', ...config });
+    const endpoint = await client.add('gateway', { kind: 'gateway', ...config });
     const run = client.embed(input, { endpoint });
     await printEmbeddingRun(elements.output, endpoint, run);
   } catch (error) {

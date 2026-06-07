@@ -977,8 +977,8 @@ function mergeProviderOptions(
 }
 
 function rejectProviderTextInvalidOptions(options: QueryOptions, hasMedia: boolean): void {
-  if (options.gatewayOptions != null) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'gatewayOptions are not valid for provider endpoints');
+  if (options.endpointOptions != null) {
+    throw new QueryError('UNSUPPORTED_OPERATION', 'endpointOptions are not valid for provider endpoints');
   }
   if (hasMedia) {
     throw new QueryError('UNSUPPORTED_OPERATION', 'local media options are not valid for provider endpoints');
@@ -991,8 +991,8 @@ function rejectProviderTextInvalidOptions(options: QueryOptions, hasMedia: boole
 }
 
 function rejectProviderEmbedInvalidOptions(options: EmbedOptions): void {
-  if (options.gatewayOptions != null) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'gatewayOptions are not valid for provider endpoints');
+  if (options.endpointOptions != null) {
+    throw new QueryError('UNSUPPORTED_OPERATION', 'endpointOptions are not valid for provider endpoints');
   }
   for (const field of LOCAL_EMBED_FIELDS) {
     if ((options as Record<string, unknown>)[field] != null) {

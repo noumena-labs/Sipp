@@ -12,7 +12,7 @@ use crate::test_support::TempDir;
 use crate::utils::BuildContext;
 
 use super::{
-    find_file_recursive, find_llama_backend_ops_exe, gateway_example_alias, host_binding_backends,
+    find_file_recursive, find_llama_backend_ops_exe, gateway_example_target, host_binding_backends,
     node_gateway_example_script, python_gateway_example_script, run, rust_gateway_example_bin,
     validate_gateway_example_backend,
 };
@@ -95,10 +95,16 @@ fn llama_correctness_mode_is_rejected_before_external_commands() {
 }
 
 #[test]
-fn gateway_example_case_mappings_match_client_files_and_aliases() {
-    assert_eq!(gateway_example_alias(RunGatewayExampleCase::Query), "local");
-    assert_eq!(gateway_example_alias(RunGatewayExampleCase::Chat), "local");
-    assert_eq!(gateway_example_alias(RunGatewayExampleCase::Embed), "local");
+fn gateway_example_case_mappings_match_client_files_and_targets() {
+    assert_eq!(
+        gateway_example_target(RunGatewayExampleCase::Query),
+        "local"
+    );
+    assert_eq!(gateway_example_target(RunGatewayExampleCase::Chat), "local");
+    assert_eq!(
+        gateway_example_target(RunGatewayExampleCase::Embed),
+        "local"
+    );
 
     assert_eq!(
         rust_gateway_example_bin(RunGatewayExampleCase::Query),

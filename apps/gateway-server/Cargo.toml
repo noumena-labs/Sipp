@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [features]
 default = ["native"]
-native = ["cogentlm-client/native", "cogentlm-gateway/native"]
+native = ["cogentlm-client/native", "cogentlm-gateway/native", "cogentlm-gateway-core/native"]
 backend-dl = ["cogentlm-gateway/backend-dl"]
 cuda = ["cogentlm-gateway/cuda"]
 metal = ["cogentlm-gateway/metal"]
@@ -23,11 +23,13 @@ openmp = ["cogentlm-gateway/openmp"]
 [dependencies]
 anyhow.workspace = true
 axum = "0.8"
+bytes = "1"
 clap.workspace = true
-cogentlm-client = { workspace = true, default-features = false, features = ["providers", "remote"] }
+cogentlm-client = { workspace = true, default-features = false, features = ["providers"] }
 cogentlm-core.workspace = true
 cogentlm-engine = { workspace = true, default-features = false }
 cogentlm-gateway.workspace = true
+cogentlm-gateway-core.workspace = true
 futures-util = "0.3"
 http = "1"
 serde.workspace = true
