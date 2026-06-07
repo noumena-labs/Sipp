@@ -17,13 +17,21 @@ export declare class CogentClient {
 export declare class CogentTextRun {
   readonly response: Promise<CogentTextResponse>
   readonly tokens: AsyncIterable<TokenBatch>
+  cancel(reason?: CancellationReason): void
   [Symbol.asyncIterator](): AsyncIterator<TokenBatch>
 }
 
 /** Embedding request handle with a final embedding response. */
 export declare class CogentEmbeddingRun {
   readonly response: Promise<CogentEmbeddingResponse>
+  cancel(reason?: CancellationReason): void
 }
+
+export type CancellationReason =
+  | 'caller_cancelled'
+  | 'client_disconnected'
+  | 'server_shutdown'
+  | 'deadline_exceeded'
 
 /** Return JSON backend/device observability reported by the native runtime. */
 export declare function backendObservabilityJson(includeDetails?: boolean | undefined | null): string
@@ -83,6 +91,7 @@ export interface LocalEmbedOptions {
 
 /** Raw-prompt text generation request. */
 export interface CogentQueryRequest {
+  requestId?: string
   endpoint?: EndpointRef
   prompt: string
   options?: CogentTextOptions
@@ -94,6 +103,7 @@ export interface CogentQueryRequest {
 
 /** Chat text generation request. */
 export interface CogentChatRequest {
+  requestId?: string
   endpoint?: EndpointRef
   messages: Array<ChatMessage>
   options?: CogentTextOptions
@@ -105,6 +115,7 @@ export interface CogentChatRequest {
 
 /** Single-input embedding request. */
 export interface CogentEmbedRequest {
+  requestId?: string
   endpoint?: EndpointRef
   input: string
   local?: LocalEmbedOptions
@@ -126,6 +137,7 @@ export interface CogentTextResponse {
   finishReason: string
   usage?: TokenUsage
   localStats?: RequestStats
+  metadata: CogentResponseMetadata
 }
 
 /** Final embedding response from an embedding request. */
@@ -136,6 +148,13 @@ export interface CogentEmbeddingResponse {
   localStats?: RequestStats
   pooling?: PoolingType
   normalized?: boolean
+  metadata: CogentResponseMetadata
+}
+
+export interface CogentResponseMetadata {
+  requestId?: string
+  upstreamRequestId?: string
+  upstreamResponseId?: string
 }
 
 /** llama.cpp context, threading, attention, and embedding settings. */
@@ -268,6 +287,7 @@ export type ProviderEndpointDescriptor = {
   authHeaderName?: string
   authHeaderValue?: string
   staticHeaders?: Array<ProviderStaticHeader>
+  correlationHeader?: string
 }
 
 export type EndpointDescriptor =

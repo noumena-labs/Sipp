@@ -1313,10 +1313,6 @@ pub struct RunGatewayLocalServeArgs {
     #[arg(long, default_value = "127.0.0.1:8787")]
     pub bind: String,
 
-    /// Environment variable containing the gateway bearer token.
-    #[arg(long, default_value = "COGENTLM_GATEWAY_TOKEN")]
-    pub token_env: String,
-
     /// Native backend used by the gateway process.
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,

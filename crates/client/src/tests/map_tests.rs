@@ -225,6 +225,7 @@ fn local_responses_preserve_stats_and_endpoint_metadata() {
 
     let text = text_response(
         endpoint.clone(),
+        Some("request-1".to_string()),
         GenerationResult {
             id: "text".to_string(),
             text: "done".to_string(),
@@ -243,6 +244,7 @@ fn local_responses_preserve_stats_and_endpoint_metadata() {
     };
     let embedding = embedding_response(
         endpoint.clone(),
+        Some("request-2".to_string()),
         EmbeddingResult {
             id: "embed".to_string(),
             values: vec![1.0, 2.0],
@@ -280,6 +282,7 @@ fn remote_responses_drop_local_metadata_and_preserve_gateway_usage() {
 
     let text = remote_text_response(
         endpoint.clone(),
+        Some("gateway-request".to_string()),
         GatewayResponse {
             result: GatewayTextOutput {
                 text: "done".to_string(),
@@ -299,6 +302,7 @@ fn remote_responses_drop_local_metadata_and_preserve_gateway_usage() {
     };
     let embedding = remote_embedding_response(
         endpoint.clone(),
+        Some("gateway-embed-request".to_string()),
         GatewayResponse {
             result: GatewayEmbeddingOutput {
                 values: vec![1.0, 2.0],

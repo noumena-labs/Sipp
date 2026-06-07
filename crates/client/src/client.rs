@@ -18,7 +18,8 @@ use crate::ProviderEndpointConfig;
 use crate::RemoteGatewayConfig;
 use crate::{
     CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError, CogentQueryRequest,
-    CogentResult, CogentTextRun, EndpointCapabilities, EndpointDescriptor, EndpointRef,
+    CogentRequestContext, CogentResult, CogentTextRun, EndpointCapabilities, EndpointDescriptor,
+    EndpointRef,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -156,24 +157,51 @@ impl CogentClient {
 
     /// Submit a raw-prompt text generation request.
     pub fn query(&self, request: CogentQueryRequest) -> CogentTextRun {
+        self.query_with_context(CogentRequestContext::default(), request)
+    }
+
+    /// Submit raw-prompt generation with request-scoped correlation metadata.
+    pub fn query_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentQueryRequest,
+    ) -> CogentTextRun {
         match self.resolve(request.endpoint.as_ref(), "query") {
-            Ok(endpoint) => endpoint.query(request),
+            Ok(endpoint) => endpoint.query_with_context(context, request),
             Err(error) => CogentTextRun::ready_err(error),
         }
     }
 
     /// Submit a chat generation request.
     pub fn chat(&self, request: CogentChatRequest) -> CogentTextRun {
+        self.chat_with_context(CogentRequestContext::default(), request)
+    }
+
+    /// Submit chat generation with request-scoped correlation metadata.
+    pub fn chat_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentChatRequest,
+    ) -> CogentTextRun {
         match self.resolve(request.endpoint.as_ref(), "chat") {
-            Ok(endpoint) => endpoint.chat(request),
+            Ok(endpoint) => endpoint.chat_with_context(context, request),
             Err(error) => CogentTextRun::ready_err(error),
         }
     }
 
     /// Submit a single-input embedding request.
     pub fn embed(&self, request: CogentEmbedRequest) -> CogentEmbeddingRun {
+        self.embed_with_context(CogentRequestContext::default(), request)
+    }
+
+    /// Submit an embedding request with request-scoped correlation metadata.
+    pub fn embed_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentEmbedRequest,
+    ) -> CogentEmbeddingRun {
         match self.resolve(request.endpoint.as_ref(), "embed") {
-            Ok(endpoint) => endpoint.embed(request),
+            Ok(endpoint) => endpoint.embed_with_context(context, request),
             Err(error) => CogentEmbeddingRun::ready_err(error),
         }
     }

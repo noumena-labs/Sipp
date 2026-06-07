@@ -6,8 +6,8 @@ use crate::{
     AnthropicAdapter, AnthropicAdapterConfig, OpenAiAdapter, OpenAiAdapterConfig,
     OpenAiCompatibleAdapter, OpenAiCompatibleAdapterConfig, ProviderChatRequest,
     ProviderChatResponse, ProviderEmbedRequest, ProviderEmbeddingResponse, ProviderGenerateRequest,
-    ProviderGenerateResponse, ProviderKind, ProviderModel, ProviderResult, ProviderStream,
-    ProviderStreamEvent,
+    ProviderGenerateResponse, ProviderKind, ProviderModel, ProviderRequestContext, ProviderResult,
+    ProviderStream, ProviderStreamEvent,
 };
 
 /// Server-side adapter contract used by the provider package.
@@ -25,11 +25,29 @@ pub trait ProviderBackend: Send + Sync {
     /// Run a chat-shaped generation request.
     async fn chat(&self, req: ProviderChatRequest) -> ProviderResult<ProviderChatResponse>;
 
+    /// Run chat with request-scoped correlation metadata.
+    async fn chat_with_context(
+        &self,
+        _context: ProviderRequestContext,
+        req: ProviderChatRequest,
+    ) -> ProviderResult<ProviderChatResponse> {
+        self.chat(req).await
+    }
+
     /// Run a raw prompt generation request.
     async fn generate(
         &self,
         req: ProviderGenerateRequest,
     ) -> ProviderResult<ProviderGenerateResponse>;
+
+    /// Run generation with request-scoped correlation metadata.
+    async fn generate_with_context(
+        &self,
+        _context: ProviderRequestContext,
+        req: ProviderGenerateRequest,
+    ) -> ProviderResult<ProviderGenerateResponse> {
+        self.generate(req).await
+    }
 
     /// Stream a raw prompt generation request.
     async fn stream_generate(
@@ -37,14 +55,41 @@ pub trait ProviderBackend: Send + Sync {
         req: ProviderGenerateRequest,
     ) -> ProviderResult<ProviderStream<ProviderStreamEvent>>;
 
+    /// Stream generation with request-scoped correlation metadata.
+    async fn stream_generate_with_context(
+        &self,
+        _context: ProviderRequestContext,
+        req: ProviderGenerateRequest,
+    ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
+        self.stream_generate(req).await
+    }
+
     /// Run an embedding request.
     async fn embed(&self, req: ProviderEmbedRequest) -> ProviderResult<ProviderEmbeddingResponse>;
+
+    /// Run embedding with request-scoped correlation metadata.
+    async fn embed_with_context(
+        &self,
+        _context: ProviderRequestContext,
+        req: ProviderEmbedRequest,
+    ) -> ProviderResult<ProviderEmbeddingResponse> {
+        self.embed(req).await
+    }
 
     /// Stream a chat-shaped generation request.
     async fn stream_chat(
         &self,
         req: ProviderChatRequest,
     ) -> ProviderResult<ProviderStream<ProviderStreamEvent>>;
+
+    /// Stream chat with request-scoped correlation metadata.
+    async fn stream_chat_with_context(
+        &self,
+        _context: ProviderRequestContext,
+        req: ProviderChatRequest,
+    ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
+        self.stream_chat(req).await
+    }
 }
 
 /// Type-erased provider transport.
@@ -96,12 +141,30 @@ impl ProviderTransport {
         self.backend.chat(req).await
     }
 
+    /// Run chat with request-scoped correlation metadata.
+    pub async fn chat_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderChatRequest,
+    ) -> ProviderResult<ProviderChatResponse> {
+        self.backend.chat_with_context(context, req).await
+    }
+
     /// Run a raw prompt generation request.
     pub async fn generate(
         &self,
         req: ProviderGenerateRequest,
     ) -> ProviderResult<ProviderGenerateResponse> {
         self.backend.generate(req).await
+    }
+
+    /// Run generation with request-scoped correlation metadata.
+    pub async fn generate_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderGenerateRequest,
+    ) -> ProviderResult<ProviderGenerateResponse> {
+        self.backend.generate_with_context(context, req).await
     }
 
     /// Stream a raw prompt generation request.
@@ -112,6 +175,17 @@ impl ProviderTransport {
         self.backend.stream_generate(req).await
     }
 
+    /// Stream generation with request-scoped correlation metadata.
+    pub async fn stream_generate_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderGenerateRequest,
+    ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
+        self.backend
+            .stream_generate_with_context(context, req)
+            .await
+    }
+
     /// Run an embedding request.
     pub async fn embed(
         &self,
@@ -120,11 +194,29 @@ impl ProviderTransport {
         self.backend.embed(req).await
     }
 
+    /// Run embedding with request-scoped correlation metadata.
+    pub async fn embed_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderEmbedRequest,
+    ) -> ProviderResult<ProviderEmbeddingResponse> {
+        self.backend.embed_with_context(context, req).await
+    }
+
     /// Stream a chat-shaped generation request.
     pub async fn stream_chat(
         &self,
         req: ProviderChatRequest,
     ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
         self.backend.stream_chat(req).await
+    }
+
+    /// Stream chat with request-scoped correlation metadata.
+    pub async fn stream_chat_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderChatRequest,
+    ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
+        self.backend.stream_chat_with_context(context, req).await
     }
 }

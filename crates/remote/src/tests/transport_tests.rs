@@ -940,6 +940,7 @@ async fn gateway_body_errors_map_gateway_error_codes() {
         ("unsupported_feature", GatewayErrorKind::UnsupportedFeature),
         ("model_not_found", GatewayErrorKind::ModelNotFound),
         ("overloaded", GatewayErrorKind::Overloaded),
+        ("server_restarting", GatewayErrorKind::ServerRestarting),
         ("quota_exceeded", GatewayErrorKind::QuotaExceeded),
         ("rate_limited", GatewayErrorKind::RateLimited),
         ("timeout", GatewayErrorKind::Timeout),

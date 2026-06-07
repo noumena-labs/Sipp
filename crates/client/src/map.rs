@@ -5,8 +5,8 @@ use cogentlm_engine::engine::{
 };
 
 use crate::{
-    CogentEmbeddingResponse, CogentError, CogentQueryRequest, CogentTextOptions,
-    CogentTextResponse, EndpointRef, LocalEmbedOptions, LocalTextOptions,
+    CogentEmbeddingResponse, CogentError, CogentQueryRequest, CogentResponseMetadata,
+    CogentTextOptions, CogentTextResponse, EndpointRef, LocalEmbedOptions, LocalTextOptions,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -47,18 +47,24 @@ pub(crate) fn local_embed_request(input: String, local: LocalEmbedOptions) -> Em
     }
 }
 
-pub(crate) fn text_response(endpoint: EndpointRef, result: GenerationResult) -> CogentTextResponse {
+pub(crate) fn text_response(
+    endpoint: EndpointRef,
+    request_id: Option<String>,
+    result: GenerationResult,
+) -> CogentTextResponse {
     CogentTextResponse {
         endpoint,
         text: result.text,
         finish_reason: result.finish_reason,
         usage: Some(usage_from_stats(result.stats)),
         local_stats: Some(result.stats),
+        metadata: local_metadata(request_id),
     }
 }
 
 pub(crate) fn embedding_response(
     endpoint: EndpointRef,
+    request_id: Option<String>,
     result: EmbeddingResult,
 ) -> CogentEmbeddingResponse {
     CogentEmbeddingResponse {
@@ -68,28 +74,38 @@ pub(crate) fn embedding_response(
         local_stats: Some(result.stats),
         pooling: Some(result.pooling),
         normalized: Some(result.normalized),
+        metadata: local_metadata(request_id),
     }
 }
 
 #[cfg(feature = "remote")]
 pub(crate) fn remote_text_response(
     endpoint: EndpointRef,
+    request_id: Option<String>,
     response: cogentlm_remote::GatewayTextResponse,
 ) -> CogentTextResponse {
+    let metadata = response.metadata;
     CogentTextResponse {
         endpoint,
         text: response.result.text,
         finish_reason: response.result.finish_reason,
         usage: response.usage,
         local_stats: None,
+        metadata: CogentResponseMetadata {
+            request_id,
+            upstream_request_id: metadata.request_id,
+            upstream_response_id: metadata.response_id,
+        },
     }
 }
 
 #[cfg(feature = "remote")]
 pub(crate) fn remote_embedding_response(
     endpoint: EndpointRef,
+    request_id: Option<String>,
     response: cogentlm_remote::GatewayEmbeddingResponse,
 ) -> CogentEmbeddingResponse {
+    let metadata = response.metadata;
     CogentEmbeddingResponse {
         endpoint,
         values: response.result.values,
@@ -97,30 +113,39 @@ pub(crate) fn remote_embedding_response(
         local_stats: None,
         pooling: None,
         normalized: None,
+        metadata: CogentResponseMetadata {
+            request_id,
+            upstream_request_id: metadata.request_id,
+            upstream_response_id: metadata.response_id,
+        },
     }
 }
 
 #[cfg(feature = "providers")]
 pub(crate) fn provider_text_response(
     endpoint: EndpointRef,
+    request_id: Option<String>,
     response: cogentlm_providers::ProviderGenerateResponse,
 ) -> CogentTextResponse {
-    provider_text_output(endpoint, response)
+    provider_text_output(endpoint, request_id, response)
 }
 
 #[cfg(feature = "providers")]
 pub(crate) fn provider_chat_response(
     endpoint: EndpointRef,
+    request_id: Option<String>,
     response: cogentlm_providers::ProviderChatResponse,
 ) -> CogentTextResponse {
-    provider_text_output(endpoint, response)
+    provider_text_output(endpoint, request_id, response)
 }
 
 #[cfg(feature = "providers")]
 pub(crate) fn provider_embedding_response(
     endpoint: EndpointRef,
+    request_id: Option<String>,
     response: cogentlm_providers::ProviderEmbeddingResponse,
 ) -> CogentEmbeddingResponse {
+    let metadata = response.metadata;
     CogentEmbeddingResponse {
         endpoint,
         values: response.result.values,
@@ -128,6 +153,11 @@ pub(crate) fn provider_embedding_response(
         local_stats: None,
         pooling: None,
         normalized: None,
+        metadata: CogentResponseMetadata {
+            request_id,
+            upstream_request_id: metadata.request_id,
+            upstream_response_id: metadata.response_id,
+        },
     }
 }
 
@@ -146,14 +176,29 @@ pub(crate) fn provider_generation_options(
 #[cfg(feature = "providers")]
 fn provider_text_output(
     endpoint: EndpointRef,
+    request_id: Option<String>,
     response: cogentlm_providers::ProviderResponse<cogentlm_providers::ProviderTextOutput>,
 ) -> CogentTextResponse {
+    let metadata = response.metadata;
     CogentTextResponse {
         endpoint,
         text: response.result.text,
         finish_reason: response.result.finish_reason,
         usage: response.usage,
         local_stats: None,
+        metadata: CogentResponseMetadata {
+            request_id,
+            upstream_request_id: metadata.request_id,
+            upstream_response_id: metadata.response_id,
+        },
+    }
+}
+
+fn local_metadata(request_id: Option<String>) -> CogentResponseMetadata {
+    CogentResponseMetadata {
+        request_id,
+        upstream_request_id: None,
+        upstream_response_id: None,
     }
 }
 

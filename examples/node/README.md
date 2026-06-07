@@ -57,7 +57,7 @@ Run:
 ```bash
 node examples/node/gateway_query.mjs <model.gguf> local [input]
 node examples/node/gateway_chat.mjs <model.gguf> local [input]
-node examples/node/gateway_embed.mjs <model.gguf> local-embed [input]
+node examples/node/gateway_embed.mjs <model.gguf> local [input]
 ```
 
 `gateway_embed` requires a model/runtime that reports embedding support.

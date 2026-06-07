@@ -62,9 +62,9 @@ export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
-Open `http://127.0.0.1:8787/` to inspect the minimal example proxy page and
-route list. `examples/gateway/README.md` explains how the proxy is built from
-`crates/gateway`; the production-style dashboard and request history live in
+Open `http://127.0.0.1:8787/` to inspect the minimal example proxy page.
+`examples/gateway/README.md` explains how it is built from `crates/gateway`;
+production lifecycle, authentication, metrics, and deployment live in
 `apps/gateway-server`.
 
 In another terminal:
@@ -77,11 +77,12 @@ node examples/node/gateway_query.mjs <model.gguf> local [input]
 python examples/python/gateway_query.py <model.gguf> local [input]
 ```
 
-Use alias `local` for `gateway_query` and `gateway_chat`; use `local-embed`
-for `gateway_embed`. Embedding examples require a model/runtime that reports
-embedding support.
+Use alias `local` for query, chat, and embedding. Embedding examples require a
+model that reports embedding support.
 
-OpenAI gateway examples require a real `OPENAI_API_KEY`:
+Provider-backed serving belongs to the production gateway server. Start from
+`apps/gateway-server/config/production.toml` and the server README. The xtask
+shortcut below launches that server with generated OpenAI aliases:
 
 ```bash
 export OPENAI_API_KEY="<openai-api-key>"

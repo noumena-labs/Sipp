@@ -10,7 +10,7 @@ use futures::executor::block_on;
 use futures::StreamExt;
 
 use super::*;
-use crate::EndpointRef;
+use crate::{CogentResponseMetadata, EndpointRef};
 
 fn endpoint() -> EndpointRef {
     EndpointRef::Remote {
@@ -52,6 +52,7 @@ fn tokens_method_borrows_owned_stream() {
                 finish_reason: FinishReason::Stop,
                 usage: None,
                 local_stats: None,
+                metadata: CogentResponseMetadata::default(),
             })
         }),
         CogentTokenBatches::closed(),
@@ -93,6 +94,7 @@ fn text_run_splits_response_and_tokens() {
                 finish_reason: FinishReason::Stop,
                 usage: None,
                 local_stats: None,
+                metadata: CogentResponseMetadata::default(),
             })
         }),
         CogentTokenBatches::closed(),
@@ -103,6 +105,25 @@ fn text_run_splits_response_and_tokens() {
 
     assert_eq!(response.text, "done");
     assert!(block_on(tokens.next()).is_none());
+}
+
+#[test]
+fn cancellation_handle_stops_response_with_reason() {
+    let run = CogentTextRun::new(
+        Box::pin(std::future::pending()),
+        CogentTokenBatches::closed(),
+    );
+    let cancellation = run.cancellation_handle();
+
+    cancellation.cancel(CogentCancellationReason::ClientDisconnected);
+    let error = block_on(run).expect_err("cancelled response");
+
+    assert!(matches!(
+        error,
+        CogentError::Cancelled {
+            reason: CogentCancellationReason::ClientDisconnected
+        }
+    ));
 }
 
 #[cfg(feature = "remote")]
@@ -130,6 +151,7 @@ fn embedding_run_resolves_response_future() {
             local_stats: None,
             pooling: None,
             normalized: None,
+            metadata: CogentResponseMetadata::default(),
         })
     }));
 

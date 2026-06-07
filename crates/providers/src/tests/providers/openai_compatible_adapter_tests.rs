@@ -16,7 +16,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::*;
 use crate::{
     OpenAiCompatibleProtocol, ProviderAuth, ProviderError, ProviderErrorKind,
-    ProviderGenerationOptions, SecretString, TokenUsage,
+    ProviderGenerationOptions, ProviderRequestContext, SecretString, TokenUsage,
 };
 
 fn config(server: &MockServer) -> OpenAiCompatibleAdapterConfig {
@@ -25,6 +25,7 @@ fn config(server: &MockServer) -> OpenAiCompatibleAdapterConfig {
         auth: ProviderAuth::Bearer(SecretString::new("token")),
         protocol: OpenAiCompatibleProtocol::OpenAiCompatible,
         static_headers: Vec::new(),
+        correlation_header: None,
         timeout: None,
     }
 }
@@ -36,6 +37,7 @@ fn rejects_zero_timeout() {
         auth: ProviderAuth::Bearer(SecretString::new("token")),
         protocol: OpenAiCompatibleProtocol::OpenAiCompatible,
         static_headers: Vec::new(),
+        correlation_header: None,
         timeout: Some(Duration::ZERO),
     };
 
@@ -47,6 +49,39 @@ fn rejects_zero_timeout() {
 
     config.timeout = Some(Duration::from_millis(1));
     OpenAiCompatibleAdapter::new(config).expect("positive timeout");
+}
+
+#[tokio::test]
+async fn configurable_correlation_header_is_sent() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/completions"))
+        .and(header("x-trace-id", "gateway-request-2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "cmpl-test",
+            "model": "gpt-test",
+            "choices": [{ "text": "done", "finish_reason": "stop" }]
+        })))
+        .mount(&server)
+        .await;
+    let mut adapter_config = config(&server);
+    adapter_config.correlation_header = Some("x-trace-id".to_string());
+    let provider = OpenAiCompatibleAdapter::new(adapter_config).expect("provider");
+
+    provider
+        .generate_with_context(
+            ProviderRequestContext {
+                request_id: Some("gateway-request-2".to_string()),
+            },
+            ProviderGenerateRequest {
+                model: "gpt-test".to_string(),
+                prompt: "hello".to_string(),
+                options: ProviderGenerationOptions::default(),
+                provider_options: Default::default(),
+            },
+        )
+        .await
+        .expect("completion");
 }
 
 #[tokio::test]

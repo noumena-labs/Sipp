@@ -27,6 +27,7 @@ fn remote_error_kind_labels_are_stable() {
         (RemoteErrorKind::ModelNotFound, "model_not_found"),
         (RemoteErrorKind::Timeout, "timeout"),
         (RemoteErrorKind::Overloaded, "overloaded"),
+        (RemoteErrorKind::ServerRestarting, "server_restarting"),
         (RemoteErrorKind::Transport, "transport"),
         (RemoteErrorKind::Remote, "remote"),
     ];
@@ -82,6 +83,10 @@ fn gateway_error_kind_conversion_covers_all_variants() {
         ),
         (GatewayErrorKind::Timeout, RemoteErrorKind::Timeout),
         (GatewayErrorKind::Overloaded, RemoteErrorKind::Overloaded),
+        (
+            GatewayErrorKind::ServerRestarting,
+            RemoteErrorKind::ServerRestarting,
+        ),
         (GatewayErrorKind::Transport, RemoteErrorKind::Transport),
         (GatewayErrorKind::Gateway, RemoteErrorKind::Remote),
     ];

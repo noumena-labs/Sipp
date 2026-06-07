@@ -21,7 +21,7 @@ pub use model::{ProviderCapabilities, ProviderModel};
 pub use providers::{AnthropicAdapter, OpenAiAdapter, OpenAiCompatibleAdapter};
 pub use request::{
     ProviderChatRequest, ProviderEmbedRequest, ProviderGenerateRequest, ProviderGenerationOptions,
-    ProviderOptions,
+    ProviderOptions, ProviderRequestContext,
 };
 pub use response::{
     ProviderChatResponse, ProviderEmbeddingOutput, ProviderEmbeddingResponse,

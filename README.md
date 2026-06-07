@@ -18,6 +18,9 @@ Python, and Rust applications.
 * `bindings/node`, `bindings/python`, `bindings/wasm`: Rust FFI build code.
 * `lib/web`: browser package source for `@noumena-labs/cogentlm`.
 * `lib/node`: Node package source for `@noumena-labs/cogentlm-server`.
+* `crates/gateway`: framework-neutral gateway adapter primitives.
+* `examples/gateway`: minimal local-model Axum gateway.
+* `apps/gateway-server`: production headless gateway service.
 * `demos`: browser demos, served with `cargo xtask run demos serve chat`.
 * `tools/playground`: browser runtime playground and diagnostics tool, served with `cargo xtask run tools serve playground`.
 * `examples/node`, `examples/python`, `examples/rust`, `examples/web`: runnable examples; serve browser examples with `cargo xtask run examples serve browser`; see `examples/README.md`.
@@ -25,3 +28,6 @@ Python, and Rust applications.
 Use `cargo xtask` commands from this repository to build native artifacts and
 language packages. After running `source setup.sh`, use `clm` as the short
 repo-local alias for `cargo xtask`.
+
+Gateway architecture, deployment, and Next.js adapter guidance are in
+[`docs/gateway.md`](docs/gateway.md).

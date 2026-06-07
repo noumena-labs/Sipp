@@ -28,6 +28,14 @@ pub enum GatewayErrorKind {
     Timeout,
     /// Gateway or upstream backend is overloaded.
     Overloaded,
+    /// The server is restarting or draining.
+    ServerRestarting,
+    /// The downstream client disconnected.
+    ClientDisconnected,
+    /// The caller explicitly cancelled the request.
+    CallerCancelled,
+    /// A request deadline expired.
+    DeadlineExceeded,
     /// Network transport to a backend failed.
     Transport,
     /// Gateway internal failure.
@@ -48,6 +56,10 @@ impl GatewayErrorKind {
             Self::ModelNotFound => "model_not_found",
             Self::Timeout => "timeout",
             Self::Overloaded => "overloaded",
+            Self::ServerRestarting => "server_restarting",
+            Self::ClientDisconnected => "client_disconnected",
+            Self::CallerCancelled => "caller_cancelled",
+            Self::DeadlineExceeded => "deadline_exceeded",
             Self::Transport => "transport",
             Self::Internal => "internal",
         }
@@ -63,8 +75,9 @@ impl GatewayErrorKind {
             Self::InvalidRequest | Self::UnsupportedFeature => 400,
             Self::RequestTooLarge => 413,
             Self::ModelNotFound => 404,
-            Self::Timeout => 408,
-            Self::Overloaded => 503,
+            Self::Timeout | Self::DeadlineExceeded => 408,
+            Self::Overloaded | Self::ServerRestarting => 503,
+            Self::ClientDisconnected | Self::CallerCancelled => 499,
             Self::Transport | Self::Internal => 500,
         }
     }
@@ -80,6 +93,8 @@ pub struct GatewayError {
     pub message: String,
     /// Retry delay when applicable.
     pub retry_after: Option<Duration>,
+    /// Upstream provider or gateway request ID, when available.
+    pub upstream_request_id: Option<String>,
 }
 
 impl GatewayError {
@@ -89,6 +104,7 @@ impl GatewayError {
             kind,
             message: message.into(),
             retry_after: None,
+            upstream_request_id: None,
         }
     }
 
@@ -101,5 +117,98 @@ impl GatewayError {
     pub fn with_retry_after(mut self, retry_after: Option<Duration>) -> Self {
         self.retry_after = retry_after;
         self
+    }
+
+    /// Attach an upstream request identifier for structured logging.
+    pub fn with_upstream_request_id(mut self, request_id: Option<String>) -> Self {
+        self.upstream_request_id = request_id;
+        self
+    }
+}
+
+impl From<cogentlm_client::CogentError> for GatewayError {
+    fn from(error: cogentlm_client::CogentError) -> Self {
+        use cogentlm_client::{CogentCancellationReason, CogentError};
+
+        match error {
+            CogentError::Cancelled { reason } => match reason {
+                CogentCancellationReason::ClientDisconnected => {
+                    Self::new(GatewayErrorKind::ClientDisconnected, "client disconnected")
+                }
+                CogentCancellationReason::ServerShutdown => {
+                    Self::new(GatewayErrorKind::ServerRestarting, "server is restarting")
+                }
+                CogentCancellationReason::CallerCancelled => {
+                    Self::new(GatewayErrorKind::CallerCancelled, "request cancelled")
+                }
+                CogentCancellationReason::DeadlineExceeded => Self::new(
+                    GatewayErrorKind::DeadlineExceeded,
+                    "request deadline exceeded",
+                ),
+            },
+            #[cfg(feature = "remote")]
+            CogentError::Remote(error) => Self::new(
+                remote_error_kind(error.kind),
+                "upstream gateway request failed",
+            )
+            .with_retry_after(error.retry_after)
+            .with_upstream_request_id(error.request_id),
+            #[cfg(feature = "providers")]
+            CogentError::Provider(error) => Self::new(
+                provider_error_kind(error.kind),
+                "upstream provider request failed",
+            )
+            .with_retry_after(error.retry_after)
+            .with_upstream_request_id(error.request_id),
+            CogentError::EndpointNotFound(_) => {
+                Self::new(GatewayErrorKind::ModelNotFound, "model alias not found")
+            }
+            CogentError::UnsupportedOperation { .. }
+            | CogentError::AmbiguousEndpoint { .. }
+            | CogentError::NoSupportedEndpoint { .. }
+            | CogentError::InvalidRequest(_) => {
+                Self::new(GatewayErrorKind::InvalidRequest, error.to_string())
+            }
+            CogentError::Local(_) | CogentError::Internal(_) => {
+                Self::new(GatewayErrorKind::Internal, "gateway execution failed")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "remote")]
+fn remote_error_kind(kind: cogentlm_client::RemoteErrorKind) -> GatewayErrorKind {
+    use cogentlm_client::RemoteErrorKind;
+    match kind {
+        RemoteErrorKind::Authentication => GatewayErrorKind::Authentication,
+        RemoteErrorKind::Authorization => GatewayErrorKind::Authorization,
+        RemoteErrorKind::RateLimited => GatewayErrorKind::RateLimited,
+        RemoteErrorKind::QuotaExceeded => GatewayErrorKind::QuotaExceeded,
+        RemoteErrorKind::InvalidRequest => GatewayErrorKind::InvalidRequest,
+        RemoteErrorKind::UnsupportedFeature => GatewayErrorKind::UnsupportedFeature,
+        RemoteErrorKind::ModelNotFound => GatewayErrorKind::ModelNotFound,
+        RemoteErrorKind::Timeout => GatewayErrorKind::Timeout,
+        RemoteErrorKind::Overloaded => GatewayErrorKind::Overloaded,
+        RemoteErrorKind::ServerRestarting => GatewayErrorKind::ServerRestarting,
+        RemoteErrorKind::Transport => GatewayErrorKind::Transport,
+        RemoteErrorKind::Remote => GatewayErrorKind::Internal,
+    }
+}
+
+#[cfg(feature = "providers")]
+fn provider_error_kind(kind: cogentlm_client::ProviderEndpointErrorKind) -> GatewayErrorKind {
+    use cogentlm_client::ProviderEndpointErrorKind;
+    match kind {
+        ProviderEndpointErrorKind::Authentication => GatewayErrorKind::Authentication,
+        ProviderEndpointErrorKind::Authorization => GatewayErrorKind::Authorization,
+        ProviderEndpointErrorKind::RateLimited => GatewayErrorKind::RateLimited,
+        ProviderEndpointErrorKind::QuotaExceeded => GatewayErrorKind::QuotaExceeded,
+        ProviderEndpointErrorKind::InvalidRequest => GatewayErrorKind::InvalidRequest,
+        ProviderEndpointErrorKind::UnsupportedFeature => GatewayErrorKind::UnsupportedFeature,
+        ProviderEndpointErrorKind::ModelNotFound => GatewayErrorKind::ModelNotFound,
+        ProviderEndpointErrorKind::Timeout => GatewayErrorKind::Timeout,
+        ProviderEndpointErrorKind::Overloaded => GatewayErrorKind::Overloaded,
+        ProviderEndpointErrorKind::Transport => GatewayErrorKind::Transport,
+        ProviderEndpointErrorKind::Provider => GatewayErrorKind::Internal,
     }
 }

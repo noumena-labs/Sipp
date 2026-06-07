@@ -1010,6 +1010,7 @@ impl PyProviderDescriptor {
                         .into_iter()
                         .map(|(name, value)| (name, CoreProviderSecret::new(value)))
                         .collect(),
+                    correlation_header: None,
                     timeout,
                 })
             }

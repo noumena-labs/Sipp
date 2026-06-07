@@ -26,6 +26,8 @@ pub enum GatewayErrorKind {
     Timeout,
     /// The gateway or upstream backend is overloaded.
     Overloaded,
+    /// The gateway is draining or restarting.
+    ServerRestarting,
     /// Network or protocol transport failed.
     Transport,
     /// Gateway returned an unclassified error.
@@ -45,6 +47,7 @@ impl GatewayErrorKind {
             Self::ModelNotFound => "model_not_found",
             Self::Timeout => "timeout",
             Self::Overloaded => "overloaded",
+            Self::ServerRestarting => "server_restarting",
             Self::Transport => "transport",
             Self::Gateway => "gateway",
         }
@@ -134,6 +137,7 @@ pub(crate) fn gateway_error_kind_from_code(code: Option<&str>) -> Option<Gateway
         Some("unsupported_feature") => Some(GatewayErrorKind::UnsupportedFeature),
         Some("model_not_found" | "not_found_error") => Some(GatewayErrorKind::ModelNotFound),
         Some("overloaded" | "overloaded_error") => Some(GatewayErrorKind::Overloaded),
+        Some("server_restarting") => Some(GatewayErrorKind::ServerRestarting),
         Some("insufficient_quota" | "quota_exceeded") => Some(GatewayErrorKind::QuotaExceeded),
         Some("rate_limit" | "rate_limited" | "rate_limit_exceeded" | "rate_limit_error") => {
             Some(GatewayErrorKind::RateLimited)

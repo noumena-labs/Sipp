@@ -43,11 +43,11 @@ pub use provider::{
 #[cfg(feature = "remote")]
 pub use remote::{RemoteGatewayConfig, RemoteSecret};
 pub use request::{
-    CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentTextOptions, GatewayOptions,
-    LocalEmbedOptions, LocalTextOptions, ProviderOptions,
+    CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentRequestContext,
+    CogentTextOptions, GatewayOptions, LocalEmbedOptions, LocalTextOptions, ProviderOptions,
 };
-pub use response::{CogentEmbeddingResponse, CogentTextResponse};
+pub use response::{CogentEmbeddingResponse, CogentResponseMetadata, CogentTextResponse};
 pub use run::{
-    CogentEmbeddingResponseFuture, CogentEmbeddingRun, CogentTextResponseFuture, CogentTextRun,
-    CogentTokenBatches,
+    CogentCancellationHandle, CogentCancellationReason, CogentEmbeddingResponseFuture,
+    CogentEmbeddingRun, CogentTextResponseFuture, CogentTextRun, CogentTokenBatches,
 };

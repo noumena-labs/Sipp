@@ -19,6 +19,7 @@ fn gateway_descriptor(alias: &str, base_url: &str, token: &str) -> EndpointDescr
         auth_header_name: None,
         auth_header_value: None,
         static_headers: None,
+        correlation_header: None,
     }
 }
 
@@ -167,6 +168,7 @@ fn remote_request_rejects_local_only_gateway_options() {
 
     let run = client
         .query(CogentQueryRequest {
+            request_id: None,
             endpoint: Some(endpoint),
             prompt: "hello".to_string(),
             options: None,

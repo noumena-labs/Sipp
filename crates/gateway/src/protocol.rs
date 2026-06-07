@@ -1,29 +1,73 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, pin::Pin};
 
-use cogentlm_core::{ChatMessage, ChatRole, FinishReason, TokenUsage};
+use cogentlm_client::{
+    CogentChatRequest, CogentEmbedRequest, CogentQueryRequest, CogentResponseMetadata,
+    CogentTextOptions, EndpointRef,
+};
+use cogentlm_core::{ChatMessage, ChatRole, FinishReason, TokenBatch, TokenUsage};
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    BackendChatRequest, BackendEmbedRequest, BackendGenerationOptions, BackendQueryRequest,
-    GatewayError, GatewayErrorKind,
-};
+use crate::{GatewayError, GatewayResult};
 
 /// Gateway-specific JSON options passed through request bodies.
 pub type GatewayOptions = BTreeMap<String, serde_json::Value>;
-const LOCAL_ONLY_GATEWAY_FIELDS: &[&str] = &[
-    "context_key",
-    "contextKey",
-    "session",
-    "grammar",
-    "json_schema",
-    "jsonSchema",
-    "sampling",
-    "media",
-    "normalize",
-    "local",
-];
 
-#[derive(Debug, Clone, Deserialize)]
+/// Stream returned by gateway text operations.
+pub type GatewayStream = Pin<Box<dyn Stream<Item = GatewayResult<GatewayStreamEvent>> + Send>>;
+
+/// Gateway streaming event emitted by query and chat operations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GatewayStreamEvent {
+    /// Text token batch.
+    TokenBatch(TokenBatch),
+    /// Token usage.
+    Usage { usage: TokenUsage },
+    /// Final finish reason and execution metadata.
+    Finished {
+        /// Normalized finish reason.
+        finish_reason: FinishReason,
+        /// Correlation metadata from the client and upstream service.
+        metadata: GatewayExecutionMetadata,
+    },
+}
+
+/// Correlation metadata preserved through gateway execution.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct GatewayExecutionMetadata {
+    /// Canonical gateway request ID.
+    pub request_id: Option<String>,
+    /// Upstream provider or gateway request ID.
+    pub upstream_request_id: Option<String>,
+    /// Upstream provider or gateway response ID.
+    pub upstream_response_id: Option<String>,
+}
+
+impl From<CogentResponseMetadata> for GatewayExecutionMetadata {
+    fn from(metadata: CogentResponseMetadata) -> Self {
+        Self {
+            request_id: metadata.request_id,
+            upstream_request_id: metadata.upstream_request_id,
+            upstream_response_id: metadata.upstream_response_id,
+        }
+    }
+}
+
+/// Normalized text output returned by a gateway executor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GatewayTextOutput {
+    /// Generated text.
+    pub text: String,
+    /// Normalized finish reason.
+    pub finish_reason: FinishReason,
+    /// Token usage when available.
+    pub usage: Option<TokenUsage>,
+    /// Correlation metadata from the client and upstream service.
+    pub metadata: GatewayExecutionMetadata,
+}
+
+/// Public query request body.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QueryRequestBody {
     /// Public model alias.
     pub model: String,
@@ -47,28 +91,20 @@ pub struct QueryRequestBody {
 }
 
 impl QueryRequestBody {
-    /// Convert the body into a backend request.
-    pub fn into_backend(self) -> BackendQueryRequest {
-        let options = self.generation_options();
-        BackendQueryRequest {
+    pub(crate) fn into_client(self, endpoint: EndpointRef) -> CogentQueryRequest {
+        CogentQueryRequest {
+            endpoint: Some(endpoint),
             prompt: self.prompt,
-            options,
-            gateway_options: self.gateway_options,
-        }
-    }
-
-    /// Return normalized generation options.
-    pub fn generation_options(&self) -> BackendGenerationOptions {
-        BackendGenerationOptions {
-            max_tokens: self.max_tokens,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            stop: self.stop.clone(),
+            options: text_options(self.max_tokens, self.temperature, self.top_p, self.stop),
+            gateway_options: self.gateway_options.into_iter().collect(),
+            emit_tokens: self.stream,
+            ..CogentQueryRequest::default()
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Public chat request body.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatRequestBody {
     /// Public model alias.
     pub model: String,
@@ -92,32 +128,24 @@ pub struct ChatRequestBody {
 }
 
 impl ChatRequestBody {
-    /// Convert the body into a backend request.
-    pub fn into_backend(self) -> BackendChatRequest {
-        let options = self.generation_options();
-        BackendChatRequest {
+    pub(crate) fn into_client(self, endpoint: EndpointRef) -> CogentChatRequest {
+        CogentChatRequest {
+            endpoint: Some(endpoint),
             messages: self
                 .messages
                 .into_iter()
                 .map(ChatMessageBody::into_core)
                 .collect(),
-            options,
-            gateway_options: self.gateway_options,
-        }
-    }
-
-    /// Return normalized generation options.
-    pub fn generation_options(&self) -> BackendGenerationOptions {
-        BackendGenerationOptions {
-            max_tokens: self.max_tokens,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            stop: self.stop.clone(),
+            options: text_options(self.max_tokens, self.temperature, self.top_p, self.stop),
+            gateway_options: self.gateway_options.into_iter().collect(),
+            emit_tokens: self.stream,
+            ..CogentChatRequest::default()
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Public embedding request body.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EmbedRequestBody {
     /// Public model alias.
     pub model: String,
@@ -129,16 +157,18 @@ pub struct EmbedRequestBody {
 }
 
 impl EmbedRequestBody {
-    /// Convert the body into a backend request.
-    pub fn into_backend(self) -> BackendEmbedRequest {
-        BackendEmbedRequest {
+    pub(crate) fn into_client(self, endpoint: EndpointRef) -> CogentEmbedRequest {
+        CogentEmbedRequest {
+            endpoint: Some(endpoint),
             input: self.input,
-            gateway_options: self.gateway_options,
+            gateway_options: self.gateway_options.into_iter().collect(),
+            ..CogentEmbedRequest::default()
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Chat message accepted by the gateway protocol.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessageBody {
     /// Chat role.
     pub role: ChatRole,
@@ -152,9 +182,10 @@ impl ChatMessageBody {
     }
 }
 
+/// Public finite text response.
 #[derive(Debug, Clone, Serialize)]
 pub struct TextResponseBody {
-    /// Response ID.
+    /// Gateway response ID.
     pub id: String,
     /// Public model alias.
     pub model: String,
@@ -167,9 +198,10 @@ pub struct TextResponseBody {
     pub usage: Option<UsageBody>,
 }
 
+/// Public finite embedding response.
 #[derive(Debug, Clone, Serialize)]
 pub struct EmbeddingResponseBody {
-    /// Response ID.
+    /// Gateway response ID.
     pub id: String,
     /// Public model alias.
     pub model: String,
@@ -180,7 +212,8 @@ pub struct EmbeddingResponseBody {
     pub usage: Option<UsageBody>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Public token usage.
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct UsageBody {
     /// Input token count when available.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,69 +236,48 @@ impl From<TokenUsage> for UsageBody {
     }
 }
 
+/// Public error envelope.
+#[derive(Debug, Clone, Serialize)]
+pub struct ErrorEnvelope {
+    /// Error payload.
+    pub error: ErrorBody,
+}
+
+impl From<&GatewayError> for ErrorEnvelope {
+    fn from(error: &GatewayError) -> Self {
+        Self {
+            error: ErrorBody {
+                code: error.code(),
+                message: error.message.clone(),
+            },
+        }
+    }
+}
+
+/// Public error body.
+#[derive(Debug, Clone, Serialize)]
+pub struct ErrorBody {
+    /// Stable machine-readable error code.
+    pub code: &'static str,
+    /// Client-safe message.
+    pub message: String,
+}
+
 /// Convert a finish reason into its stable wire label.
 pub fn finish_reason(reason: FinishReason) -> String {
     reason.as_str().to_string()
 }
 
-/// Validate text generation options.
-pub fn validate_text_options(options: &BackendGenerationOptions) -> Result<(), GatewayError> {
-    if matches!(options.max_tokens, Some(0)) {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "max_tokens must be greater than zero",
-        ));
+fn text_options(
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+    stop: Vec<String>,
+) -> CogentTextOptions {
+    CogentTextOptions {
+        max_tokens,
+        temperature,
+        top_p,
+        stop,
     }
-    if options.temperature.is_some_and(|value| !value.is_finite()) {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "temperature must be finite",
-        ));
-    }
-    if options.temperature.is_some_and(|value| value < 0.0) {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "temperature must be greater than or equal to zero",
-        ));
-    }
-    if options.top_p.is_some_and(|value| !value.is_finite()) {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "top_p must be finite",
-        ));
-    }
-    if options
-        .top_p
-        .is_some_and(|value| !(0.0..=1.0).contains(&value))
-    {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "top_p must be between 0 and 1",
-        ));
-    }
-    Ok(())
-}
-
-/// Validate gateway options for remote gateway requests.
-pub fn validate_gateway_options(options: &GatewayOptions) -> Result<(), GatewayError> {
-    for key in options.keys() {
-        if LOCAL_ONLY_GATEWAY_FIELDS.contains(&key.as_str()) {
-            return Err(GatewayError::new(
-                GatewayErrorKind::InvalidRequest,
-                format!("gateway request cannot contain local-only field: {key}"),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Validate that a request string is not blank.
-pub fn validate_non_empty(value: &str, field: &'static str) -> Result<(), GatewayError> {
-    if value.trim().is_empty() {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            format!("{field} must not be empty"),
-        ));
-    }
-    Ok(())
 }

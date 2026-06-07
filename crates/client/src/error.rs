@@ -5,6 +5,7 @@ use cogentlm_providers::{ProviderError, ProviderErrorKind};
 #[cfg(feature = "remote")]
 use cogentlm_remote::{GatewayError, GatewayErrorKind};
 
+use crate::CogentCancellationReason;
 use crate::EndpointRef;
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -44,6 +45,8 @@ pub enum RemoteErrorKind {
     Timeout,
     /// The remote service is overloaded.
     Overloaded,
+    /// The remote gateway is draining or restarting.
+    ServerRestarting,
     /// Network or protocol transport failed.
     Transport,
     /// Remote service returned an unclassified API error.
@@ -64,6 +67,7 @@ impl RemoteErrorKind {
             Self::ModelNotFound => "model_not_found",
             Self::Timeout => "timeout",
             Self::Overloaded => "overloaded",
+            Self::ServerRestarting => "server_restarting",
             Self::Transport => "transport",
             Self::Remote => "remote",
         }
@@ -121,6 +125,7 @@ impl From<GatewayError> for RemoteError {
                 GatewayErrorKind::ModelNotFound => RemoteErrorKind::ModelNotFound,
                 GatewayErrorKind::Timeout => RemoteErrorKind::Timeout,
                 GatewayErrorKind::Overloaded => RemoteErrorKind::Overloaded,
+                GatewayErrorKind::ServerRestarting => RemoteErrorKind::ServerRestarting,
                 GatewayErrorKind::Transport => RemoteErrorKind::Transport,
                 GatewayErrorKind::Gateway => RemoteErrorKind::Remote,
             },
@@ -278,6 +283,13 @@ pub enum CogentError {
     #[cfg(feature = "providers")]
     #[error(transparent)]
     Provider(ProviderEndpointError),
+
+    /// The caller cancelled an in-flight request.
+    #[error("request cancelled ({})", reason.as_str())]
+    Cancelled {
+        /// Stable cancellation classification.
+        reason: CogentCancellationReason,
+    },
 
     /// Internal client error.
     #[error("internal facade error: {0}")]

@@ -10,13 +10,14 @@ use std::{
 
 use cogentlm_client::{
     AnthropicProviderConfig as CoreAnthropicProviderConfig,
-    CogentChatRequest as CoreClientChatRequest, CogentClient as CoreClient,
-    CogentEmbedRequest as CoreClientEmbedRequest,
+    CogentCancellationHandle as CoreCancellationHandle,
+    CogentCancellationReason as CoreCancellationReason, CogentChatRequest as CoreClientChatRequest,
+    CogentClient as CoreClient, CogentEmbedRequest as CoreClientEmbedRequest,
     CogentEmbeddingResponse as CoreClientEmbeddingResponse,
     CogentEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
     CogentEmbeddingRun as CoreClientEmbeddingRun, CogentError as CoreClientError,
-    CogentQueryRequest as CoreClientQueryRequest, CogentTextOptions as CoreClientTextOptions,
-    CogentTextResponse as CoreClientTextResponse,
+    CogentQueryRequest as CoreClientQueryRequest, CogentRequestContext as CoreClientRequestContext,
+    CogentTextOptions as CoreClientTextOptions, CogentTextResponse as CoreClientTextResponse,
     CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
     CogentTokenBatches as CoreClientTokenBatches, EndpointDescriptor as CoreEndpointDescriptor,
     EndpointRef as CoreEndpointRef, LocalEmbedOptions as CoreClientLocalEmbedOptions,
@@ -699,6 +700,8 @@ impl LocalEmbedOptions {
 /// Prompt completion request routed to a local endpoint or remote gateway.
 #[napi(object)]
 pub struct CogentQueryRequest {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
     pub prompt: String,
     pub options: Option<CogentTextOptions>,
@@ -728,6 +731,8 @@ impl CogentQueryRequest {
 /// Chat completion request routed to a local endpoint or remote gateway.
 #[napi(object)]
 pub struct CogentChatRequest {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
     pub messages: Vec<ChatMessage>,
     pub options: Option<CogentTextOptions>,
@@ -757,6 +762,8 @@ impl CogentChatRequest {
 /// Embedding request routed to a local endpoint or remote gateway.
 #[napi(object)]
 pub struct CogentEmbedRequest {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
     pub input: String,
     pub local: Option<LocalEmbedOptions>,
@@ -846,6 +853,8 @@ pub struct EndpointDescriptor {
     pub auth_header_value: Option<String>,
     #[napi(js_name = "staticHeaders")]
     pub static_headers: Option<Vec<ProviderStaticHeader>>,
+    #[napi(js_name = "correlationHeader")]
+    pub correlation_header: Option<String>,
 }
 
 impl EndpointDescriptor {
@@ -874,6 +883,7 @@ impl EndpointDescriptor {
                 ("authHeaderName", self.auth_header_name.is_some()),
                 ("authHeaderValue", self.auth_header_value.is_some()),
                 ("staticHeaders", self.static_headers.is_some()),
+                ("correlationHeader", self.correlation_header.is_some()),
             ],
             "local",
         )?;
@@ -902,6 +912,7 @@ impl EndpointDescriptor {
                 ("authHeaderName", self.auth_header_name.is_some()),
                 ("authHeaderValue", self.auth_header_value.is_some()),
                 ("staticHeaders", self.static_headers.is_some()),
+                ("correlationHeader", self.correlation_header.is_some()),
             ],
             "gateway",
         )?;
@@ -937,6 +948,7 @@ impl EndpointDescriptor {
                         ("authHeaderName", self.auth_header_name.is_some()),
                         ("authHeaderValue", self.auth_header_value.is_some()),
                         ("staticHeaders", self.static_headers.is_some()),
+                        ("correlationHeader", self.correlation_header.is_some()),
                     ],
                     "OpenAI provider",
                 )?;
@@ -953,6 +965,7 @@ impl EndpointDescriptor {
                         ("authHeaderName", self.auth_header_name.is_some()),
                         ("authHeaderValue", self.auth_header_value.is_some()),
                         ("staticHeaders", self.static_headers.is_some()),
+                        ("correlationHeader", self.correlation_header.is_some()),
                     ],
                     "Anthropic provider",
                 )?;
@@ -991,6 +1004,7 @@ impl EndpointDescriptor {
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    correlation_header: self.correlation_header.clone(),
                     timeout,
                 })
             }
@@ -1147,6 +1161,7 @@ pub struct CogentTextResponse {
     pub usage: Option<TokenUsage>,
     #[napi(js_name = "localStats")]
     pub local_stats: Option<RequestStats>,
+    pub metadata: CogentResponseMetadata,
 }
 
 /// Final vector response from an embedding request.
@@ -1159,6 +1174,18 @@ pub struct CogentEmbeddingResponse {
     pub local_stats: Option<RequestStats>,
     pub pooling: Option<PoolingType>,
     pub normalized: Option<bool>,
+    pub metadata: CogentResponseMetadata,
+}
+
+/// Request and upstream correlation metadata.
+#[napi(object)]
+pub struct CogentResponseMetadata {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
+    #[napi(js_name = "upstreamRequestId")]
+    pub upstream_request_id: Option<String>,
+    #[napi(js_name = "upstreamResponseId")]
+    pub upstream_response_id: Option<String>,
 }
 
 fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
@@ -1186,6 +1213,16 @@ fn token_usage_to_node(usage: CoreTokenUsage) -> TokenUsage {
     }
 }
 
+fn response_metadata_to_node(
+    metadata: cogentlm_client::CogentResponseMetadata,
+) -> CogentResponseMetadata {
+    CogentResponseMetadata {
+        request_id: metadata.request_id,
+        upstream_request_id: metadata.upstream_request_id,
+        upstream_response_id: metadata.upstream_response_id,
+    }
+}
+
 fn cogent_text_response_to_node(response: CoreClientTextResponse) -> CogentTextResponse {
     CogentTextResponse {
         endpoint: endpoint_ref_to_node(response.endpoint),
@@ -1193,6 +1230,7 @@ fn cogent_text_response_to_node(response: CoreClientTextResponse) -> CogentTextR
         finish_reason: response.finish_reason.as_str().to_string(),
         usage: response.usage.map(token_usage_to_node),
         local_stats: response.local_stats.map(request_stats_to_node),
+        metadata: response_metadata_to_node(response.metadata),
     }
 }
 
@@ -1206,6 +1244,7 @@ fn cogent_embedding_response_to_node(
         local_stats: response.local_stats.map(request_stats_to_node),
         pooling: response.pooling.map(PoolingType::from),
         normalized: response.normalized,
+        metadata: response_metadata_to_node(response.metadata),
     }
 }
 
@@ -1262,34 +1301,43 @@ impl CogentClient {
 
     #[napi(ts_return_type = "CogentTextRun")]
     pub fn query(&self, request: CogentQueryRequest) -> Result<CogentTextRun> {
+        let context = CoreClientRequestContext {
+            request_id: request.request_id.clone(),
+        };
         let request = request.to_core()?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .query(request);
+            .query_with_context(context, request);
         Ok(CogentTextRun::from_core(run))
     }
 
     #[napi(ts_return_type = "CogentTextRun")]
     pub fn chat(&self, request: CogentChatRequest) -> Result<CogentTextRun> {
+        let context = CoreClientRequestContext {
+            request_id: request.request_id.clone(),
+        };
         let request = request.to_core()?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .chat(request);
+            .chat_with_context(context, request);
         Ok(CogentTextRun::from_core(run))
     }
 
     #[napi(ts_return_type = "CogentEmbeddingRun")]
     pub fn embed(&self, request: CogentEmbedRequest) -> Result<CogentEmbeddingRun> {
+        let context = CoreClientRequestContext {
+            request_id: request.request_id.clone(),
+        };
         let request = request.to_core()?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .embed(request);
+            .embed_with_context(context, request);
         Ok(CogentEmbeddingRun::from_core(run))
     }
 }
@@ -1299,14 +1347,16 @@ impl CogentClient {
 pub struct CogentTextRun {
     response: SharedClientTextResponse,
     tokens: SharedClientTokenBatches,
+    cancellation: CoreCancellationHandle,
 }
 
 impl CogentTextRun {
     fn from_core(run: CoreClientTextRun) -> Self {
-        let (tokens, response) = run.into_parts();
+        let (tokens, response, cancellation) = run.into_parts_with_cancel();
         Self {
             response: Arc::new(Mutex::new(Some(response))),
             tokens: Arc::new(Mutex::new(Some(tokens))),
+            cancellation,
         }
     }
 }
@@ -1326,18 +1376,28 @@ impl CogentTextRun {
             tokens: self.tokens.clone(),
         })
     }
+
+    /// Cancel the native run and abort local or upstream execution.
+    #[napi]
+    pub fn cancel(&self, reason: Option<String>) -> Result<()> {
+        self.cancellation.cancel(cancellation_reason(reason)?);
+        Ok(())
+    }
 }
 
 /// Embedding request handle with a final embedding response.
 #[napi(js_name = "CogentEmbeddingRun")]
 pub struct CogentEmbeddingRun {
     response: SharedClientEmbeddingResponse,
+    cancellation: CoreCancellationHandle,
 }
 
 impl CogentEmbeddingRun {
     fn from_core(run: CoreClientEmbeddingRun) -> Self {
+        let (response, cancellation) = run.into_parts();
         Self {
-            response: Arc::new(Mutex::new(Some(run.into_response()))),
+            response: Arc::new(Mutex::new(Some(response))),
+            cancellation,
         }
     }
 }
@@ -1352,6 +1412,25 @@ impl CogentEmbeddingRun {
         AsyncTask::new(ClientEmbeddingResultTask {
             response: self.response.clone(),
         })
+    }
+
+    /// Cancel the native run and abort local or upstream execution.
+    #[napi]
+    pub fn cancel(&self, reason: Option<String>) -> Result<()> {
+        self.cancellation.cancel(cancellation_reason(reason)?);
+        Ok(())
+    }
+}
+
+fn cancellation_reason(reason: Option<String>) -> Result<CoreCancellationReason> {
+    match reason.as_deref().unwrap_or("caller_cancelled") {
+        "caller_cancelled" => Ok(CoreCancellationReason::CallerCancelled),
+        "client_disconnected" => Ok(CoreCancellationReason::ClientDisconnected),
+        "server_shutdown" => Ok(CoreCancellationReason::ServerShutdown),
+        "deadline_exceeded" => Ok(CoreCancellationReason::DeadlineExceeded),
+        _ => Err(invalid_arg(
+            "cancellation reason must be caller_cancelled, client_disconnected, server_shutdown, or deadline_exceeded",
+        )),
     }
 }
 

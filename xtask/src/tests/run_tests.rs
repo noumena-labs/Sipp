@@ -6,16 +6,15 @@
 
 use crate::cli::{
     Backend, LlamaBackendOpsMode, LlamaBackendOpsOutput, RunCommands, RunGatewayExampleCase,
-    RunGatewayLocalServeArgs, RunLlamaBackendOpsArgs, RunLlamaCommands,
+    RunLlamaBackendOpsArgs, RunLlamaCommands,
 };
 use crate::test_support::TempDir;
 use crate::utils::BuildContext;
 
 use super::{
-    find_file_recursive, find_llama_backend_ops_exe, gateway_example_alias,
-    gateway_web_allowed_origins, host_binding_backends, node_gateway_example_script,
-    python_gateway_example_script, run, rust_gateway_example_bin, validate_gateway_example_backend,
-    write_local_gateway_config, write_local_gateway_example_config, LocalGatewayConfigOptions,
+    find_file_recursive, find_llama_backend_ops_exe, gateway_example_alias, host_binding_backends,
+    node_gateway_example_script, python_gateway_example_script, run, rust_gateway_example_bin,
+    validate_gateway_example_backend,
 };
 
 #[test]
@@ -99,10 +98,7 @@ fn llama_correctness_mode_is_rejected_before_external_commands() {
 fn gateway_example_case_mappings_match_client_files_and_aliases() {
     assert_eq!(gateway_example_alias(RunGatewayExampleCase::Query), "local");
     assert_eq!(gateway_example_alias(RunGatewayExampleCase::Chat), "local");
-    assert_eq!(
-        gateway_example_alias(RunGatewayExampleCase::Embed),
-        "local-embed"
-    );
+    assert_eq!(gateway_example_alias(RunGatewayExampleCase::Embed), "local");
 
     assert_eq!(
         rust_gateway_example_bin(RunGatewayExampleCase::Query),
@@ -140,62 +136,6 @@ fn gateway_example_case_mappings_match_client_files_and_aliases() {
         python_gateway_example_script(RunGatewayExampleCase::Embed),
         "gateway_embed.py"
     );
-}
-
-#[test]
-fn gateway_web_origins_include_selected_host_port_and_loopback_peer() {
-    assert_eq!(
-        gateway_web_allowed_origins("localhost", 4173),
-        vec![
-            "http://localhost:4173".to_owned(),
-            "http://127.0.0.1:4173".to_owned()
-        ]
-    );
-    assert_eq!(
-        gateway_web_allowed_origins("0.0.0.0", 5174),
-        vec![
-            "http://127.0.0.1:5174".to_owned(),
-            "http://localhost:5174".to_owned()
-        ]
-    );
-}
-
-#[test]
-fn local_gateway_config_uses_dynamic_browser_origins() {
-    let temp = TempDir::new("run-gateway-config");
-    let model = temp.write("models/model.gguf", "fixture");
-    let ctx = BuildContext::from_workspace_root_for_test(temp.path());
-    let args = RunGatewayLocalServeArgs {
-        model,
-        bind: "127.0.0.1:18888".to_owned(),
-        token_env: "TEST_GATEWAY_TOKEN".to_owned(),
-        backend: Backend::Cpu,
-    };
-
-    let config = write_local_gateway_example_config(&ctx, &args).unwrap();
-    let contents = std::fs::read_to_string(config).unwrap();
-
-    assert!(contents.contains("bind = \"127.0.0.1:18888\""));
-    assert!(contents.contains("token_env = \"TEST_GATEWAY_TOKEN\""));
-    assert!(contents
-        .contains("allowed_origins = [\"http://127.0.0.1:5173\", \"http://localhost:5173\"]"));
-    assert!(contents.contains("name = \"local\""));
-    assert!(contents.contains("name = \"local-embed\""));
-
-    let custom_origins = gateway_web_allowed_origins("localhost", 4173);
-    let config = write_local_gateway_config(
-        &ctx,
-        LocalGatewayConfigOptions {
-            model: &args.model,
-            bind: &args.bind,
-            token_env: &args.token_env,
-            allowed_origins: &custom_origins,
-        },
-    )
-    .unwrap();
-    let contents = std::fs::read_to_string(config).unwrap();
-    assert!(contents
-        .contains("allowed_origins = [\"http://localhost:4173\", \"http://127.0.0.1:4173\"]"));
 }
 
 #[test]

@@ -27,6 +27,7 @@ fn openai_compatible_config_debug_redacts_static_header_values() {
         auth: ProviderAuth::Bearer(SecretString::new("gateway-token")),
         protocol: OpenAiCompatibleProtocol::OpenAiCompatible,
         static_headers: vec![("x-provider-secret".to_string(), "secret-value".to_string())],
+        correlation_header: None,
         timeout: None,
     };
     let debug = format!("{config:?}");

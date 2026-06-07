@@ -247,9 +247,7 @@ fn serve_local_gateway_example(
     output::phase("Serve local gateway example");
     output::path("Model", &args.model);
     output::detail("Bind", &args.bind);
-    output::detail("Gateway token env", &args.token_env);
     output::detail("Backend", args.backend.as_str());
-    validate_secret_env(&args.token_env)?;
     if !args.model.is_file() {
         anyhow::bail!(
             "gateway model file does not exist: {}",
@@ -257,11 +255,11 @@ fn serve_local_gateway_example(
         );
     }
 
-    let config_path = write_local_gateway_example_config(ctx, args)?;
-    run_gateway_server(
+    run_local_gateway_server(
         sh,
         ctx,
-        &config_path,
+        &args.model,
+        &args.bind,
         &args.backend,
         "local gateway example",
     )
@@ -280,7 +278,7 @@ fn serve_openai_gateway_example(
     validate_secret_env(&args.api_key_env)?;
 
     let config_path = write_openai_gateway_example_config(ctx, args)?;
-    run_gateway_server(
+    run_production_gateway_server(
         sh,
         ctx,
         &config_path,
@@ -311,13 +309,7 @@ fn run_rust_gateway_example_client(
     let model = resolve_gateway_example_model(sh, ctx, &args.common)?;
     output::path("Model", &model);
 
-    let mut gateway = start_local_gateway_example(
-        sh,
-        ctx,
-        &args.common,
-        &model,
-        &default_gateway_allowed_origins(),
-    )?;
+    let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model)?;
     wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
 
     let alias = gateway_example_alias(args.common.case);
@@ -356,13 +348,7 @@ fn run_node_gateway_example_client(
     output::path("Model", &model);
     targets::node::build(sh, ctx, Some(&Backend::Cpu))?;
 
-    let mut gateway = start_local_gateway_example(
-        sh,
-        ctx,
-        &args.common,
-        &model,
-        &default_gateway_allowed_origins(),
-    )?;
+    let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model)?;
     wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
 
     let alias = gateway_example_alias(args.common.case);
@@ -403,13 +389,7 @@ fn run_python_gateway_example_client(
     let wheel = build_python_gateway_run_wheel(sh, ctx)?;
     let python_exe = install_python_gateway_run_venv(sh, ctx, &wheel)?;
 
-    let mut gateway = start_local_gateway_example(
-        sh,
-        ctx,
-        &args.common,
-        &model,
-        &default_gateway_allowed_origins(),
-    )?;
+    let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model)?;
     wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
 
     let alias = gateway_example_alias(args.common.case);
@@ -461,8 +441,7 @@ fn run_web_gateway_example(
         output::warning("Skipping browser package build before serving");
     }
 
-    let allowed_origins = gateway_web_allowed_origins(&args.host, args.port);
-    let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model, &allowed_origins)?;
+    let mut gateway = start_local_gateway_example(sh, ctx, &args.common, &model)?;
     wait_for_gateway_example(&args.common.bind, gateway.child_mut()?)?;
 
     output::detail("Gateway URL", gateway_url(&args.common.bind));
@@ -501,125 +480,6 @@ fn build_example_only(sh: &Shell, ctx: &BuildContext, example: ExampleName) -> R
     .with_context(|| format!("failed to build {} example", example.label()))
 }
 
-fn write_local_gateway_example_config(
-    ctx: &BuildContext,
-    args: &RunGatewayLocalServeArgs,
-) -> Result<PathBuf> {
-    let allowed_origins = default_gateway_allowed_origins();
-    write_local_gateway_config(
-        ctx,
-        LocalGatewayConfigOptions {
-            model: &args.model,
-            bind: &args.bind,
-            token_env: &args.token_env,
-            allowed_origins: &allowed_origins,
-        },
-    )
-}
-
-struct LocalGatewayConfigOptions<'a> {
-    model: &'a Path,
-    bind: &'a str,
-    token_env: &'a str,
-    allowed_origins: &'a [String],
-}
-
-fn write_local_gateway_config(
-    ctx: &BuildContext,
-    options: LocalGatewayConfigOptions<'_>,
-) -> Result<PathBuf> {
-    let config_dir = ctx.tmp_dir().join("examples").join("gateway");
-    fs::create_dir_all(&config_dir)
-        .with_context(|| format!("failed to create {}", config_dir.display()))?;
-    let config_path = config_dir.join("local-gateway.toml");
-    let allowed_origins = toml_array(options.allowed_origins);
-    let contents = format!(
-        r#"[server]
-bind = {bind}
-
-[auth]
-token_env = {token_env}
-admin_token_env = {token_env}
-
-[limits]
-max_request_bytes = 1048576
-history_capacity = 200
-
-[cors]
-allowed_origins = {allowed_origins}
-
-[[aliases]]
-name = "local"
-operations = ["query", "chat"]
-
-[aliases.limits]
-max_concurrent_requests = 4
-max_requests_per_minute = 60
-
-[aliases.backend]
-kind = "local_cogent_engine"
-model_path = {model_path}
-
-[aliases.backend.options]
-context_key = "gateway-local"
-
-[aliases.backend.runtime.context]
-n_ctx = 2048
-embeddings = false
-
-[aliases.backend.runtime.scheduler]
-continuous_batching = true
-prefill_chunk_size = 0
-
-[aliases.backend.runtime.cache]
-mode = "live_slot_prefix"
-
-[aliases.backend.runtime.observability]
-runtime_metrics = true
-backend_profiling = false
-
-[[aliases]]
-name = "local-embed"
-operations = ["embed"]
-
-[aliases.limits]
-max_concurrent_requests = 4
-max_requests_per_minute = 60
-
-[aliases.backend]
-kind = "local_cogent_engine"
-model_path = {model_path}
-
-[aliases.backend.options]
-embedding_context_key = "gateway-embed"
-normalize_embeddings = true
-
-[aliases.backend.runtime.context]
-n_ctx = 2048
-embeddings = true
-
-[aliases.backend.runtime.scheduler]
-continuous_batching = true
-prefill_chunk_size = 0
-
-[aliases.backend.runtime.cache]
-mode = "live_slot_prefix"
-
-[aliases.backend.runtime.observability]
-runtime_metrics = true
-backend_profiling = false
-"#,
-        bind = toml_string(options.bind),
-        token_env = toml_string(options.token_env),
-        model_path = toml_string(&options.model.display().to_string()),
-        allowed_origins = allowed_origins,
-    );
-    fs::write(&config_path, contents)
-        .with_context(|| format!("failed to write {}", config_path.display()))?;
-    output::path("Generated gateway config", &config_path);
-    Ok(config_path)
-}
-
 fn write_openai_gateway_example_config(
     ctx: &BuildContext,
     args: &RunGatewayOpenAiServeArgs,
@@ -629,45 +489,48 @@ fn write_openai_gateway_example_config(
         .with_context(|| format!("failed to create {}", config_dir.display()))?;
     let config_path = config_dir.join("openai-gateway.toml");
     let contents = format!(
-        r#"[server]
-bind = {bind}
-
-[auth]
-token_env = {token_env}
-admin_token_env = {token_env}
-
-[limits]
+        r#"public_bind = {bind}
+management_bind = "127.0.0.1:9090"
 max_request_bytes = 1048576
-history_capacity = 200
-
-[cors]
+drain_timeout_seconds = 120
+force_close_timeout_seconds = 5
 allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+[[tokens]]
+env = {token_env}
+caller = "xtask-openai"
 
 [[aliases]]
 name = "openai-chat"
-operations = ["query", "chat"]
-
-[aliases.limits]
-max_concurrent_requests = 8
-max_requests_per_minute = 120
-
-[aliases.backend]
-kind = "open_ai"
+type = "openai"
 model = {chat_model}
 api_key_env = {api_key_env}
 
-[[aliases]]
-name = "openai-embed"
-operations = ["embed"]
-
 [aliases.limits]
+[aliases.limits.global]
 max_concurrent_requests = 8
 max_requests_per_minute = 120
 
-[aliases.backend]
-kind = "open_ai"
+[aliases.operations]
+query = true
+chat = true
+embed = false
+
+[[aliases]]
+name = "openai-embed"
+type = "openai"
 model = {embed_model}
 api_key_env = {api_key_env}
+
+[aliases.limits]
+[aliases.limits.global]
+max_concurrent_requests = 8
+max_requests_per_minute = 120
+
+[aliases.operations]
+query = false
+chat = false
+embed = true
 "#,
         bind = toml_string(&args.bind),
         token_env = toml_string(&args.token_env),
@@ -681,7 +544,7 @@ api_key_env = {api_key_env}
     Ok(config_path)
 }
 
-fn run_gateway_server(
+fn run_production_gateway_server(
     sh: &Shell,
     ctx: &BuildContext,
     config_path: &Path,
@@ -695,11 +558,36 @@ fn run_gateway_server(
     }
 
     let _dir = sh.push_dir(ctx.workspace_root());
+    let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway-server -- serve");
+    if *backend != Backend::Cpu {
+        gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
+    }
+    gateway_cmd = gateway_cmd.arg("--config").arg(config_path);
+    gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(backend))?;
+    output::run_long_command(format!("Starting {label}"), gateway_cmd)
+        .with_context(|| format!("{label} failed"))
+}
+
+fn run_local_gateway_server(
+    sh: &Shell,
+    ctx: &BuildContext,
+    model: &Path,
+    bind: &str,
+    backend: &Backend,
+    label: &'static str,
+) -> Result<()> {
+    validate_gateway_example_backend(backend)?;
+    let _dir = sh.push_dir(ctx.workspace_root());
     let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway-example");
     if *backend != Backend::Cpu {
         gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
     }
-    gateway_cmd = gateway_cmd.arg("--").arg("--config").arg(config_path);
+    gateway_cmd = gateway_cmd
+        .arg("--")
+        .arg("--model")
+        .arg(model)
+        .arg("--bind")
+        .arg(bind);
     gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(backend))?;
     output::run_long_command(format!("Starting {label}"), gateway_cmd)
         .with_context(|| format!("{label} failed"))
@@ -710,26 +598,9 @@ fn start_local_gateway_example(
     ctx: &BuildContext,
     common: &RunGatewayExampleCommonArgs,
     model: &Path,
-    allowed_origins: &[String],
 ) -> Result<ManagedGatewayProcess> {
     validate_gateway_example_common(common)?;
-    let config_path = write_local_gateway_config(
-        ctx,
-        LocalGatewayConfigOptions {
-            model,
-            bind: &common.bind,
-            token_env: GATEWAY_RUN_TOKEN_ENV,
-            allowed_origins,
-        },
-    )?;
-    ManagedGatewayProcess::start(
-        sh,
-        ctx,
-        &config_path,
-        &common.backend,
-        GATEWAY_RUN_TOKEN_ENV,
-        &common.token,
-    )
+    ManagedGatewayProcess::start(sh, ctx, model, &common.bind, &common.backend)
 }
 
 pub(crate) fn validate_gateway_example_backend(backend: &Backend) -> Result<()> {
@@ -805,10 +676,9 @@ impl ManagedGatewayProcess {
     fn start(
         sh: &Shell,
         ctx: &BuildContext,
-        config_path: &Path,
+        model: &Path,
+        bind: &str,
         backend: &Backend,
-        token_env: &str,
-        token: &str,
     ) -> Result<Self> {
         let log_dir = ctx.command_logs_dir();
         fs::create_dir_all(&log_dir)
@@ -823,12 +693,16 @@ impl ManagedGatewayProcess {
         if *backend != Backend::Cpu {
             gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
         }
-        gateway_cmd = gateway_cmd.arg("--").arg("--config").arg(config_path);
+        gateway_cmd = gateway_cmd
+            .arg("--")
+            .arg("--model")
+            .arg(model)
+            .arg("--bind")
+            .arg(bind);
         gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(backend))?;
 
         let mut command: Command = gateway_cmd.quiet().into();
         command
-            .env(token_env, token)
             .stdin(Stdio::null())
             .stdout(Stdio::from(
                 log.try_clone()
@@ -874,44 +748,6 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).expect("string serialization cannot fail")
 }
 
-fn toml_array(values: &[String]) -> String {
-    let values = values
-        .iter()
-        .map(|value| toml_string(value))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{values}]")
-}
-
-fn default_gateway_allowed_origins() -> Vec<String> {
-    gateway_web_allowed_origins("127.0.0.1", 5173)
-}
-
-pub(crate) fn gateway_web_allowed_origins(host: &str, port: u16) -> Vec<String> {
-    let normalized = host.trim().trim_matches(['[', ']']);
-    let mut origins = Vec::new();
-    if matches!(normalized, "0.0.0.0" | "::") {
-        push_origin(&mut origins, "127.0.0.1", port);
-        push_origin(&mut origins, "localhost", port);
-        return origins;
-    }
-
-    push_origin(&mut origins, normalized, port);
-    match normalized {
-        "127.0.0.1" => push_origin(&mut origins, "localhost", port),
-        "localhost" => push_origin(&mut origins, "127.0.0.1", port),
-        _ => {}
-    }
-    origins
-}
-
-fn push_origin(origins: &mut Vec<String>, host: &str, port: u16) {
-    let origin = format!("http://{}:{port}", url_host(host));
-    if !origins.contains(&origin) {
-        origins.push(origin);
-    }
-}
-
 fn url_host(host: &str) -> String {
     if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]")
@@ -921,10 +757,8 @@ fn url_host(host: &str) -> String {
 }
 
 pub(crate) fn gateway_example_alias(case: RunGatewayExampleCase) -> &'static str {
-    match case {
-        RunGatewayExampleCase::Query | RunGatewayExampleCase::Chat => "local",
-        RunGatewayExampleCase::Embed => "local-embed",
-    }
+    let _ = case;
+    "local"
 }
 
 pub(crate) fn rust_gateway_example_bin(case: RunGatewayExampleCase) -> &'static str {

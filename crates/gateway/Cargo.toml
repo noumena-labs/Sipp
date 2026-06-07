@@ -1,34 +1,31 @@
 [package]
 name = "cogentlm-gateway"
-description = "Server-side CogentLM Remote Gateway implementation"
+description = "Framework-neutral building blocks for CogentLM gateway adapters"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-readme = "../../README.md"
+readme = "README.md"
 version.workspace = true
 
 [features]
-default = ["native"]
-native = ["cogentlm-engine/native"]
-backend-dl = ["cogentlm-engine/backend-dl"]
-cuda = ["cogentlm-engine/cuda"]
-metal = ["cogentlm-engine/metal"]
-vulkan = ["cogentlm-engine/vulkan"]
-openmp = ["cogentlm-engine/openmp"]
+default = ["native", "remote", "providers"]
+native = ["cogentlm-client/native"]
+backend-dl = ["cogentlm-client/backend-dl"]
+cuda = ["cogentlm-client/cuda"]
+metal = ["cogentlm-client/metal"]
+vulkan = ["cogentlm-client/vulkan"]
+openmp = ["cogentlm-client/openmp"]
+remote = ["cogentlm-client/remote"]
+providers = ["cogentlm-client/providers"]
 
 [dependencies]
-async-trait = "0.1"
+cogentlm-client.workspace = true
 cogentlm-core.workspace = true
-cogentlm-engine = { workspace = true, default-features = false }
-cogentlm-providers.workspace = true
 futures-util = "0.3"
-http = "1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
-toml = "0.8"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
-wiremock = "0.6"

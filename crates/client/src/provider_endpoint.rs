@@ -4,8 +4,8 @@ use std::task::{Context, Poll};
 
 use cogentlm_core::{FinishReason, TokenBatch, TokenUsage};
 use cogentlm_providers::{
-    ProviderChatRequest, ProviderEmbedRequest, ProviderGenerateRequest, ProviderStreamEvent,
-    ProviderTransport,
+    ProviderChatRequest, ProviderEmbedRequest, ProviderGenerateRequest, ProviderRequestContext,
+    ProviderStreamEvent, ProviderTransport,
 };
 use futures::StreamExt;
 use futures_channel::mpsc;
@@ -14,8 +14,9 @@ use crate::dispatch::InferenceEndpoint;
 use crate::remote_executor::RemoteExecutor;
 use crate::{
     map, validate, CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError,
-    CogentQueryRequest, CogentResult, CogentTextResponse, CogentTextRun, CogentTokenBatches,
-    EndpointCapabilities, EndpointRef, ProviderEndpointError,
+    CogentQueryRequest, CogentRequestContext, CogentResponseMetadata, CogentResult,
+    CogentTextResponse, CogentTextRun, CogentTokenBatches, EndpointCapabilities, EndpointRef,
+    ProviderEndpointError,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -68,7 +69,11 @@ impl InferenceEndpoint for ProviderEndpoint {
         &self.capabilities
     }
 
-    fn query(&self, request: CogentQueryRequest) -> CogentTextRun {
+    fn query_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentQueryRequest,
+    ) -> CogentTextRun {
         if let Err(error) = validate::provider_query(&request) {
             return CogentTextRun::ready_err(error);
         }
@@ -82,12 +87,24 @@ impl InferenceEndpoint for ProviderEndpoint {
         let endpoint = self.endpoint.clone();
         let executor = self.executor.clone();
         let secrets = self.secrets();
+        let request_id = context.request_id;
+        let provider_context = ProviderRequestContext {
+            request_id: request_id.clone(),
+        };
 
         if request.emit_tokens {
             let (batch_tx, batch_rx) = mpsc::unbounded();
             let join = executor.spawn(async move {
-                run_provider_query_stream(transport, endpoint, provider_request, batch_tx, secrets)
-                    .await
+                run_provider_query_stream(
+                    transport,
+                    endpoint,
+                    request_id,
+                    provider_context,
+                    provider_request,
+                    batch_tx,
+                    secrets,
+                )
+                .await
             });
             CogentTextRun::new(
                 Box::pin(ProviderResponseFuture::new(join, executor)),
@@ -96,9 +113,9 @@ impl InferenceEndpoint for ProviderEndpoint {
         } else {
             let join = executor.spawn(async move {
                 transport
-                    .generate(provider_request)
+                    .generate_with_context(provider_context, provider_request)
                     .await
-                    .map(|response| map::provider_text_response(endpoint, response))
+                    .map(|response| map::provider_text_response(endpoint, request_id, response))
                     .map_err(|error| provider_error(error, &secrets))
             });
             CogentTextRun::new(
@@ -108,7 +125,11 @@ impl InferenceEndpoint for ProviderEndpoint {
         }
     }
 
-    fn chat(&self, request: CogentChatRequest) -> CogentTextRun {
+    fn chat_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentChatRequest,
+    ) -> CogentTextRun {
         if let Err(error) = validate::provider_chat(&request) {
             return CogentTextRun::ready_err(error);
         }
@@ -122,12 +143,24 @@ impl InferenceEndpoint for ProviderEndpoint {
         let endpoint = self.endpoint.clone();
         let executor = self.executor.clone();
         let secrets = self.secrets();
+        let request_id = context.request_id;
+        let provider_context = ProviderRequestContext {
+            request_id: request_id.clone(),
+        };
 
         if request.emit_tokens {
             let (batch_tx, batch_rx) = mpsc::unbounded();
             let join = executor.spawn(async move {
-                run_provider_chat_stream(transport, endpoint, provider_request, batch_tx, secrets)
-                    .await
+                run_provider_chat_stream(
+                    transport,
+                    endpoint,
+                    request_id,
+                    provider_context,
+                    provider_request,
+                    batch_tx,
+                    secrets,
+                )
+                .await
             });
             CogentTextRun::new(
                 Box::pin(ProviderResponseFuture::new(join, executor)),
@@ -136,9 +169,9 @@ impl InferenceEndpoint for ProviderEndpoint {
         } else {
             let join = executor.spawn(async move {
                 transport
-                    .chat(provider_request)
+                    .chat_with_context(provider_context, provider_request)
                     .await
-                    .map(|response| map::provider_chat_response(endpoint, response))
+                    .map(|response| map::provider_chat_response(endpoint, request_id, response))
                     .map_err(|error| provider_error(error, &secrets))
             });
             CogentTextRun::new(
@@ -148,7 +181,11 @@ impl InferenceEndpoint for ProviderEndpoint {
         }
     }
 
-    fn embed(&self, request: CogentEmbedRequest) -> CogentEmbeddingRun {
+    fn embed_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentEmbedRequest,
+    ) -> CogentEmbeddingRun {
         if let Err(error) = validate::provider_embed(&request) {
             return CogentEmbeddingRun::ready_err(error);
         }
@@ -161,11 +198,15 @@ impl InferenceEndpoint for ProviderEndpoint {
         let endpoint = self.endpoint.clone();
         let executor = self.executor.clone();
         let secrets = self.secrets();
+        let request_id = context.request_id;
+        let provider_context = ProviderRequestContext {
+            request_id: request_id.clone(),
+        };
         let join = executor.spawn(async move {
             transport
-                .embed(provider_request)
+                .embed_with_context(provider_context, provider_request)
                 .await
-                .map(|response| map::provider_embedding_response(endpoint, response))
+                .map(|response| map::provider_embedding_response(endpoint, request_id, response))
                 .map_err(|error| provider_error(error, &secrets))
         });
         CogentEmbeddingRun::new(Box::pin(ProviderResponseFuture::new(join, executor)))
@@ -209,33 +250,38 @@ impl<T> Drop for ProviderResponseFuture<T> {
 async fn run_provider_query_stream(
     transport: ProviderTransport,
     endpoint: EndpointRef,
+    request_id: Option<String>,
+    context: ProviderRequestContext,
     request: ProviderGenerateRequest,
     batch_tx: mpsc::UnboundedSender<TokenBatch>,
     secrets: Vec<String>,
 ) -> CogentResult<CogentTextResponse> {
     let stream = transport
-        .stream_generate(request)
+        .stream_generate_with_context(context, request)
         .await
         .map_err(|error| provider_error(error, &secrets))?;
-    collect_provider_stream(endpoint, stream, batch_tx, secrets).await
+    collect_provider_stream(endpoint, request_id, stream, batch_tx, secrets).await
 }
 
 async fn run_provider_chat_stream(
     transport: ProviderTransport,
     endpoint: EndpointRef,
+    request_id: Option<String>,
+    context: ProviderRequestContext,
     request: ProviderChatRequest,
     batch_tx: mpsc::UnboundedSender<TokenBatch>,
     secrets: Vec<String>,
 ) -> CogentResult<CogentTextResponse> {
     let stream = transport
-        .stream_chat(request)
+        .stream_chat_with_context(context, request)
         .await
         .map_err(|error| provider_error(error, &secrets))?;
-    collect_provider_stream(endpoint, stream, batch_tx, secrets).await
+    collect_provider_stream(endpoint, request_id, stream, batch_tx, secrets).await
 }
 
 async fn collect_provider_stream(
     endpoint: EndpointRef,
+    request_id: Option<String>,
     mut stream: cogentlm_providers::ProviderStream<ProviderStreamEvent>,
     batch_tx: mpsc::UnboundedSender<TokenBatch>,
     secrets: Vec<String>,
@@ -243,10 +289,14 @@ async fn collect_provider_stream(
     let mut text = String::new();
     let mut finish_reason = FinishReason::Stop;
     let mut usage: Option<TokenUsage> = None;
+    let mut upstream_request_id = None;
 
     while let Some(event) = stream.next().await {
         match event.map_err(|error| provider_error(error, &secrets))? {
             ProviderStreamEvent::TokenBatch(batch) => {
+                if upstream_request_id.is_none() && !batch.request_id.is_empty() {
+                    upstream_request_id = Some(batch.request_id.clone());
+                }
                 text.push_str(&batch.text);
                 let _ = batch_tx.unbounded_send(batch);
             }
@@ -263,6 +313,11 @@ async fn collect_provider_stream(
         finish_reason,
         usage,
         local_stats: None,
+        metadata: CogentResponseMetadata {
+            request_id,
+            upstream_request_id,
+            upstream_response_id: None,
+        },
     })
 }
 

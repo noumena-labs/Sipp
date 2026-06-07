@@ -4,12 +4,26 @@
   "description": "Native Node.js server bindings for CogentLM",
   "main": "router.js",
   "types": "router.d.ts",
+  "exports": {
+    ".": {
+      "types": "./router.d.ts",
+      "require": "./router.js",
+      "default": "./router.js"
+    },
+    "./next": {
+      "types": "./next.d.ts",
+      "require": "./next.js",
+      "default": "./next.js"
+    }
+  },
   "license": "Apache-2.0",
   "files": [
     "index.d.ts",
     "LICENSE",
     "native",
     "README.md",
+    "next.d.ts",
+    "next.js",
     "router.d.ts",
     "router.js"
   ],

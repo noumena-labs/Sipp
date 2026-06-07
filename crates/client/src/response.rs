@@ -3,6 +3,17 @@ use cogentlm_engine::engine::{PoolingType, RequestStats};
 
 use crate::EndpointRef;
 
+/// Correlation metadata returned by local, gateway, and provider endpoints.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CogentResponseMetadata {
+    /// Canonical request identifier supplied by the calling application.
+    pub request_id: Option<String>,
+    /// Request identifier returned by an upstream gateway or provider.
+    pub upstream_request_id: Option<String>,
+    /// Response identifier returned by an upstream gateway or provider.
+    pub upstream_response_id: Option<String>,
+}
+
 /// Final text response from a local or remote endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CogentTextResponse {
@@ -16,6 +27,8 @@ pub struct CogentTextResponse {
     pub usage: Option<TokenUsage>,
     /// Local runtime statistics for local endpoints.
     pub local_stats: Option<RequestStats>,
+    /// Request and upstream correlation metadata.
+    pub metadata: CogentResponseMetadata,
 }
 
 /// Final embedding response from a local or remote endpoint.
@@ -33,4 +46,6 @@ pub struct CogentEmbeddingResponse {
     pub pooling: Option<PoolingType>,
     /// Whether the endpoint normalized the vector.
     pub normalized: Option<bool>,
+    /// Request and upstream correlation metadata.
+    pub metadata: CogentResponseMetadata,
 }

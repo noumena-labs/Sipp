@@ -3,6 +3,13 @@ use cogentlm_engine::engine::SamplingRuntimeConfig;
 
 use crate::EndpointRef;
 
+/// Request-scoped metadata propagated through local and remote execution.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CogentRequestContext {
+    /// Canonical request identifier assigned by the application boundary.
+    pub request_id: Option<String>,
+}
+
 /// Gateway free-form options carried by request envelopes.
 pub type GatewayOptions = serde_json::Map<String, serde_json::Value>;
 

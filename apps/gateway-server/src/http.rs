@@ -1,99 +1,74 @@
 use std::{
-    collections::VecDeque,
+    collections::HashMap,
     convert::Infallible,
-    net::IpAddr,
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
 
 use axum::{
     extract::{rejection::JsonRejection, DefaultBodyLimit, Extension, Request, State},
     http::{
         header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER},
-        HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri,
+        HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
     },
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
-        Html, IntoResponse, Response,
+        IntoResponse, Response,
     },
     routing::{get, post},
     Json, Router,
 };
 use cogentlm_core::TokenUsage;
 use cogentlm_gateway::{
-    constant_time_eq, finish_reason, BackendEmbeddingOutput, BackendTextOutput, ChatRequestBody,
-    EmbedRequestBody, EmbeddingResponseBody, GatewayAccess, GatewayAdapter, GatewayAliasLimits,
-    GatewayAliasSnapshot, GatewayCaller, GatewayError, GatewayErrorKind, GatewayResult,
-    GatewayStream, GatewayStreamEvent, QueryRequestBody, TextResponseBody, UsageBody,
+    finish_reason, validate_request_id, ChatRequestBody, EmbedRequestBody, EmbeddingResponseBody,
+    ErrorEnvelope, GatewayAdapter, GatewayCancellation, GatewayCancellationReason, GatewayError,
+    GatewayErrorKind, GatewayRequestContext, GatewayResult, GatewayStream, GatewayStreamEvent,
+    Operation, QueryRequestBody, TextResponseBody, UsageBody,
 };
-use futures_util::{Stream, StreamExt};
+use futures_util::Stream;
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::{Notify, RwLock};
 use tower_http::cors::CorsLayer;
+
+use crate::{
+    config::LoadedToken,
+    lifecycle::{LifecycleState, ServerLifecycle},
+    metrics::GatewayMetrics,
+};
 
 const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 const RETRY_AFTER_MS: HeaderName = HeaderName::from_static("retry-after-ms");
-static NEXT_GATEWAY_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Default maximum request body size accepted by the gateway server.
-pub const DEFAULT_MAX_REQUEST_BYTES: usize = 1 << 20;
-
-/// Gateway-wide HTTP service limits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GatewayHttpLimits {
-    /// Maximum JSON request body size in bytes.
-    pub max_request_bytes: usize,
-}
-
-impl Default for GatewayHttpLimits {
-    fn default() -> Self {
-        Self {
-            max_request_bytes: DEFAULT_MAX_REQUEST_BYTES,
-        }
-    }
-}
-
-/// Standalone gateway bearer token and access scope.
-#[derive(Clone, PartialEq, Eq)]
-pub struct GatewayToken {
-    secret: String,
-    access: GatewayAccess,
-}
-
-impl GatewayToken {
-    /// Create a standalone server token.
-    pub fn new(secret: impl Into<String>, access: GatewayAccess) -> GatewayResult<Self> {
-        let secret = secret.into();
-        cogentlm_gateway::validate_gateway_bearer_secret(&secret, "gateway token")?;
-        Ok(Self { secret, access })
-    }
-}
-
-/// Standalone HTTP service for a gateway adapter.
+/// Shared HTTP service for separate public and management listeners.
 #[derive(Clone)]
 pub struct GatewayHttpService {
-    adapter: GatewayAdapter,
-    tokens: Vec<GatewayToken>,
-    admin_secret: String,
+    state: Arc<ServiceState>,
+    max_request_bytes: usize,
     allowed_origins: Vec<HeaderValue>,
-    limits: GatewayHttpLimits,
-    history: GatewayHistory,
-    started: Instant,
+}
+
+struct ServiceState {
+    lifecycle: Arc<LifecycleState>,
+    adapter: RwLock<Option<GatewayAdapter>>,
+    tokens: Vec<LoadedToken>,
+    active: Arc<ActiveRequests>,
+    metrics: Arc<GatewayMetrics>,
 }
 
 impl GatewayHttpService {
-    /// Create a standalone gateway HTTP service.
+    /// Create a service in the `Starting` state.
     pub fn new(
-        adapter: GatewayAdapter,
-        tokens: Vec<GatewayToken>,
-        admin_secret: String,
-        allowed_origins: Vec<String>,
-        limits: GatewayHttpLimits,
-        history_capacity: usize,
+        tokens: Vec<LoadedToken>,
+        max_request_bytes: usize,
+        allowed_origins: &[String],
     ) -> GatewayResult<Self> {
         if tokens.is_empty() {
             return Err(GatewayError::new(
@@ -101,112 +76,104 @@ impl GatewayHttpService {
                 "gateway server requires at least one bearer token",
             ));
         }
-        cogentlm_gateway::validate_gateway_bearer_secret(&admin_secret, "gateway admin token")?;
-        validate_service_limits(limits)?;
-        let mut origins = Vec::with_capacity(allowed_origins.len());
-        for origin in allowed_origins {
-            origins.push(cors_origin_header(&origin)?);
+        if max_request_bytes == 0 {
+            return Err(GatewayError::new(
+                GatewayErrorKind::InvalidRequest,
+                "max_request_bytes must be greater than zero",
+            ));
         }
+        let origins = allowed_origins
+            .iter()
+            .map(|origin| {
+                HeaderValue::from_str(origin).map_err(|_| {
+                    GatewayError::new(GatewayErrorKind::InvalidRequest, "invalid CORS origin")
+                })
+            })
+            .collect::<GatewayResult<Vec<_>>>()?;
+        let metrics = Arc::new(GatewayMetrics::new());
         Ok(Self {
-            adapter,
-            tokens,
-            admin_secret,
+            state: Arc::new(ServiceState {
+                lifecycle: Arc::new(LifecycleState::starting()),
+                adapter: RwLock::new(None),
+                tokens,
+                active: Arc::new(ActiveRequests::new(metrics.clone())),
+                metrics,
+            }),
+            max_request_bytes,
             allowed_origins: origins,
-            limits,
-            history: GatewayHistory::new(history_capacity),
-            started: Instant::now(),
         })
     }
 
-    /// Build the Axum router.
-    pub fn router(self) -> Router {
-        let allowed_origins = self.allowed_origins.clone();
-        let max_request_bytes = self.limits.max_request_bytes;
-        let state = Arc::new(self);
+    /// Build the public inference router.
+    pub fn public_router(&self) -> Router {
         let router = Router::new()
-            .route("/", get(dashboard))
-            .route("/healthz", get(healthz))
-            .route("/readyz", get(readyz))
-            .route("/admin/api/status", get(status))
-            .route("/admin/api/history", get(history))
             .route("/v1/query", post(query))
             .route("/v1/chat", post(chat))
             .route("/v1/embed", post(embed))
-            .with_state(state)
-            .layer(DefaultBodyLimit::max(max_request_bytes));
+            .with_state(self.state.clone())
+            .layer(DefaultBodyLimit::max(self.max_request_bytes))
+            .layer(middleware::from_fn(request_id_middleware));
 
-        let router = if allowed_origins.is_empty() {
+        if self.allowed_origins.is_empty() {
             router
         } else {
             router.layer(
                 CorsLayer::new()
-                    .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                    .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+                    .allow_methods([Method::POST, Method::OPTIONS])
+                    .allow_headers([AUTHORIZATION, CONTENT_TYPE, X_REQUEST_ID.clone()])
                     .expose_headers([X_REQUEST_ID.clone(), RETRY_AFTER, RETRY_AFTER_MS.clone()])
-                    .allow_origin(allowed_origins),
+                    .allow_origin(self.allowed_origins.clone()),
             )
-        };
-        router.layer(middleware::from_fn(add_request_id))
+        }
+    }
+
+    /// Build the management router.
+    pub fn management_router(&self) -> Router {
+        Router::new()
+            .route("/healthz", get(healthz))
+            .route("/readyz", get(readyz))
+            .route("/metrics", get(metrics))
+            .with_state(self.state.clone())
+    }
+
+    /// Publish a fully loaded adapter and become ready.
+    pub async fn set_ready(&self, adapter: GatewayAdapter) {
+        *self.state.adapter.write().await = Some(adapter);
+        self.state.lifecycle.set(ServerLifecycle::Ready);
+    }
+
+    /// Mark endpoint loading as failed.
+    pub fn set_failed(&self) {
+        self.state.lifecycle.set(ServerLifecycle::Failed);
+    }
+
+    /// Begin draining and reject new public requests.
+    pub fn begin_draining(&self) {
+        self.state.lifecycle.set(ServerLifecycle::Draining);
+    }
+
+    /// Wait until all active inference requests have finished.
+    pub async fn wait_for_idle(&self, timeout: Duration) -> bool {
+        self.state.active.wait_for_idle(timeout).await
+    }
+
+    /// Cancel every active request with a shutdown reason.
+    pub fn cancel_active_for_shutdown(&self) {
+        self.state
+            .active
+            .cancel_all(GatewayCancellationReason::ServerShutdown);
+    }
+
+    /// Return the current lifecycle.
+    pub fn lifecycle(&self) -> ServerLifecycle {
+        self.state.lifecycle.get()
     }
 }
 
 #[derive(Clone)]
-struct GatewayHistory {
-    inner: Arc<Mutex<GatewayHistoryInner>>,
-}
+struct RequestId(String);
 
-struct GatewayHistoryInner {
-    capacity: usize,
-    entries: VecDeque<HistoryEntry>,
-}
-
-impl GatewayHistory {
-    fn new(capacity: usize) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(GatewayHistoryInner {
-                capacity,
-                entries: VecDeque::with_capacity(capacity),
-            })),
-        }
-    }
-
-    fn push(&self, entry: HistoryEntry) {
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
-        if inner.entries.len() == inner.capacity {
-            inner.entries.pop_front();
-        }
-        inner.entries.push_back(entry);
-    }
-
-    fn snapshot(&self) -> Vec<HistoryEntry> {
-        let Ok(inner) = self.inner.lock() else {
-            return Vec::new();
-        };
-        inner.entries.iter().cloned().collect()
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct HistoryEntry {
-    request_id: String,
-    timestamp_ms: u128,
-    alias: String,
-    operation: &'static str,
-    outcome: &'static str,
-    status_code: u16,
-    latency_ms: f64,
-    stream: bool,
-    finish_reason: Option<String>,
-    usage: Option<UsageBody>,
-    error_code: Option<String>,
-}
-
-#[derive(Clone)]
-struct GatewayRequestId(String);
-
-impl GatewayRequestId {
+impl RequestId {
     fn as_str(&self) -> &str {
         &self.0
     }
@@ -226,419 +193,460 @@ impl IntoResponse for GatewayHttpError {
     }
 }
 
-async fn dashboard() -> Html<&'static str> {
-    Html(DASHBOARD_HTML)
+async fn healthz(State(state): State<Arc<ServiceState>>) -> impl IntoResponse {
+    Json(ProbeBody {
+        status: "ok",
+        state: lifecycle_label(state.lifecycle.get()),
+    })
 }
 
-async fn healthz() -> &'static str {
-    "ok"
+async fn readyz(State(state): State<Arc<ServiceState>>) -> Response {
+    let lifecycle = state.lifecycle.get();
+    let body = Json(ProbeBody {
+        status: if lifecycle == ServerLifecycle::Ready {
+            "ready"
+        } else {
+            "not_ready"
+        },
+        state: lifecycle_label(lifecycle),
+    });
+    if lifecycle == ServerLifecycle::Ready {
+        (StatusCode::OK, body).into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, body).into_response()
+    }
 }
 
-async fn readyz() -> &'static str {
-    "ready"
-}
-
-async fn status(
-    State(state): State<Arc<GatewayHttpService>>,
-    headers: HeaderMap,
-) -> Result<Json<StatusBody>, GatewayHttpError> {
-    state.authorize_admin(&headers)?;
-    let snapshot = state.adapter.snapshot()?;
-    Ok(Json(StatusBody {
-        uptime_secs: state.started.elapsed().as_secs(),
-        aliases: snapshot
-            .aliases
-            .into_iter()
-            .map(AliasStatusBody::from)
-            .collect(),
-    }))
-}
-
-async fn history(
-    State(state): State<Arc<GatewayHttpService>>,
-    headers: HeaderMap,
-) -> Result<Json<HistoryBody>, GatewayHttpError> {
-    state.authorize_admin(&headers)?;
-    Ok(Json(HistoryBody {
-        entries: state.history.snapshot(),
-    }))
+async fn metrics(State(state): State<Arc<ServiceState>>) -> Response {
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        state.metrics.render(),
+    )
+        .into_response()
 }
 
 async fn query(
-    State(state): State<Arc<GatewayHttpService>>,
-    Extension(request_id): Extension<GatewayRequestId>,
+    State(state): State<Arc<ServiceState>>,
+    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     body: Result<Json<QueryRequestBody>, JsonRejection>,
 ) -> Result<Response, GatewayHttpError> {
-    let started = Instant::now();
-    let caller = state.authorize_inference(&headers)?;
+    ensure_ready(&state)?;
+    let caller = authorize(&state.tokens, &headers)?;
     let Json(body) = body.map_err(json_rejection_error)?;
-    let model = body.model.clone();
     let stream = body.stream;
-    let request = body.into_backend();
+    let alias = body.model.clone();
+    let context = GatewayRequestContext::new(request_id.0.clone(), caller)?;
+    let adapter = adapter(&state).await?;
+    let guard = state
+        .active
+        .register(context.cancellation.clone(), Operation::Query, stream);
+
     if stream {
-        let stream = match state.adapter.stream_query(&caller, &model, request).await {
+        let stream = match adapter.stream_query(&context, body) {
             Ok(stream) => stream,
             Err(error) => {
-                record_error(
-                    &state,
+                log_error(
                     &request_id,
-                    &model,
-                    OperationInfo::Query,
-                    true,
-                    started,
+                    &alias,
+                    Operation::Query,
                     &error,
+                    guard.elapsed(),
                 );
+                guard.complete(false);
                 return Err(error.into());
             }
         };
-        return Ok(sse(observe_stream(
-            state.history.clone(),
+        return Ok(sse_response(
             stream,
+            guard,
             request_id,
-            model,
-            OperationInfo::Query,
-            started,
-        ))
-        .into_response());
+            alias,
+            Operation::Query,
+        ));
     }
-    match state.adapter.query(&caller, &model, request).await {
+
+    match adapter.query(&context, body).await {
         Ok(output) => {
-            record_text_success(
-                &state,
+            if let Some(usage) = output.usage {
+                state.metrics.usage(usage);
+            }
+            log_success(
                 &request_id,
-                &model,
-                OperationInfo::Query,
-                false,
-                &output,
-                started,
+                &alias,
+                Operation::Query,
+                output.metadata.upstream_request_id.as_deref(),
+                output.metadata.upstream_response_id.as_deref(),
+                guard.elapsed(),
             );
-            Ok(Json(text_response(&request_id, model, output)).into_response())
+            guard.complete(true);
+            Ok(Json(TextResponseBody {
+                id: request_id.0,
+                model: alias,
+                text: output.text,
+                finish_reason: finish_reason(output.finish_reason),
+                usage: output.usage.and_then(usage_body),
+            })
+            .into_response())
         }
         Err(error) => {
-            record_error(
-                &state,
+            log_error(
                 &request_id,
-                &model,
-                OperationInfo::Query,
-                false,
-                started,
+                &alias,
+                Operation::Query,
                 &error,
+                guard.elapsed(),
             );
+            guard.complete(false);
             Err(error.into())
         }
     }
 }
 
 async fn chat(
-    State(state): State<Arc<GatewayHttpService>>,
-    Extension(request_id): Extension<GatewayRequestId>,
+    State(state): State<Arc<ServiceState>>,
+    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     body: Result<Json<ChatRequestBody>, JsonRejection>,
 ) -> Result<Response, GatewayHttpError> {
-    let started = Instant::now();
-    let caller = state.authorize_inference(&headers)?;
+    ensure_ready(&state)?;
+    let caller = authorize(&state.tokens, &headers)?;
     let Json(body) = body.map_err(json_rejection_error)?;
-    let model = body.model.clone();
     let stream = body.stream;
-    let request = body.into_backend();
+    let alias = body.model.clone();
+    let context = GatewayRequestContext::new(request_id.0.clone(), caller)?;
+    let adapter = adapter(&state).await?;
+    let guard = state
+        .active
+        .register(context.cancellation.clone(), Operation::Chat, stream);
+
     if stream {
-        let stream = match state.adapter.stream_chat(&caller, &model, request).await {
+        let stream = match adapter.stream_chat(&context, body) {
             Ok(stream) => stream,
             Err(error) => {
-                record_error(
-                    &state,
+                log_error(
                     &request_id,
-                    &model,
-                    OperationInfo::Chat,
-                    true,
-                    started,
+                    &alias,
+                    Operation::Chat,
                     &error,
+                    guard.elapsed(),
                 );
+                guard.complete(false);
                 return Err(error.into());
             }
         };
-        return Ok(sse(observe_stream(
-            state.history.clone(),
+        return Ok(sse_response(
             stream,
+            guard,
             request_id,
-            model,
-            OperationInfo::Chat,
-            started,
-        ))
-        .into_response());
+            alias,
+            Operation::Chat,
+        ));
     }
-    match state.adapter.chat(&caller, &model, request).await {
+
+    match adapter.chat(&context, body).await {
         Ok(output) => {
-            record_text_success(
-                &state,
+            if let Some(usage) = output.usage {
+                state.metrics.usage(usage);
+            }
+            log_success(
                 &request_id,
-                &model,
-                OperationInfo::Chat,
-                false,
-                &output,
-                started,
+                &alias,
+                Operation::Chat,
+                output.metadata.upstream_request_id.as_deref(),
+                output.metadata.upstream_response_id.as_deref(),
+                guard.elapsed(),
             );
-            Ok(Json(text_response(&request_id, model, output)).into_response())
+            guard.complete(true);
+            Ok(Json(TextResponseBody {
+                id: request_id.0,
+                model: alias,
+                text: output.text,
+                finish_reason: finish_reason(output.finish_reason),
+                usage: output.usage.and_then(usage_body),
+            })
+            .into_response())
         }
         Err(error) => {
-            record_error(
-                &state,
+            log_error(
                 &request_id,
-                &model,
-                OperationInfo::Chat,
-                false,
-                started,
+                &alias,
+                Operation::Chat,
                 &error,
+                guard.elapsed(),
             );
+            guard.complete(false);
             Err(error.into())
         }
     }
 }
 
 async fn embed(
-    State(state): State<Arc<GatewayHttpService>>,
-    Extension(request_id): Extension<GatewayRequestId>,
+    State(state): State<Arc<ServiceState>>,
+    Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     body: Result<Json<EmbedRequestBody>, JsonRejection>,
 ) -> Result<Response, GatewayHttpError> {
-    let started = Instant::now();
-    let caller = state.authorize_inference(&headers)?;
+    ensure_ready(&state)?;
+    let caller = authorize(&state.tokens, &headers)?;
     let Json(body) = body.map_err(json_rejection_error)?;
-    let model = body.model.clone();
-    let request = body.into_backend();
-    match state.adapter.embed(&caller, &model, request).await {
+    let alias = body.model.clone();
+    let context = GatewayRequestContext::new(request_id.0.clone(), caller)?;
+    let adapter = adapter(&state).await?;
+    let guard = state
+        .active
+        .register(context.cancellation.clone(), Operation::Embed, false);
+
+    match adapter.embed(&context, body).await {
         Ok(output) => {
-            record_embedding_success(&state, &request_id, &model, &output, started);
-            Ok(Json(embedding_response(&request_id, model, output)).into_response())
+            if let Some(usage) = output.usage {
+                state.metrics.usage(usage);
+            }
+            log_success(
+                &request_id,
+                &alias,
+                Operation::Embed,
+                output.metadata.upstream_request_id.as_deref(),
+                output.metadata.upstream_response_id.as_deref(),
+                guard.elapsed(),
+            );
+            guard.complete(true);
+            Ok(Json(EmbeddingResponseBody {
+                id: request_id.0,
+                model: alias,
+                embedding: output.values,
+                usage: output.usage.and_then(usage_body),
+            })
+            .into_response())
         }
         Err(error) => {
-            record_error(
-                &state,
+            log_error(
                 &request_id,
-                &model,
-                OperationInfo::Embed,
-                false,
-                started,
+                &alias,
+                Operation::Embed,
                 &error,
+                guard.elapsed(),
             );
+            guard.complete(false);
             Err(error.into())
         }
     }
 }
 
-impl GatewayHttpService {
-    fn authorize_inference(&self, headers: &HeaderMap) -> GatewayResult<GatewayCaller> {
-        let token = bearer_token(headers, "gateway inference")?;
-        let mut matched_index = None;
-        for (index, candidate) in self.tokens.iter().enumerate() {
-            if constant_time_eq(token.as_bytes(), candidate.secret.as_bytes()) {
-                matched_index = Some(index);
-            }
-        }
-        matched_index
-            .map(|index| GatewayCaller {
-                id: Some(format!("standalone-token-{index}")),
-                access: self.tokens[index].access.clone(),
-            })
-            .ok_or_else(|| {
-                GatewayError::new(GatewayErrorKind::Authentication, "invalid bearer token")
-            })
-    }
+async fn adapter(state: &ServiceState) -> GatewayResult<GatewayAdapter> {
+    state.adapter.read().await.clone().ok_or_else(restarting)
+}
 
-    fn authorize_admin(&self, headers: &HeaderMap) -> GatewayResult<()> {
-        let token = bearer_token(headers, "gateway admin")?;
-        if constant_time_eq(token.as_bytes(), self.admin_secret.as_bytes()) {
-            return Ok(());
-        }
-        Err(GatewayError::new(
-            GatewayErrorKind::Authentication,
-            "invalid admin bearer token",
-        ))
+fn ensure_ready(state: &ServiceState) -> GatewayResult<()> {
+    if state.lifecycle.is_ready() {
+        Ok(())
+    } else {
+        Err(restarting())
     }
 }
 
-fn bearer_token<'a>(headers: &'a HeaderMap, label: &'static str) -> GatewayResult<&'a str> {
-    let Some(header) = headers.get(AUTHORIZATION) else {
-        return Err(GatewayError::new(
-            GatewayErrorKind::Authentication,
-            format!("missing {label} bearer token"),
-        ));
-    };
+fn restarting() -> GatewayError {
+    GatewayError::new(
+        GatewayErrorKind::ServerRestarting,
+        "gateway is starting or restarting",
+    )
+}
+
+fn authorize(
+    tokens: &[LoadedToken],
+    headers: &HeaderMap,
+) -> GatewayResult<cogentlm_gateway::GatewayCaller> {
+    let header = headers.get(AUTHORIZATION).ok_or_else(|| {
+        GatewayError::new(GatewayErrorKind::Authentication, "missing bearer token")
+    })?;
     let value = header.to_str().map_err(|_| {
         GatewayError::new(
             GatewayErrorKind::Authentication,
             "invalid authorization header",
         )
     })?;
-    value.strip_prefix("Bearer ").ok_or_else(|| {
+    let secret = value.strip_prefix("Bearer ").ok_or_else(|| {
         GatewayError::new(
             GatewayErrorKind::Authentication,
             "authorization header must use bearer auth",
         )
-    })
+    })?;
+    let mut matched = None;
+    for token in tokens {
+        if constant_time_eq(secret.as_bytes(), token.secret.as_bytes()) {
+            matched = Some(token.caller.clone());
+        }
+    }
+    matched
+        .ok_or_else(|| GatewayError::new(GatewayErrorKind::Authentication, "invalid bearer token"))
 }
 
-async fn add_request_id(mut request: Request, next: Next) -> Response {
-    let request_id = next_request_id();
-    let method = request.method().clone();
-    let path = request.uri().path().to_string();
-    let started = Instant::now();
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let max_len = left.len().max(right.len());
+    let mut difference = left.len() ^ right.len();
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or_default();
+        let right_byte = right.get(index).copied().unwrap_or_default();
+        difference |= usize::from(left_byte ^ right_byte);
+    }
+    difference == 0
+}
+
+async fn request_id_middleware(mut request: Request, next: Next) -> Response {
+    let request_id = request
+        .headers()
+        .get(&X_REQUEST_ID)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| validate_request_id(value).is_ok())
+        .map(str::to_owned)
+        .unwrap_or_else(generated_request_id);
     request
         .extensions_mut()
-        .insert(GatewayRequestId(request_id.clone()));
+        .insert(RequestId(request_id.clone()));
     let mut response = next.run(request).await;
-    let status = response.status().as_u16();
-    let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(X_REQUEST_ID.clone(), value);
     }
-    tracing::info!(
-        target: "cogentlm_gateway_server::request",
-        request_id = %request_id,
-        method = %method,
-        path = %path,
-        status,
-        latency_ms,
-        "gateway request"
-    );
     response
 }
 
-fn next_request_id() -> String {
-    let id = NEXT_GATEWAY_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+fn generated_request_id() -> String {
+    let id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     format!("gw_{id:016x}")
 }
 
-fn text_response(
-    request_id: &GatewayRequestId,
-    model: String,
-    output: BackendTextOutput,
-) -> TextResponseBody {
-    TextResponseBody {
-        id: request_id.as_str().to_string(),
-        model,
-        text: output.text,
-        finish_reason: finish_reason(output.finish_reason),
-        usage: output.usage.and_then(usage_body),
+fn gateway_error_response(error: GatewayError) -> Response {
+    let mut headers = HeaderMap::new();
+    if let Some(retry_after) = error.retry_after {
+        insert_header(&mut headers, RETRY_AFTER, retry_after.as_secs().to_string());
+        insert_header(
+            &mut headers,
+            RETRY_AFTER_MS.clone(),
+            retry_after.as_millis().to_string(),
+        );
     }
+    let status = StatusCode::from_u16(error.kind.http_status_code())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, headers, Json(ErrorEnvelope::from(&error))).into_response()
 }
 
-fn embedding_response(
-    request_id: &GatewayRequestId,
-    model: String,
-    output: BackendEmbeddingOutput,
-) -> EmbeddingResponseBody {
-    EmbeddingResponseBody {
-        id: request_id.as_str().to_string(),
-        model,
-        embedding: output.values,
-        usage: output.usage.and_then(usage_body),
-    }
-}
-
-fn usage_body(usage: TokenUsage) -> Option<UsageBody> {
-    if usage.input_tokens.is_none() && usage.output_tokens.is_none() && usage.total_tokens.is_none()
-    {
-        None
+fn json_rejection_error(rejection: JsonRejection) -> GatewayHttpError {
+    let kind = if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        GatewayErrorKind::RequestTooLarge
     } else {
-        Some(UsageBody::from(usage))
+        GatewayErrorKind::InvalidRequest
+    };
+    GatewayError::new(kind, "invalid JSON request body").into()
+}
+
+fn insert_header(headers: &mut HeaderMap, name: HeaderName, value: String) {
+    if let Ok(value) = HeaderValue::from_str(&value) {
+        headers.insert(name, value);
     }
 }
 
-fn sse(
-    stream: impl Stream<Item = GatewayResult<GatewayStreamEvent>> + Send + 'static,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    Sse::new(stream.filter_map(|event| async move { sse_event(event).map(Ok) }))
-        .keep_alive(KeepAlive::default())
-}
-
-fn observe_stream(
-    history: GatewayHistory,
-    stream: GatewayStream<GatewayStreamEvent>,
-    request_id: GatewayRequestId,
+fn sse_response(
+    stream: GatewayStream,
+    guard: RequestGuard,
+    request_id: RequestId,
     alias: String,
-    operation: OperationInfo,
-    started: Instant,
-) -> GatewayStream<GatewayStreamEvent> {
-    let mut usage = None;
-    let mut recorded = false;
-    Box::pin(stream.map(move |event| {
-        match &event {
-            Ok(GatewayStreamEvent::Usage { usage: current }) => {
-                usage = Some(*current);
-            }
-            Ok(GatewayStreamEvent::Finished { finish_reason }) => {
-                if !recorded {
-                    history.push(HistoryEntry {
-                        request_id: request_id.as_str().to_string(),
-                        timestamp_ms: unix_ms(),
-                        alias: alias.clone(),
-                        operation: operation.as_str(),
-                        outcome: "ok",
-                        status_code: 200,
-                        latency_ms: started.elapsed().as_secs_f64() * 1000.0,
-                        stream: true,
-                        finish_reason: Some(finish_reason.as_str().to_string()),
-                        usage: usage.and_then(usage_body),
-                        error_code: None,
-                    });
-                    recorded = true;
-                }
-            }
-            Err(error) => {
-                if !recorded {
-                    history.push(error_history_entry(
-                        &request_id,
-                        &alias,
-                        operation,
-                        true,
-                        started,
-                        error,
-                    ));
-                    recorded = true;
-                }
-            }
-            Ok(GatewayStreamEvent::TokenBatch(_)) => {}
-        }
-        event
-    }))
+    operation: Operation,
+) -> Response {
+    Sse::new(HttpSseStream {
+        inner: stream,
+        guard: Some(guard),
+        request_id,
+        alias,
+        operation,
+        terminal: false,
+    })
+    .keep_alive(KeepAlive::default())
+    .into_response()
 }
 
-fn sse_event(event: GatewayResult<GatewayStreamEvent>) -> Option<Event> {
-    match event {
-        Ok(GatewayStreamEvent::TokenBatch(batch)) => Some(
-            Event::default()
-                .event("token")
-                .json_data(json!({
-                    "text": batch.text,
-                    "sequence": batch.sequence_start,
-                }))
-                .unwrap_or_else(internal_sse_error),
-        ),
-        Ok(GatewayStreamEvent::Usage { usage }) => usage_body(usage).map(|usage| {
-            Event::default()
-                .event("usage")
-                .json_data(usage)
-                .unwrap_or_else(internal_sse_error)
-        }),
-        Ok(GatewayStreamEvent::Finished { finish_reason }) => Some(
-            Event::default()
-                .event("done")
-                .json_data(json!({ "finish_reason": finish_reason.as_str() }))
-                .unwrap_or_else(internal_sse_error),
-        ),
-        Err(error) => Some(
-            Event::default()
-                .event("error")
-                .json_data(json!({
-                    "error": {
-                        "code": error.code(),
-                        "message": error.message,
-                    }
-                }))
-                .unwrap_or_else(internal_sse_error),
-        ),
+struct HttpSseStream {
+    inner: GatewayStream,
+    guard: Option<RequestGuard>,
+    request_id: RequestId,
+    alias: String,
+    operation: Operation,
+    terminal: bool,
+}
+
+impl Stream for HttpSseStream {
+    type Item = Result<Event, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.terminal {
+            return Poll::Ready(None);
+        }
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(GatewayStreamEvent::TokenBatch(batch)))) => {
+                Poll::Ready(Some(Ok(Event::default()
+                    .event("token")
+                    .json_data(json!({
+                        "text": batch.text,
+                        "sequence": batch.sequence_start,
+                    }))
+                    .unwrap_or_else(internal_sse_error))))
+            }
+            Poll::Ready(Some(Ok(GatewayStreamEvent::Usage { usage }))) => {
+                if let Some(guard) = &self.guard {
+                    guard.metrics.usage(usage);
+                }
+                Poll::Ready(Some(Ok(Event::default()
+                    .event("usage")
+                    .json_data(UsageBody::from(usage))
+                    .unwrap_or_else(internal_sse_error))))
+            }
+            Poll::Ready(Some(Ok(GatewayStreamEvent::Finished {
+                finish_reason: reason,
+                metadata,
+            }))) => {
+                if let Some(guard) = self.guard.take() {
+                    log_success(
+                        &self.request_id,
+                        &self.alias,
+                        self.operation,
+                        metadata.upstream_request_id.as_deref(),
+                        metadata.upstream_response_id.as_deref(),
+                        guard.elapsed(),
+                    );
+                    guard.complete(true);
+                }
+                self.terminal = true;
+                Poll::Ready(Some(Ok(Event::default()
+                    .event("done")
+                    .json_data(json!({ "finish_reason": reason.as_str() }))
+                    .unwrap_or_else(internal_sse_error))))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                if let Some(guard) = self.guard.take() {
+                    log_error(
+                        &self.request_id,
+                        &self.alias,
+                        self.operation,
+                        &error,
+                        guard.elapsed(),
+                    );
+                    guard.complete(false);
+                }
+                self.terminal = true;
+                Poll::Ready(Some(Ok(Event::default()
+                    .event("error")
+                    .json_data(ErrorEnvelope::from(&error))
+                    .unwrap_or_else(internal_sse_error))))
+            }
+            Poll::Ready(None) => {
+                self.terminal = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -648,430 +656,208 @@ fn internal_sse_error(_: axum::Error) -> Event {
         .data(r#"{"error":{"code":"internal","message":"failed to encode SSE event"}}"#)
 }
 
-fn record_text_success(
-    state: &GatewayHttpService,
-    request_id: &GatewayRequestId,
-    alias: &str,
-    operation: OperationInfo,
-    stream: bool,
-    output: &BackendTextOutput,
-    started: Instant,
-) {
-    state.history.push(HistoryEntry {
-        request_id: request_id.as_str().to_string(),
-        timestamp_ms: unix_ms(),
-        alias: alias.to_string(),
-        operation: operation.as_str(),
-        outcome: "ok",
-        status_code: 200,
-        latency_ms: started.elapsed().as_secs_f64() * 1000.0,
-        stream,
-        finish_reason: Some(output.finish_reason.as_str().to_string()),
-        usage: output.usage.and_then(usage_body),
-        error_code: None,
-    });
+struct ActiveRequests {
+    next_id: AtomicU64,
+    entries: Mutex<HashMap<u64, GatewayCancellation>>,
+    notify: Notify,
+    metrics: Arc<GatewayMetrics>,
 }
 
-fn record_embedding_success(
-    state: &GatewayHttpService,
-    request_id: &GatewayRequestId,
-    alias: &str,
-    output: &BackendEmbeddingOutput,
-    started: Instant,
-) {
-    state.history.push(HistoryEntry {
-        request_id: request_id.as_str().to_string(),
-        timestamp_ms: unix_ms(),
-        alias: alias.to_string(),
-        operation: OperationInfo::Embed.as_str(),
-        outcome: "ok",
-        status_code: 200,
-        latency_ms: started.elapsed().as_secs_f64() * 1000.0,
-        stream: false,
-        finish_reason: None,
-        usage: output.usage.and_then(usage_body),
-        error_code: None,
-    });
-}
-
-fn record_error(
-    state: &GatewayHttpService,
-    request_id: &GatewayRequestId,
-    alias: &str,
-    operation: OperationInfo,
-    stream: bool,
-    started: Instant,
-    error: &GatewayError,
-) {
-    state.history.push(error_history_entry(
-        request_id, alias, operation, stream, started, error,
-    ));
-}
-
-fn error_history_entry(
-    request_id: &GatewayRequestId,
-    alias: &str,
-    operation: OperationInfo,
-    stream: bool,
-    started: Instant,
-    error: &GatewayError,
-) -> HistoryEntry {
-    HistoryEntry {
-        request_id: request_id.as_str().to_string(),
-        timestamp_ms: unix_ms(),
-        alias: alias.to_string(),
-        operation: operation.as_str(),
-        outcome: "error",
-        status_code: error.kind.http_status_code(),
-        latency_ms: started.elapsed().as_secs_f64() * 1000.0,
-        stream,
-        finish_reason: None,
-        usage: None,
-        error_code: Some(error.code().to_string()),
+impl ActiveRequests {
+    fn new(metrics: Arc<GatewayMetrics>) -> Self {
+        Self {
+            next_id: AtomicU64::new(1),
+            entries: Mutex::new(HashMap::new()),
+            notify: Notify::new(),
+            metrics,
+        }
     }
-}
 
-#[derive(Debug, Clone, Copy)]
-enum OperationInfo {
-    Query,
-    Chat,
-    Embed,
-}
+    fn register(
+        self: &Arc<Self>,
+        cancellation: GatewayCancellation,
+        operation: Operation,
+        stream: bool,
+    ) -> RequestGuard {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.insert(id, cancellation.clone());
+        }
+        self.metrics.request_started();
+        if stream {
+            self.metrics.stream_delta(1);
+        }
+        RequestGuard {
+            registry: self.clone(),
+            id,
+            cancellation,
+            operation,
+            stream,
+            started: Instant::now(),
+            metrics: self.metrics.clone(),
+            completed: false,
+        }
+    }
 
-impl OperationInfo {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Query => "query",
-            Self::Chat => "chat",
-            Self::Embed => "embed",
+    fn unregister(&self, id: u64) {
+        let empty = self
+            .entries
+            .lock()
+            .map(|mut entries| {
+                entries.remove(&id);
+                entries.is_empty()
+            })
+            .unwrap_or(false);
+        if empty {
+            self.notify.notify_waiters();
+        }
+    }
+
+    fn cancel_all(&self, reason: GatewayCancellationReason) {
+        let cancellations = self
+            .entries
+            .lock()
+            .map(|entries| entries.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for cancellation in cancellations {
+            if cancellation.reason().is_none() {
+                self.metrics.cancellation(reason);
+                cancellation.cancel(reason);
+            }
+        }
+    }
+
+    async fn wait_for_idle(&self, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self
+                .entries
+                .lock()
+                .map(|entries| entries.is_empty())
+                .unwrap_or(true)
+            {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, self.notify.notified())
+                .await
+                .is_err()
+            {
+                return false;
+            }
         }
     }
 }
 
-fn json_rejection_error(rejection: JsonRejection) -> GatewayHttpError {
-    if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-        return GatewayError::new(
-            GatewayErrorKind::RequestTooLarge,
-            "request body exceeds gateway limit",
-        )
-        .into();
-    }
-    GatewayError::new(
-        GatewayErrorKind::InvalidRequest,
-        "invalid JSON request body",
-    )
-    .into()
+struct RequestGuard {
+    registry: Arc<ActiveRequests>,
+    id: u64,
+    cancellation: GatewayCancellation,
+    operation: Operation,
+    stream: bool,
+    started: Instant,
+    metrics: Arc<GatewayMetrics>,
+    completed: bool,
 }
 
-fn gateway_error_response(error: GatewayError) -> Response {
-    let mut headers = HeaderMap::new();
-    if let Some(retry_after) = error.retry_after {
-        insert_header_if_valid(
-            &mut headers,
-            HeaderName::from_static("retry-after"),
-            retry_after.as_secs().to_string(),
-        );
-        insert_header_if_valid(
-            &mut headers,
-            HeaderName::from_static("retry-after-ms"),
-            retry_after.as_millis().to_string(),
-        );
+impl RequestGuard {
+    fn elapsed(&self) -> Duration {
+        self.started.elapsed()
     }
 
-    let status = StatusCode::from_u16(error.kind.http_status_code())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body = Json(json!({
-        "error": {
-            "code": error.code(),
-            "message": error.message,
+    fn complete(mut self, success: bool) {
+        self.finish(success);
+    }
+
+    fn finish(&mut self, success: bool) {
+        if self.completed {
+            return;
         }
-    }));
-    (status, headers, body).into_response()
-}
-
-fn insert_header_if_valid(headers: &mut HeaderMap, name: HeaderName, value: impl AsRef<str>) {
-    if let Ok(value) = HeaderValue::from_str(value.as_ref()) {
-        headers.insert(name, value);
+        self.completed = true;
+        self.metrics
+            .request_finished(self.operation, success, self.started.elapsed());
+        if self.stream {
+            self.metrics.stream_delta(-1);
+        }
+        self.registry.unregister(self.id);
     }
 }
 
-fn cors_origin_header(origin: &str) -> GatewayResult<HeaderValue> {
-    let trimmed = origin.trim();
-    if trimmed.is_empty() {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "CORS origin must not be empty",
-        ));
+impl Drop for RequestGuard {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        if self.cancellation.reason().is_none() {
+            self.metrics
+                .cancellation(GatewayCancellationReason::ClientDisconnected);
+            self.cancellation
+                .cancel(GatewayCancellationReason::ClientDisconnected);
+        }
+        self.finish(false);
     }
-    if trimmed != origin {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            format!("invalid CORS origin {origin}: surrounding whitespace is not allowed"),
-        ));
-    }
-    if trimmed == "*" || trimmed.eq_ignore_ascii_case("null") {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "CORS origin must be an exact application origin",
-        ));
-    }
-
-    let uri = trimmed.parse::<Uri>().map_err(|error| {
-        GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            format!("invalid CORS origin {origin}: {error}"),
-        )
-    })?;
-    let Some(scheme) = uri.scheme_str() else {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "CORS origin must be an absolute http(s) origin",
-        ));
-    };
-    let Some(authority) = uri.authority() else {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "CORS origin must be an absolute http(s) origin",
-        ));
-    };
-    if !matches!(scheme, "http" | "https") {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "CORS origin must be an absolute http(s) origin",
-        ));
-    }
-    if authority.as_str().contains('@') {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "CORS origin must not include userinfo",
-        ));
-    }
-    let expected_origin = format!("{scheme}://{authority}");
-    if trimmed != expected_origin {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "CORS origin must not include a path, query, or fragment",
-        ));
-    }
-    if scheme == "http" && !uri.host().is_some_and(is_loopback_host) {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "CORS origin must use HTTPS unless it targets loopback",
-        ));
-    }
-
-    HeaderValue::from_str(trimmed).map_err(|error| {
-        GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            format!("invalid CORS origin {origin}: {error}"),
-        )
-    })
 }
 
-fn is_loopback_host(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    match host
-        .trim_matches(|character| character == '[' || character == ']')
-        .parse::<IpAddr>()
+fn usage_body(usage: TokenUsage) -> Option<UsageBody> {
+    if usage.input_tokens.is_none() && usage.output_tokens.is_none() && usage.total_tokens.is_none()
     {
-        Ok(address) => address.is_loopback(),
-        Err(_) => false,
+        None
+    } else {
+        Some(usage.into())
     }
 }
 
-fn validate_service_limits(limits: GatewayHttpLimits) -> GatewayResult<()> {
-    if limits.max_request_bytes == 0 {
-        return Err(GatewayError::new(
-            GatewayErrorKind::InvalidRequest,
-            "max_request_bytes must be greater than zero",
-        ));
-    }
-    Ok(())
+fn log_success(
+    request_id: &RequestId,
+    alias: &str,
+    operation: Operation,
+    upstream_request_id: Option<&str>,
+    upstream_response_id: Option<&str>,
+    elapsed: Duration,
+) {
+    tracing::info!(
+        target: "cogentlm_gateway_server::request",
+        request_id = request_id.as_str(),
+        alias,
+        operation = operation.as_str(),
+        outcome = "ok",
+        latency_ms = elapsed.as_secs_f64() * 1_000.0,
+        upstream_request_id,
+        upstream_response_id,
+        "gateway inference request"
+    );
 }
 
-fn unix_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis()
+fn log_error(
+    request_id: &RequestId,
+    alias: &str,
+    operation: Operation,
+    error: &GatewayError,
+    elapsed: Duration,
+) {
+    tracing::warn!(
+        target: "cogentlm_gateway_server::request",
+        request_id = request_id.as_str(),
+        alias,
+        operation = operation.as_str(),
+        outcome = "error",
+        error_code = error.code(),
+        latency_ms = elapsed.as_secs_f64() * 1_000.0,
+        upstream_request_id = error.upstream_request_id.as_deref(),
+        "gateway inference request"
+    );
 }
 
-#[derive(Serialize)]
-struct StatusBody {
-    uptime_secs: u64,
-    aliases: Vec<AliasStatusBody>,
-}
-
-#[derive(Serialize)]
-struct AliasStatusBody {
-    name: String,
-    operations: Vec<&'static str>,
-    limits: AliasLimitsBody,
-    global_total_requests: u64,
-    global_window_requests: u32,
-    tracked_callers: usize,
-}
-
-impl From<GatewayAliasSnapshot> for AliasStatusBody {
-    fn from(snapshot: GatewayAliasSnapshot) -> Self {
-        let mut operations = Vec::new();
-        if snapshot.query {
-            operations.push("query");
-        }
-        if snapshot.chat {
-            operations.push("chat");
-        }
-        if snapshot.embed {
-            operations.push("embed");
-        }
-        Self {
-            name: snapshot.name,
-            operations,
-            limits: AliasLimitsBody::from(snapshot.limits),
-            global_total_requests: snapshot.global_total_requests,
-            global_window_requests: snapshot.global_window_requests,
-            tracked_callers: snapshot.tracked_callers,
-        }
+fn lifecycle_label(state: ServerLifecycle) -> &'static str {
+    match state {
+        ServerLifecycle::Starting => "starting",
+        ServerLifecycle::Ready => "ready",
+        ServerLifecycle::Draining => "draining",
+        ServerLifecycle::Failed => "failed",
     }
 }
 
 #[derive(Serialize)]
-struct AliasLimitsBody {
-    global: RequestLimitsBody,
-    per_caller: Option<RequestLimitsBody>,
-    max_tracked_callers: usize,
+struct ProbeBody {
+    status: &'static str,
+    state: &'static str,
 }
-
-impl From<GatewayAliasLimits> for AliasLimitsBody {
-    fn from(limits: GatewayAliasLimits) -> Self {
-        Self {
-            global: RequestLimitsBody::from(limits.global),
-            per_caller: limits.per_caller.map(RequestLimitsBody::from),
-            max_tracked_callers: limits.max_tracked_callers,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct RequestLimitsBody {
-    max_concurrent_requests: Option<usize>,
-    max_requests_per_minute: Option<u32>,
-    max_requests_total: Option<u64>,
-}
-
-impl From<cogentlm_gateway::GatewayRequestLimits> for RequestLimitsBody {
-    fn from(limits: cogentlm_gateway::GatewayRequestLimits) -> Self {
-        Self {
-            max_concurrent_requests: limits.max_concurrent_requests,
-            max_requests_per_minute: limits.max_requests_per_minute,
-            max_requests_total: limits.max_requests_total,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct HistoryBody {
-    entries: Vec<HistoryEntry>,
-}
-
-const DASHBOARD_HTML: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CogentLM Gateway</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.45; }
-    input, textarea, select, button { font: inherit; margin: .25rem 0; }
-    input, textarea { width: min(720px, 100%); box-sizing: border-box; }
-    textarea { min-height: 7rem; }
-    pre { background: #111827; color: #f9fafb; padding: 1rem; overflow: auto; }
-    section { margin-block: 1.5rem; }
-    label { display: block; font-weight: 600; margin-top: .75rem; }
-  </style>
-</head>
-<body>
-  <h1>CogentLM Gateway</h1>
-  <p>This standalone server exposes <code>/v1/query</code>, <code>/v1/chat</code>, and <code>/v1/embed</code>. Status and history require the admin token.</p>
-
-  <section>
-    <h2>Status</h2>
-    <label>Admin token <input id="admin-token" type="password" autocomplete="off"></label>
-    <button id="refresh">Refresh status and history</button>
-    <pre id="status">Enter the admin token and refresh.</pre>
-  </section>
-
-  <section>
-    <h2>Manual Trigger</h2>
-    <label>Inference token <input id="inference-token" type="password" autocomplete="off"></label>
-    <label>Alias <input id="alias" value="local"></label>
-    <label>Operation
-      <select id="operation">
-        <option value="query">query</option>
-        <option value="chat">chat</option>
-        <option value="embed">embed</option>
-      </select>
-    </label>
-    <label>Input <textarea id="input">Write one sentence about gateway inference.</textarea></label>
-    <button id="run">Run</button>
-    <pre id="output">Manual responses appear here.</pre>
-  </section>
-
-  <section>
-    <h2>curl</h2>
-    <pre>curl -s http://127.0.0.1:8787/v1/query \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"local","prompt":"hello","max_tokens":32}'</pre>
-  </section>
-
-  <script>
-    const statusEl = document.getElementById('status');
-    const outputEl = document.getElementById('output');
-    const adminToken = document.getElementById('admin-token');
-    const inferenceToken = document.getElementById('inference-token');
-    const alias = document.getElementById('alias');
-    const operation = document.getElementById('operation');
-    const input = document.getElementById('input');
-
-    async function adminJson(path) {
-      const response = await fetch(path, {
-        headers: { Authorization: `Bearer ${adminToken.value}` },
-      });
-      const text = await response.text();
-      try { return JSON.parse(text); } catch { return { status: response.status, body: text }; }
-    }
-
-    document.getElementById('refresh').onclick = async () => {
-      statusEl.textContent = 'Loading...';
-      const [status, history] = await Promise.all([
-        adminJson('/admin/api/status'),
-        adminJson('/admin/api/history'),
-      ]);
-      statusEl.textContent = JSON.stringify({ status, history }, null, 2);
-    };
-
-    document.getElementById('run').onclick = async () => {
-      outputEl.textContent = 'Running...';
-      const op = operation.value;
-      const body = op === 'chat'
-        ? { model: alias.value, messages: [{ role: 'user', content: input.value }], max_tokens: 64 }
-        : op === 'embed'
-          ? { model: alias.value, input: input.value }
-          : { model: alias.value, prompt: input.value, max_tokens: 64 };
-      const response = await fetch(`/v1/${op}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${inferenceToken.value}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
-      outputEl.textContent = await response.text();
-    };
-  </script>
-</body>
-</html>
-"#;

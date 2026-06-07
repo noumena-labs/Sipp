@@ -64,6 +64,29 @@ fn py_remote_gateway_config_rejects_zero_timeout() {
 }
 
 #[test]
+fn py_openai_compatible_descriptor_leaves_correlation_header_unset() {
+    let descriptor = PyProviderDescriptor::new(
+        "openai_compatible".to_string(),
+        "model".to_string(),
+        Some("token".to_string()),
+        Some("http://localhost:8080/v1".to_string()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("provider descriptor");
+
+    match descriptor.core {
+        CoreProviderEndpointConfig::OpenAiCompatible(config) => {
+            assert_eq!(config.correlation_header, None);
+        }
+        _ => panic!("expected OpenAI-compatible descriptor"),
+    }
+}
+
+#[test]
 fn py_add_rejects_empty_alias_before_gateway_transport_config() {
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {

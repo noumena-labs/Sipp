@@ -53,7 +53,7 @@ Run:
 ```bash
 python examples/python/gateway_query.py <model.gguf> local [input]
 python examples/python/gateway_chat.py <model.gguf> local [input]
-python examples/python/gateway_embed.py <model.gguf> local-embed [input]
+python examples/python/gateway_embed.py <model.gguf> local [input]
 ```
 
 `gateway_embed` requires a model/runtime that reports embedding support.
