@@ -1,21 +1,15 @@
-# CogentLM Rust Facade
+# Rust Package
 
-`lib/rust` is the public Rust facade crate published as `cogentlm`. It is the
-Rust dependency for local GGUF inference,
-gateway-backed inference, provider descriptors, native runtime configuration,
-and shared CogentLM value types.
+The Rust package target is `cogentlm`. It is the public facade crate for Rust
+applications and re-exports the high-level client API plus selected runtime,
+backend, lifecycle, shard, provider, and gateway types.
 
-The facade re-exports the high-level `CogentClient` API plus selected engine,
-backend, lifecycle, shard, provider, and gateway modules.
+## Use It For
 
-## Source Build
-
-From the repository root:
-
-```bash
-cargo xtask build core
-cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> "Explain CogentLM."
-```
+- Rust applications that need local GGUF inference.
+- Gateway-backed query, chat, and embedding calls.
+- Direct provider descriptors behind the `providers` feature.
+- Shared CogentLM value types across application boundaries.
 
 ## Local GGUF Query
 
@@ -55,7 +49,6 @@ async fn run(
             ..Default::default()
         })
         .await?;
-
     println!("{}", response.text);
     Ok(())
 }
@@ -84,15 +77,14 @@ fn runtime_config() -> NativeRuntimeConfig {
 }
 ```
 
-Register endpoints with `add(id, descriptor)`, keep the returned `EndpointRef`,
-and pass that reference on each request when routing must be explicit.
+## Gateway
 
-Gateway clients use `EndpointDescriptor::gateway` when a Rust application calls
-a separate CogentLM gateway.
+Register `EndpointDescriptor::gateway` when a Rust application calls a separate
+CogentLM gateway. The gateway toolkit and server docs cover route and
+deployment ownership.
 
-## Learn More
+## Related Docs
 
-- [Rust package docs](../../docs/packages/rust.md)
-- [Local inference](../../docs/guides/local-inference.md)
-- [Gateway and hybrid inference](../../docs/guides/gateway-hybrid.md)
-- [Rust examples](../../examples/rust/README.md)
+- [Local Inference](../guides/local-inference.md)
+- [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
+- [Architecture](../architecture.md)

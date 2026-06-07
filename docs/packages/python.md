@@ -1,22 +1,14 @@
-# CogentLM Python Package
+# Python Package
 
-`lib/python` is the Python package source for the public `cogentlm` package. It
-loads the best available native backend and exposes descriptor classes for
-local GGUF models, gateway endpoints, and provider endpoints.
+The Python package target is `cogentlm`. It exposes native descriptor classes,
+run handles, token streaming, and the same endpoint model as the Rust client.
 
-Text and embedding calls return run handles. Call `.result()` for the final
-response and `.tokens()` for streamed text batches.
+## Use It For
 
-## Source Build
-
-From the repository root:
-
-```bash
-cargo xtask build python --backend cpu
-python examples/python/query.py <model.gguf> "Explain CogentLM."
-```
-
-Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
+- Python applications that need local GGUF inference.
+- Gateway-backed inference from Python services or scripts.
+- Direct provider descriptors where server-side credentials are appropriate.
+- Source-based package validation through maturin and xtask.
 
 ## Local GGUF Query
 
@@ -61,12 +53,16 @@ run = client.query(
 print(run.result()["text"])
 ```
 
-Gateway clients use `GatewayDescriptor` when a Python service or script calls a
-separate CogentLM gateway.
+Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native
+backend.
 
-## Learn More
+## Gateway
 
-- [Python package docs](../../docs/packages/python.md)
-- [Local inference](../../docs/guides/local-inference.md)
-- [Gateway and hybrid inference](../../docs/guides/gateway-hybrid.md)
-- [Python examples](../../examples/python/README.md)
+Register `GatewayDescriptor` when a Python service or script calls a separate
+CogentLM gateway. Gateway examples live under `examples/python`.
+
+## Related Docs
+
+- [Installation](../getting-started/installation.md)
+- [Local Inference](../guides/local-inference.md)
+- [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)

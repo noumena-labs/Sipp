@@ -1,18 +1,9 @@
-# demos/avatar
+# Avatar Demo
 
-Small React + three.js high-fantasy avatar demo showing how to pair
-`CogentClient` with `@noumena-labs/cogentlm/character` and a VRM character.
+`demos/avatar` is a React and three.js character demo showing how to pair
+`CogentClient` with the browser package character helpers and a VRM character.
 
-The app keeps responsibilities split cleanly:
-
-- `character.json` defines persona, actions, and memory
-- the app chooses the model URL and owns client startup
-- the app resolves `avatar.vrm` and animation clips by folder convention
-- the app renders the fantasy stage, manual action controls, prompt chips, and procedural magic effects
-
-## Quick start
-
-From the repo root:
+## Run
 
 ```bash
 cargo xtask run demos serve avatar
@@ -21,98 +12,18 @@ cargo xtask run demos serve avatar
 Open the printed local URL and press `Start`. The start screen pre-populates a
 small default `.gguf` model URL that can be replaced before entering the demo.
 
-## What the app loads
+## What It Demonstrates
 
-- Character config: `public/characters/aria/character.json`
-- Avatar model: `public/characters/aria/avatar.vrm`
-- Idle clip: `public/characters/aria/animations/idle.fbx`
-- Action clips: `public/characters/aria/animations/<action>.fbx`
-- Default model URL: `https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf`
+- Character config loading from `public/characters/aria/character.json`.
+- Local model startup owned by the app.
+- VRM and FBX animation asset resolution by folder convention.
+- Manual action controls and prompt chips.
+- Character event bus integration with scene effects.
 
-## Fantasy Demo
+The character config is demo-owned. New character authoring puts durable
+steering in `persona.anchorExamples`, conversational examples in
+`persona.dialogExamples`, and style notes in `persona.notes`.
 
-Aria is authored as a Dawnblade knight guarding the Starfall Gate. The stage is
-an asset-free three.js fantasy ruin with a stone dais, rune rings, crystals,
-broken pillars, fog, and drifting magic motes.
-
-The demo exposes three interaction layers:
-
-- chat, driven by the loaded model and `character.json`
-- suggested prompt chips for quick user onboarding
-- a manual Actions panel that dispatches action events directly through the character event bus
-
-The character config is intentionally internal to this demo. The setup UI only
-exposes the model URL.
-
-## Action Coverage
-
-Aria's action schema includes body emotes, facial expressions, gaze targets, and
-procedural magic effects. Every configured action is expected to produce a
-visible result.
-
-Existing FBX emotes:
-
-- `wave`
-- `nod`
-- `shake_head`
-- `salute`
-- `thinking`
-- `bashful`
-- `excited`
-- `happy_blissful`
-- `joy_jump`
-- `upset_angry`
-- `crying`
-- `sad_idle`
-
-Code-driven expressions and gaze:
-
-- `smile`
-- `look_sad`
-- `gasp`
-- `look_angry`
-- `settle`
-- `look_at_you`
-- `glance_left`
-- `glance_right`
-- `look_up`
-- `look_down`
-
-Procedural fantasy effects:
-
-- `summon_familiar`
-- `cast_starbolt`
-- `raise_ward`
-- `summon_rune_circle`
-
-## Character flow
-
-`src/App.tsx` uses the public helper:
-
-```ts
-const client = new CogentClient();
-const { character, config } = await createCharacterFromConfigUrl({
-  configUrl: args.characterUrl,
-  client,
-  bus: new CharacterEventBus(),
-});
-```
-
-The app still owns:
-
-- client creation
-- model download / init
-- render asset validation
-- scene bindings
-
-## character.json notes
-
-Aria-specific style rules now live in `persona.notes`, not in the client's
-shared prompt renderer. That is the intended authoring pattern for new
-characters too.
-
-Use `persona.anchorExamples` for durable steering and `persona.dialogExamples`
-for conversational flow examples.
-
-See `lib/web/src/character` for the character runtime APIs
-and config shape.
+See `lib/web/src/character` for the character runtime APIs and
+[../../docs/examples-demos.md](../../docs/examples-demos.md) for the demo
+index.

@@ -1,0 +1,16 @@
+[book]
+authors = ["Noumena Labs"]
+language = "en"
+src = "docs"
+title = "CogentLM Documentation"
+
+[build]
+build-dir = "book"
+
+[output.html]
+edit-url-template = "https://github.com/noumena-labs/CogentLM/edit/master/{path}"
+git-repository-url = "https://github.com/noumena-labs/CogentLM"
+site-url = "/CogentLM/"
+
+[output.html.search]
+enable = true
