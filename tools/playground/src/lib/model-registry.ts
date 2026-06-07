@@ -1,0 +1,286 @@
+/**
+ * Curated model registry for the CogentLM browser playground.
+ *
+ * Each entry is app-facing catalog data. Its client-facing portion is a
+ * minimal `CogentClient` ModelSource.
+ */
+
+import type { ModelSource } from '@noumena-labs/cogentlm';
+
+export type ModelCapability = 'text' | 'vision' | 'embedding';
+
+export interface ModelVariant {
+  /** Quantization label (e.g. "Q4_0", "Q4_K_M") */
+  quant: string;
+  /** Approximate file size in bytes (for display) */
+  sizeBytes: number;
+  /** Approximate projector file size in bytes */
+  projectorSizeBytes?: number;
+  /** Source consumed by a local client.add(...) descriptor. */
+  source: ModelSource;
+}
+
+export interface ModelRegistryEntry {
+  /** Unique identifier */
+  id: string;
+  /** Human-readable name */
+  name: string;
+  /** Model family / publisher */
+  publisher: string;
+  /** Parameter count label (e.g. "0.5B", "2B", "7B") */
+  parameterCount: string;
+  /** What this model can do */
+  capability: ModelCapability;
+  /** Optional runtime model class hint used for playground defaults. */
+  modelClass?: 'decoder_only' | 'encoder_decoder' | 'encoder_only';
+  /** Available quantization variants */
+  variants: ModelVariant[];
+  /** Default variant index */
+  defaultVariant?: number;
+}
+
+// ── Registry ─────────────────────────────────────────────────────────────
+
+export const MODEL_REGISTRY: ModelRegistryEntry[] = [
+  // ── Text models ──
+  {
+    id: 'qwen2.5-0.5b-instruct',
+    name: 'Qwen 2.5 0.5B Instruct',
+    publisher: 'Qwen',
+    parameterCount: '0.5B',
+    capability: 'text',
+    variants: [
+      {
+        quant: 'Q4_0',
+        sizeBytes: 397_000_000,
+        source: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
+      },
+    ],
+  },
+  {
+    id: 'qwen2.5-1.5b-instruct',
+    name: 'Qwen 2.5 1.5B Instruct',
+    publisher: 'Qwen',
+    parameterCount: '1.5B',
+    capability: 'text',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 1_050_000_000,
+        source: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf',
+      },
+    ],
+  },
+  {
+    id: 'smollm2-360m-instruct',
+    name: 'SmolLM2 360M Instruct',
+    publisher: 'HuggingFace',
+    parameterCount: '360M',
+    capability: 'text',
+    variants: [
+      {
+        quant: 'Q8_0',
+        sizeBytes: 386_000_000,
+        source: 'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
+      },
+    ],
+  },
+  {
+    id: 't5-small-gguf',
+    name: 'T5 Small Text-to-text',
+    publisher: 'Noumena Labs',
+    parameterCount: '60.5M',
+    capability: 'text',
+    modelClass: 'encoder_decoder',
+    variants: [
+      {
+        quant: 'Q5_K_M',
+        sizeBytes: 46_300_000,
+        source: 'https://huggingface.co/noumenalabs/t5-small-gguf/resolve/main/t5-small-q5_k_m.gguf',
+      },
+    ],
+  },
+
+  // Embedding models
+  {
+    id: 'bge-small-en-v1.5',
+    name: 'BGE Small EN v1.5',
+    publisher: 'BAAI',
+    parameterCount: '33M',
+    capability: 'embedding',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 29_200_000,
+        source: 'https://huggingface.co/ChristianAzinn/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5.Q4_K_M.gguf',
+      },
+    ],
+  },
+  {
+    id: 'nomic-embed-text-v1.5',
+    name: 'Nomic Embed Text v1.5',
+    publisher: 'Nomic',
+    parameterCount: '137M',
+    capability: 'embedding',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 84_100_000,
+        source: 'https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf',
+      },
+    ],
+  },
+
+  // ── Vision models ──
+  {
+    id: 'qwen2-vl-2b-instruct',
+    name: 'Qwen2-VL 2B Instruct',
+    publisher: 'Qwen',
+    parameterCount: '2B',
+    capability: 'vision',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 1_400_000_000,
+        projectorSizeBytes: 1_500_000_000,
+        source: {
+          model: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
+          projector: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf',
+        },
+      },
+    ],
+  },
+  {
+    id: 'llava-v1.5-7b',
+    name: 'LLaVA v1.5 7B',
+    publisher: 'LLaVA',
+    parameterCount: '7B',
+    capability: 'vision',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 4_080_000_000,
+        projectorSizeBytes: 624_000_000,
+        source: {
+          model: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf',
+          projector: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf',
+        },
+      },
+    ],
+  },
+  {
+    id: 'smolvlm-256m-instruct',
+    name: 'SmolVLM 256M Instruct',
+    publisher: 'HuggingFace',
+    parameterCount: '256M',
+    capability: 'vision',
+    variants: [
+      {
+        quant: 'Q8_0',
+        sizeBytes: 286_000_000,
+        projectorSizeBytes: 360_000_000,
+        source: {
+          model: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf',
+          projector: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-f16.gguf',
+        },
+      },
+    ],
+  },
+  {
+    id: 'smolvlm-500m-instruct',
+    name: 'SmolVLM 500M Instruct',
+    publisher: 'HuggingFace',
+    parameterCount: '500M',
+    capability: 'vision',
+    variants: [
+      {
+        quant: 'Q8_0',
+        sizeBytes: 534_000_000,
+        projectorSizeBytes: 360_000_000,
+        source: {
+          model: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q8_0.gguf',
+          projector: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-f16.gguf',
+        },
+      },
+    ],
+  },
+  {
+    id: 'minicpm-v-2.6',
+    name: 'MiniCPM-V 2.6',
+    publisher: 'MiniCPM',
+    parameterCount: '8B',
+    capability: 'vision',
+    variants: [
+      {
+        quant: 'Q4_K_M',
+        sizeBytes: 4_680_000_000,
+        projectorSizeBytes: 1_040_000_000,
+        source: {
+          model: 'https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/MiniCPM-V-2_6-Q4_K_M.gguf',
+          projector: 'https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/mmproj-model-f16-2.gguf',
+        },
+      },
+    ],
+  },
+];
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+export function getModelById(id: string): ModelRegistryEntry | undefined {
+  return MODEL_REGISTRY.find((m) => m.id === id);
+}
+
+export function getDefaultVariant(model: ModelRegistryEntry): ModelVariant {
+  return model.variants[model.defaultVariant ?? 0];
+}
+
+export function getVariantPrimaryUrl(variant: ModelVariant): string {
+  if (typeof variant.source === 'string') {
+    return variant.source;
+  }
+  if (variant.source instanceof File) {
+    return variant.source.name || 'model.gguf';
+  }
+  if (Array.isArray(variant.source)) {
+    const first = variant.source[0];
+    return typeof first === 'string' ? first : first?.name || 'model.gguf';
+  }
+  if (!('model' in variant.source)) {
+    return 'model.gguf';
+  }
+  const model = variant.source.model;
+  if (typeof model === 'string') {
+    return model;
+  }
+  if (model instanceof File) {
+    return model.name || 'model.gguf';
+  }
+  const first = model[0];
+  return typeof first === 'string' ? first : first?.name || 'model.gguf';
+}
+
+export function isVisionModel(model: ModelRegistryEntry): boolean {
+  return model.capability === 'vision';
+}
+
+export function isEmbeddingModel(model: ModelRegistryEntry): boolean {
+  return model.capability === 'embedding';
+}
+
+export function getVisionModels(): ModelRegistryEntry[] {
+  return MODEL_REGISTRY.filter((m) => m.capability === 'vision');
+}
+
+export function getEmbeddingModels(): ModelRegistryEntry[] {
+  return MODEL_REGISTRY.filter((m) => m.capability === 'embedding');
+}
+
+export function getTextModels(): ModelRegistryEntry[] {
+  return MODEL_REGISTRY.filter((m) => m.capability === 'text');
+}
+
+export function formatSize(bytes: number): string {
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(0)} MB`;
+  return `${(bytes / 1_000).toFixed(0)} KB`;
+}

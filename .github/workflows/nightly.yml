@@ -73,20 +73,23 @@ jobs:
             .build/cargo
             .build/cmake
             .build/c
-          key: cargo-nightly-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          key: cargo-nightly-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
           restore-keys: |
             cargo-nightly-${{ runner.os }}-
 
-      - name: Cache Bun dependencies
+      - name: Cache JavaScript dependencies
         uses: actions/cache@v5.0.5
         with:
           path: |
             ~/.bun/install/cache
             node_modules
-            packages/npm/node_modules
+            lib/web/node_modules
+            lib/node/node_modules
             bindings/node/node_modules
-            apps/*/node_modules
-          key: bun-nightly-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'packages/npm/package.json', 'bindings/node/package.json', 'apps/*/package.json') }}
+            demos/*/node_modules
+            tools/*/node_modules
+            examples/web/node_modules
+          key: bun-nightly-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'lib/node/package.json', 'lib/web/package.json', 'bindings/node/package.json', 'demos/*/package.json', 'tools/*/package.json', 'examples/web/package.json') }}
           restore-keys: |
             bun-nightly-${{ runner.os }}-
 
@@ -96,7 +99,7 @@ jobs:
           path: |
             .build/toolchain
             .build/uv-cache
-          key: xtask-toolchain-nightly-${{ runner.os }}-${{ hashFiles('crates/xtask/src/toolchains/*.rs') }}
+          key: xtask-toolchain-nightly-${{ runner.os }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
           restore-keys: |
             xtask-toolchain-nightly-${{ runner.os }}-
 
@@ -104,14 +107,16 @@ jobs:
         uses: actions/cache@v5.0.5
         with:
           path: .build/models
-          key: sample-models-nightly-${{ runner.os }}-${{ hashFiles('crates/xtask/src/sample_model.rs') }}
+          key: sample-models-nightly-${{ runner.os }}-${{ hashFiles('xtask/src/sample_model.rs') }}
           restore-keys: |
             sample-models-nightly-${{ runner.os }}-
 
-      - name: Install dependencies
+      - name: Install JavaScript workspace dependencies
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun install --frozen-lockfile
 
       - name: Run full test workflow
-        run: cargo xtask --plain test all --profile full --backend cpu
+        run: |
+          cargo xtask --plain test unit group full
+          cargo xtask --plain test smoke group full --backend cpu

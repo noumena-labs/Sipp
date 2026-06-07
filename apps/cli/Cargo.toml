@@ -1,0 +1,30 @@
+[package]
+name = "cogentlm-cli"
+description = "Command-line interface for CogentLM local inference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+
+[features]
+default = ["native"]
+native = ["cogentlm/native"]
+backend-dl = ["cogentlm/backend-dl"]
+cuda = ["cogentlm/cuda"]
+metal = ["cogentlm/metal"]
+vulkan = ["cogentlm/vulkan"]
+openmp = ["cogentlm/openmp"]
+
+[[bin]]
+name = "cogentlm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+cogentlm.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2.0"

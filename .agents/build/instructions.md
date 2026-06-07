@@ -47,21 +47,21 @@ If a build fails stating missing CMake variables or SDKs, it is usually because 
 
 ## Run And Test Commands
 
-Use the `run` group for long-lived apps and non-test diagnostics. Use the
+Use the `run` group for long-lived demos and non-test diagnostics. Use the
 `test` group for white-box tests, interface tests, smoke checks, and coverage:
 
 ```bash
-cargo xtask run apps serve examples
+cargo xtask run demos serve chat
+cargo xtask run demos build avatar
 cargo xtask run llama backend-ops --backend cpu
 cargo xtask test list
-cargo xtask test all --profile contributor
-cargo xtask test all --profile quick
-cargo xtask test whitebox --suite xtask
-cargo xtask test whitebox --suite rust-crates --package cogentlm-core
-cargo xtask test interface --suite model-smoke --backend cpu --model <model.gguf>
-cargo xtask test coverage --scope whitebox --backend cpu
+cargo xtask test unit xtask
+cargo xtask test unit rust --package cogentlm-core
+cargo xtask test unit node --backend cpu
+cargo xtask test smoke model --backend cpu --model <model.gguf>
+cargo xtask test smoke browser
+cargo xtask test verify --target whitebox
 ```
 
-Profiles are cumulative: `contributor` runs `layout` and `xtask`; `quick` adds
-`rust-crates`; `ci` adds `package-ts` and `rust-public-api`; `full` runs every
-cataloged suite. See `docs/testing.md` for the human-facing summary.
+Run `cargo xtask test list --cases` to inspect cataloged suites and cheap case
+discovery. See `docs/testing.md` for the human-facing summary.

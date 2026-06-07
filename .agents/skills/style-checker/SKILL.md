@@ -159,7 +159,7 @@ If fixes were made, summarize them in plain language.
 Example:
 
 ```text
-Style check completed. I fixed two TypeScript style issues in packages/api/src/client.ts: added NodeNext .js import extensions and made the exported config map readonly. I ran pnpm typecheck and it passed.
+Style check completed. I fixed two TypeScript style issues in lib/web/src/client.ts: added NodeNext .js import extensions and made the exported config map readonly. I ran pnpm typecheck and it passed.
 ```
 
 ## Constraints

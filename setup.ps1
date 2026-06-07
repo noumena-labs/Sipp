@@ -12,8 +12,8 @@ $BinDir = Join-Path $Root ".build\bin"
 $EnvScript = Join-Path $BinDir "cogentlm-env.ps1"
 
 $SourceRoots = @(
-  (Join-Path $Root "crates\xtask\src"),
-  (Join-Path $Root "crates\xtask\Cargo.toml"),
+  (Join-Path $Root "xtask\src"),
+  (Join-Path $Root "xtask\Cargo.toml"),
   (Join-Path $Root "Cargo.toml"),
   (Join-Path $Root "Cargo.lock"),
   (Join-Path $Root ".cargo\config.toml")

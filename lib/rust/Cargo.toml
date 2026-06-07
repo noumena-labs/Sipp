@@ -1,0 +1,31 @@
+[package]
+name = "cogentlm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Unified Rust facade for extensible CogentLM inference"
+readme = "../../README.md"
+keywords = ["ai", "llm", "inference", "gguf"]
+categories = ["api-bindings", "science"]
+
+[features]
+default = ["native", "gateway", "providers"]
+native = ["cogentlm-client/native", "cogentlm-engine/native"]
+gateway = ["dep:cogentlm-gateway"]
+providers = ["cogentlm-client/providers"]
+backend-dl = ["native", "cogentlm-client/backend-dl", "cogentlm-engine/backend-dl"]
+cuda = ["native", "cogentlm-client/cuda", "cogentlm-engine/cuda"]
+metal = ["native", "cogentlm-client/metal", "cogentlm-engine/metal"]
+vulkan = ["native", "cogentlm-client/vulkan", "cogentlm-engine/vulkan"]
+openmp = ["native", "cogentlm-client/openmp", "cogentlm-engine/openmp"]
+
+[dependencies]
+cogentlm-client.workspace = true
+cogentlm-core.workspace = true
+cogentlm-engine.workspace = true
+cogentlm-gateway = { workspace = true, optional = true }
+cogentlm-shard.workspace = true
+
+[dev-dependencies]
+futures.workspace = true

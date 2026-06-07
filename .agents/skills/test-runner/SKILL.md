@@ -23,66 +23,70 @@ change.
 ### 1. Broad and automation checks
 - Run every deterministic unit suite:
   ```bash
-  cargo xtask test unit
+  cargo xtask test unit group full
   ```
 - Run all white-box unit suites:
   ```bash
-  cargo xtask test unit whitebox
+  cargo xtask test unit group whitebox
   ```
 - Run xtask-only checks when the change is limited to developer automation:
   ```bash
-  cargo xtask test unit xtask
+  cargo xtask test unit suite xtask
   ```
 
 ### 2. Rust Native Core (`crates/`)
 - Run cataloged Rust unit tests for the affected crate:
   ```bash
-  cargo xtask test unit rust --package <crate_name>
+  cargo xtask test unit suite rust-crates --package <crate_name>
   ```
-- Example: `cargo xtask test unit rust --package cogentlm-engine`
+- Example: `cargo xtask test unit suite rust-crates --package cogentlm-engine`
 
-### 3. Node.js Bindings (`bindings/node/`)
+### 3. Node.js Bindings And Package (`bindings/node/`, `lib/node/`)
 - Run deterministic Node package API tests:
   ```bash
-  cargo xtask test unit node --backend cpu
+  cargo xtask test unit suite node-package --backend cpu
   ```
 - Run model-backed Node smoke when local inference behavior changed:
   ```bash
-  cargo xtask test smoke node --backend cpu
+  cargo xtask test smoke suite example-node --backend cpu
   ```
 
-### 4. TypeScript NPM Packages (`packages/npm/`)
+### 4. Browser Package And Demos (`lib/web/`, `demos/`)
 - Run browser package TypeScript tests:
   ```bash
-  cargo xtask test unit browser-package
+  cargo xtask test unit suite browser-package
   ```
-- App tests are cataloged separately:
+- Demo tests are cataloged separately:
   ```bash
-  cargo xtask test unit apps
+  cargo xtask test unit suite demos
   ```
 
-### 5. Python Bindings (`bindings/python/`)
+### 5. Python Bindings And Package (`bindings/python/`, `lib/python/`)
 - Run deterministic Python package API tests:
   ```bash
-  cargo xtask test unit python --backend cpu
+  cargo xtask test unit suite python-package --backend cpu
   ```
 - Run model-backed Python smoke when local inference behavior changed:
   ```bash
-  cargo xtask test smoke python --backend cpu
+  cargo xtask test smoke suite example-python --backend cpu
   ```
 
 ### 6. Browser and holistic smoke checks
-- Run browser runtime smoke:
+- Run browser example smoke:
   ```bash
-  cargo xtask test smoke browser
+  cargo xtask test smoke suite example-browser
+  ```
+- Run browser playground runtime smoke:
+  ```bash
+  cargo xtask test smoke suite playground-browser
   ```
 - Run CLI, Rust, Node, and Python model-backed smoke:
   ```bash
-  cargo xtask test smoke model --backend cpu
+  cargo xtask test smoke group local-model --backend cpu
   ```
 - Run llama.cpp backend correctness smoke:
   ```bash
-  cargo xtask test smoke llama --backend cpu
+  cargo xtask test smoke suite llama-backend-ops --backend cpu
   ```
 
 ### 7. Coverage and verification

@@ -40,67 +40,115 @@ pub(crate) fn common_text_options(options: &CogentTextOptions) -> Result<(), Cog
 
 pub(crate) fn local_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
-    reject_gateway_options(&request.gateway_options)
+    reject_endpoint_options(&request.endpoint_options, "local endpoints")?;
+    reject_provider_options(&request.provider_options, "local endpoints")
 }
 
 pub(crate) fn local_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
-    reject_gateway_options(&request.gateway_options)
+    reject_endpoint_options(&request.endpoint_options, "local endpoints")?;
+    reject_provider_options(&request.provider_options, "local endpoints")
 }
 
 pub(crate) fn local_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
-    reject_gateway_options(&request.gateway_options)
+    reject_endpoint_options(&request.endpoint_options, "local endpoints")?;
+    reject_provider_options(&request.provider_options, "local endpoints")
 }
 
-#[cfg(feature = "remote")]
-pub(crate) fn remote_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
+pub(crate) fn gateway_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
         return Err(CogentError::InvalidRequest(
-            "local text options are not valid for remote endpoints".to_string(),
+            "local text options are not valid for gateway endpoints".to_string(),
         ));
     }
-    reject_local_only_gateway_options(&request.gateway_options)?;
+    reject_provider_options(&request.provider_options, "gateway endpoints")?;
+    reject_local_only_endpoint_options(&request.endpoint_options)?;
     Ok(())
 }
 
-#[cfg(feature = "remote")]
-pub(crate) fn remote_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
+pub(crate) fn gateway_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
         return Err(CogentError::InvalidRequest(
-            "local text options are not valid for remote endpoints".to_string(),
+            "local text options are not valid for gateway endpoints".to_string(),
         ));
     }
-    reject_local_only_gateway_options(&request.gateway_options)?;
+    reject_provider_options(&request.provider_options, "gateway endpoints")?;
+    reject_local_only_endpoint_options(&request.endpoint_options)?;
     Ok(())
 }
 
-#[cfg(feature = "remote")]
-pub(crate) fn remote_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
+pub(crate) fn gateway_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
     if request.local.has_fields() {
         return Err(CogentError::InvalidRequest(
-            "local embed options are not valid for remote endpoints".to_string(),
+            "local embed options are not valid for gateway endpoints".to_string(),
         ));
     }
-    reject_local_only_gateway_options(&request.gateway_options)?;
+    reject_provider_options(&request.provider_options, "gateway endpoints")?;
+    reject_local_only_endpoint_options(&request.endpoint_options)?;
     Ok(())
 }
 
-fn reject_gateway_options(
-    gateway_options: &serde_json::Map<String, serde_json::Value>,
+#[cfg(feature = "providers")]
+pub(crate) fn provider_query(request: &CogentQueryRequest) -> Result<(), CogentError> {
+    common_text_options(&request.options)?;
+    if request.local.has_fields() {
+        return Err(CogentError::InvalidRequest(
+            "local text options are not valid for provider endpoints".to_string(),
+        ));
+    }
+    reject_endpoint_options(&request.endpoint_options, "provider endpoints")
+}
+
+#[cfg(feature = "providers")]
+pub(crate) fn provider_chat(request: &CogentChatRequest) -> Result<(), CogentError> {
+    common_text_options(&request.options)?;
+    if request.local.has_fields() {
+        return Err(CogentError::InvalidRequest(
+            "local text options are not valid for provider endpoints".to_string(),
+        ));
+    }
+    reject_endpoint_options(&request.endpoint_options, "provider endpoints")
+}
+
+#[cfg(feature = "providers")]
+pub(crate) fn provider_embed(request: &CogentEmbedRequest) -> Result<(), CogentError> {
+    if request.local.has_fields() {
+        return Err(CogentError::InvalidRequest(
+            "local embed options are not valid for provider endpoints".to_string(),
+        ));
+    }
+    reject_endpoint_options(&request.endpoint_options, "provider endpoints")
+}
+
+fn reject_endpoint_options(
+    endpoint_options: &serde_json::Map<String, serde_json::Value>,
+    endpoint_label: &'static str,
 ) -> Result<(), CogentError> {
-    if gateway_options.is_empty() {
+    if endpoint_options.is_empty() {
         Ok(())
     } else {
-        Err(CogentError::InvalidRequest(
-            "gateway_options are not valid for local endpoints".to_string(),
-        ))
+        Err(CogentError::InvalidRequest(format!(
+            "endpoint_options are not valid for {endpoint_label}"
+        )))
     }
 }
 
-#[cfg(feature = "remote")]
-const LOCAL_ONLY_GATEWAY_FIELDS: &[&str] = &[
+fn reject_provider_options(
+    provider_options: &serde_json::Map<String, serde_json::Value>,
+    endpoint_label: &'static str,
+) -> Result<(), CogentError> {
+    if provider_options.is_empty() {
+        Ok(())
+    } else {
+        Err(CogentError::InvalidRequest(format!(
+            "provider_options are not valid for {endpoint_label}"
+        )))
+    }
+}
+
+const LOCAL_ONLY_ENDPOINT_FIELDS: &[&str] = &[
     "context_key",
     "contextKey",
     "session",
@@ -113,14 +161,13 @@ const LOCAL_ONLY_GATEWAY_FIELDS: &[&str] = &[
     "local",
 ];
 
-#[cfg(feature = "remote")]
-fn reject_local_only_gateway_options(
-    gateway_options: &serde_json::Map<String, serde_json::Value>,
+fn reject_local_only_endpoint_options(
+    endpoint_options: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), CogentError> {
-    for key in gateway_options.keys() {
-        if LOCAL_ONLY_GATEWAY_FIELDS.contains(&key.as_str()) {
+    for key in endpoint_options.keys() {
+        if LOCAL_ONLY_ENDPOINT_FIELDS.contains(&key.as_str()) {
             return Err(CogentError::InvalidRequest(format!(
-                "gateway_options cannot contain local-only field: {key}"
+                "endpoint_options cannot contain local-only field: {key}"
             )));
         }
     }

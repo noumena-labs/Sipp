@@ -1,0 +1,59 @@
+[package]
+name = "cogentlm-rust-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autobins = false
+
+[[bin]]
+name = "query"
+path = "src/query.rs"
+
+[[bin]]
+name = "chat"
+path = "src/chat.rs"
+
+[[bin]]
+name = "embed"
+path = "src/embed.rs"
+
+[[bin]]
+name = "vision_chat"
+path = "src/vision_chat.rs"
+
+[[bin]]
+name = "gateway_query"
+path = "src/gateway_query.rs"
+required-features = ["gateway"]
+
+[[bin]]
+name = "gateway_chat"
+path = "src/gateway_chat.rs"
+required-features = ["gateway"]
+
+[[bin]]
+name = "gateway_embed"
+path = "src/gateway_embed.rs"
+required-features = ["gateway"]
+
+[[bin]]
+name = "openai_provider_chat"
+path = "src/openai_provider_chat.rs"
+
+[features]
+default = ["native"]
+native = ["cogentlm/native"]
+gateway = ["cogentlm/gateway"]
+backend-dl = ["cogentlm/backend-dl"]
+cuda = ["cogentlm/cuda"]
+metal = ["cogentlm/metal"]
+vulkan = ["cogentlm/vulkan"]
+openmp = ["cogentlm/openmp"]
+
+[dependencies]
+cogentlm.workspace = true
+cogentlm-providers.workspace = true
+futures.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

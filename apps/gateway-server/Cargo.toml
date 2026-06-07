@@ -1,0 +1,45 @@
+[package]
+name = "cogentlm-gateway-server"
+description = "Standalone CogentLM gateway HTTP server"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+version.workspace = true
+
+[[bin]]
+name = "cogentlm-gateway"
+path = "src/main.rs"
+
+[features]
+default = ["native"]
+native = ["cogentlm-client/native", "cogentlm-gateway/native", "cogentlm-gateway-core/native"]
+backend-dl = ["cogentlm-gateway/backend-dl"]
+cuda = ["cogentlm-gateway/cuda"]
+metal = ["cogentlm-gateway/metal"]
+vulkan = ["cogentlm-gateway/vulkan"]
+openmp = ["cogentlm-gateway/openmp"]
+
+[dependencies]
+anyhow.workspace = true
+axum = "0.8"
+bytes = "1"
+clap.workspace = true
+cogentlm-client = { workspace = true, default-features = false, features = ["providers"] }
+cogentlm-core.workspace = true
+cogentlm-engine = { workspace = true, default-features = false }
+cogentlm-gateway.workspace = true
+cogentlm-gateway-core.workspace = true
+futures-util = "0.3"
+http = "1"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+[dev-dependencies]
+tower = "0.5"
+wiremock = "0.6"

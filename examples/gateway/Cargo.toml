@@ -1,0 +1,35 @@
+[package]
+name = "cogentlm-gateway-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autobins = false
+
+[[bin]]
+name = "cogentlm-gateway-example"
+path = "src/main.rs"
+
+[features]
+default = ["native"]
+native = ["cogentlm-client/native", "cogentlm-gateway/native"]
+backend-dl = ["cogentlm-gateway/backend-dl"]
+cuda = ["cogentlm-gateway/cuda"]
+metal = ["cogentlm-gateway/metal"]
+vulkan = ["cogentlm-gateway/vulkan"]
+openmp = ["cogentlm-gateway/openmp"]
+
+[dependencies]
+anyhow.workspace = true
+axum = "0.8"
+bytes = "1"
+clap.workspace = true
+cogentlm-client = { workspace = true, default-features = false }
+cogentlm-engine = { workspace = true, default-features = false }
+cogentlm-gateway.workspace = true
+cogentlm-gateway-core.workspace = true
+futures-util = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal"] }

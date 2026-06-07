@@ -312,6 +312,7 @@ dependencies = [
  "cogentlm-client",
  "cogentlm-core",
  "cogentlm-engine",
+ "cogentlm-gateway",
  "cogentlm-shard",
  "futures",
 ]
@@ -323,7 +324,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
- "cogentlm-engine",
+ "cogentlm",
  "serde_json",
 ]
 
@@ -334,10 +335,12 @@ dependencies = [
  "async-trait",
  "cogentlm-core",
  "cogentlm-engine",
- "cogentlm-remote",
+ "cogentlm-providers",
  "futures",
  "futures-channel",
  "futures-core",
+ "reqwest",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -374,40 +377,70 @@ dependencies = [
 name = "cogentlm-gateway"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "clap",
+ "bytes",
+ "cogentlm-client",
  "cogentlm-core",
- "cogentlm-engine",
- "cogentlm-gateway-providers",
- "futures-util",
+ "cogentlm-gateway-core",
+ "http",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "cogentlm-gateway-core"
+version = "0.1.0"
+dependencies = [
+ "cogentlm-client",
+ "cogentlm-core",
+ "futures-util",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "cogentlm-gateway-example"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "cogentlm-client",
+ "cogentlm-engine",
+ "cogentlm-gateway",
+ "cogentlm-gateway-core",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "cogentlm-gateway-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "cogentlm-client",
+ "cogentlm-core",
+ "cogentlm-engine",
+ "cogentlm-gateway",
+ "cogentlm-gateway-core",
+ "futures-util",
+ "http",
+ "serde",
+ "serde_json",
  "tokio",
  "toml",
  "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "wiremock",
-]
-
-[[package]]
-name = "cogentlm-gateway-providers"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "clap",
- "cogentlm-core",
- "futures-util",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
  "wiremock",
 ]
 
@@ -428,6 +461,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "cogentlm-providers"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cogentlm-core",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "cogentlm-py"
 version = "0.1.0"
 dependencies = [
@@ -442,18 +491,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "cogentlm-remote"
+name = "cogentlm-rust-examples"
 version = "0.1.0"
 dependencies = [
- "bytes",
- "cogentlm-core",
- "futures-util",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
+ "cogentlm",
+ "cogentlm-providers",
+ "futures",
  "tokio",
- "wiremock",
 ]
 
 [[package]]
@@ -2468,6 +2512,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2477,12 +2531,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]

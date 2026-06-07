@@ -1,0 +1,19 @@
+{
+  "name": "cogentlm-chat-demo",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "bunx --bun vite",
+    "build": "bunx --bun tsc && bunx --bun vite build",
+    "preview": "bunx --bun vite preview",
+    "test": "bun test chat-state.test.ts"
+  },
+  "dependencies": {
+    "@noumena-labs/cogentlm": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vite": "^5.1.0"
+  }
+}

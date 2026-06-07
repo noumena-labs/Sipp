@@ -186,15 +186,15 @@ They do not call llama.cpp or the CXX bridge directly.
 
 `bindings/node/src/lib.rs` uses napi-rs. The `#[napi]` macros and
 `napi::bindgen_prelude` generate the JavaScript-facing native module surface:
-configuration objects, `CogentEngine`, `ModelService`, gateway remote config
-types, async tasks, event draining, and small backend helpers. Native model
+configuration objects, `CogentEngine`, `ModelService`, explicit gateway
+descriptors, async tasks, event draining, and small backend helpers. Native model
 execution still flows through `cogentlm-engine` and then `native_bridge.rs`.
 
 `bindings/python/src/lib.rs` uses PyO3 and Maturin. The `#[pyclass]`,
 `#[pymethods]`, `#[pyfunction]`, and `#[pymodule]` surfaces mirror the same
 engine concepts for Python. Long-running work releases the GIL with
-`allow_threads`, then maps engine, model, and remote gateway errors into Python
-exceptions.
+`allow_threads`, then maps engine, model, gateway endpoint, and provider errors
+into Python exceptions.
 
 In this repo, "bindgen" usually means these generated host-language binding
 surfaces, especially napi-rs' bindgen prelude. It does not mean generated

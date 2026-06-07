@@ -1,0 +1,801 @@
+import {
+  type CogentClient,
+  type ModelLoadOptions,
+  type ModelSource,
+  type TokenBatch,
+} from '@noumena-labs/cogentlm';
+import type {
+  BenchmarkOperation,
+  BenchmarkRun,
+  BenchmarkTraceReport,
+  BenchmarkTracePhaseRow,
+  GroupResult,
+  GroupSummary,
+  MemorySnapshot,
+  MixedLoadResult,
+  RequestObservability,
+  ScenarioDefinition,
+  ScenarioResult,
+} from './types';
+import { measureAsync, round } from './utils';
+
+type BenchmarkRuntimeOptions = NonNullable<ModelLoadOptions['runtime']>;
+
+export interface ObservedRequestRun {
+  operation: BenchmarkOperation;
+  outputKind: 'text' | 'embedding';
+  output: string;
+  wallMs: number;
+  ttftMs: number | null;
+  tokenTimes: number[];
+  embeddingDimensions: number | null;
+  embeddingPooling: string | null;
+  embeddingNormalized: boolean | null;
+  observability: RequestObservability | null;
+}
+
+export interface BenchmarkTokenObserver {
+  onRunStart?: (label: string) => void;
+  onTokenBatch?: (label: string, batch: TokenBatch) => void;
+}
+
+function summarize(values: number[]) {
+  const sorted = [...values].sort((left, right) => left - right);
+  const total = sorted.reduce((acc, value) => acc + value, 0);
+  const percentileIndex = Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.99) - 1);
+  return {
+    mean: round(total / sorted.length),
+    median: round(sorted[Math.floor(sorted.length / 2)]),
+    p99: round(sorted[percentileIndex]),
+    min: round(sorted[0]),
+    max: round(sorted[sorted.length - 1]),
+  };
+}
+
+function summarizeOptional(values: number[]) {
+  const filtered = values.filter((value) => Number.isFinite(value));
+  return filtered.length === 0 ? null : summarize(filtered);
+}
+
+function averageOptional(values: Array<number | null | undefined>): number | null {
+  const filtered = values.filter((value): value is number => value != null && Number.isFinite(value));
+  if (filtered.length === 0) return null;
+  return round(filtered.reduce((sum, value) => sum + value, 0) / filtered.length);
+}
+
+function cloneRuntimeObservation(
+  observation: RequestObservability | null | undefined
+): RequestObservability | null {
+  if (observation == null) {
+    return null;
+  }
+  return {
+    ...observation,
+    execution: { ...observation.execution },
+  };
+}
+
+function observeSessionCompletion(
+  targetClient: CogentClient,
+  session: string
+): {
+  promise: Promise<RequestObservability | null>;
+  dispose: () => void;
+} {
+  let unsubscribe: (() => void) | null = null;
+
+  const promise = new Promise<RequestObservability | null>((resolve) => {
+    unsubscribe = targetClient.observability.subscribe((event) => {
+      const query = event.snapshot.query;
+      if (query?.session !== session) {
+        return;
+      }
+      if (event.type !== 'query-complete' && event.type !== 'error') {
+        return;
+      }
+      const done = unsubscribe;
+      unsubscribe = null;
+      done?.();
+      resolve(cloneRuntimeObservation(event.snapshot.runtime));
+    });
+  });
+
+  return {
+    promise,
+    dispose: () => {
+      const done = unsubscribe;
+      unsubscribe = null;
+      done?.();
+    },
+  };
+}
+
+function formatEmbeddingPreview(values: readonly number[]): string {
+  const preview = values.slice(0, 8).map((value) => round(value)).join(', ');
+  return `[${preview}${values.length > 8 ? ', ...' : ''}]`;
+}
+
+export async function runObservedRequest(
+  targetClient: CogentClient,
+  prompt: string,
+  options: {
+    operation: BenchmarkOperation;
+    session: string;
+    maxTokens: number;
+    onTokenBatch?: (batch: TokenBatch) => void;
+    emitTokens?: boolean;
+    media?: Uint8Array[];
+  }
+): Promise<ObservedRequestRun> {
+  const start = performance.now();
+  let ttftMs: number | null = null;
+  const tokenTimes: number[] = [];
+  const sessionObserver = observeSessionCompletion(targetClient, options.session);
+  const emitTokens = options.operation !== 'embed' && options.emitTokens === true;
+
+  try {
+    if (options.operation === 'embed') {
+      const embedRun = targetClient.embed(prompt, {
+        contextKey: options.session,
+        normalize: true,
+      });
+      const [result, observability] = await Promise.all([
+        embedRun.response,
+        sessionObserver.promise,
+      ]);
+
+      return {
+        operation: options.operation,
+        outputKind: 'embedding',
+        output: [
+          `dimensions=${result.values.length}`,
+          `pooling=${result.pooling}`,
+          `normalized=${result.normalized}`,
+          formatEmbeddingPreview(result.values),
+        ].join('\n'),
+        wallMs: round(performance.now() - start),
+        ttftMs: null,
+        tokenTimes,
+        embeddingDimensions: result.values.length,
+        embeddingPooling: result.pooling,
+        embeddingNormalized: result.normalized,
+        observability,
+      };
+    }
+
+    const messages = options.media == null
+      ? [{ role: 'user' as const, content: prompt }]
+      : { messages: [{ role: 'user' as const, content: prompt }], media: options.media };
+
+    const requestOptions = {
+      maxTokens: options.maxTokens,
+      session: options.session,
+      emitTokens,
+    };
+    const textRun =
+      options.operation === 'query'
+        ? targetClient.query(
+            options.media == null ? prompt : { prompt, media: options.media },
+            requestOptions
+          )
+        : targetClient.chat(messages, requestOptions);
+    const tokenDrain = !emitTokens
+      ? Promise.resolve()
+      : (async () => {
+          for await (const batch of textRun.tokens) {
+            const elapsed = round(performance.now() - start);
+            const frames = Math.max(1, batch.frameCount);
+            for (let index = 0; index < frames; index += 1) {
+              tokenTimes.push(elapsed);
+              ttftMs ??= elapsed;
+            }
+            options.onTokenBatch?.(batch);
+          }
+        })();
+    const [result, observability] = await Promise.all([
+      textRun.response,
+      sessionObserver.promise,
+      tokenDrain,
+    ]);
+
+    return {
+      operation: options.operation,
+      outputKind: 'text',
+      output: result.text,
+      wallMs: round(performance.now() - start),
+      ttftMs,
+      tokenTimes,
+      embeddingDimensions: null,
+      embeddingPooling: null,
+      embeddingNormalized: null,
+      observability,
+    };
+  } finally {
+    sessionObserver.dispose();
+  }
+}
+
+function summarizeRunGroup(runs: BenchmarkRun[], benchmarkDurationMs: number): GroupSummary {
+  const observations = runs
+    .map((run) => run.observability)
+    .filter((value): value is RequestObservability => value != null);
+
+  const totalInputTokens = runs.reduce(
+    (acc, run) => acc + (run.observability?.inputTokens ?? 0),
+    0
+  );
+  const totalGeneratedTokens = runs.reduce((acc, run) => acc + run.outputTokens, 0);
+  const totalPrefillTokens = runs.reduce(
+    (acc, run) => acc + (run.observability?.prefillTokens ?? 0),
+    0
+  );
+  const benchmarkDurationSeconds = benchmarkDurationMs > 0 ? benchmarkDurationMs / 1000 : 0;
+
+  const decodeTpsValues = observations
+    .map((item) =>
+      item.decodeMs > 0 && item.outputTokens > 0
+        ? (item.outputTokens * 1000) / item.decodeMs
+        : 0
+    )
+    .filter((v) => v > 0);
+  const e2eTpsValues = observations
+    .map((item) =>
+      item.e2eMs > 0 && item.outputTokens > 0
+        ? (item.outputTokens * 1000) / item.e2eMs
+        : 0
+    )
+    .filter((v) => v > 0);
+
+  // Native prefill TPS: prefill_tokens / prefill_ms.
+  // We use a noise floor (min 0.1ms and >=1 token) to avoid astronomical
+  // numbers from zero-token ticks.
+  const prefillTpsValues = observations
+    .map((item) =>
+      item.prefillMs >= 0.1 && item.prefillTokens >= 1
+        ? (item.prefillTokens * 1000) / item.prefillMs
+        : 0
+    )
+    .filter((v) => v > 0);
+
+  return {
+    serving: {
+      successfulRequests: runs.length,
+      benchmarkDurationMs,
+      totalInputTokens,
+      totalGeneratedTokens,
+      totalPrefillTokens,
+      requestThroughputRps:
+        benchmarkDurationSeconds > 0 ? round(runs.length / benchmarkDurationSeconds) : null,
+      outputTokenThroughputTps:
+        benchmarkDurationSeconds > 0 ? round(totalGeneratedTokens / benchmarkDurationSeconds) : null,
+      totalTokenThroughputTps:
+        benchmarkDurationSeconds > 0
+          ? round((totalInputTokens + totalGeneratedTokens) / benchmarkDurationSeconds)
+          : null,
+    },
+    runtime: {
+      ttftMs: summarizeOptional(observations.map((item) => item.ttftMs)),
+      itlAvgMs: summarizeOptional(observations.map((item) => item.itlAvgMs)),
+      itlP99Ms: summarizeOptional(observations.map((item) => item.itlP99Ms)),
+      decodeTps: summarizeOptional(decodeTpsValues),
+      e2eTps: summarizeOptional(e2eTpsValues),
+      prefillTps: summarizeOptional(prefillTpsValues),
+      avgInputTokens: averageOptional(observations.map((item) => item.inputTokens)),
+      avgOutputTokens: averageOptional(observations.map((item) => item.outputTokens)),
+      avgPrefillTokens: averageOptional(observations.map((item) => item.prefillTokens)),
+      avgPrefillMs: averageOptional(observations.map((item) => item.prefillMs)),
+      avgDecodeMs: averageOptional(observations.map((item) => item.decodeMs)),
+      avgNativeGpuMs: averageOptional(observations.map((item) => item.nativeGpuMs)),
+      avgNativeSyncMs: averageOptional(observations.map((item) => item.nativeSyncMs)),
+      avgNativeLogicMs: averageOptional(observations.map((item) => item.nativeLogicMs)),
+      avgCacheHits: averageOptional(observations.map((item) => item.cacheHits)),
+    },
+  };
+}
+
+function createRun(
+  label: string,
+  run: ObservedRequestRun
+): BenchmarkRun {
+  return {
+    label,
+    operation: run.operation,
+    outputKind: run.outputKind,
+    wallMs: run.wallMs,
+    ttftMs: run.observability?.ttftMs ?? null,
+    itlAvgMs: run.observability?.itlAvgMs ?? null,
+    itlP99Ms: run.observability?.itlP99Ms ?? null,
+    decodeTps:
+      (run.observability?.decodeMs ?? 0) > 0 && (run.observability?.outputTokens ?? 0) > 0
+        ? (run.observability!.outputTokens * 1000) / run.observability!.decodeMs
+        : null,
+    e2eTps:
+      (run.observability?.e2eMs ?? 0) > 0 && (run.observability?.outputTokens ?? 0) > 0
+        ? (run.observability!.outputTokens * 1000) / run.observability!.e2eMs
+        : null,
+    inputTokens: run.observability?.inputTokens ?? null,
+    outputTokens: run.observability?.outputTokens ?? run.tokenTimes.length,
+    prefillTokens: run.observability?.prefillTokens ?? null,
+    prefillTps:
+      (run.observability?.prefillMs ?? 0) >= 0.1 && (run.observability?.prefillTokens ?? 0) >= 1
+        ? (run.observability!.prefillTokens * 1000) / run.observability!.prefillMs
+        : null,
+    outputLength: run.output.length,
+    outputPreview: run.output.slice(0, 160).replace(/\s+/g, ' ').trim(),
+    embeddingDimensions: run.embeddingDimensions,
+    embeddingPooling: run.embeddingPooling,
+    embeddingNormalized: run.embeddingNormalized,
+    observability: run.observability,
+  };
+}
+
+export function createGroupResult(
+  id: string,
+  label: string,
+  warmupRuns: number,
+  measuredRuns: number,
+  group: { benchmarkDurationMs: number; runs: BenchmarkRun[]; summary: GroupSummary },
+  expectedCacheSource: RequestObservability['cacheSource'] | null = null
+): GroupResult {
+  const cacheReuseExpected = expectedCacheSource != null;
+  return {
+    id,
+    label,
+    warmupRuns,
+    measuredRuns,
+    cacheReuse: {
+      expected: cacheReuseExpected,
+      expectedSource: expectedCacheSource,
+      invalidRunLabels: invalidCacheReuseRunLabels(group.runs, expectedCacheSource),
+    },
+    benchmarkDurationMs: group.benchmarkDurationMs,
+    runs: group.runs,
+    summary: group.summary,
+  };
+}
+
+function invalidCacheReuseRunLabels(
+  runs: BenchmarkRun[],
+  expectedSource: RequestObservability['cacheSource'] | null
+): string[] {
+  if (expectedSource == null) {
+    return [];
+  }
+  return runs
+    .filter(
+      (run) =>
+        run.observability == null ||
+        run.observability.cacheSource !== expectedSource ||
+        run.observability.cacheHits === 0
+    )
+    .map((run) => run.label);
+}
+
+function repeatedPromptCacheSource(
+  mode: RequestObservability['cacheMode'] | undefined
+): RequestObservability['cacheSource'] | null {
+  if (mode === 'state_snapshot' || mode === 'live_slot_and_snapshot') {
+    return 'snapshot';
+  }
+  return null;
+}
+
+export async function runPromptGroup(
+  targetClient: CogentClient,
+  operation: BenchmarkOperation,
+  groupLabel: string,
+  prompt: string,
+  tokenCount: number,
+  warmupRuns: number,
+  measuredRuns: number,
+  sessionFactory: (index: number) => string,
+  setStatus: (s: string) => void,
+  emitTokens = true,
+  tokenObserver?: BenchmarkTokenObserver
+): Promise<{ benchmarkDurationMs: number; runs: BenchmarkRun[]; summary: GroupSummary }> {
+  for (let i = 0; i < warmupRuns; i++) {
+    setStatus(`${groupLabel}: warmup ${i + 1}/${warmupRuns}`);
+    await runObservedRequest(targetClient, prompt, {
+      operation,
+      maxTokens: tokenCount,
+      session: sessionFactory(i),
+      emitTokens,
+      onTokenBatch: emitTokens && operation !== 'embed' ? () => {} : undefined,
+    });
+  }
+
+  const runs: BenchmarkRun[] = [];
+  const benchmarkStart = performance.now();
+  for (let i = 0; i < measuredRuns; i++) {
+    const runLabel = `${groupLabel}-${i + 1}`;
+    setStatus(`${groupLabel}: run ${i + 1}/${measuredRuns}`);
+    tokenObserver?.onRunStart?.(runLabel);
+    const run = await runObservedRequest(targetClient, prompt, {
+      operation,
+      maxTokens: tokenCount,
+      session: sessionFactory(i + warmupRuns),
+      emitTokens,
+      onTokenBatch:
+        tokenObserver?.onTokenBatch == null
+          ? undefined
+          : (batch) => tokenObserver.onTokenBatch?.(runLabel, batch),
+    });
+    runs.push(createRun(runLabel, run));
+  }
+
+  const benchmarkDurationMs = round(performance.now() - benchmarkStart);
+  return {
+    benchmarkDurationMs,
+    runs,
+    summary: summarizeRunGroup(runs, benchmarkDurationMs),
+  };
+}
+
+export async function runScenarioBenchmark(
+  targetClient: CogentClient,
+  operation: BenchmarkOperation,
+  scenario: ScenarioDefinition,
+  modelSource: ModelSource,
+  warmupRuns: number,
+  measuredRuns: number,
+  runtime: BenchmarkRuntimeOptions,
+  setStatus: (s: string) => void,
+  alreadyLoaded?: boolean,
+  emitTokens = true,
+  tokenObserver?: BenchmarkTokenObserver
+): Promise<ScenarioResult> {
+  let loadRuntimeMs = 0;
+  if (!alreadyLoaded) {
+    setStatus(`${scenario.label}: loading model...`);
+    const measured = await measureAsync(() =>
+      targetClient.add('playground-local', {
+        kind: 'local',
+        source: modelSource,
+        options: { runtime, observability: 'profile' },
+      })
+    );
+    loadRuntimeMs = measured.ms;
+  }
+
+  const coldPrompt = await runPromptGroup(
+    targetClient,
+    operation,
+    `${scenario.label}: cold prompt`,
+    scenario.prompt,
+    scenario.outputTokenLimit,
+    0,
+    1,
+    () => `${scenario.id}-cold`,
+    setStatus,
+    emitTokens,
+    tokenObserver
+  );
+  const hotFreshContext = await runPromptGroup(
+    targetClient,
+    operation,
+    `${scenario.label}: hot fresh context`,
+    scenario.prompt,
+    scenario.outputTokenLimit,
+    warmupRuns,
+    measuredRuns,
+    (index) => `${scenario.id}-fresh-${index}`,
+    setStatus,
+    emitTokens,
+    tokenObserver
+  );
+  const repeatedPrompt = await runPromptGroup(
+    targetClient,
+    operation,
+    `${scenario.label}: repeated prompt`,
+    scenario.prompt,
+    scenario.outputTokenLimit,
+    warmupRuns,
+    measuredRuns,
+    () => `${scenario.id}-reuse`,
+    setStatus,
+    emitTokens,
+    tokenObserver
+  );
+  const expectedRepeatedPromptSource =
+    operation === 'embed' ? null : repeatedPromptCacheSource(runtime.cache?.mode);
+
+  return {
+    definition: scenario,
+    runtime: { loadRuntimeMs },
+    coldPrompt: createGroupResult('coldPrompt', 'Cold Prompt', 0, 1, coldPrompt),
+    hotFreshContext: createGroupResult('hotFreshContext', 'Hot Prompt: Fresh Context', warmupRuns, measuredRuns, hotFreshContext),
+    repeatedPrompt: createGroupResult(
+      'repeatedPrompt',
+      'Repeated Prompt',
+      warmupRuns,
+      measuredRuns,
+      repeatedPrompt,
+      expectedRepeatedPromptSource
+    ),
+  };
+}
+
+export async function captureBrowserMemorySnapshot(
+  label: string,
+  includeDetailed?: boolean
+): Promise<MemorySnapshot> {
+  const snapshot: MemorySnapshot = {
+    label,
+    capturedAt: new Date().toISOString(),
+    source: 'unavailable',
+    usedJsHeapBytes: null,
+    totalJsHeapBytes: null,
+    jsHeapLimitBytes: null,
+    userAgentBytes: null,
+    error: null,
+  };
+
+  if (typeof performance !== 'undefined' && 'memory' in performance) {
+    const memory = (performance as Performance & {
+      memory?: { usedJSHeapSize?: number; totalJSHeapSize?: number; jsHeapSizeLimit?: number };
+    }).memory;
+    snapshot.source = 'performance.memory';
+    snapshot.usedJsHeapBytes = memory?.usedJSHeapSize ?? null;
+    snapshot.totalJsHeapBytes = memory?.totalJSHeapSize ?? null;
+    snapshot.jsHeapLimitBytes = memory?.jsHeapSizeLimit ?? null;
+  }
+
+  const detailedMemory = performance as Performance & {
+    measureUserAgentSpecificMemory?: () => Promise<{ bytes?: number }>;
+  };
+  if (includeDetailed && typeof detailedMemory.measureUserAgentSpecificMemory === 'function') {
+    try {
+      const uaMemory = await detailedMemory.measureUserAgentSpecificMemory();
+      snapshot.userAgentBytes = uaMemory.bytes ?? null;
+      snapshot.source =
+        snapshot.source === 'performance.memory'
+          ? 'performance.memory + measureUserAgentSpecificMemory'
+          : 'measureUserAgentSpecificMemory';
+    } catch (error) {
+      snapshot.error = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  return snapshot;
+}
+
+export function supportsConcurrentQueryApi(targetClient: CogentClient | null): boolean {
+  return targetClient != null;
+}
+
+export async function runMixedLoadBenchmark(
+  targetClient: CogentClient,
+  operation: Exclude<BenchmarkOperation, 'embed'>,
+  definition: import('./types').MixedLoadDefinition,
+  modelSource: ModelSource,
+  warmupRuns: number,
+  measuredRuns: number,
+  runtime: BenchmarkRuntimeOptions,
+  setStatus: (s: string) => void,
+  alreadyLoaded?: boolean,
+  emitTokens = true,
+  tokenObserver?: BenchmarkTokenObserver
+): Promise<import('./types').MixedLoadResult> {
+  let loadRuntimeMs = 0;
+  if (!alreadyLoaded) {
+    const measured = await measureAsync(() =>
+      targetClient.add('playground-local', {
+        kind: 'local',
+        source: modelSource,
+        options: { runtime, observability: 'profile' },
+      })
+    );
+    loadRuntimeMs = measured.ms;
+  }
+
+  for (let i = 0; i < warmupRuns; i++) {
+    setStatus(`${definition.label}: warmup ${i + 1}/${warmupRuns}`);
+    await Promise.all([
+      runObservedRequest(targetClient, definition.background.prompt, {
+        operation,
+        maxTokens: definition.background.outputTokenLimit,
+        session: `${definition.background.id}-warmup-${i}`,
+        emitTokens,
+      }),
+      runObservedRequest(targetClient, definition.foreground.prompt, {
+        operation,
+        maxTokens: definition.foreground.outputTokenLimit,
+        session: `${definition.foreground.id}-warmup-${i}`,
+        emitTokens,
+      }),
+    ]);
+  }
+
+  const foregroundRuns: BenchmarkRun[] = [];
+  const backgroundRuns: BenchmarkRun[] = [];
+  const benchmarkStart = performance.now();
+  for (let i = 0; i < measuredRuns; i++) {
+    setStatus(`${definition.label}: run ${i + 1}/${measuredRuns}`);
+    const backgroundLabel = `${definition.id}-background-${i + 1}`;
+    const foregroundLabel = `${definition.id}-foreground-${i + 1}`;
+    tokenObserver?.onRunStart?.(backgroundLabel);
+    tokenObserver?.onRunStart?.(foregroundLabel);
+    const [backgroundRun, foregroundRun] = await Promise.all([
+      runObservedRequest(targetClient, definition.background.prompt, {
+        operation,
+        maxTokens: definition.background.outputTokenLimit,
+        session: `${definition.background.id}-mixed-${i}`,
+        emitTokens,
+        onTokenBatch:
+          tokenObserver?.onTokenBatch == null
+            ? undefined
+            : (batch) => tokenObserver.onTokenBatch?.(backgroundLabel, batch),
+      }),
+      runObservedRequest(targetClient, definition.foreground.prompt, {
+        operation,
+        maxTokens: definition.foreground.outputTokenLimit,
+        session: `${definition.foreground.id}-mixed-${i}`,
+        emitTokens,
+        onTokenBatch:
+          tokenObserver?.onTokenBatch == null
+            ? undefined
+            : (batch) => tokenObserver.onTokenBatch?.(foregroundLabel, batch),
+      }),
+    ]);
+    backgroundRuns.push(createRun(backgroundLabel, backgroundRun));
+    foregroundRuns.push(createRun(foregroundLabel, foregroundRun));
+  }
+
+  const benchmarkDurationMs = round(performance.now() - benchmarkStart);
+  return {
+    definition,
+    runtime: { loadRuntimeMs },
+    foreground: createGroupResult('foreground', `${definition.foreground.label} Under Mixed Load`, warmupRuns, measuredRuns, {
+      benchmarkDurationMs,
+      runs: foregroundRuns,
+      summary: summarizeRunGroup(foregroundRuns, benchmarkDurationMs),
+    }),
+    background: createGroupResult('background', `${definition.background.label} Under Mixed Load`, warmupRuns, measuredRuns, {
+      benchmarkDurationMs,
+      runs: backgroundRuns,
+      summary: summarizeRunGroup(backgroundRuns, benchmarkDurationMs),
+    }),
+  };
+}
+
+function collectGroupLogs(
+  scenarioId: string,
+  scenarioLabel: string,
+  group: GroupResult
+): BenchmarkTraceReport['logs'] {
+  return group.runs.map((run) => ({
+    scenarioId,
+    scenarioLabel,
+    groupId: group.id,
+    groupLabel: group.label,
+    runLabel: run.label,
+    operation: run.operation,
+    outputKind: run.outputKind,
+    wallMs: run.wallMs,
+    inputTokens: run.inputTokens,
+    outputTokens: run.outputTokens,
+    prefillTokens: run.prefillTokens,
+    cacheMode: run.observability?.cacheMode ?? null,
+    cacheSource: run.observability?.cacheSource ?? null,
+    cacheHits: run.observability?.cacheHits ?? null,
+    embeddingDimensions: run.embeddingDimensions,
+    observability: run.observability,
+  }));
+}
+
+function tracePhaseRow(log: BenchmarkTraceReport['logs'][number]): BenchmarkTracePhaseRow {
+  const metrics = log.observability;
+  const tokenPath = metrics?.execution.tokenPath ?? 'none';
+  return {
+    scenario: log.scenarioLabel,
+    group: log.groupLabel,
+    run: log.runLabel,
+    tokenPath,
+    inputTokens: log.inputTokens,
+    outputTokens: log.outputTokens,
+    prefillTokens: log.prefillTokens,
+    cacheMode: log.cacheMode,
+    cacheSource: log.cacheSource,
+    cacheHits: log.cacheHits,
+    decodeTps:
+      metrics != null && metrics.decodeMs > 0 && metrics.outputTokens > 0
+        ? round((metrics.outputTokens * 1000) / metrics.decodeMs)
+        : null,
+    e2eTps:
+      metrics != null && metrics.e2eMs > 0 && metrics.outputTokens > 0
+        ? round((metrics.outputTokens * 1000) / metrics.e2eMs)
+        : null,
+    prefillMs: metrics == null ? null : round(metrics.prefillMs),
+    decodeMs: metrics == null ? null : round(metrics.decodeMs),
+    e2eMs: metrics == null ? null : round(metrics.e2eMs),
+    nativeGpuMs: metrics == null ? null : round(metrics.nativeGpuMs),
+    nativeSyncMs: metrics == null ? null : round(metrics.nativeSyncMs),
+    nativeLogicMs: metrics == null ? null : round(metrics.nativeLogicMs),
+    jsTokenDrainMs:
+      tokenPath === 'token-stream' && metrics?.jsTokenDrainMs != null
+        ? round(metrics.jsTokenDrainMs)
+        : null,
+    jsTokenDrainCalls:
+      tokenPath === 'token-stream'
+        ? metrics?.jsTokenDrainCalls ?? null
+        : null,
+  };
+}
+
+export function buildBenchmarkTraceReport(
+  scenarios: ScenarioResult[],
+  mixedLoad: MixedLoadResult | null
+): BenchmarkTraceReport {
+  const logs: BenchmarkTraceReport['logs'] = [];
+  for (const scenario of scenarios) {
+    logs.push(
+      ...collectGroupLogs(
+        scenario.definition.id,
+        scenario.definition.label,
+        scenario.coldPrompt
+      ),
+      ...collectGroupLogs(
+        scenario.definition.id,
+        scenario.definition.label,
+        scenario.hotFreshContext
+      ),
+      ...collectGroupLogs(
+        scenario.definition.id,
+        scenario.definition.label,
+        scenario.repeatedPrompt
+      )
+    );
+  }
+  if (mixedLoad?.foreground != null) {
+    logs.push(
+      ...collectGroupLogs(
+        mixedLoad.definition.id,
+        mixedLoad.definition.label,
+        mixedLoad.foreground
+      )
+    );
+  }
+  if (mixedLoad?.background != null) {
+    logs.push(
+      ...collectGroupLogs(
+        mixedLoad.definition.id,
+        mixedLoad.definition.label,
+        mixedLoad.background
+      )
+    );
+  }
+
+  const observations = logs
+    .map((log) => log.observability)
+    .filter((value): value is RequestObservability => value != null);
+
+  const decodeTpsValues = observations
+    .map((item) =>
+      item.decodeMs > 0 && item.outputTokens > 0
+        ? (item.outputTokens * 1000) / item.decodeMs
+        : 0
+    )
+    .filter((v) => v > 0);
+  const e2eTpsValues = observations
+    .map((item) =>
+      item.e2eMs > 0 && item.outputTokens > 0
+        ? (item.outputTokens * 1000) / item.e2eMs
+        : 0
+    )
+    .filter((v) => v > 0);
+
+  return {
+    runCount: logs.length,
+    logs,
+    rows: logs.map(tracePhaseRow),
+    analysis: {
+      ttftMs: summarizeOptional(observations.map((item) => item.ttftMs)),
+      itlAvgMs: summarizeOptional(observations.map((item) => item.itlAvgMs)),
+      itlP99Ms: summarizeOptional(observations.map((item) => item.itlP99Ms)),
+      decodeTps: summarizeOptional(decodeTpsValues),
+      e2eTps: summarizeOptional(e2eTpsValues),
+    },
+  };
+}
+
+export type { RequestObservability };

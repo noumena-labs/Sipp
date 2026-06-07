@@ -1,9 +1,9 @@
 use thiserror::Error;
 
-#[cfg(feature = "remote")]
-use cogentlm_remote::{GatewayError, GatewayErrorKind};
-
+use crate::CogentCancellationReason;
 use crate::EndpointRef;
+#[cfg(feature = "providers")]
+use cogentlm_providers::{ProviderError, ProviderErrorKind};
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -20,36 +20,71 @@ mod error_tests;
 /// Result type used by the unified facade.
 pub type CogentResult<T> = Result<T, CogentError>;
 
-/// Classification for remote execution failures.
-#[cfg(feature = "remote")]
+/// Structured error returned by a gateway endpoint.
+#[derive(Debug, Clone, Error)]
+#[error("endpoint error ({kind}): {message}")]
+pub struct EndpointError {
+    /// Endpoint-defined stable error classification.
+    pub kind: String,
+    /// Transport status code when the endpoint returned one.
+    pub status: Option<u16>,
+    /// Endpoint-specific error code when available.
+    pub code: Option<String>,
+    /// Human-readable error message.
+    pub message: String,
+    /// Retry delay returned by the endpoint.
+    pub retry_after: Option<std::time::Duration>,
+    /// Upstream request id when available.
+    pub request_id: Option<String>,
+    /// Raw endpoint error payload when available.
+    pub raw: Option<Box<serde_json::Value>>,
+}
+
+impl EndpointError {
+    /// Create an endpoint error with no optional transport metadata.
+    pub fn new(kind: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            status: None,
+            code: None,
+            message: message.into(),
+            retry_after: None,
+            request_id: None,
+            raw: None,
+        }
+    }
+}
+
+/// Classification for direct provider execution failures.
+#[cfg(feature = "providers")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteErrorKind {
+pub enum ProviderEndpointErrorKind {
     /// Authentication failed.
     Authentication,
     /// Authorization failed after authentication.
     Authorization,
-    /// The remote service rate limited the request.
+    /// The provider rate limited the request.
     RateLimited,
-    /// The remote account quota is exhausted.
+    /// The provider account quota is exhausted.
     QuotaExceeded,
-    /// The request is invalid for the remote service.
+    /// The request is invalid for the provider.
     InvalidRequest,
-    /// The requested feature is not supported by the remote service.
+    /// The requested feature is not supported by the provider.
     UnsupportedFeature,
-    /// The requested model was not found by the remote service.
+    /// The requested model was not found by the provider.
     ModelNotFound,
-    /// The remote request timed out.
+    /// The provider request timed out.
     Timeout,
-    /// The remote service is overloaded.
+    /// The provider service is overloaded.
     Overloaded,
     /// Network or protocol transport failed.
     Transport,
-    /// Remote service returned an unclassified API error.
-    Remote,
+    /// Provider returned an unclassified API error.
+    Provider,
 }
 
-#[cfg(feature = "remote")]
-impl RemoteErrorKind {
+#[cfg(feature = "providers")]
+impl ProviderEndpointErrorKind {
     /// Stable string used by bindings and diagnostics.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -63,38 +98,45 @@ impl RemoteErrorKind {
             Self::Timeout => "timeout",
             Self::Overloaded => "overloaded",
             Self::Transport => "transport",
-            Self::Remote => "remote",
+            Self::Provider => "provider",
         }
     }
 }
 
-/// Structured error returned by remote endpoints.
-#[cfg(feature = "remote")]
+/// Structured error returned by direct provider endpoints.
+#[cfg(feature = "providers")]
 #[derive(Debug, Clone, Error)]
-#[error("remote gateway error ({}): {message}", kind.as_str())]
-pub struct RemoteError {
+#[error("provider error ({} {provider}): {message}", kind.as_str())]
+pub struct ProviderEndpointError {
     /// Error classification.
-    pub kind: RemoteErrorKind,
-    /// HTTP status code when the remote returned one.
+    pub kind: ProviderEndpointErrorKind,
+    /// Provider label.
+    pub provider: String,
+    /// HTTP status code when the provider returned one.
     pub status: Option<u16>,
-    /// Remote service-specific error code when available.
+    /// Provider-specific error code when available.
     pub code: Option<String>,
-    /// Human-readable error message.
+    /// Human-readable error message with configured secrets redacted.
     pub message: String,
-    /// Retry delay returned by the remote service.
+    /// Retry delay returned by the provider.
     pub retry_after: Option<std::time::Duration>,
-    /// Remote request id when available.
+    /// Provider request id when available.
     pub request_id: Option<String>,
-    /// Raw remote error payload when available.
+    /// Raw provider error payload with configured secrets redacted.
     pub raw: Option<Box<serde_json::Value>>,
 }
 
-#[cfg(feature = "remote")]
-impl RemoteError {
-    /// Create a remote error with no optional transport metadata.
-    pub fn new(kind: RemoteErrorKind, message: impl Into<String>) -> Self {
+#[cfg(feature = "providers")]
+impl ProviderEndpointError {
+    /// Create a provider error with no optional transport metadata.
+    pub fn new(
+        kind: ProviderEndpointErrorKind,
+        provider: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             kind,
+            provider: provider.into(),
             status: None,
             code: None,
             message: message.into(),
@@ -103,39 +145,34 @@ impl RemoteError {
             raw: None,
         }
     }
-}
 
-#[cfg(feature = "remote")]
-impl From<GatewayError> for RemoteError {
-    fn from(error: GatewayError) -> Self {
+    pub(crate) fn from_provider_error(error: ProviderError, secrets: &[String]) -> Self {
         Self {
             kind: match error.kind {
-                GatewayErrorKind::Authentication => RemoteErrorKind::Authentication,
-                GatewayErrorKind::Authorization => RemoteErrorKind::Authorization,
-                GatewayErrorKind::RateLimited => RemoteErrorKind::RateLimited,
-                GatewayErrorKind::QuotaExceeded => RemoteErrorKind::QuotaExceeded,
-                GatewayErrorKind::InvalidRequest => RemoteErrorKind::InvalidRequest,
-                GatewayErrorKind::UnsupportedFeature => RemoteErrorKind::UnsupportedFeature,
-                GatewayErrorKind::ModelNotFound => RemoteErrorKind::ModelNotFound,
-                GatewayErrorKind::Timeout => RemoteErrorKind::Timeout,
-                GatewayErrorKind::Overloaded => RemoteErrorKind::Overloaded,
-                GatewayErrorKind::Transport => RemoteErrorKind::Transport,
-                GatewayErrorKind::Gateway => RemoteErrorKind::Remote,
+                ProviderErrorKind::Authentication => ProviderEndpointErrorKind::Authentication,
+                ProviderErrorKind::Authorization => ProviderEndpointErrorKind::Authorization,
+                ProviderErrorKind::RateLimited => ProviderEndpointErrorKind::RateLimited,
+                ProviderErrorKind::QuotaExceeded => ProviderEndpointErrorKind::QuotaExceeded,
+                ProviderErrorKind::InvalidRequest => ProviderEndpointErrorKind::InvalidRequest,
+                ProviderErrorKind::UnsupportedFeature => {
+                    ProviderEndpointErrorKind::UnsupportedFeature
+                }
+                ProviderErrorKind::ModelNotFound => ProviderEndpointErrorKind::ModelNotFound,
+                ProviderErrorKind::Timeout => ProviderEndpointErrorKind::Timeout,
+                ProviderErrorKind::Overloaded => ProviderEndpointErrorKind::Overloaded,
+                ProviderErrorKind::Transport => ProviderEndpointErrorKind::Transport,
+                ProviderErrorKind::Provider => ProviderEndpointErrorKind::Provider,
             },
+            provider: error.provider.as_str().to_string(),
             status: error.status,
-            code: error.code,
-            message: error.message,
+            code: error.code.map(|value| redact_string(value, secrets)),
+            message: redact_string(error.message, secrets),
             retry_after: error.retry_after,
-            request_id: error.request_id,
-            raw: error.raw,
+            request_id: error.request_id.map(|value| redact_string(value, secrets)),
+            raw: error
+                .raw
+                .map(|value| Box::new(redact_json_value(*value, secrets))),
         }
-    }
-}
-
-#[cfg(feature = "remote")]
-impl From<GatewayError> for CogentError {
-    fn from(error: GatewayError) -> Self {
-        Self::Remote(RemoteError::from(error))
     }
 }
 
@@ -146,10 +183,21 @@ pub enum CogentError {
     #[error(transparent)]
     Local(#[from] cogentlm_engine::Error),
 
-    /// Remote endpoint error.
-    #[cfg(feature = "remote")]
+    /// Gateway endpoint error.
     #[error(transparent)]
-    Remote(RemoteError),
+    Endpoint(EndpointError),
+
+    /// Direct provider endpoint error.
+    #[cfg(feature = "providers")]
+    #[error(transparent)]
+    Provider(ProviderEndpointError),
+
+    /// The caller cancelled an in-flight request.
+    #[error("request cancelled ({})", reason.as_str())]
+    Cancelled {
+        /// Stable cancellation classification.
+        reason: CogentCancellationReason,
+    },
 
     /// Internal client error.
     #[error("internal facade error: {0}")]
@@ -185,4 +233,37 @@ pub enum CogentError {
     /// Request validation failed before execution.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+}
+
+#[cfg(feature = "providers")]
+fn redact_string(mut value: String, secrets: &[String]) -> String {
+    for secret in secrets {
+        if secret.is_empty() {
+            continue;
+        }
+        value = value.replace(secret, "[redacted]");
+    }
+    value
+}
+
+#[cfg(feature = "providers")]
+fn redact_json_value(value: serde_json::Value, secrets: &[String]) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(value) => {
+            serde_json::Value::String(redact_string(value, secrets))
+        }
+        serde_json::Value::Array(values) => serde_json::Value::Array(
+            values
+                .into_iter()
+                .map(|value| redact_json_value(value, secrets))
+                .collect(),
+        ),
+        serde_json::Value::Object(values) => serde_json::Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, redact_json_value(value, secrets)))
+                .collect(),
+        ),
+        value => value,
+    }
 }

@@ -11,5 +11,24 @@ Python, and Rust applications.
 * `@noumena-labs/cogentlm-server`: internal Node.js server package on GitHub Packages.
 * `cogentlm`: Python package name on PyPI.
 
+## Repository Layout
+
+* `lib/rust`: Rust facade crate.
+* `lib/python`: Python package source and packaging metadata.
+* `bindings/node`, `bindings/python`, `bindings/wasm`: Rust FFI build code.
+* `lib/web`: browser package source for `@noumena-labs/cogentlm`.
+* `lib/node`: Node package source for `@noumena-labs/cogentlm-server`.
+* `crates/gateway-core`: protocol-neutral inference pipeline primitives.
+* `lib/gateway`: route-free HTTP codec, error, SSE, and policy helpers.
+* `examples/gateway`: explicit Axum route handlers calling `CogentClient`.
+* `apps/gateway-server`: opinionated first-party gateway application.
+* `demos`: browser demos, served with `cargo xtask run demos serve chat`.
+* `tools/playground`: browser runtime playground and diagnostics tool, served with `cargo xtask run tools serve playground`.
+* `examples/node`, `examples/python`, `examples/rust`, `examples/web`: runnable examples; serve browser examples with `cargo xtask run examples serve browser`; see `examples/README.md`.
+
 Use `cargo xtask` commands from this repository to build native artifacts and
-language packages.
+language packages. After running `source setup.sh`, use `clm` as the short
+repo-local alias for `cargo xtask`.
+
+Gateway architecture and deployment guidance are in
+[`docs/gateway.md`](docs/gateway.md).

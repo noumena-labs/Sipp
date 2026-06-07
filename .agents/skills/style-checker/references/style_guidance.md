@@ -9,6 +9,8 @@ Agents and developers must follow these rules when generating code, reviewing ch
 * Prefer clear, boring, maintainable code over clever abstractions.
 * Keep changes small, focused, and reviewable.
 * Match existing local conventions before introducing new patterns.
+* Use the language's established community style as the default when this guide
+  does not state a stricter CogentLM rule.
 * Treat public APIs, exported types, CLI flags, config formats, and serialized data as compatibility surfaces.
 * Add tests for behavior changes and bug fixes.
 * Avoid unrelated formatting, refactors, or dependency changes.
@@ -18,6 +20,13 @@ Agents and developers must follow these rules when generating code, reviewing ch
 ---
 
 ## Rust Guidelines
+
+Rust code should follow the default Rust style described by the official
+[Rust Style Guide](https://doc.rust-lang.org/style-guide/index.html), with
+`rustfmt` defaults treated as the mechanical formatter of record. Public Rust
+APIs should also follow the documentation expectations from the
+[Rust API Guidelines](https://rust-lang.github.io/api-guidelines/documentation.html)
+unless a local CogentLM rule below is stricter.
 
 ### 1. Error Handling
 
@@ -63,7 +72,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #### Binaries, examples, and scripts
 
-For binaries and developer tooling such as `crates/cli`, `crates/xtask`, examples, and one-off migration scripts:
+For binaries and developer tooling such as `apps/cli`, `xtask`, examples, and one-off migration scripts:
 
 * `anyhow::Result` is allowed.
 * Prefer `anyhow::Context` for user-facing failure messages.
@@ -79,11 +88,25 @@ For binaries and developer tooling such as `crates/cli`, `crates/xtask`, example
 
 ### 3. Documentation
 
-* Use `//!` at the top of every `lib.rs` to describe the crate’s purpose and role in the workspace.
+* Use `//!` at the top of every `lib.rs` to describe the crate's purpose and role in the workspace.
 * Use `///` for public structs, enums, traits, functions, modules, and important associated items.
 * Include rustdoc examples for public APIs where usage is not obvious.
 * Keep examples compilable when practical.
 * Document safety invariants on every `unsafe` function or block.
+* Use `//!` only for crate-level and module-level documentation; use outer
+  `///` rustdoc comments for public items.
+* Put rustdoc comments before attributes such as `#[derive(...)]`, `#[napi]`,
+  and `#[pyclass]`.
+* Prefer line doc comments (`///`) over block doc comments (`/** ... */`).
+* Write rustdoc summaries as complete sentence-style prose: start with a
+  capital letter and end with punctuation.
+* Keep standalone comment and doc-comment lines readable; prefer wrapping near
+  the Rust style guide's 80-character comment recommendation and never exceed
+  the normal formatted line width unless a URL or generated value requires it.
+* Use `?` in fallible rustdoc examples instead of `unwrap()` or `expect()`.
+* Document `# Errors`, `# Panics`, and `# Safety` sections when the API can
+  return errors, panic for caller-controlled reasons, or requires unsafe
+  invariants.
 
 Example:
 
@@ -151,6 +174,12 @@ mod error_tests;
 
 ## TypeScript and JavaScript Guidelines
 
+TypeScript source should follow the project `tsconfig` settings and the
+[Google TypeScript Style Guide](https://google.github.io/styleguide/tsguide.html)
+where this guide is silent. JavaScript runtime shims should follow the
+[Google JavaScript Style Guide](https://google.github.io/styleguide/jsguide.html)
+where it does not conflict with the existing package style.
+
 ### 1. Strict Typing and NodeNext Modules
 
 The project targets `NodeNext` and `ES2022`.
@@ -201,10 +230,20 @@ export interface RuntimeOptions {
 * Prefer discriminated unions for structured variants.
 * Validate untrusted inputs at boundaries.
 
-### 4. JSDoc and Comments
+### 4. JSDoc, TSDoc, and Comments
 
-* Use JSDoc block comments for exported interfaces, classes, functions, and complex behavior.
-* Explain why code exists, not what each obvious line does.
+* Use `/** ... */` JSDoc/TSDoc comments for public exports and other
+  documentation intended for package users or editor/documentation tooling.
+* Use `//` line comments for implementation notes intended only for maintainers.
+* Avoid ordinary `/* ... */` block comments for implementation notes; prefer
+  multiple `//` lines for multi-line implementation comments.
+* Do not use decorative boxed comments for new TypeScript or JavaScript code.
+* Explain why code exists, what inputs are valid, what the output means, and
+  important side effects or failure modes. Do not restate types that TypeScript
+  already expresses.
+* Use Markdown inside JSDoc/TSDoc when structure is needed.
+* Keep declaration comments aligned between source TypeScript, generated
+  declaration files, and hand-maintained Node `.d.ts` files.
 * Do not leave dead code or commented-out blocks.
 * Keep TODO comments actionable and attributable when possible.
 
@@ -232,6 +271,10 @@ export function createRuntime(options: RuntimeOptions): AgentRuntime {
 ## Python Guidelines
 
 Python may be used for bindings, tooling, tests, examples, packaging, or data-processing utilities.
+
+Python code should follow [PEP 8](https://peps.python.org/pep-0008/) where
+this guide is silent. Public docstrings should follow
+[PEP 257](https://peps.python.org/pep-0257/).
 
 ### 1. Typing
 
@@ -266,6 +309,20 @@ def read_config(path: Path) -> str:
     """Read a UTF-8 configuration file."""
     return path.read_text(encoding="utf-8")
 ```
+
+### 4. Docstrings
+
+* Use triple double-quoted docstrings for public modules, classes, functions,
+  constructors, and public methods.
+* Use one-line docstrings only for obvious APIs that fit naturally on one line;
+  otherwise use a summary line, a blank line, and concise detail.
+* Phrase one-line docstrings as an imperative or effect summary such as
+  "Return the active backend name."
+* Do not repeat the signature in the docstring when type annotations or native
+  binding signatures already expose it.
+* Document arguments, return values, raised exceptions, side effects,
+  environment variables, and call-order restrictions when they matter to a
+  package user.
 
 ---
 
@@ -417,18 +474,21 @@ The repository is organized by responsibility:
 
 * `crates/`: Core Rust implementation.
 * `bindings/`: FFI and language bindings such as Node, Python, and WASM.
-* `packages/`: NPM packages intended for distribution, such as browser or runtime packages.
-* `apps/`: Applications, examples, demos, and benchmarks using the engine.
+* `apps/`: First-party applications such as the Rust CLI.
+* `demos/`: Browser demos using the public browser package.
+* `tools/`: Developer tools such as the browser playground.
+* `examples/`: Runnable onboarding examples for public package surfaces.
+* `lib/`: Public facade and language/runtime package source, including Rust, Python, Node, and browser packages.
 * `docs/`: User-facing and contributor-facing documentation.
-* `crates/xtask/`: Developer automation and repository maintenance tooling.
+* `xtask/`: Developer automation and repository maintenance tooling.
 * `.agents/skills/`: Agent skills and repository-specific agent guidance.
 
 ### Boundaries
 
-* Core engine behavior belongs in `crates/`, not duplicated in bindings or apps.
+* Core engine behavior belongs in `crates/`, not duplicated in bindings, demos, or apps.
 * Bindings should be thin layers over stable core APIs.
-* Packages should expose polished public APIs, not internal engine details.
-* Apps may compose packages and crates but should not become hidden libraries.
+* Public library packages should expose polished public APIs, not internal engine details.
+* Demos and apps may compose packages and crates but should not become hidden libraries.
 * Shared test fixtures should be placed where all relevant languages can consume them without circular dependencies.
 
 ---

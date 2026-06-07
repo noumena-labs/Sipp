@@ -1,0 +1,28 @@
+{
+  "name": "cogentlm-browser-playground",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "bunx --bun vite",
+    "build": "bunx --bun vite build",
+    "preview": "bunx --bun vite preview",
+    "browser:smoke": "node ./scripts/playground-runtime-smoke.mjs",
+    "browser:smoke:ingest": "node ./scripts/playground-runtime-smoke.mjs --require-rust-browser-engine --require-gguf-ingest"
+  },
+  "dependencies": {
+    "@noumena-labs/cogentlm": "workspace:*",
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "scheduler": "^0.27.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.3",
+    "playwright-core": "^1.54.2",
+    "typescript": "^6.0.2",
+    "vite": "^5.4.0"
+  }
+}

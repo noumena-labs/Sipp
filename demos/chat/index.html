@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#f4f6f7">
+    <title>CogentLM Chat</title>
+    <link rel="stylesheet" href="/src/style.css">
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">C</span>
+          <div>
+            <strong>CogentLM</strong>
+            <span>WebGPU Chat</span>
+          </div>
+        </div>
+
+        <button id="model-button" class="model-button" type="button">
+          <span>
+            <span class="control-label">Model</span>
+            <strong id="model-name">Choose model</strong>
+          </span>
+          <span id="model-capability" class="capability-badge text" hidden>Text</span>
+        </button>
+
+        <div class="topbar-actions">
+          <div class="runtime-status" aria-live="polite">
+            <span id="status-dot" class="status-dot idle"></span>
+            <span id="status-text">No model loaded</span>
+          </div>
+          <button id="new-chat-button" class="button secondary" type="button" disabled>
+            New chat
+          </button>
+          <button id="settings-button" class="button secondary" type="button" disabled>
+            Settings
+          </button>
+        </div>
+      </header>
+
+      <main class="chat-layout">
+        <section class="chat-surface" aria-label="Chat">
+          <div class="metrics-bar">
+            <div>
+              <span>Backend</span>
+              <strong id="backend-value">--</strong>
+            </div>
+            <div>
+              <span>Decode</span>
+              <strong id="throughput-value">--</strong>
+            </div>
+          </div>
+
+          <div id="empty-state" class="empty-state">
+            <div class="empty-mark" aria-hidden="true">C</div>
+            <h1>Start a conversation</h1>
+            <p id="empty-model-name">Load a local model</p>
+            <div class="topic-grid" aria-label="Example topics">
+              <button
+                type="button"
+                data-topic="Explain how WebGPU accelerates local language models."
+              >
+                Explain WebGPU
+              </button>
+              <button
+                type="button"
+                data-topic="Write a small TypeScript function that groups objects by a key."
+              >
+                Write TypeScript
+              </button>
+              <button
+                type="button"
+                data-topic="Compare CPU and GPU inference for running a local model."
+              >
+                Compare inference
+              </button>
+            </div>
+          </div>
+
+          <div id="transcript" class="transcript" aria-live="polite" hidden></div>
+
+          <form id="composer" class="composer">
+            <div id="attachment" class="attachment" hidden>
+              <img id="attachment-image" alt="">
+              <span id="attachment-name"></span>
+              <button
+                id="remove-attachment-button"
+                type="button"
+                aria-label="Remove attached image"
+                title="Remove image"
+              >
+                Remove
+              </button>
+            </div>
+            <div class="composer-row">
+              <input id="image-input" type="file" accept="image/*" hidden>
+              <button
+                id="image-button"
+                class="button secondary image-button"
+                type="button"
+                hidden
+              >
+                Add image
+              </button>
+              <textarea
+                id="prompt-input"
+                rows="1"
+                placeholder="Load a model to start chatting"
+                aria-label="Message"
+                disabled
+              ></textarea>
+              <button id="send-button" class="button primary" type="submit" disabled>
+                Send
+              </button>
+              <button id="stop-button" class="button danger" type="button" hidden>
+                Stop
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="model-dialog" class="dialog model-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="dialog-eyebrow">Local inference</span>
+          <h2>Choose a model</h2>
+        </div>
+        <button
+          id="close-model-button"
+          class="dialog-close"
+          type="button"
+          aria-label="Close model picker"
+          title="Close"
+          hidden
+        >
+          Close
+        </button>
+      </div>
+
+      <div class="segmented-control" aria-label="Model source">
+        <button type="button" data-picker-mode="curated" aria-pressed="true">
+          Curated
+        </button>
+        <button type="button" data-picker-mode="custom" aria-pressed="false">
+          Custom
+        </button>
+      </div>
+
+      <section id="curated-panel">
+        <div id="model-options" class="model-options"></div>
+      </section>
+
+      <section id="custom-panel" class="custom-panel" hidden>
+        <div class="segmented-control compact" aria-label="Custom model source">
+          <button type="button" data-custom-source="url" aria-pressed="true">
+            URL
+          </button>
+          <button type="button" data-custom-source="file" aria-pressed="false">
+            Local file
+          </button>
+        </div>
+
+        <div id="custom-url-panel" class="field">
+          <label for="custom-model-url">GGUF model URL</label>
+          <input
+            id="custom-model-url"
+            type="url"
+            placeholder="https://.../model.gguf"
+            autocomplete="off"
+          >
+        </div>
+
+        <div id="custom-file-panel" class="field" hidden>
+          <label for="custom-model-file">GGUF model file</label>
+          <input id="custom-model-file" type="file" accept=".gguf">
+          <span id="custom-file-name" class="file-name">No file selected</span>
+        </div>
+
+        <p class="custom-note">
+          Custom imports support text models. Choose a curated bundle for vision.
+        </p>
+      </section>
+
+      <div class="dialog-footer">
+        <div class="load-feedback" aria-live="polite">
+          <p id="load-status" class="dialog-status">Select a model to begin.</p>
+          <progress id="load-progress" max="100" value="0" hidden></progress>
+        </div>
+        <button id="load-model-button" class="button primary" type="button">
+          Load model
+        </button>
+      </div>
+    </dialog>
+
+    <dialog id="settings-dialog" class="dialog settings-dialog">
+      <div class="dialog-header">
+        <div>
+          <span class="dialog-eyebrow">Generation</span>
+          <h2>Settings</h2>
+        </div>
+        <button
+          class="dialog-close"
+          type="button"
+          data-close-dialog
+          aria-label="Close settings"
+          title="Close"
+        >
+          Close
+        </button>
+      </div>
+
+      <div class="settings-fields">
+        <label class="setting-row" for="max-tokens-input">
+          <span>
+            <strong>Max tokens</strong>
+            <small>Maximum response length</small>
+          </span>
+          <input
+            id="max-tokens-input"
+            type="number"
+            min="16"
+            max="2048"
+            step="16"
+            value="256"
+          >
+        </label>
+
+        <label class="setting-row" for="temperature-input">
+          <span>
+            <strong>Temperature</strong>
+            <small>Higher values increase variation</small>
+          </span>
+          <span class="range-control">
+            <input
+              id="temperature-input"
+              type="range"
+              min="0"
+              max="2"
+              step="0.05"
+              value="0.7"
+            >
+            <output id="temperature-value" for="temperature-input">0.70</output>
+          </span>
+        </label>
+
+        <label class="setting-row" for="top-p-input">
+          <span>
+            <strong>Top-p</strong>
+            <small>Nucleus sampling threshold</small>
+          </span>
+          <span class="range-control">
+            <input
+              id="top-p-input"
+              type="range"
+              min="0.05"
+              max="1"
+              step="0.05"
+              value="0.9"
+            >
+            <output id="top-p-value" for="top-p-input">0.90</output>
+          </span>
+        </label>
+      </div>
+
+      <div class="dialog-footer settings-footer">
+        <button class="button primary" type="button" data-close-dialog>
+          Done
+        </button>
+      </div>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

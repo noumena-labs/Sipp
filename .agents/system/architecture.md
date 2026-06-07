@@ -1,32 +1,40 @@
 # CogentLM Architecture Guide
 
-The CogentLM monorepo is organized to clearly separate the core Rust inference engine from the language-specific bindings and the high-level frontend applications.
+CogentLM separates inference primitives from protocol and deployment policy.
 
-## 1. Rust Native Core (`crates/`)
-The native engine is broken down into modular crates.
-- **`crates/sys`**: Unsafe FFI bindings to the underlying C/C++ libraries (e.g., llama.cpp). Rust bridge declarations live under `src/`; CXX and llama.cpp shim files live under `native/`.
-- **`crates/core`**: Low-level foundational Rust types and abstractions.
-- **`crates/engine`**: The primary inference engine logic, memory management, and model lifecycle.
-- **`crates/shard`**: GGUF cache planning and split-file writing utilities.
-- **`crates/remote`**: Client-side transport for the CogentLM Remote Gateway Protocol (`/v1/query`, `/v1/chat`, and `/v1/embed`). App-facing remote clients depend on this crate, not on provider adapters.
-- **`crates/gateway`**: Server-side CogentLM Remote Gateway implementation. Owns bearer auth, alias routing, normalized gateway routes, CORS setup, gateway-owned backends such as mock and hosted-local CogentEngine, and the `serve --config gateway.toml` binary.
-- **`crates/gateway-providers`**: Server-side external provider adapter code for gateway use. Provider keys, upstream URLs, provider headers, and routing policy belong behind a gateway boundary, not in `CogentClient` or distributed app packages.
-- **`crates/cli`**: The command-line interface for running the engine directly.
-- **`crates/xtask`**: The central build orchestrator (replaces `make`/`cmake` shell scripts).
+## Foundational Crates
 
-## 2. Language Bindings (`bindings/`)
-These directories contain the bridge code between the Rust core and other languages.
-- **`bindings/node`**: N-API based bindings for Node.js using `@napi-rs/cli`.
-- **`bindings/python`**: PyO3 and Maturin based bindings for Python.
-- **`bindings/wasm`**: Emscripten compilation target for browser WebAssembly/WebGPU. Rust owns the JS-facing `CE_*` ABI with `#[no_mangle] extern "C"` exports under `src/`; CMake links that Rust staticlib with llama.cpp/ggml/mtmd backend objects and a small Emscripten JS shim under `native/emscripten/`.
+- **`crates/sys`**: Unsafe FFI bindings and native llama.cpp shims.
+- **`crates/core`**: Low-level shared types.
+- **`crates/engine`**: Local inference, scheduling, model lifecycle, and memory management.
+- **`crates/shard`**: GGUF cache planning and split-file utilities.
+- **`crates/client`**: Typed query, chat, and embed dispatch. It owns local, provider, and gateway endpoint descriptors.
+- **`crates/gateway-core`**: Protocol-neutral gateway execution. It owns request context, cancellation, typed pipeline ordering, streaming events, and resolver, authorizer, admission, and executor traits.
+- **`crates/providers`**: Explicitly selected external provider adapters. Provider wire requirements do not define gateway-core behavior.
 
-## 3. NPM Packages (`packages/npm/`)
-High-level JavaScript/TypeScript orchestration.
-- **`@noumena-labs/cogentlm`**: The main JS package for browser environments. Includes high-level features like:
-  - `character/`: Parsing and rendering agent personas and actions.
-  - `orchestrator/`: The Director runtime for executing multi-step tasks.
-  - `models/`: File system and OPFS management for downloading and caching models.
+Nothing under `crates/` owns HTTP routes, JSON/SSE contracts, authentication schemes, configuration files, application limits, or deployment defaults.
 
-## 4. Applications (`apps/`)
-Front-end applications and examples utilizing the engine.
-- Contains sub-projects like `avatar`, `benchmark`, `proactive-ui`, etc.
+## Developer Libraries
+
+- **`lib/gateway`**: Route-free HTTP gateway toolkit outside the foundational crates. It provides codecs, authentication traits, error translation, observability, and response helpers.
+- **`lib/gateway::GatewayCodec`**: Optional first-party query/chat/embed JSON and SSE profile.
+- **`cogentlm_client::GatewayEndpointConfig`**: Client-owned descriptor for calling an HTTP gateway endpoint.
+- **`lib/rust`**: Public Rust facade.
+- **`lib/node`**, **`lib/python`**, and **`lib/web`**: Public language packages exposing local inference, provider adapters, and gateway endpoint descriptors through the unified add API.
+
+Arbitrary wire formats are implemented programmatically through `ProtocolCodec`. The core client remains limited to the query, chat, and embed inference capabilities.
+
+## Applications
+
+- **`apps/gateway-server`**: First-party Axum application. It owns TOML, routes, bearer authentication, target policy, concurrency limits, CORS, metrics, listeners, and deployment behavior.
+- **`examples/gateway`**: Minimal Axum composition with application-owned routes that decode requests, call `CogentClient` directly, and encode responses.
+- **`apps/cli`**: Command-line local inference application.
+- **`xtask`**: Build, test, run, and packaging orchestration.
+
+## Bindings
+
+- **`bindings/node`**: N-API host binding.
+- **`bindings/python`**: PyO3 host binding.
+- **`bindings/wasm`**: Browser WebAssembly/WebGPU ABI and native link target.
+
+Bindings expose endpoint construction but do not move protocol policy back into `crates/client`.
