@@ -5,12 +5,12 @@ use std::path::PathBuf;
 use cogentlm::backend::set_llama_log_quiet;
 use cogentlm::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, GpuLayerConfig, KvReuseMode, ModelPlacementConfig,
-    NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
-    SchedulerRuntimeConfig,
+    NativeRuntimeConfig, ObservabilityRuntimeConfig, PoolingType, ResidencyRuntimeConfig,
+    SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
 use cogentlm::{
-    CogentClient, CogentEmbedRequest, EndpointDescriptor, LocalEmbedOptions, RemoteGatewayConfig,
-    RemoteSecret,
+    CogentClient, CogentEmbedRequest, EndpointDescriptor, GatewayAuthentication,
+    GatewayEndpointConfig, GatewayRoutes, GatewaySecret, GatewayTimeoutPolicy, LocalEmbedOptions,
 };
 use futures::executor::block_on;
 
@@ -29,11 +29,16 @@ fn main() -> support::ExampleResult<()> {
                 EndpointDescriptor::local(args.model_path, runtime_config(true, None)),
             )
             .await?;
-        let config = RemoteGatewayConfig {
-            alias: args.alias.clone(),
+        let config = GatewayEndpointConfig {
+            target: args.target.clone(),
             base_url: support::required_env("COGENTLM_GATEWAY_URL")?,
-            token: RemoteSecret::new(support::required_env("COGENTLM_GATEWAY_TOKEN")?),
-            timeout: None,
+            routes: GatewayRoutes::default(),
+            authentication: GatewayAuthentication::Bearer(GatewaySecret::new(
+                support::required_env("COGENTLM_GATEWAY_TOKEN")?,
+            )),
+            static_headers: Default::default(),
+            timeouts: GatewayTimeoutPolicy::default(),
+            protocol_options: Default::default(),
         };
         let gateway_endpoint = client
             .add("gateway", EndpointDescriptor::gateway(config))
@@ -80,6 +85,7 @@ fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRu
             n_threads: support::env_parse("COGENTLM_THREADS"),
             n_threads_batch: support::env_parse("COGENTLM_THREADS"),
             embeddings: embeddings.then_some(true),
+            pooling: embeddings.then_some(PoolingType::Mean),
             ..Default::default()
         },
         sampling: SamplingRuntimeConfig {

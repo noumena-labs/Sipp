@@ -64,7 +64,7 @@ def text_options() -> CogentTextOptions:
 
 
 def main() -> None:
-    model, alias, prompt = read_gateway_args(
+    model, target, prompt = read_gateway_args(
         "gateway_query", "Write one sentence about gateway inference."
     )
     set_llama_log_quiet(True)
@@ -74,14 +74,17 @@ def main() -> None:
         "local",
         LocalModelDescriptor(model, runtime_config(embeddings=False)),
     )
-    gateway = GatewayDescriptor(
-        alias,
-        required_env("COGENTLM_GATEWAY_URL"),
-        required_env("COGENTLM_GATEWAY_TOKEN"),
+    gateway_endpoint = client.add(
+        "gateway",
+        GatewayDescriptor(
+            target,
+            required_env("COGENTLM_GATEWAY_URL"),
+            authentication_kind="bearer",
+            authentication_value=required_env("COGENTLM_GATEWAY_TOKEN"),
+        )
     )
-    gateway_endpoint = client.add("gateway", gateway)
 
-    # The app only needs the gateway URL, gateway bearer token, and public alias.
+    # The app only needs the gateway URL, gateway bearer token, and public target.
     # Provider credentials or local model paths stay in the gateway process.
     local = client.query(
         prompt,
@@ -89,7 +92,7 @@ def main() -> None:
         options=text_options(),
         local=LocalTextOptions(context_key="python-gateway-query-local"),
     ).result()
-    remote = client.query(
+    gateway = client.query(
         prompt,
         endpoint=gateway_endpoint,
         options=text_options(),
@@ -98,7 +101,7 @@ def main() -> None:
     print("local:")
     print_text(local)
     print("gateway:")
-    print_text(remote)
+    print_text(gateway)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,8 @@ use cogentlm_engine::engine::{
 use crate::dispatch::InferenceEndpoint;
 use crate::{
     map, validate, CogentChatRequest, CogentEmbedRequest, CogentEmbeddingRun, CogentError,
-    CogentQueryRequest, CogentTextRun, CogentTokenBatches, EndpointCapabilities, EndpointRef,
+    CogentQueryRequest, CogentRequestContext, CogentTextRun, CogentTokenBatches,
+    EndpointCapabilities, EndpointRef,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -87,7 +88,11 @@ impl InferenceEndpoint for LocalEndpoint {
         &self.capabilities
     }
 
-    fn query(&self, request: CogentQueryRequest) -> CogentTextRun {
+    fn query_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentQueryRequest,
+    ) -> CogentTextRun {
         if let Err(error) = validate::local_query(&request) {
             return CogentTextRun::ready_err(error);
         }
@@ -100,14 +105,18 @@ impl InferenceEndpoint for LocalEndpoint {
             Box::pin(async move {
                 run.response
                     .await
-                    .map(|result| map::text_response(endpoint, result))
+                    .map(|result| map::text_response(endpoint, context.request_id, result))
                     .map_err(CogentError::Local)
             }),
             CogentTokenBatches::from_engine(run.tokens),
         )
     }
 
-    fn chat(&self, request: CogentChatRequest) -> CogentTextRun {
+    fn chat_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentChatRequest,
+    ) -> CogentTextRun {
         if let Err(error) = validate::local_chat(&request) {
             return CogentTextRun::ready_err(error);
         }
@@ -125,14 +134,18 @@ impl InferenceEndpoint for LocalEndpoint {
             Box::pin(async move {
                 run.response
                     .await
-                    .map(|result| map::text_response(endpoint, result))
+                    .map(|result| map::text_response(endpoint, context.request_id, result))
                     .map_err(CogentError::Local)
             }),
             CogentTokenBatches::from_engine(run.tokens),
         )
     }
 
-    fn embed(&self, request: CogentEmbedRequest) -> CogentEmbeddingRun {
+    fn embed_with_context(
+        &self,
+        context: CogentRequestContext,
+        request: CogentEmbedRequest,
+    ) -> CogentEmbeddingRun {
         if let Err(error) = validate::local_embed(&request) {
             return CogentEmbeddingRun::ready_err(error);
         }
@@ -142,7 +155,7 @@ impl InferenceEndpoint for LocalEndpoint {
             .embed(map::local_embed_request(request.input, request.local));
         CogentEmbeddingRun::new(Box::pin(async move {
             run.await
-                .map(|result| map::embedding_response(endpoint, result))
+                .map(|result| map::embedding_response(endpoint, context.request_id, result))
                 .map_err(CogentError::Local)
         }))
     }

@@ -13,7 +13,7 @@ use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::*;
-use crate::{ProviderErrorKind, ProviderGenerationOptions, SecretString};
+use crate::{ProviderErrorKind, ProviderGenerationOptions, ProviderRequestContext, SecretString};
 
 fn config(server: &MockServer) -> OpenAiAdapterConfig {
     OpenAiAdapterConfig {
@@ -179,6 +179,40 @@ async fn maps_openai_chat_response() {
     assert_eq!(response.result.text, "hi");
     assert_eq!(response.metadata.provider, ProviderKind::OpenAi);
     assert_eq!(response.metadata.request_id.as_deref(), Some("req-chat"));
+}
+
+#[tokio::test]
+async fn sends_openai_client_request_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(header("x-client-request-id", "gateway-request-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "chatcmpl-test",
+            "model": "gpt-test",
+            "choices": [{
+                "message": { "role": "assistant", "content": "hi" },
+                "finish_reason": "stop"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    let provider = OpenAiAdapter::new(config(&server)).expect("provider");
+    provider
+        .chat_with_context(
+            ProviderRequestContext {
+                request_id: Some("gateway-request-1".to_string()),
+            },
+            ProviderChatRequest {
+                model: "gpt-test".to_string(),
+                messages: vec![ChatMessage::new(ChatRole::User, "hello")],
+                options: ProviderGenerationOptions::default(),
+                provider_options: Default::default(),
+            },
+        )
+        .await
+        .expect("chat");
 }
 
 #[tokio::test]

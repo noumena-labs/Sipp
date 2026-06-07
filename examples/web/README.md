@@ -15,6 +15,17 @@ const endpoint = await client.add('local', {
 });
 ```
 
+Gateway pages register an explicit first-party endpoint:
+
+```ts
+const endpoint = await client.add('gateway', {
+  kind: 'gateway',
+  target: 'local',
+  baseUrl,
+  authentication: { kind: 'bearer', value: token },
+});
+```
+
 Start the app:
 
 ```bash
@@ -38,8 +49,7 @@ export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
-Then enter URL `http://127.0.0.1:8787`, token `dev-token`, and alias `local`
-for query/chat pages. Use alias `local-embed` for the embedding page.
+Then enter URL `http://127.0.0.1:8787`, any non-empty token, and target `local`.
 
 To start the local gateway and the web example from one terminal instead, run:
 
@@ -51,7 +61,5 @@ The cached sample model under `.build/models` is used by default; pass
 `--model <model.gguf>` to override it.
 
 Open `http://127.0.0.1:8787/` to inspect the minimal example proxy route list.
-The production-style dashboard and request history live in `apps/gateway-server`.
-
-OpenAI gateway pages require the gateway process to have `OPENAI_API_KEY` set.
-Use alias `openai-chat` for query/chat and `openai-embed` for embeddings.
+Production authentication, metrics, probes, and deployment live in
+`apps/gateway-server`.

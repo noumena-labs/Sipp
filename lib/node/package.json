@@ -4,6 +4,13 @@
   "description": "Native Node.js server bindings for CogentLM",
   "main": "router.js",
   "types": "router.d.ts",
+  "exports": {
+    ".": {
+      "types": "./router.d.ts",
+      "require": "./router.js",
+      "default": "./router.js"
+    }
+  },
   "license": "Apache-2.0",
   "files": [
     "index.d.ts",

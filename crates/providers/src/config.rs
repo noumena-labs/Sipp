@@ -108,6 +108,8 @@ pub struct OpenAiCompatibleAdapterConfig {
     pub protocol: OpenAiCompatibleProtocol,
     /// Static headers owned by provider configuration.
     pub static_headers: Vec<(String, String)>,
+    /// Optional per-request correlation header.
+    pub correlation_header: Option<String>,
     /// Request timeout.
     pub timeout: Option<Duration>,
 }
@@ -124,6 +126,7 @@ impl fmt::Debug for OpenAiCompatibleAdapterConfig {
             .field("auth", &self.auth)
             .field("protocol", &self.protocol)
             .field("static_headers", &static_headers)
+            .field("correlation_header", &self.correlation_header)
             .field("timeout", &self.timeout)
             .finish()
     }

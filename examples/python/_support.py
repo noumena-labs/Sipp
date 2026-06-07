@@ -36,7 +36,7 @@ def read_gateway_args(command: str, default_input: str) -> tuple[str, str, str]:
     if len(sys.argv) < 3:
         raise SystemExit(
             f"usage: python examples/python/{command}.py "
-            "<model.gguf> <gateway-alias> [input]"
+            "<model.gguf> <gateway-target> [input]"
         )
     return sys.argv[1], sys.argv[2], " ".join(sys.argv[3:]) or default_input
 

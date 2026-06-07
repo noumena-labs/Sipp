@@ -5,7 +5,7 @@
 //! exception surfaces.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -21,13 +21,14 @@ use cogentlm_client::{
     CogentTextResponse as ClientTextResponse, CogentTextResponseFuture as ClientTextResponseFuture,
     CogentTextRun as CoreClientTextRun, CogentTokenBatches as ClientTokenBatches,
     EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
+    GatewayAuthentication as CoreGatewayAuthentication,
+    GatewayEndpointConfig as CoreGatewayEndpointConfig, GatewayRoutes as CoreGatewayRoutes,
+    GatewaySecret as CoreGatewaySecret, GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy,
     LocalEmbedOptions as ClientLocalEmbedOptions, LocalTextOptions as ClientLocalTextOptions,
     OpenAiCompatibleProviderConfig as CoreOpenAiCompatibleProviderConfig,
     OpenAiProviderConfig as CoreOpenAiProviderConfig, ProviderAuthConfig as CoreProviderAuthConfig,
     ProviderEndpointConfig as CoreProviderEndpointConfig,
     ProviderEndpointError as CoreProviderEndpointError, ProviderSecret as CoreProviderSecret,
-    RemoteError as CoreRemoteError, RemoteGatewayConfig as CoreRemoteGatewayConfig,
-    RemoteSecret as CoreRemoteSecret,
 };
 use cogentlm_core::TokenUsage;
 use cogentlm_engine::backend::{
@@ -51,8 +52,8 @@ use pyo3::types::{PyAny, PyBool, PyDict, PyFloat, PyList, PyLong, PyString, PyTu
 use serde::de::DeserializeOwned;
 
 #[cfg(test)]
-#[path = "tests/remote_tests.rs"]
-mod remote_tests;
+#[path = "tests/root_tests.rs"]
+mod root_tests;
 
 pyo3::create_exception!(
     _native,
@@ -61,7 +62,7 @@ pyo3::create_exception!(
     "The loaded model does not support the requested operation."
 );
 
-pyo3::create_exception!(_native, RemoteError, PyException, "Remote API error.");
+pyo3::create_exception!(_native, EndpointError, PyException, "Endpoint error.");
 pyo3::create_exception!(_native, ProviderError, PyException, "Provider API error.");
 
 const PY_CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
@@ -650,7 +651,7 @@ impl PyNativeRuntimeConfig {
     }
 }
 
-/// Role/content chat message accepted by local and remote chat requests.
+/// Role/content chat message accepted by chat requests.
 #[pyclass(name = "ChatMessage")]
 #[derive(Debug, Clone)]
 struct PyChatMessage {
@@ -678,7 +679,7 @@ impl PyChatMessage {
     }
 }
 
-/// Address of a registered local, remote gateway, or direct provider endpoint.
+/// Address of a registered inference endpoint.
 #[pyclass(name = "EndpointRef")]
 #[derive(Clone)]
 struct PyEndpointRef {
@@ -695,9 +696,9 @@ impl PyEndpointRef {
     }
 
     #[staticmethod]
-    fn remote(id: String) -> Self {
+    fn gateway(id: String) -> Self {
         Self {
-            core: CoreEndpointRef::Remote { id },
+            core: CoreEndpointRef::Gateway { id },
         }
     }
 
@@ -709,10 +710,10 @@ impl PyEndpointRef {
     }
 
     #[getter]
-    fn kind(&self) -> &'static str {
-        match self.core {
+    fn kind(&self) -> &str {
+        match &self.core {
             CoreEndpointRef::Local { .. } => "local",
-            CoreEndpointRef::Remote { .. } => "remote",
+            CoreEndpointRef::Gateway { .. } => "gateway",
             CoreEndpointRef::Provider { .. } => "provider",
         }
     }
@@ -822,42 +823,88 @@ impl PyLocalEmbedOptions {
     }
 }
 
-/// Remote CogentLM gateway alias, URL, token, and optional timeout.
-#[pyclass(name = "RemoteGatewayConfig")]
+/// Gateway endpoint descriptor accepted by CogentClient.add.
+#[pyclass(name = "GatewayDescriptor")]
 #[derive(Clone)]
-struct PyRemoteGatewayConfig {
-    core: CoreRemoteGatewayConfig,
+struct PyGatewayDescriptor {
+    core: CoreGatewayEndpointConfig,
 }
 
 #[pymethods]
-impl PyRemoteGatewayConfig {
+impl PyGatewayDescriptor {
     #[new]
-    #[pyo3(signature = (alias, base_url, token, *, timeout_ms = None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (target, base_url, *, authentication_kind = "none", authentication_value = None, authentication_header = None, static_headers = None, timeout_ms = None, query_route = None, chat_route = None, embed_route = None, protocol_options = None))]
     fn new(
-        alias: String,
+        py: Python<'_>,
+        target: String,
         base_url: String,
-        token: String,
+        authentication_kind: &str,
+        authentication_value: Option<String>,
+        authentication_header: Option<String>,
+        static_headers: Option<BTreeMap<String, String>>,
         timeout_ms: Option<u64>,
+        query_route: Option<String>,
+        chat_route: Option<String>,
+        embed_route: Option<String>,
+        protocol_options: Option<PyObject>,
     ) -> PyResult<Self> {
         if timeout_ms == Some(0) {
             return Err(PyValueError::new_err(
-                "RemoteGatewayConfig.timeout_ms must be a positive integer",
+                "timeout_ms must be a positive integer",
             ));
         }
+        let authentication = match authentication_kind {
+            "none" => CoreGatewayAuthentication::None,
+            "bearer" => CoreGatewayAuthentication::Bearer(CoreGatewaySecret::new(
+                authentication_value.ok_or_else(|| {
+                    PyValueError::new_err("authentication_value is required for bearer auth")
+                })?,
+            )),
+            "header" => CoreGatewayAuthentication::Header {
+                name: authentication_header.ok_or_else(|| {
+                    PyValueError::new_err("authentication_header is required for header auth")
+                })?,
+                value: CoreGatewaySecret::new(authentication_value.ok_or_else(|| {
+                    PyValueError::new_err("authentication_value is required for header auth")
+                })?),
+            },
+            _ => {
+                return Err(PyValueError::new_err(
+                    "authentication_kind must be none, bearer, or header",
+                ));
+            }
+        };
+        let mut routes = CoreGatewayRoutes::default();
+        assign_if_some(&mut routes.query, query_route);
+        assign_if_some(&mut routes.chat, chat_route);
+        assign_if_some(&mut routes.embed, embed_route);
+        let timeout = Duration::from_millis(timeout_ms.unwrap_or(60_000));
         Ok(Self {
-            core: CoreRemoteGatewayConfig {
-                alias,
+            core: CoreGatewayEndpointConfig {
+                target,
                 base_url,
-                token: CoreRemoteSecret::new(token),
-                timeout: timeout_ms.map(Duration::from_millis),
+                routes,
+                authentication,
+                static_headers: static_headers.unwrap_or_default(),
+                timeouts: CoreGatewayTimeoutPolicy {
+                    connect: timeout,
+                    request: timeout,
+                    read: timeout,
+                },
+                protocol_options: py_json_options_or_empty(
+                    py,
+                    protocol_options,
+                    "protocol_options",
+                )?,
             },
         })
     }
 }
 
-impl PyRemoteGatewayConfig {
-    fn to_core(&self) -> CoreRemoteGatewayConfig {
-        self.core.clone()
+impl PyGatewayDescriptor {
+    fn to_core(&self) -> CoreEndpointDescriptor {
+        CoreEndpointDescriptor::gateway(self.core.clone())
     }
 }
 
@@ -884,45 +931,6 @@ impl PyLocalModelDescriptor {
 impl PyLocalModelDescriptor {
     fn to_core(&self) -> CoreEndpointDescriptor {
         CoreEndpointDescriptor::local(self.model_path.clone(), self.config.clone())
-    }
-}
-
-/// Gateway descriptor accepted by CogentClient.add.
-#[pyclass(name = "GatewayDescriptor")]
-#[derive(Clone)]
-struct PyGatewayDescriptor {
-    core: CoreRemoteGatewayConfig,
-}
-
-#[pymethods]
-impl PyGatewayDescriptor {
-    #[new]
-    #[pyo3(signature = (alias, base_url, token, *, timeout_ms = None))]
-    fn new(
-        alias: String,
-        base_url: String,
-        token: String,
-        timeout_ms: Option<u64>,
-    ) -> PyResult<Self> {
-        if timeout_ms == Some(0) {
-            return Err(PyValueError::new_err(
-                "GatewayDescriptor.timeout_ms must be a positive integer",
-            ));
-        }
-        Ok(Self {
-            core: CoreRemoteGatewayConfig {
-                alias,
-                base_url,
-                token: CoreRemoteSecret::new(token),
-                timeout: timeout_ms.map(Duration::from_millis),
-            },
-        })
-    }
-}
-
-impl PyGatewayDescriptor {
-    fn to_core(&self) -> CoreEndpointDescriptor {
-        CoreEndpointDescriptor::gateway(self.core.clone())
     }
 }
 
@@ -1010,6 +1018,7 @@ impl PyProviderDescriptor {
                         .into_iter()
                         .map(|(name, value)| (name, CoreProviderSecret::new(value)))
                         .collect(),
+                    correlation_header: None,
                     timeout,
                 })
             }
@@ -1029,7 +1038,7 @@ impl PyProviderDescriptor {
     }
 }
 
-/// Client facade for local CogentLM models and remote gateway aliases.
+/// Client facade for registered inference endpoints.
 #[pyclass(name = "CogentClient")]
 struct PyCogentClient {
     inner: Arc<Mutex<CoreCogentClient>>,
@@ -1060,7 +1069,7 @@ impl PyCogentClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, gateway_options = None, provider_options = None, emit_tokens = false))]
+    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, endpoint_options = None, provider_options = None, emit_tokens = false))]
     fn query(
         &self,
         py: Python<'_>,
@@ -1068,7 +1077,7 @@ impl PyCogentClient {
         endpoint: Option<Py<PyEndpointRef>>,
         options: Option<Py<PyCogentTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
-        gateway_options: Option<PyObject>,
+        endpoint_options: Option<PyObject>,
         provider_options: Option<PyObject>,
         emit_tokens: bool,
     ) -> PyResult<PyCogentTextRun> {
@@ -1079,7 +1088,7 @@ impl PyCogentClient {
             prompt,
             options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
-            gateway_options: py_gateway_options_or_empty(py, gateway_options)?,
+            endpoint_options: py_endpoint_options_or_empty(py, endpoint_options)?,
             provider_options: py_provider_options_or_empty(py, provider_options)?,
             emit_tokens,
         };
@@ -1092,7 +1101,7 @@ impl PyCogentClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, gateway_options = None, provider_options = None, emit_tokens = false))]
+    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, endpoint_options = None, provider_options = None, emit_tokens = false))]
     fn chat(
         &self,
         py: Python<'_>,
@@ -1100,7 +1109,7 @@ impl PyCogentClient {
         endpoint: Option<Py<PyEndpointRef>>,
         options: Option<Py<PyCogentTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
-        gateway_options: Option<PyObject>,
+        endpoint_options: Option<PyObject>,
         provider_options: Option<PyObject>,
         emit_tokens: bool,
     ) -> PyResult<PyCogentTextRun> {
@@ -1111,7 +1120,7 @@ impl PyCogentClient {
             messages: chat_messages_to_core(py, messages)?,
             options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
-            gateway_options: py_gateway_options_or_empty(py, gateway_options)?,
+            endpoint_options: py_endpoint_options_or_empty(py, endpoint_options)?,
             provider_options: py_provider_options_or_empty(py, provider_options)?,
             emit_tokens,
         };
@@ -1123,14 +1132,14 @@ impl PyCogentClient {
         Ok(PyCogentTextRun::from_core(run))
     }
 
-    #[pyo3(signature = (input, *, endpoint = None, local = None, gateway_options = None, provider_options = None))]
+    #[pyo3(signature = (input, *, endpoint = None, local = None, endpoint_options = None, provider_options = None))]
     fn embed(
         &self,
         py: Python<'_>,
         input: String,
         endpoint: Option<Py<PyEndpointRef>>,
         local: Option<Py<PyLocalEmbedOptions>>,
-        gateway_options: Option<PyObject>,
+        endpoint_options: Option<PyObject>,
         provider_options: Option<PyObject>,
     ) -> PyResult<PyCogentEmbeddingRun> {
         let request = ClientEmbedRequest {
@@ -1139,7 +1148,7 @@ impl PyCogentClient {
                 .map(|endpoint| endpoint.borrow(py).to_core()),
             input,
             local: py_core_or_default(py, local, PyLocalEmbedOptions::to_core),
-            gateway_options: py_gateway_options_or_empty(py, gateway_options)?,
+            endpoint_options: py_endpoint_options_or_empty(py, endpoint_options)?,
             provider_options: py_provider_options_or_empty(py, provider_options)?,
         };
         let run = self
@@ -1271,7 +1280,10 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         "UnsupportedOperationError",
         module.py().get_type_bound::<UnsupportedOperationError>(),
     )?;
-    module.add("RemoteError", module.py().get_type_bound::<RemoteError>())?;
+    module.add(
+        "EndpointError",
+        module.py().get_type_bound::<EndpointError>(),
+    )?;
     module.add(
         "ProviderError",
         module.py().get_type_bound::<ProviderError>(),
@@ -1295,9 +1307,8 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCogentTextRun>()?;
     module.add_class::<PyCogentTokenIterator>()?;
     module.add_class::<PyCogentEmbeddingRun>()?;
-    module.add_class::<PyRemoteGatewayConfig>()?;
-    module.add_class::<PyLocalModelDescriptor>()?;
     module.add_class::<PyGatewayDescriptor>()?;
+    module.add_class::<PyLocalModelDescriptor>()?;
     module.add_class::<PyProviderDescriptor>()?;
     module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
     module.add("DEFAULT_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
@@ -1306,11 +1317,11 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn py_gateway_options_or_empty(
+fn py_endpoint_options_or_empty(
     py: Python<'_>,
     value: Option<PyObject>,
 ) -> PyResult<serde_json::Map<String, serde_json::Value>> {
-    py_json_options_or_empty(py, value, "gateway_options")
+    py_json_options_or_empty(py, value, "endpoint_options")
 }
 
 fn py_provider_options_or_empty(
@@ -1344,17 +1355,14 @@ fn py_endpoint_descriptor_to_core(
     if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyLocalModelDescriptor>>() {
         return Ok(descriptor.to_core());
     }
-    if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyGatewayDescriptor>>() {
-        return Ok(descriptor.to_core());
-    }
-    if let Ok(config) = descriptor.extract::<PyRef<'_, PyRemoteGatewayConfig>>() {
-        return Ok(CoreEndpointDescriptor::gateway(config.to_core()));
-    }
     if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyProviderDescriptor>>() {
         return Ok(descriptor.to_core());
     }
+    if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyGatewayDescriptor>>() {
+        return Ok(descriptor.to_core());
+    }
     Err(PyTypeError::new_err(
-        "descriptor must be LocalModelDescriptor, GatewayDescriptor, RemoteGatewayConfig, or ProviderDescriptor",
+        "descriptor must be LocalModelDescriptor, ProviderDescriptor, or GatewayDescriptor",
     ))
 }
 
@@ -1526,8 +1534,8 @@ fn endpoint_ref_to_dict(py: Python<'_>, endpoint: CoreEndpointRef) -> PyResult<P
             dict.set_item("kind", "local")?;
             dict.set_item("id", id)?;
         }
-        CoreEndpointRef::Remote { id } => {
-            dict.set_item("kind", "remote")?;
+        CoreEndpointRef::Gateway { id } => {
+            dict.set_item("kind", "gateway")?;
             dict.set_item("id", id)?;
         }
         CoreEndpointRef::Provider { id } => {
@@ -1735,42 +1743,6 @@ fn assign_if_some<T>(target: &mut T, value: Option<T>) {
     }
 }
 
-fn remote_error_message(error: &CoreRemoteError) -> String {
-    format!(
-        "remote gateway error ({}): {}",
-        error.kind.as_str(),
-        error.message
-    )
-}
-
-fn to_py_remote_error(error: CoreRemoteError) -> PyErr {
-    Python::with_gil(|py| match to_py_remote_error_result(py, error) {
-        Ok(error) => error,
-        Err(error) => error,
-    })
-}
-
-fn to_py_remote_error_result(py: Python<'_>, error: CoreRemoteError) -> PyResult<PyErr> {
-    let message = remote_error_message(&error);
-    let instance = py.get_type_bound::<RemoteError>().call1((message,))?;
-    let retry_after_ms = error
-        .retry_after
-        .map(|duration| duration.as_secs_f64() * 1000.0);
-    let raw_body = match error.raw {
-        Some(value) => json_to_py(py, *value)?,
-        None => py.None(),
-    };
-
-    instance.setattr("kind", error.kind.as_str())?;
-    instance.setattr("status", error.status)?;
-    instance.setattr("code", error.code)?;
-    instance.setattr("request_id", error.request_id)?;
-    instance.setattr("retry_after_ms", retry_after_ms)?;
-    instance.setattr("raw_body", raw_body)?;
-
-    Ok(PyErr::from_value_bound(instance))
-}
-
 fn provider_error_message(error: &CoreProviderEndpointError) -> String {
     format!(
         "provider error ({} {}): {}",
@@ -1815,7 +1787,22 @@ fn to_py_provider_error_result(
 fn to_py_client_error(error: ClientError) -> PyErr {
     match error {
         ClientError::Local(error) => to_py_error(error),
-        ClientError::Remote(error) => to_py_remote_error(error),
+        ClientError::Endpoint(error) => Python::with_gil(|py| {
+            let instance = py
+                .get_type_bound::<EndpointError>()
+                .call1((error.to_string(),))
+                .and_then(|instance| {
+                    instance.setattr("kind", error.kind)?;
+                    instance.setattr("status", error.status)?;
+                    instance.setattr("code", error.code)?;
+                    instance.setattr("request_id", error.request_id)?;
+                    Ok(instance)
+                });
+            match instance {
+                Ok(instance) => PyErr::from_value_bound(instance),
+                Err(error) => error,
+            }
+        }),
         ClientError::Provider(error) => to_py_provider_error(error),
         ClientError::InvalidRequest(message) => PyValueError::new_err(message),
         ClientError::UnsupportedOperation {

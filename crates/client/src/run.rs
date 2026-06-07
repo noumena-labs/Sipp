@@ -1,11 +1,13 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use cogentlm_core::TokenBatch;
 use cogentlm_engine::engine::EngineTokenBatches;
-#[cfg(any(feature = "remote", feature = "providers"))]
+use futures::future::{select, Either};
 use futures_channel::mpsc;
+use futures_channel::oneshot;
 use futures_core::Stream;
 
 use crate::{CogentEmbeddingResponse, CogentError, CogentResult, CogentTextResponse};
@@ -30,15 +32,74 @@ pub type CogentTextResponseFuture =
 pub type CogentEmbeddingResponseFuture =
     Pin<Box<dyn Future<Output = CogentResult<CogentEmbeddingResponse>> + Send>>;
 
+/// Stable reason attached to explicit request cancellation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CogentCancellationReason {
+    /// The application explicitly cancelled the request.
+    CallerCancelled,
+    /// The downstream HTTP client disconnected.
+    ClientDisconnected,
+    /// The hosting server is shutting down.
+    ServerShutdown,
+    /// The request exceeded an application deadline.
+    DeadlineExceeded,
+}
+
+impl CogentCancellationReason {
+    /// Return the stable cancellation label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CallerCancelled => "caller_cancelled",
+            Self::ClientDisconnected => "client_disconnected",
+            Self::ServerShutdown => "server_shutdown",
+            Self::DeadlineExceeded => "deadline_exceeded",
+        }
+    }
+}
+
+/// Cloneable handle that cancels an in-flight client run.
+#[derive(Clone)]
+pub struct CogentCancellationHandle {
+    sender: Arc<Mutex<Option<oneshot::Sender<CogentCancellationReason>>>>,
+}
+
+impl CogentCancellationHandle {
+    /// Cancel the run if it has not already completed or been cancelled.
+    pub fn cancel(&self, reason: CogentCancellationReason) {
+        let Ok(mut sender) = self.sender.lock() else {
+            return;
+        };
+        if let Some(sender) = sender.take() {
+            let _ = sender.send(reason);
+        }
+    }
+}
+
 /// Awaitable text run plus token batches owner.
 pub struct CogentTextRun {
     response: CogentTextResponseFuture,
     tokens: CogentTokenBatches,
+    cancellation: CogentCancellationHandle,
 }
 
 impl CogentTextRun {
     pub(crate) fn new(response: CogentTextResponseFuture, tokens: CogentTokenBatches) -> Self {
-        Self { response, tokens }
+        let (response, cancellation) = cancellable_response(response);
+        Self {
+            response,
+            tokens,
+            cancellation,
+        }
+    }
+
+    /// Create a finite text run from a response future.
+    pub fn from_response(response: CogentTextResponseFuture) -> Self {
+        Self::new(response, CogentTokenBatches::closed())
+    }
+
+    /// Create a text run from token batches and a final response future.
+    pub fn from_parts(tokens: CogentTokenBatches, response: CogentTextResponseFuture) -> Self {
+        Self::new(response, tokens)
     }
 
     pub(crate) fn ready_err(error: CogentError) -> Self {
@@ -53,9 +114,30 @@ impl CogentTextRun {
         &mut self.tokens
     }
 
+    /// Return a handle that can cancel this run from another task.
+    pub fn cancellation_handle(&self) -> CogentCancellationHandle {
+        self.cancellation.clone()
+    }
+
+    /// Cancel this run.
+    pub fn cancel(&self, reason: CogentCancellationReason) {
+        self.cancellation.cancel(reason);
+    }
+
     /// Split the token batches from the final-response future.
     pub fn into_parts(self) -> (CogentTokenBatches, CogentTextResponseFuture) {
         (self.tokens, self.response)
+    }
+
+    /// Split the run while retaining an explicit cancellation handle.
+    pub fn into_parts_with_cancel(
+        self,
+    ) -> (
+        CogentTokenBatches,
+        CogentTextResponseFuture,
+        CogentCancellationHandle,
+    ) {
+        (self.tokens, self.response, self.cancellation)
     }
 }
 
@@ -70,20 +152,45 @@ impl Future for CogentTextRun {
 /// Awaitable embedding run.
 pub struct CogentEmbeddingRun {
     response: CogentEmbeddingResponseFuture,
+    cancellation: CogentCancellationHandle,
 }
 
 impl CogentEmbeddingRun {
     pub(crate) fn new(response: CogentEmbeddingResponseFuture) -> Self {
-        Self { response }
+        let (response, cancellation) = cancellable_response(response);
+        Self {
+            response,
+            cancellation,
+        }
+    }
+
+    /// Create an embedding run from a response future.
+    pub fn from_response(response: CogentEmbeddingResponseFuture) -> Self {
+        Self::new(response)
     }
 
     pub(crate) fn ready_err(error: CogentError) -> Self {
         Self::new(Box::pin(async move { Err(error) }))
     }
 
+    /// Return a handle that can cancel this run from another task.
+    pub fn cancellation_handle(&self) -> CogentCancellationHandle {
+        self.cancellation.clone()
+    }
+
+    /// Cancel this run.
+    pub fn cancel(&self, reason: CogentCancellationReason) {
+        self.cancellation.cancel(reason);
+    }
+
     /// Convert the run into its final-response future.
     pub fn into_response(self) -> CogentEmbeddingResponseFuture {
         self.response
+    }
+
+    /// Split the response future from its cancellation handle.
+    pub fn into_parts(self) -> (CogentEmbeddingResponseFuture, CogentCancellationHandle) {
+        (self.response, self.cancellation)
     }
 }
 
@@ -103,8 +210,8 @@ pub struct CogentTokenBatches {
 enum TokenBatchSource {
     Empty,
     Local(EngineTokenBatches),
-    #[cfg(any(feature = "remote", feature = "providers"))]
     Receiver(mpsc::UnboundedReceiver<TokenBatch>),
+    External(Pin<Box<dyn Stream<Item = TokenBatch> + Send>>),
 }
 
 impl CogentTokenBatches {
@@ -123,10 +230,16 @@ impl CogentTokenBatches {
         }
     }
 
-    #[cfg(any(feature = "remote", feature = "providers"))]
     pub(crate) fn from_receiver(receiver: mpsc::UnboundedReceiver<TokenBatch>) -> Self {
         Self {
             inner: TokenBatchSource::Receiver(receiver),
+        }
+    }
+
+    /// Create token batches from an endpoint-owned stream.
+    pub fn from_stream(stream: Pin<Box<dyn Stream<Item = TokenBatch> + Send>>) -> Self {
+        Self {
+            inner: TokenBatchSource::External(stream),
         }
     }
 }
@@ -138,8 +251,34 @@ impl Stream for CogentTokenBatches {
         match &mut self.inner {
             TokenBatchSource::Empty => Poll::Ready(None),
             TokenBatchSource::Local(stream) => Pin::new(stream).poll_next(cx),
-            #[cfg(any(feature = "remote", feature = "providers"))]
             TokenBatchSource::Receiver(receiver) => Pin::new(receiver).poll_next(cx),
+            TokenBatchSource::External(stream) => stream.as_mut().poll_next(cx),
         }
     }
+}
+
+fn cancellable_response<T>(
+    response: Pin<Box<dyn Future<Output = CogentResult<T>> + Send>>,
+) -> (
+    Pin<Box<dyn Future<Output = CogentResult<T>> + Send>>,
+    CogentCancellationHandle,
+)
+where
+    T: Send + 'static,
+{
+    let (sender, receiver) = oneshot::channel();
+    let cancellation = CogentCancellationHandle {
+        sender: Arc::new(Mutex::new(Some(sender))),
+    };
+    let response = Box::pin(async move {
+        match select(response, receiver).await {
+            Either::Left((result, _)) => result,
+            Either::Right((Ok(reason), response)) => {
+                drop(response);
+                Err(CogentError::Cancelled { reason })
+            }
+            Either::Right((Err(_), response)) => response.await,
+        }
+    });
+    (response, cancellation)
 }

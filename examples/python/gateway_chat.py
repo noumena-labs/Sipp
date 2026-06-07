@@ -86,7 +86,7 @@ def collect_streamed_text(label: str, run: CogentTextRun) -> dict[str, object]:
 
 
 def main() -> None:
-    model, alias, prompt = read_gateway_args(
+    model, target, prompt = read_gateway_args(
         "gateway_chat", "Explain gateway-backed inference in one sentence."
     )
     set_llama_log_quiet(True)
@@ -96,12 +96,15 @@ def main() -> None:
         "local",
         LocalModelDescriptor(model, runtime_config(embeddings=False)),
     )
-    gateway = GatewayDescriptor(
-        alias,
-        required_env("COGENTLM_GATEWAY_URL"),
-        required_env("COGENTLM_GATEWAY_TOKEN"),
+    gateway_endpoint = client.add(
+        "gateway",
+        GatewayDescriptor(
+            target,
+            required_env("COGENTLM_GATEWAY_URL"),
+            authentication_kind="bearer",
+            authentication_value=required_env("COGENTLM_GATEWAY_TOKEN"),
+        )
     )
-    gateway_endpoint = client.add("gateway", gateway)
 
     local_run = client.chat(
         chat_messages(prompt),
@@ -118,12 +121,12 @@ def main() -> None:
         options=text_options(),
         emit_tokens=True,
     )
-    remote = collect_streamed_text("gateway", gateway_run)
+    gateway = collect_streamed_text("gateway", gateway_run)
 
     print("local:")
     print_text(local)
     print("gateway:")
-    print_text(remote)
+    print_text(gateway)
 
 
 if __name__ == "__main__":

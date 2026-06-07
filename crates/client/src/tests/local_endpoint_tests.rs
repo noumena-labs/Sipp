@@ -135,10 +135,10 @@ fn query_validates_before_local_runtime_dispatch() {
     let runtime = Arc::new(FakeLocalRuntime::default());
     let endpoint = endpoint(runtime.clone());
     let error = block_on(endpoint.query(CogentQueryRequest {
-        gateway_options: serde_json::Map::from_iter([("seed".to_string(), serde_json::json!(1))]),
+        endpoint_options: serde_json::Map::from_iter([("seed".to_string(), serde_json::json!(1))]),
         ..CogentQueryRequest::default()
     }))
-    .expect_err("remote options are invalid locally");
+    .expect_err("endpoint options are invalid locally");
 
     assert!(matches!(error, CogentError::InvalidRequest(_)));
     assert!(runtime.calls().is_empty());

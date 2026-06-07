@@ -40,7 +40,6 @@ const DEFAULT_SMOKE_PROMPT: &str = "Describe browser LLM inference.";
 const DEFAULT_SMOKE_MAX_TOKENS: u32 = 64;
 const DEFAULT_SMOKE_TEMPERATURE: f32 = 0.0;
 const GATEWAY_SMOKE_BIND: &str = "127.0.0.1:18787";
-const GATEWAY_SMOKE_TOKEN_ENV: &str = "COGENTLM_GATEWAY_TOKEN";
 const GATEWAY_SMOKE_TOKEN: &str = "example-gateway-smoke-token";
 const GATEWAY_SMOKE_START_TIMEOUT: Duration = Duration::from_secs(300);
 const RUST_GENERATION_SMOKE_EXAMPLES: &[&str] = &["query", "chat", "embed"];
@@ -61,10 +60,9 @@ const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::lib("cogentlm-shard"),
     RustTestTarget::lib("cogentlm-sys"),
     RustTestTarget::lib("cogentlm-engine"),
-    RustTestTarget::lib("cogentlm-remote"),
+    RustTestTarget::lib("cogentlm-gateway-core"),
     RustTestTarget::lib("cogentlm-gateway"),
     RustTestTarget::package("cogentlm-gateway-server"),
-    RustTestTarget::test("cogentlm-gateway-server", "provider_gateway_smoke"),
     RustTestTarget::lib("cogentlm-providers"),
     RustTestTarget::lib("cogentlm-client"),
     RustTestTarget::bin("cogentlm-cli", "cogentlm"),
@@ -91,8 +89,8 @@ const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
     "crates/shard/src",
     "crates/sys/src",
     "crates/engine/src",
-    "crates/remote/src",
-    "crates/gateway/src",
+    "crates/gateway-core/src",
+    "lib/gateway/src",
     "apps/gateway-server/src",
     "crates/providers/src",
     "crates/client/src",
@@ -129,7 +127,8 @@ const GATEWAY_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &[
     "examples/rust/src",
     "examples/node",
     "examples/python",
-    "crates/gateway/src",
+    "crates/gateway-core/src",
+    "lib/gateway/src",
     "apps/gateway-server/src",
     "crates/providers/src",
 ];
@@ -1400,142 +1399,24 @@ fn run_example_gateway_smoke(
     let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
     output::path("Model", &model);
     output::detail("Backend", options.backend.as_str());
-    let config_path = write_gateway_smoke_config(ctx, &model, options.cases)?;
-    run_rust_gateway_smoke(sh, ctx, options, &config_path, &model)?;
-    run_node_gateway_smoke(sh, ctx, options, &config_path, &model)?;
-    run_python_gateway_smoke(sh, ctx, options, &config_path, &model)?;
+    run_rust_gateway_smoke(sh, ctx, options, &model)?;
+    run_node_gateway_smoke(sh, ctx, options, &model)?;
+    run_python_gateway_smoke(sh, ctx, options, &model)?;
     Ok(())
-}
-
-fn write_gateway_smoke_config(
-    ctx: &BuildContext,
-    model: &Path,
-    cases: &[TestSmokeCase],
-) -> Result<PathBuf> {
-    let config_dir = ctx.tmp_dir().join("examples").join("gateway-smoke");
-    std::fs::create_dir_all(&config_dir)
-        .with_context(|| format!("failed to create {}", config_dir.display()))?;
-    let config_path = config_dir.join("local-gateway.toml");
-    let selected_cases = selected_smoke_cases(cases);
-    let model_path = toml_string(&model.display().to_string());
-    let mut aliases = String::new();
-    let text_operations = selected_cases
-        .iter()
-        .filter(|case| matches!(case, TestSmokeCase::Query | TestSmokeCase::Chat))
-        .map(TestSmokeCase::as_str)
-        .collect::<Vec<_>>();
-    if !text_operations.is_empty() {
-        let operations = toml_array(text_operations);
-        aliases.push_str(&format!(
-            r#"[[aliases]]
-name = "local"
-operations = {operations}
-
-[aliases.limits]
-max_concurrent_requests = 4
-max_requests_per_minute = 60
-
-[aliases.backend]
-kind = "local_cogent_engine"
-model_path = {model_path}
-
-[aliases.backend.runtime.context]
-n_ctx = 2048
-embeddings = false
-warmup = false
-
-[aliases.backend.runtime.scheduler]
-continuous_batching = true
-prefill_chunk_size = 0
-
-[aliases.backend.runtime.cache]
-mode = "disabled"
-
-[aliases.backend.runtime.observability]
-runtime_metrics = true
-backend_profiling = false
-"#
-        ));
-    }
-    if selected_cases.contains(&TestSmokeCase::Embed) {
-        if !aliases.is_empty() {
-            aliases.push('\n');
-        }
-        aliases.push_str(&format!(
-            r#"[[aliases]]
-name = "local-embed"
-operations = ["embed"]
-
-[aliases.limits]
-max_concurrent_requests = 4
-max_requests_per_minute = 60
-
-[aliases.backend]
-kind = "local_cogent_engine"
-model_path = {model_path}
-
-[aliases.backend.options]
-embedding_context_key = "gateway-embed"
-normalize_embeddings = true
-
-[aliases.backend.runtime.context]
-n_ctx = 2048
-embeddings = true
-warmup = false
-
-[aliases.backend.runtime.scheduler]
-continuous_batching = true
-prefill_chunk_size = 0
-
-[aliases.backend.runtime.cache]
-mode = "disabled"
-
-[aliases.backend.runtime.observability]
-runtime_metrics = true
-backend_profiling = false
-"#
-        ));
-    }
-    let contents = format!(
-        r#"[server]
-bind = {bind}
-
-[auth]
-token_env = {token_env}
-admin_token_env = {token_env}
-
-[limits]
-max_request_bytes = 1048576
-history_capacity = 200
-
-[cors]
-allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
-
-{aliases}
-"#,
-        bind = toml_string(GATEWAY_SMOKE_BIND),
-        token_env = toml_string(GATEWAY_SMOKE_TOKEN_ENV),
-        aliases = aliases,
-    );
-    std::fs::write(&config_path, contents)
-        .with_context(|| format!("failed to write {}", config_path.display()))?;
-    output::path("Gateway config", &config_path);
-    Ok(config_path)
 }
 
 fn run_rust_gateway_smoke(
     sh: &Shell,
     ctx: &BuildContext,
     options: &SuiteRunOptions<'_>,
-    config_path: &Path,
     model: &Path,
 ) -> Result<()> {
     output::phase("Rust gateway client smoke");
     let _dir = sh.push_dir(ctx.workspace_root());
     for example in selected_rust_gateway_smoke_examples(options.cases) {
-        let mut gateway = GatewaySmokeProcess::start(sh, ctx, config_path, &options.backend)?;
+        let mut gateway = GatewaySmokeProcess::start(sh, ctx, model, &options.backend)?;
         wait_for_gateway_smoke(gateway.child_mut())?;
-        let mut features = vec!["remote"];
+        let mut features = vec!["gateway"];
         if options.backend != Backend::Cpu {
             features.push(options.backend.as_str());
         }
@@ -1546,7 +1427,7 @@ fn run_rust_gateway_smoke(
             .arg(example)
             .arg("--")
             .arg(model)
-            .arg(gateway_smoke_alias(example))
+            .arg(gateway_smoke_target(example))
             .arg(options.prompt)
             .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
             .env("COGENTLM_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
@@ -1567,7 +1448,6 @@ fn run_node_gateway_smoke(
     sh: &Shell,
     ctx: &BuildContext,
     options: &SuiteRunOptions<'_>,
-    config_path: &Path,
     model: &Path,
 ) -> Result<()> {
     output::phase("Node.js gateway client smoke");
@@ -1576,12 +1456,12 @@ fn run_node_gateway_smoke(
     let node_dir = ctx.workspace_root().join("examples").join("node");
     let _dir = sh.push_dir(&node_dir);
     for script in selected_node_gateway_smoke_scripts(options.cases) {
-        let mut gateway = GatewaySmokeProcess::start(sh, ctx, config_path, &options.backend)?;
+        let mut gateway = GatewaySmokeProcess::start(sh, ctx, model, &options.backend)?;
         wait_for_gateway_smoke(gateway.child_mut())?;
         let mut smoke_cmd = cmd!(sh, "node")
             .arg(script)
             .arg(model)
-            .arg(gateway_smoke_alias(script))
+            .arg(gateway_smoke_target(script))
             .arg(options.prompt)
             .env("COGENTLM_NODE_BACKEND", "cpu")
             .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
@@ -1603,7 +1483,6 @@ fn run_python_gateway_smoke(
     sh: &Shell,
     ctx: &BuildContext,
     options: &SuiteRunOptions<'_>,
-    config_path: &Path,
     model: &Path,
 ) -> Result<()> {
     output::phase("Python gateway client smoke");
@@ -1632,12 +1511,12 @@ fn run_python_gateway_smoke(
     let python_dir = ctx.workspace_root().join("examples").join("python");
     let _dir = sh.push_dir(&python_dir);
     for script in selected_python_gateway_smoke_scripts(options.cases) {
-        let mut gateway = GatewaySmokeProcess::start(sh, ctx, config_path, &options.backend)?;
+        let mut gateway = GatewaySmokeProcess::start(sh, ctx, model, &options.backend)?;
         wait_for_gateway_smoke(gateway.child_mut())?;
         let mut smoke_cmd = cmd!(sh, "{python_exe}")
             .arg(script)
             .arg(model)
-            .arg(gateway_smoke_alias(script))
+            .arg(gateway_smoke_target(script))
             .arg(options.prompt)
             .env("COGENTLM_PYTHON_BACKEND", "cpu")
             .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
@@ -1683,25 +1562,9 @@ fn gateway_smoke_url() -> String {
     format!("http://{GATEWAY_SMOKE_BIND}")
 }
 
-fn gateway_smoke_alias(case_name: &str) -> &'static str {
-    if case_name.contains("embed") {
-        "local-embed"
-    } else {
-        "local"
-    }
-}
-
-fn toml_string(value: &str) -> String {
-    serde_json::to_string(value).expect("string serialization cannot fail")
-}
-
-fn toml_array<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
-    let values = values
-        .into_iter()
-        .map(toml_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{values}]")
+fn gateway_smoke_target(case_name: &str) -> &'static str {
+    let _ = case_name;
+    "local"
 }
 
 struct GatewaySmokeProcess {
@@ -1709,12 +1572,7 @@ struct GatewaySmokeProcess {
 }
 
 impl GatewaySmokeProcess {
-    fn start(
-        sh: &Shell,
-        ctx: &BuildContext,
-        config_path: &Path,
-        backend: &Backend,
-    ) -> Result<Self> {
+    fn start(sh: &Shell, ctx: &BuildContext, model: &Path, backend: &Backend) -> Result<Self> {
         let log_dir = ctx.command_logs_dir();
         std::fs::create_dir_all(&log_dir)
             .with_context(|| format!("failed to create {}", log_dir.display()))?;
@@ -1728,12 +1586,16 @@ impl GatewaySmokeProcess {
         if *backend != Backend::Cpu {
             gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
         }
-        gateway_cmd = gateway_cmd.arg("--").arg("--config").arg(config_path);
+        gateway_cmd = gateway_cmd
+            .arg("--")
+            .arg("--model")
+            .arg(model)
+            .arg("--bind")
+            .arg(GATEWAY_SMOKE_BIND);
         gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(backend))?;
 
         let mut command: Command = gateway_cmd.quiet().into();
         command
-            .env(GATEWAY_SMOKE_TOKEN_ENV, GATEWAY_SMOKE_TOKEN)
             .stdout(Stdio::from(
                 log.try_clone()
                     .context("failed to clone gateway smoke log handle")?,
@@ -3735,8 +3597,8 @@ fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
         "cogentlm-shard" => &["crates", "shard"],
         "cogentlm-sys" => &["crates", "sys"],
         "cogentlm-engine" => &["crates", "engine"],
-        "cogentlm-remote" => &["crates", "remote"],
-        "cogentlm-gateway" => &["crates", "gateway"],
+        "cogentlm-gateway-core" => &["crates", "gateway-core"],
+        "cogentlm-gateway" => &["lib", "gateway"],
         "cogentlm-providers" => &["crates", "providers"],
         "cogentlm-gateway-server" => &["apps", "gateway-server"],
         "cogentlm-client" => &["crates", "client"],

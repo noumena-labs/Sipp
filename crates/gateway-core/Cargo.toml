@@ -1,0 +1,28 @@
+[package]
+name = "cogentlm-gateway-core"
+description = "Protocol-neutral gateway execution primitives for CogentLM"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[features]
+default = ["native", "providers"]
+native = ["cogentlm-client/native"]
+backend-dl = ["cogentlm-client/backend-dl"]
+cuda = ["cogentlm-client/cuda"]
+metal = ["cogentlm-client/metal"]
+vulkan = ["cogentlm-client/vulkan"]
+openmp = ["cogentlm-client/openmp"]
+providers = ["cogentlm-client/providers"]
+
+[dependencies]
+cogentlm-client.workspace = true
+cogentlm-core.workspace = true
+futures-util = "0.3"
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

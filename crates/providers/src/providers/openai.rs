@@ -1,8 +1,8 @@
 use crate::{
     HttpTransport, OpenAiAdapterConfig, ProviderAuth, ProviderBackend, ProviderChatRequest,
     ProviderChatResponse, ProviderEmbedRequest, ProviderEmbeddingResponse, ProviderGenerateRequest,
-    ProviderGenerateResponse, ProviderKind, ProviderModel, ProviderResult, ProviderStream,
-    ProviderStreamEvent,
+    ProviderGenerateResponse, ProviderKind, ProviderModel, ProviderRequestContext, ProviderResult,
+    ProviderStream, ProviderStreamEvent,
 };
 use async_trait::async_trait;
 
@@ -67,12 +67,47 @@ impl ProviderBackend for OpenAiAdapter {
         openai_chat_response_from_body(response.request_id, response.body, ProviderKind::OpenAi)
     }
 
+    async fn chat_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderChatRequest,
+    ) -> ProviderResult<ProviderChatResponse> {
+        let body = openai_chat_body(&req, ProviderKind::OpenAi)?;
+        let response = self
+            .transport
+            .post_json_with_context(
+                "/chat/completions",
+                &body,
+                &context,
+                Some("x-client-request-id"),
+            )
+            .await?;
+        openai_chat_response_from_body(response.request_id, response.body, ProviderKind::OpenAi)
+    }
+
     async fn generate(
         &self,
         req: ProviderGenerateRequest,
     ) -> ProviderResult<ProviderGenerateResponse> {
         let body = openai_completion_body(&req, ProviderKind::OpenAi)?;
         let response = self.transport.post_json("/completions", &body).await?;
+        openai_completion_response_from_body(
+            response.request_id,
+            response.body,
+            ProviderKind::OpenAi,
+        )
+    }
+
+    async fn generate_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderGenerateRequest,
+    ) -> ProviderResult<ProviderGenerateResponse> {
+        let body = openai_completion_body(&req, ProviderKind::OpenAi)?;
+        let response = self
+            .transport
+            .post_json_with_context("/completions", &body, &context, Some("x-client-request-id"))
+            .await?;
         openai_completion_response_from_body(
             response.request_id,
             response.body,
@@ -96,9 +131,48 @@ impl ProviderBackend for OpenAiAdapter {
         ))
     }
 
+    async fn stream_generate_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderGenerateRequest,
+    ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
+        let body = openai_stream_completion_body(&req, ProviderKind::OpenAi)?;
+        let response = self
+            .transport
+            .post_json_stream_with_context(
+                "/completions",
+                &body,
+                &context,
+                Some("x-client-request-id"),
+            )
+            .await?;
+        Ok(openai_completion_stream_events(
+            response.request_id,
+            response.stream,
+            ProviderKind::OpenAi,
+        ))
+    }
+
     async fn embed(&self, req: ProviderEmbedRequest) -> ProviderResult<ProviderEmbeddingResponse> {
         let body = openai_embedding_body(&req, ProviderKind::OpenAi)?;
         let response = self.transport.post_json("/embeddings", &body).await?;
+        openai_embedding_response_from_body(
+            response.request_id,
+            response.body,
+            ProviderKind::OpenAi,
+        )
+    }
+
+    async fn embed_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderEmbedRequest,
+    ) -> ProviderResult<ProviderEmbeddingResponse> {
+        let body = openai_embedding_body(&req, ProviderKind::OpenAi)?;
+        let response = self
+            .transport
+            .post_json_with_context("/embeddings", &body, &context, Some("x-client-request-id"))
+            .await?;
         openai_embedding_response_from_body(
             response.request_id,
             response.body,
@@ -114,6 +188,28 @@ impl ProviderBackend for OpenAiAdapter {
         let response = self
             .transport
             .post_json_stream("/chat/completions", &body)
+            .await?;
+        Ok(openai_stream_events(
+            response.request_id,
+            response.stream,
+            ProviderKind::OpenAi,
+        ))
+    }
+
+    async fn stream_chat_with_context(
+        &self,
+        context: ProviderRequestContext,
+        req: ProviderChatRequest,
+    ) -> ProviderResult<ProviderStream<ProviderStreamEvent>> {
+        let body = openai_stream_chat_body(&req, ProviderKind::OpenAi)?;
+        let response = self
+            .transport
+            .post_json_stream_with_context(
+                "/chat/completions",
+                &body,
+                &context,
+                Some("x-client-request-id"),
+            )
             .await?;
         Ok(openai_stream_events(
             response.request_id,

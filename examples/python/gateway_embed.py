@@ -37,6 +37,7 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
             n_threads=int_env("COGENTLM_THREADS"),
             n_threads_batch=int_env("COGENTLM_THREADS"),
             embeddings=embeddings,
+            pooling="mean" if embeddings else None,
         ),
         sampling=SamplingRuntimeConfig(
             temperature=float_env("COGENTLM_TEMPERATURE", DEFAULT_TEMPERATURE),
@@ -53,7 +54,7 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
 
 
 def main() -> None:
-    model, alias, input_text = read_gateway_args(
+    model, target, input_text = read_gateway_args(
         "gateway_embed", "CogentClient gateway embedding example input."
     )
     set_llama_log_quiet(True)
@@ -63,12 +64,15 @@ def main() -> None:
         "local",
         LocalModelDescriptor(model, runtime_config(embeddings=True)),
     )
-    gateway = GatewayDescriptor(
-        alias,
-        required_env("COGENTLM_GATEWAY_URL"),
-        required_env("COGENTLM_GATEWAY_TOKEN"),
+    gateway_endpoint = client.add(
+        "gateway",
+        GatewayDescriptor(
+            target,
+            required_env("COGENTLM_GATEWAY_URL"),
+            authentication_kind="bearer",
+            authentication_value=required_env("COGENTLM_GATEWAY_TOKEN"),
+        )
     )
-    gateway_endpoint = client.add("gateway", gateway)
 
     local = client.embed(
         input_text,
@@ -78,7 +82,7 @@ def main() -> None:
             normalize=True,
         ),
     ).result()
-    remote = client.embed(
+    gateway = client.embed(
         input_text,
         endpoint=gateway_endpoint,
     ).result()
@@ -86,7 +90,7 @@ def main() -> None:
     print("local:")
     print_embedding(local)
     print("gateway:")
-    print_embedding(remote)
+    print_embedding(gateway)
 
 
 if __name__ == "__main__":

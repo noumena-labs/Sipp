@@ -35,6 +35,7 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
             n_threads=int_env("COGENTLM_THREADS"),
             n_threads_batch=int_env("COGENTLM_THREADS"),
             embeddings=embeddings,
+            pooling="mean" if embeddings else None,
         ),
         sampling=SamplingRuntimeConfig(
             temperature=float_env("COGENTLM_TEMPERATURE", DEFAULT_TEMPERATURE),

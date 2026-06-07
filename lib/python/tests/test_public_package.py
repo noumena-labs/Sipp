@@ -13,9 +13,9 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert callable(cogentlm.set_llama_log_quiet)
     assert cogentlm.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
     assert hasattr(cogentlm.CogentClient, "add")
+    assert hasattr(cogentlm, "GatewayDescriptor")
     assert not hasattr(cogentlm.CogentClient, "add_" + "local")
-    assert not hasattr(cogentlm.CogentClient, "add_" + "remote")
-    assert not hasattr(cogentlm.CogentClient, "update_" + "remote")
+    assert not hasattr(cogentlm.CogentClient, "add_http_endpoint")
 
 
 def test_invalid_backend_environment_is_rejected() -> None:
@@ -58,8 +58,7 @@ class NativeRuntimeConfig: pass
 class ObservabilityRuntimeConfig: pass
 class ProviderDescriptor: pass
 class ProviderError(Exception): pass
-class RemoteGatewayConfig: pass
-class RemoteError(Exception): pass
+class EndpointError(Exception): pass
 class ResidencyRuntimeConfig: pass
 class SamplingRuntimeConfig: pass
 class SchedulerPolicyConfig: pass

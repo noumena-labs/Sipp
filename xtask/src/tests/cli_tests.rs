@@ -124,7 +124,6 @@ fn run_examples_and_tools_parse_browser_workflows() {
     };
     assert_eq!(args.model, std::path::PathBuf::from("model.gguf"));
     assert_eq!(args.bind, "127.0.0.1:8787");
-    assert_eq!(args.token_env, "COGENTLM_GATEWAY_TOKEN");
     assert_eq!(args.backend, Backend::Cpu);
 
     let cli = Cli::parse_from(["xtask", "run", "tools", "build", "playground"]);

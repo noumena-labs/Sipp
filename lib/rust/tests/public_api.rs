@@ -1,7 +1,7 @@
 //! Integration tests for the `cogentlm` facade public API.
 //!
 //! Covers root-level client re-exports and nested native config modules without
-//! loading local models or calling remote gateways.
+//! loading local models or calling gateway endpoints.
 
 use cogentlm::{
     engine::ContextRuntimeConfig, lifecycle::BackendPreference,

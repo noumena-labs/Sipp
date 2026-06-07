@@ -10,25 +10,27 @@ use std::{
 
 use cogentlm_client::{
     AnthropicProviderConfig as CoreAnthropicProviderConfig,
-    CogentChatRequest as CoreClientChatRequest, CogentClient as CoreClient,
-    CogentEmbedRequest as CoreClientEmbedRequest,
+    CogentCancellationHandle as CoreCancellationHandle,
+    CogentCancellationReason as CoreCancellationReason, CogentChatRequest as CoreClientChatRequest,
+    CogentClient as CoreClient, CogentEmbedRequest as CoreClientEmbedRequest,
     CogentEmbeddingResponse as CoreClientEmbeddingResponse,
     CogentEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
     CogentEmbeddingRun as CoreClientEmbeddingRun, CogentError as CoreClientError,
-    CogentQueryRequest as CoreClientQueryRequest, CogentTextOptions as CoreClientTextOptions,
-    CogentTextResponse as CoreClientTextResponse,
+    CogentQueryRequest as CoreClientQueryRequest, CogentRequestContext as CoreClientRequestContext,
+    CogentTextOptions as CoreClientTextOptions, CogentTextResponse as CoreClientTextResponse,
     CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
     CogentTokenBatches as CoreClientTokenBatches, EndpointDescriptor as CoreEndpointDescriptor,
-    EndpointRef as CoreEndpointRef, LocalEmbedOptions as CoreClientLocalEmbedOptions,
+    EndpointRef as CoreEndpointRef, GatewayAuthentication as CoreGatewayAuthentication,
+    GatewayEndpointConfig as CoreGatewayEndpointConfig, GatewayRoutes as CoreGatewayRoutes,
+    GatewaySecret as CoreGatewaySecret, GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy,
+    LocalEmbedOptions as CoreClientLocalEmbedOptions,
     LocalTextOptions as CoreClientLocalTextOptions,
     OpenAiCompatibleProviderConfig as CoreOpenAiCompatibleProviderConfig,
     OpenAiProviderConfig as CoreOpenAiProviderConfig, ProviderAuthConfig as CoreProviderAuthConfig,
     ProviderEndpointConfig as CoreProviderEndpointConfig,
     ProviderEndpointError as CoreProviderEndpointError,
     ProviderEndpointErrorKind as CoreProviderEndpointErrorKind,
-    ProviderSecret as CoreProviderSecret, RemoteError as CoreRemoteError,
-    RemoteErrorKind as CoreRemoteErrorKind, RemoteGatewayConfig as CoreRemoteGatewayConfig,
-    RemoteSecret as CoreRemoteSecret,
+    ProviderSecret as CoreProviderSecret,
 };
 use cogentlm_core::TokenUsage as CoreTokenUsage;
 use cogentlm_engine::backend::{
@@ -59,8 +61,9 @@ use napi_derive::napi;
 use serde::de::DeserializeOwned;
 
 #[cfg(test)]
-#[path = "tests/remote_tests.rs"]
-mod remote_tests;
+#[path = "tests/root_tests.rs"]
+mod root_tests;
+
 #[cfg(test)]
 #[path = "tests/stats_tests.rs"]
 mod stats_tests;
@@ -588,7 +591,7 @@ impl NativeRuntimeConfig {
     }
 }
 
-/// Address of a registered local, remote gateway, or direct provider endpoint.
+/// Address of a registered inference endpoint.
 #[napi(object)]
 pub struct EndpointRef {
     pub kind: String,
@@ -601,14 +604,14 @@ impl EndpointRef {
             "local" => Ok(CoreEndpointRef::Local {
                 id: self.id.clone(),
             }),
-            "remote" => Ok(CoreEndpointRef::Remote {
+            "gateway" => Ok(CoreEndpointRef::Gateway {
                 id: self.id.clone(),
             }),
             "provider" => Ok(CoreEndpointRef::Provider {
                 id: self.id.clone(),
             }),
             _ => Err(invalid_arg(
-                "endpoint kind must be local, remote, or provider",
+                "endpoint kind must be local, gateway, or provider",
             )),
         }
     }
@@ -696,15 +699,17 @@ impl LocalEmbedOptions {
     }
 }
 
-/// Prompt completion request routed to a local endpoint or remote gateway.
+/// Prompt completion request routed to an inference endpoint.
 #[napi(object)]
 pub struct CogentQueryRequest {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
     pub prompt: String,
     pub options: Option<CogentTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[napi(js_name = "gatewayOptions")]
-    pub gateway_options: Option<serde_json::Value>,
+    #[napi(js_name = "endpointOptions")]
+    pub endpoint_options: Option<serde_json::Value>,
     #[napi(js_name = "providerOptions")]
     pub provider_options: Option<serde_json::Value>,
     #[napi(js_name = "emitTokens")]
@@ -718,22 +723,24 @@ impl CogentQueryRequest {
             prompt: self.prompt.clone(),
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
-            gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
+            endpoint_options: endpoint_options_or_empty(self.endpoint_options.clone())?,
             provider_options: provider_options_or_empty(self.provider_options.clone())?,
             emit_tokens: self.emit_tokens.unwrap_or(false),
         })
     }
 }
 
-/// Chat completion request routed to a local endpoint or remote gateway.
+/// Chat completion request routed to an inference endpoint.
 #[napi(object)]
 pub struct CogentChatRequest {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
     pub messages: Vec<ChatMessage>,
     pub options: Option<CogentTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[napi(js_name = "gatewayOptions")]
-    pub gateway_options: Option<serde_json::Value>,
+    #[napi(js_name = "endpointOptions")]
+    pub endpoint_options: Option<serde_json::Value>,
     #[napi(js_name = "providerOptions")]
     pub provider_options: Option<serde_json::Value>,
     #[napi(js_name = "emitTokens")]
@@ -747,21 +754,23 @@ impl CogentChatRequest {
             messages: chat_messages_to_core(self.messages.clone())?,
             options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
-            gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
+            endpoint_options: endpoint_options_or_empty(self.endpoint_options.clone())?,
             provider_options: provider_options_or_empty(self.provider_options.clone())?,
             emit_tokens: self.emit_tokens.unwrap_or(false),
         })
     }
 }
 
-/// Embedding request routed to a local endpoint or remote gateway.
+/// Embedding request routed to an inference endpoint.
 #[napi(object)]
 pub struct CogentEmbedRequest {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
     pub input: String,
     pub local: Option<LocalEmbedOptions>,
-    #[napi(js_name = "gatewayOptions")]
-    pub gateway_options: Option<serde_json::Value>,
+    #[napi(js_name = "endpointOptions")]
+    pub endpoint_options: Option<serde_json::Value>,
     #[napi(js_name = "providerOptions")]
     pub provider_options: Option<serde_json::Value>,
 }
@@ -776,13 +785,13 @@ impl CogentEmbedRequest {
                 .as_ref()
                 .map(LocalEmbedOptions::to_core)
                 .unwrap_or_default(),
-            gateway_options: gateway_options_or_empty(self.gateway_options.clone())?,
+            endpoint_options: endpoint_options_or_empty(self.endpoint_options.clone())?,
             provider_options: provider_options_or_empty(self.provider_options.clone())?,
         })
     }
 }
 
-/// Role/content chat message accepted by local and remote chat requests.
+/// Role/content chat message accepted by chat requests.
 #[napi(object)]
 #[derive(Clone)]
 pub struct ChatMessage {
@@ -790,29 +799,13 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-/// Remote CogentLM gateway alias, URL, token, and optional timeout.
+/// Authentication configuration for a gateway endpoint.
 #[napi(object)]
-pub struct RemoteGatewayConfig {
-    pub alias: String,
-    #[napi(js_name = "baseUrl")]
-    pub base_url: String,
-    pub token: String,
-    #[napi(js_name = "timeoutMs")]
-    pub timeout_ms: Option<u32>,
-}
-
-impl RemoteGatewayConfig {
-    fn to_core(&self) -> CoreRemoteGatewayConfig {
-        let timeout = self
-            .timeout_ms
-            .map(|timeout_ms| Duration::from_millis(u64::from(timeout_ms)));
-        CoreRemoteGatewayConfig {
-            alias: self.alias.clone(),
-            base_url: self.base_url.clone(),
-            token: CoreRemoteSecret::new(self.token.clone()),
-            timeout,
-        }
-    }
+pub struct GatewayAuthentication {
+    pub kind: String,
+    pub value: Option<String>,
+    #[napi(js_name = "headerName")]
+    pub header_name: Option<String>,
 }
 
 /// Static header entry for an OpenAI-compatible provider descriptor.
@@ -822,17 +815,17 @@ pub struct ProviderStaticHeader {
     pub value: String,
 }
 
-/// Local, gateway, or direct provider endpoint descriptor accepted by add.
+/// Local or direct provider endpoint descriptor accepted by add.
 #[napi(object)]
 pub struct EndpointDescriptor {
     pub kind: String,
     #[napi(js_name = "modelPath")]
     pub model_path: Option<String>,
     pub config: Option<NativeRuntimeConfig>,
-    pub alias: Option<String>,
     #[napi(js_name = "baseUrl")]
     pub base_url: Option<String>,
-    pub token: Option<String>,
+    pub target: Option<String>,
+    pub authentication: Option<GatewayAuthentication>,
     pub provider: Option<String>,
     pub model: Option<String>,
     #[napi(js_name = "apiKey")]
@@ -846,16 +839,26 @@ pub struct EndpointDescriptor {
     pub auth_header_value: Option<String>,
     #[napi(js_name = "staticHeaders")]
     pub static_headers: Option<Vec<ProviderStaticHeader>>,
+    #[napi(js_name = "correlationHeader")]
+    pub correlation_header: Option<String>,
+    #[napi(js_name = "queryRoute")]
+    pub query_route: Option<String>,
+    #[napi(js_name = "chatRoute")]
+    pub chat_route: Option<String>,
+    #[napi(js_name = "embedRoute")]
+    pub embed_route: Option<String>,
+    #[napi(js_name = "protocolOptions")]
+    pub protocol_options: Option<serde_json::Value>,
 }
 
 impl EndpointDescriptor {
     fn to_core(&self) -> Result<CoreEndpointDescriptor> {
         match self.kind.as_str() {
             "local" => self.local_to_core(),
-            "gateway" | "remote" => self.gateway_to_core(),
+            "gateway" => self.gateway_to_core(),
             "provider" => self.provider_to_core(),
             _ => Err(invalid_arg(
-                "endpoint descriptor kind must be local, gateway, remote, or provider",
+                "endpoint descriptor kind must be local, gateway, or provider",
             )),
         }
     }
@@ -863,9 +866,9 @@ impl EndpointDescriptor {
     fn local_to_core(&self) -> Result<CoreEndpointDescriptor> {
         reject_endpoint_descriptor_fields(
             &[
-                ("alias", self.alias.is_some()),
                 ("baseUrl", self.base_url.is_some()),
-                ("token", self.token.is_some()),
+                ("target", self.target.is_some()),
+                ("authentication", self.authentication.is_some()),
                 ("provider", self.provider.is_some()),
                 ("model", self.model.is_some()),
                 ("apiKey", self.api_key.is_some()),
@@ -874,6 +877,11 @@ impl EndpointDescriptor {
                 ("authHeaderName", self.auth_header_name.is_some()),
                 ("authHeaderValue", self.auth_header_value.is_some()),
                 ("staticHeaders", self.static_headers.is_some()),
+                ("correlationHeader", self.correlation_header.is_some()),
+                ("queryRoute", self.query_route.is_some()),
+                ("chatRoute", self.chat_route.is_some()),
+                ("embedRoute", self.embed_route.is_some()),
+                ("protocolOptions", self.protocol_options.is_some()),
             ],
             "local",
         )?;
@@ -901,18 +909,36 @@ impl EndpointDescriptor {
                 ("version", self.version.is_some()),
                 ("authHeaderName", self.auth_header_name.is_some()),
                 ("authHeaderValue", self.auth_header_value.is_some()),
-                ("staticHeaders", self.static_headers.is_some()),
+                ("correlationHeader", self.correlation_header.is_some()),
             ],
             "gateway",
         )?;
-        Ok(CoreEndpointDescriptor::gateway(CoreRemoteGatewayConfig {
-            alias: required_descriptor_string(self.alias.as_ref(), "gateway alias")?,
+        let timeout = endpoint_timeout(self.timeout_ms)?.unwrap_or(Duration::from_secs(60));
+        let mut routes = CoreGatewayRoutes::default();
+        assign_if_some(&mut routes.query, self.query_route.clone());
+        assign_if_some(&mut routes.chat, self.chat_route.clone());
+        assign_if_some(&mut routes.embed, self.embed_route.clone());
+        Ok(CoreEndpointDescriptor::gateway(CoreGatewayEndpointConfig {
+            target: required_descriptor_string(self.target.as_ref(), "gateway target")?,
             base_url: required_descriptor_string(self.base_url.as_ref(), "gateway baseUrl")?,
-            token: CoreRemoteSecret::new(required_descriptor_string(
-                self.token.as_ref(),
-                "gateway token",
-            )?),
-            timeout: endpoint_timeout(self.timeout_ms)?,
+            routes,
+            authentication: gateway_authentication(self.authentication.as_ref())?,
+            static_headers: self
+                .static_headers
+                .as_ref()
+                .map(|headers| {
+                    headers
+                        .iter()
+                        .map(|header| (header.name.clone(), header.value.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            timeouts: CoreGatewayTimeoutPolicy {
+                connect: timeout,
+                request: timeout,
+                read: timeout,
+            },
+            protocol_options: endpoint_options_or_empty(self.protocol_options.clone())?,
         }))
     }
 
@@ -921,8 +947,12 @@ impl EndpointDescriptor {
             &[
                 ("modelPath", self.model_path.is_some()),
                 ("config", self.config.is_some()),
-                ("alias", self.alias.is_some()),
-                ("token", self.token.is_some()),
+                ("target", self.target.is_some()),
+                ("authentication", self.authentication.is_some()),
+                ("queryRoute", self.query_route.is_some()),
+                ("chatRoute", self.chat_route.is_some()),
+                ("embedRoute", self.embed_route.is_some()),
+                ("protocolOptions", self.protocol_options.is_some()),
             ],
             "provider",
         )?;
@@ -937,6 +967,7 @@ impl EndpointDescriptor {
                         ("authHeaderName", self.auth_header_name.is_some()),
                         ("authHeaderValue", self.auth_header_value.is_some()),
                         ("staticHeaders", self.static_headers.is_some()),
+                        ("correlationHeader", self.correlation_header.is_some()),
                     ],
                     "OpenAI provider",
                 )?;
@@ -953,6 +984,7 @@ impl EndpointDescriptor {
                         ("authHeaderName", self.auth_header_name.is_some()),
                         ("authHeaderValue", self.auth_header_value.is_some()),
                         ("staticHeaders", self.static_headers.is_some()),
+                        ("correlationHeader", self.correlation_header.is_some()),
                     ],
                     "Anthropic provider",
                 )?;
@@ -991,6 +1023,7 @@ impl EndpointDescriptor {
                                 .collect()
                         })
                         .unwrap_or_default(),
+                    correlation_header: self.correlation_header.clone(),
                     timeout,
                 })
             }
@@ -1036,6 +1069,37 @@ fn provider_secret(value: Option<&String>, name: &'static str) -> Result<CorePro
     required_descriptor_string(value, name).map(CoreProviderSecret::new)
 }
 
+fn gateway_authentication(
+    authentication: Option<&GatewayAuthentication>,
+) -> Result<CoreGatewayAuthentication> {
+    match authentication {
+        None => Ok(CoreGatewayAuthentication::None),
+        Some(authentication) if authentication.kind == "none" => {
+            Ok(CoreGatewayAuthentication::None)
+        }
+        Some(authentication) if authentication.kind == "bearer" => {
+            Ok(CoreGatewayAuthentication::Bearer(CoreGatewaySecret::new(
+                required_descriptor_string(authentication.value.as_ref(), "authentication value")?,
+            )))
+        }
+        Some(authentication) if authentication.kind == "header" => {
+            Ok(CoreGatewayAuthentication::Header {
+                name: required_descriptor_string(
+                    authentication.header_name.as_ref(),
+                    "authentication headerName",
+                )?,
+                value: CoreGatewaySecret::new(required_descriptor_string(
+                    authentication.value.as_ref(),
+                    "authentication value",
+                )?),
+            })
+        }
+        Some(_) => Err(invalid_arg(
+            "authentication kind must be none, bearer, or header",
+        )),
+    }
+}
+
 fn provider_auth(descriptor: &EndpointDescriptor) -> Result<CoreProviderAuthConfig> {
     match (
         descriptor.api_key.as_ref(),
@@ -1055,7 +1119,7 @@ fn provider_auth(descriptor: &EndpointDescriptor) -> Result<CoreProviderAuthConf
     }
 }
 
-/// Token counts reported by local or remote inference backends.
+/// Token counts reported by inference endpoints.
 #[napi(object)]
 pub struct TokenUsage {
     #[napi(js_name = "inputTokens")]
@@ -1147,6 +1211,7 @@ pub struct CogentTextResponse {
     pub usage: Option<TokenUsage>,
     #[napi(js_name = "localStats")]
     pub local_stats: Option<RequestStats>,
+    pub metadata: CogentResponseMetadata,
 }
 
 /// Final vector response from an embedding request.
@@ -1159,6 +1224,18 @@ pub struct CogentEmbeddingResponse {
     pub local_stats: Option<RequestStats>,
     pub pooling: Option<PoolingType>,
     pub normalized: Option<bool>,
+    pub metadata: CogentResponseMetadata,
+}
+
+/// Request and upstream correlation metadata.
+#[napi(object)]
+pub struct CogentResponseMetadata {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
+    #[napi(js_name = "upstreamRequestId")]
+    pub upstream_request_id: Option<String>,
+    #[napi(js_name = "upstreamResponseId")]
+    pub upstream_response_id: Option<String>,
 }
 
 fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
@@ -1167,8 +1244,8 @@ fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
             kind: "local".to_string(),
             id,
         },
-        CoreEndpointRef::Remote { id } => EndpointRef {
-            kind: "remote".to_string(),
+        CoreEndpointRef::Gateway { id } => EndpointRef {
+            kind: "gateway".to_string(),
             id,
         },
         CoreEndpointRef::Provider { id } => EndpointRef {
@@ -1186,6 +1263,16 @@ fn token_usage_to_node(usage: CoreTokenUsage) -> TokenUsage {
     }
 }
 
+fn response_metadata_to_node(
+    metadata: cogentlm_client::CogentResponseMetadata,
+) -> CogentResponseMetadata {
+    CogentResponseMetadata {
+        request_id: metadata.request_id,
+        upstream_request_id: metadata.upstream_request_id,
+        upstream_response_id: metadata.upstream_response_id,
+    }
+}
+
 fn cogent_text_response_to_node(response: CoreClientTextResponse) -> CogentTextResponse {
     CogentTextResponse {
         endpoint: endpoint_ref_to_node(response.endpoint),
@@ -1193,6 +1280,7 @@ fn cogent_text_response_to_node(response: CoreClientTextResponse) -> CogentTextR
         finish_reason: response.finish_reason.as_str().to_string(),
         usage: response.usage.map(token_usage_to_node),
         local_stats: response.local_stats.map(request_stats_to_node),
+        metadata: response_metadata_to_node(response.metadata),
     }
 }
 
@@ -1206,6 +1294,7 @@ fn cogent_embedding_response_to_node(
         local_stats: response.local_stats.map(request_stats_to_node),
         pooling: response.pooling.map(PoolingType::from),
         normalized: response.normalized,
+        metadata: response_metadata_to_node(response.metadata),
     }
 }
 
@@ -1231,7 +1320,7 @@ pub struct TokenBatch {
     pub stats: TokenEmissionStats,
 }
 
-/// Client facade for local CogentLM models and remote gateway aliases.
+/// Client facade for registered inference endpoints.
 #[napi(js_name = "CogentClient")]
 pub struct CogentClient {
     inner: SharedCogentClient,
@@ -1262,34 +1351,43 @@ impl CogentClient {
 
     #[napi(ts_return_type = "CogentTextRun")]
     pub fn query(&self, request: CogentQueryRequest) -> Result<CogentTextRun> {
+        let context = CoreClientRequestContext {
+            request_id: request.request_id.clone(),
+        };
         let request = request.to_core()?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .query(request);
+            .query_with_context(context, request);
         Ok(CogentTextRun::from_core(run))
     }
 
     #[napi(ts_return_type = "CogentTextRun")]
     pub fn chat(&self, request: CogentChatRequest) -> Result<CogentTextRun> {
+        let context = CoreClientRequestContext {
+            request_id: request.request_id.clone(),
+        };
         let request = request.to_core()?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .chat(request);
+            .chat_with_context(context, request);
         Ok(CogentTextRun::from_core(run))
     }
 
     #[napi(ts_return_type = "CogentEmbeddingRun")]
     pub fn embed(&self, request: CogentEmbedRequest) -> Result<CogentEmbeddingRun> {
+        let context = CoreClientRequestContext {
+            request_id: request.request_id.clone(),
+        };
         let request = request.to_core()?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .embed(request);
+            .embed_with_context(context, request);
         Ok(CogentEmbeddingRun::from_core(run))
     }
 }
@@ -1299,14 +1397,16 @@ impl CogentClient {
 pub struct CogentTextRun {
     response: SharedClientTextResponse,
     tokens: SharedClientTokenBatches,
+    cancellation: CoreCancellationHandle,
 }
 
 impl CogentTextRun {
     fn from_core(run: CoreClientTextRun) -> Self {
-        let (tokens, response) = run.into_parts();
+        let (tokens, response, cancellation) = run.into_parts_with_cancel();
         Self {
             response: Arc::new(Mutex::new(Some(response))),
             tokens: Arc::new(Mutex::new(Some(tokens))),
+            cancellation,
         }
     }
 }
@@ -1326,18 +1426,28 @@ impl CogentTextRun {
             tokens: self.tokens.clone(),
         })
     }
+
+    /// Cancel the native run and abort local or upstream execution.
+    #[napi]
+    pub fn cancel(&self, reason: Option<String>) -> Result<()> {
+        self.cancellation.cancel(cancellation_reason(reason)?);
+        Ok(())
+    }
 }
 
 /// Embedding request handle with a final embedding response.
 #[napi(js_name = "CogentEmbeddingRun")]
 pub struct CogentEmbeddingRun {
     response: SharedClientEmbeddingResponse,
+    cancellation: CoreCancellationHandle,
 }
 
 impl CogentEmbeddingRun {
     fn from_core(run: CoreClientEmbeddingRun) -> Self {
+        let (response, cancellation) = run.into_parts();
         Self {
-            response: Arc::new(Mutex::new(Some(run.into_response()))),
+            response: Arc::new(Mutex::new(Some(response))),
+            cancellation,
         }
     }
 }
@@ -1352,6 +1462,25 @@ impl CogentEmbeddingRun {
         AsyncTask::new(ClientEmbeddingResultTask {
             response: self.response.clone(),
         })
+    }
+
+    /// Cancel the native run and abort local or upstream execution.
+    #[napi]
+    pub fn cancel(&self, reason: Option<String>) -> Result<()> {
+        self.cancellation.cancel(cancellation_reason(reason)?);
+        Ok(())
+    }
+}
+
+fn cancellation_reason(reason: Option<String>) -> Result<CoreCancellationReason> {
+    match reason.as_deref().unwrap_or("caller_cancelled") {
+        "caller_cancelled" => Ok(CoreCancellationReason::CallerCancelled),
+        "client_disconnected" => Ok(CoreCancellationReason::ClientDisconnected),
+        "server_shutdown" => Ok(CoreCancellationReason::ServerShutdown),
+        "deadline_exceeded" => Ok(CoreCancellationReason::DeadlineExceeded),
+        _ => Err(invalid_arg(
+            "cancellation reason must be caller_cancelled, client_disconnected, server_shutdown, or deadline_exceeded",
+        )),
     }
 }
 
@@ -1472,10 +1601,10 @@ pub fn set_llama_log_quiet(quiet: bool) {
     core_set_llama_log_quiet(quiet);
 }
 
-fn gateway_options_or_empty(
+fn endpoint_options_or_empty(
     value: Option<serde_json::Value>,
 ) -> Result<serde_json::Map<String, serde_json::Value>> {
-    json_options_or_empty(value, "gatewayOptions")
+    json_options_or_empty(value, "endpointOptions")
 }
 
 fn provider_options_or_empty(
@@ -1668,23 +1797,6 @@ fn napi_error(message: impl ToString) -> Error {
     Error::new(Status::GenericFailure, message)
 }
 
-fn remote_error_message(error: &CoreRemoteError) -> String {
-    format!(
-        "remote gateway error ({}): {}",
-        error.kind.as_str(),
-        error.message
-    )
-}
-
-fn remote_error_status(kind: CoreRemoteErrorKind) -> Status {
-    match kind {
-        CoreRemoteErrorKind::InvalidRequest | CoreRemoteErrorKind::UnsupportedFeature => {
-            Status::InvalidArg
-        }
-        _ => Status::GenericFailure,
-    }
-}
-
 fn provider_error_message(error: &CoreProviderEndpointError) -> String {
     format!(
         "provider error ({} {}): {}",
@@ -1702,41 +1814,28 @@ fn provider_error_status(kind: CoreProviderEndpointErrorKind) -> Status {
     }
 }
 
-fn remote_error_to_node(env: Env, error: CoreRemoteError) -> Error {
-    match remote_error_to_node_result(env, error) {
-        Ok(error) => error,
-        Err(error) => error,
-    }
-}
-
-fn remote_error_to_node_result(env: Env, error: CoreRemoteError) -> Result<Error> {
-    let status = remote_error_status(error.kind);
-    let message = remote_error_message(&error);
-    let mut object = env.create_error(Error::new(status, message))?;
-    let retry_after_ms = error
-        .retry_after
-        .map(|duration| duration.as_secs_f64() * 1000.0);
-    let raw_body = error
-        .raw
-        .map(|value| *value)
-        .unwrap_or(serde_json::Value::Null);
-
-    object.set("name", "RemoteError")?;
-    object.set("kind", error.kind.as_str())?;
-    object.set("status", error.status)?;
-    object.set("code", error.code)?;
-    object.set("requestId", error.request_id)?;
-    object.set("retryAfterMs", retry_after_ms)?;
-    object.set("rawBody", raw_body)?;
-
-    Ok(Error::from(object.to_unknown()))
-}
-
 fn provider_error_to_node(env: Env, error: CoreProviderEndpointError) -> Error {
     match provider_error_to_node_result(env, error) {
         Ok(error) => error,
         Err(error) => error,
     }
+}
+
+fn endpoint_error_to_node(env: Env, error: cogentlm_client::EndpointError) -> Error {
+    match endpoint_error_to_node_result(env, error) {
+        Ok(error) => error,
+        Err(error) => error,
+    }
+}
+
+fn endpoint_error_to_node_result(env: Env, error: cogentlm_client::EndpointError) -> Result<Error> {
+    let mut object = env.create_error(Error::new(Status::GenericFailure, error.to_string()))?;
+    object.set("name", "EndpointError")?;
+    object.set("kind", error.kind)?;
+    object.set("status", error.status)?;
+    object.set("code", error.code)?;
+    object.set("requestId", error.request_id)?;
+    Ok(Error::from(object.to_unknown()))
 }
 
 fn provider_error_to_node_result(env: Env, error: CoreProviderEndpointError) -> Result<Error> {
@@ -1763,32 +1862,10 @@ fn provider_error_to_node_result(env: Env, error: CoreProviderEndpointError) -> 
     Ok(Error::from(object.to_unknown()))
 }
 
-fn client_error_without_env(error: CoreClientError) -> Error {
-    match error {
-        CoreClientError::Local(error) => core_error(error),
-        CoreClientError::Remote(error) => Error::new(
-            remote_error_status(error.kind),
-            remote_error_message(&error),
-        ),
-        CoreClientError::Provider(error) => Error::new(
-            provider_error_status(error.kind),
-            provider_error_message(&error),
-        ),
-        CoreClientError::InvalidRequest(message) => invalid_arg(message),
-        CoreClientError::UnsupportedOperation {
-            endpoint,
-            operation,
-        } => invalid_arg(format!(
-            "unsupported operation {operation} on endpoint {endpoint:?}"
-        )),
-        other => napi_error(other.to_string()),
-    }
-}
-
 fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
-        CoreClientError::Remote(error) => remote_error_to_node(env, error),
+        CoreClientError::Endpoint(error) => endpoint_error_to_node(env, error),
         CoreClientError::Provider(error) => provider_error_to_node(env, error),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),
         CoreClientError::UnsupportedOperation {

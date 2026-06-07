@@ -1,7 +1,7 @@
 //! Tests the `cogentlm` crate root public facade helpers.
 //!
 //! Covers deterministic package metadata without loading local models or calling
-//! remote gateways.
+//! gateway endpoints.
 
 use super::package_version;
 

@@ -10,6 +10,20 @@ Endpoints use the unified descriptor API:
 endpoint = client.add("local", LocalModelDescriptor(model_path, runtime))
 ```
 
+Gateway endpoints use the same descriptor API:
+
+```python
+endpoint = client.add(
+    "gateway",
+    GatewayDescriptor(
+        "local",
+        base_url,
+        authentication_kind="bearer",
+        authentication_value=token,
+    )
+)
+```
+
 ## Local GGUF
 
 Build/install the Python package with xtask when needed:
@@ -53,11 +67,11 @@ Run:
 ```bash
 python examples/python/gateway_query.py <model.gguf> local [input]
 python examples/python/gateway_chat.py <model.gguf> local [input]
-python examples/python/gateway_embed.py <model.gguf> local-embed [input]
+python examples/python/gateway_embed.py <model.gguf> local [input]
 ```
 
 `gateway_embed` requires a model/runtime that reports embedding support.
 
-For the OpenAI gateway, use alias `openai-chat` for query/chat and
+For the OpenAI gateway, use target `openai-chat` for query/chat and
 `openai-embed` for embeddings. The OpenAI gateway requires `OPENAI_API_KEY` in
 the gateway process.

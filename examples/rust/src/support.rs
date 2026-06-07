@@ -27,7 +27,7 @@ pub struct VisionArgs {
 
 pub struct GatewayArgs {
     pub model_path: PathBuf,
-    pub alias: String,
+    pub target: String,
     pub input: String,
 }
 
@@ -80,13 +80,13 @@ pub fn gateway_args(
     let model_path = args
         .next()
         .ok_or_else(|| usage_error(gateway_usage(command)))?;
-    let alias = args
+    let target = args
         .next()
         .ok_or_else(|| usage_error(gateway_usage(command)))?;
     let input = args.collect::<Vec<_>>().join(" ");
     Ok(GatewayArgs {
         model_path: PathBuf::from(model_path),
-        alias,
+        target,
         input: defaulted_input(input, default_input),
     })
 }
@@ -154,8 +154,8 @@ fn local_usage(command: &'static str) -> String {
 
 fn gateway_usage(command: &'static str) -> String {
     format!(
-        "usage: cargo run -p cogentlm-rust-examples --features remote --bin {command} -- \
-         <model.gguf> <gateway-alias> [input]"
+        "usage: cargo run -p cogentlm-rust-examples --features gateway --bin {command} -- \
+         <model.gguf> <gateway-target> [input]"
     )
 }
 

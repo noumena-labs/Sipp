@@ -110,6 +110,7 @@ impl ProviderEndpointConfig {
             base_url: base_url.into(),
             auth,
             static_headers: Vec::new(),
+            correlation_header: None,
             timeout: None,
         })
     }
@@ -162,6 +163,8 @@ pub struct OpenAiCompatibleProviderConfig {
     pub auth: ProviderAuthConfig,
     /// Static provider headers. Values are treated as secrets.
     pub static_headers: Vec<(String, ProviderSecret)>,
+    /// Optional per-request correlation header.
+    pub correlation_header: Option<String>,
     /// Request timeout.
     pub timeout: Option<Duration>,
 }
@@ -220,6 +223,7 @@ fn build_openai_compatible_provider(
         auth: config.auth.into_provider_auth(),
         protocol: OpenAiCompatibleProtocol::OpenAiCompatible,
         static_headers,
+        correlation_header: config.correlation_header,
         timeout: config.timeout,
     })
     .map_err(|error| {

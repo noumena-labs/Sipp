@@ -36,16 +36,16 @@ export function readVisionArgs(defaultInput) {
 
 export function readGatewayArgs(command, defaultInput) {
   const model = process.argv[2];
-  const alias = process.argv[3];
-  if (!model || !alias) {
+  const target = process.argv[3];
+  if (!model || !target) {
     console.error(
-      `usage: node examples/node/${command}.mjs <model.gguf> <gateway-alias> [input]`,
+      `usage: node examples/node/${command}.mjs <model.gguf> <gateway-target> [input]`,
     );
     process.exit(2);
   }
   return {
     model,
-    alias,
+    target,
     input: process.argv.slice(4).join(' ') || defaultInput,
   };
 }

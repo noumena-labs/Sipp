@@ -1313,10 +1313,6 @@ pub struct RunGatewayLocalServeArgs {
     #[arg(long, default_value = "127.0.0.1:8787")]
     pub bind: String,
 
-    /// Environment variable containing the gateway bearer token.
-    #[arg(long, default_value = "COGENTLM_GATEWAY_TOKEN")]
-    pub token_env: String,
-
     /// Native backend used by the gateway process.
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,
@@ -1337,11 +1333,11 @@ pub struct RunGatewayOpenAiServeArgs {
     #[arg(long, default_value = "OPENAI_API_KEY")]
     pub api_key_env: String,
 
-    /// OpenAI model used by the query/chat alias.
+    /// OpenAI model used by the query/chat target.
     #[arg(long, default_value = "gpt-5-mini")]
     pub chat_model: String,
 
-    /// OpenAI embedding model used by the embed alias.
+    /// OpenAI embedding model used by the embed target.
     #[arg(long, default_value = "text-embedding-3-small")]
     pub embed_model: String,
 }

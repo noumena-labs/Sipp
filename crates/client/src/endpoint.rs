@@ -21,8 +21,8 @@ pub enum EndpointRef {
         /// Client-scoped endpoint id.
         id: String,
     },
-    /// Remote endpoint registered in the client.
-    Remote {
+    /// HTTP gateway endpoint registered in the client.
+    Gateway {
         /// Client-scoped endpoint id.
         id: String,
     },
@@ -37,7 +37,7 @@ impl EndpointRef {
     /// Return the stable client-scoped endpoint id.
     pub fn id(&self) -> &str {
         match self {
-            Self::Local { id } | Self::Remote { id } | Self::Provider { id } => id,
+            Self::Local { id } | Self::Gateway { id } | Self::Provider { id } => id,
         }
     }
 
@@ -45,13 +45,18 @@ impl EndpointRef {
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::Local { .. } => "local",
-            Self::Remote { .. } => "remote",
+            Self::Gateway { .. } => "gateway",
             Self::Provider { .. } => "provider",
         }
     }
 
     pub(crate) fn is_local(&self) -> bool {
         matches!(self, Self::Local { .. })
+    }
+
+    /// Create a reference for a gateway endpoint.
+    pub fn gateway(id: impl Into<String>) -> Self {
+        Self::Gateway { id: id.into() }
     }
 }
 
@@ -75,8 +80,8 @@ impl EndpointCapabilities {
         }
     }
 
-    #[cfg(any(feature = "remote", feature = "providers"))]
-    pub(crate) const fn unknown() -> Self {
+    /// Return capabilities that will be determined by the endpoint at runtime.
+    pub const fn unknown() -> Self {
         Self {
             query: CapabilitySupport::Unknown,
             chat: CapabilitySupport::Unknown,
@@ -84,7 +89,8 @@ impl EndpointCapabilities {
         }
     }
 
-    pub(crate) fn for_operation(&self, operation: &'static str) -> CapabilitySupport {
+    /// Return support for one canonical inference operation.
+    pub fn for_operation(&self, operation: &'static str) -> CapabilitySupport {
         match operation {
             "query" => self.query,
             "chat" => self.chat,

@@ -1,13 +1,16 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use cogentlm_gateway::GatewayFileConfig;
-use cogentlm_gateway_server::http;
+use cogentlm_gateway_server::{
+    config::GatewayServerConfig, http::GatewayHttpService, metrics::GatewayMetrics,
+};
+use tokio::sync::oneshot;
 
 #[derive(Debug, Parser)]
 #[command(name = "cogentlm-gateway")]
-#[command(about = "Run a CogentLM remote gateway")]
+#[command(about = "Run the first-party CogentLM gateway application")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -15,9 +18,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Serve the gateway using a TOML configuration file.
+    /// Serve the gateway application.
     Serve {
-        /// Path to gateway.toml.
+        /// Path to the application TOML file.
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Parse and validate configuration without loading endpoints.
+    Check {
+        /// Path to the application TOML file.
         #[arg(long)]
         config: PathBuf,
     },
@@ -26,74 +35,85 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
-    let cli = Cli::parse();
-    match cli.command {
+    match Cli::parse().command {
         Command::Serve { config } => serve(config).await,
+        Command::Check { config } => check(config),
     }
 }
 
-async fn serve(config: PathBuf) -> anyhow::Result<()> {
-    let config = GatewayFileConfig::from_path(&config)
-        .with_context(|| format!("failed to load gateway config {}", config.display()))?;
-    let bind = config.server.bind;
-    let access = config
-        .gateway_access()
-        .context("failed to build gateway token access")?;
-    let token = load_secret_env(&config.auth.token_env)?;
-    let admin_env = config
-        .auth
-        .admin_token_env
-        .clone()
-        .context("auth.admin_token_env is required for the gateway dashboard")?;
-    let admin_token = load_secret_env(&admin_env)?;
-    let max_request_bytes = config
-        .limits
-        .max_request_bytes()
-        .context("invalid gateway request byte limit")?;
-    let history_capacity = config
-        .limits
-        .history_capacity()
-        .context("invalid gateway history capacity")?;
-    let allowed_origins = config.cors.allowed_origins.clone();
-    let adapter = config
-        .build_adapter()
-        .await
-        .context("failed to build gateway adapter")?;
-    let service = http::GatewayHttpService::new(
-        adapter,
-        vec![http::GatewayToken::new(token, access)?],
-        admin_token,
-        allowed_origins,
-        http::GatewayHttpLimits { max_request_bytes },
-        history_capacity,
-    )
-    .context("failed to build gateway HTTP service")?;
-
-    let listener = tokio::net::TcpListener::bind(bind)
-        .await
-        .with_context(|| format!("failed to bind gateway to {bind}"))?;
-    axum::serve(listener, service.router().into_make_service())
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .context("gateway server stopped with an error")
+fn check(path: PathBuf) -> anyhow::Result<()> {
+    GatewayServerConfig::from_path(&path)?;
+    println!("configuration is valid: {}", path.display());
+    Ok(())
 }
 
-fn load_secret_env(name: &str) -> anyhow::Result<String> {
-    let value = std::env::var(name).with_context(|| format!("{name} is required"))?;
-    if value.trim().is_empty() {
-        anyhow::bail!("{name} must not be empty");
-    }
-    Ok(value)
+async fn serve(path: PathBuf) -> anyhow::Result<()> {
+    let config = GatewayServerConfig::from_path(&path)?;
+    let runtime = config.build_runtime().await?;
+    let tokens = config.load_tokens()?;
+    let metrics = Arc::new(GatewayMetrics::new());
+    let service = GatewayHttpService::new(
+        runtime,
+        config.gateway_routes(),
+        tokens,
+        metrics,
+        config.max_request_bytes,
+        &config.allowed_origins,
+        config.max_concurrent_requests,
+    )?;
+
+    let management_listener = tokio::net::TcpListener::bind(config.management_bind)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to bind management listener {}",
+                config.management_bind
+            )
+        })?;
+    let public_listener = tokio::net::TcpListener::bind(config.public_bind)
+        .await
+        .with_context(|| format!("failed to bind public listener {}", config.public_bind))?;
+
+    let (management_stop_tx, management_stop_rx) = oneshot::channel();
+    let management_router = service.management_router();
+    let management_task = tokio::spawn(async move {
+        axum::serve(management_listener, management_router.into_make_service())
+            .with_graceful_shutdown(async {
+                let _ = management_stop_rx.await;
+            })
+            .await
+    });
+
+    let public_router = service.public_router();
+    let public_task = tokio::spawn(async move {
+        axum::serve(public_listener, public_router.into_make_service())
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+    });
+
+    tracing::info!(
+        public_bind = %config.public_bind,
+        management_bind = %config.management_bind,
+        "gateway application ready"
+    );
+    public_task.await??;
+    let _ = management_stop_tx.send(());
+    management_task.await??;
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 fn init_tracing() {
-    let filter = match tracing_subscriber::EnvFilter::try_from_default_env() {
-        Ok(filter) => filter,
-        Err(_) => tracing_subscriber::EnvFilter::new("info"),
-    };
-    if let Err(error) = tracing_subscriber::fmt().with_env_filter(filter).try_init() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    if let Err(error) = tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(filter)
+        .try_init()
+    {
         eprintln!("failed to initialize gateway tracing: {error}");
     }
 }

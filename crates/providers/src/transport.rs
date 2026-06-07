@@ -6,7 +6,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 
 use crate::{
     error::provider_error_kind_from_code, ProviderAuth, ProviderError, ProviderErrorKind,
-    ProviderKind, ProviderResult,
+    ProviderKind, ProviderRequestContext, ProviderResult,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -119,6 +119,23 @@ impl HttpTransport {
         self.send(self.http.post(self.url(path)).json(body)).await
     }
 
+    pub(crate) async fn post_json_with_context<T: serde::Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &T,
+        context: &ProviderRequestContext,
+        correlation_header: Option<&str>,
+    ) -> ProviderResult<HttpResponse> {
+        let request = self.http.post(self.url(path)).json(body);
+        self.send(with_correlation(
+            request,
+            self.provider,
+            context,
+            correlation_header,
+        )?)
+        .await
+    }
+
     pub(crate) async fn post_json_stream<T: serde::Serialize + ?Sized>(
         &self,
         path: &str,
@@ -126,6 +143,23 @@ impl HttpTransport {
     ) -> ProviderResult<HttpStreamResponse> {
         self.send_stream(self.http.post(self.url(path)).json(body))
             .await
+    }
+
+    pub(crate) async fn post_json_stream_with_context<T: serde::Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &T,
+        context: &ProviderRequestContext,
+        correlation_header: Option<&str>,
+    ) -> ProviderResult<HttpStreamResponse> {
+        let request = self.http.post(self.url(path)).json(body);
+        self.send_stream(with_correlation(
+            request,
+            self.provider,
+            context,
+            correlation_header,
+        )?)
+        .await
     }
 
     fn url(&self, path: &str) -> String {
@@ -221,6 +255,32 @@ impl HttpTransport {
             raw: Some(Box::new(raw)),
         }
     }
+}
+
+fn with_correlation(
+    request: reqwest::RequestBuilder,
+    provider: ProviderKind,
+    context: &ProviderRequestContext,
+    header: Option<&str>,
+) -> ProviderResult<reqwest::RequestBuilder> {
+    let (Some(request_id), Some(header)) = (context.request_id.as_deref(), header) else {
+        return Ok(request);
+    };
+    let name = HeaderName::from_bytes(header.as_bytes()).map_err(|error| {
+        ProviderError::new(
+            ProviderErrorKind::InvalidRequest,
+            provider,
+            format!("invalid provider correlation header: {error}"),
+        )
+    })?;
+    let value = HeaderValue::from_str(request_id).map_err(|error| {
+        ProviderError::new(
+            ProviderErrorKind::InvalidRequest,
+            provider,
+            format!("invalid provider request ID: {error}"),
+        )
+    })?;
+    Ok(request.header(name, value))
 }
 
 /// Build the full request header map once at construction: static headers plus

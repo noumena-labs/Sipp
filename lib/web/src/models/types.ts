@@ -193,8 +193,8 @@ export interface QueryOptions {
   signal?: AbortSignal;
   emitTokens?: boolean;
   grammar?: string;
-  /** Gateway-specific request options passed only to remote gateway endpoints. */
-  gatewayOptions?: GatewayOptions;
+  /** Endpoint-specific request options passed only to gateway endpoints. */
+  endpointOptions?: EndpointOptions;
   /** Provider-specific request options passed only to direct provider endpoints. */
   providerOptions?: ProviderOptions;
 }
@@ -206,8 +206,8 @@ export type ChatInput =
       media?: Uint8Array[];
     };
 
-/** Gateway-specific options merged into remote request bodies after typed fields. */
-export type GatewayOptions = Record<string, unknown>;
+/** Endpoint-specific options passed to gateway endpoint implementations. */
+export type EndpointOptions = Record<string, unknown>;
 
 /** Direct provider-specific options merged into provider request bodies after typed fields. */
 export type ProviderOptions = Record<string, unknown>;
@@ -372,8 +372,8 @@ export interface EmbedOptions {
   normalize?: boolean;
   contextKey?: string;
   signal?: AbortSignal;
-  /** Gateway-specific request options passed only to remote gateway endpoints. */
-  gatewayOptions?: GatewayOptions;
+  /** Endpoint-specific request options passed only to gateway endpoints. */
+  endpointOptions?: EndpointOptions;
   /** Provider-specific request options passed only to direct provider endpoints. */
   providerOptions?: ProviderOptions;
 }
@@ -399,14 +399,14 @@ export interface BrowserEmbeddingRun {
   cancel(reason?: unknown): void;
 }
 
-/** Stable reference returned by local, remote gateway, and provider registration. */
+/** Stable reference returned by endpoint registration. */
 export type EndpointRef =
   | {
       readonly kind: 'local';
       readonly id: string;
     }
   | {
-      readonly kind: 'remote';
+      readonly kind: 'gateway';
       readonly id: string;
     }
   | {
@@ -417,31 +417,46 @@ export type EndpointRef =
 /** Supplies a short-lived direct provider key for BYOK browser calls. */
 export type ProviderKeyProvider = () => string | Promise<string>;
 
-/** Supplies a short-lived gateway bearer token for browser remote calls. */
-export type RemoteTokenProvider = () => string | Promise<string>;
+/** Supplies a short-lived authentication value for browser gateway calls. */
+export type GatewaySecretProvider = () => string | Promise<string>;
 
-/** Browser-safe configuration for a CogentLM remote gateway endpoint. */
-export interface RemoteGatewayConfig {
-  /** Public gateway alias. */
-  readonly alias: string;
-  /** Gateway base URL. */
+export type GatewayAuthentication =
+  | { readonly kind: 'none' }
+  | {
+      readonly kind: 'bearer';
+      readonly value?: string;
+      readonly valueProvider?: GatewaySecretProvider;
+    }
+  | {
+      readonly kind: 'header';
+      readonly headerName: string;
+      readonly value?: string;
+      readonly valueProvider?: GatewaySecretProvider;
+    };
+
+/** Browser-safe gateway endpoint descriptor. */
+export interface GatewayEndpointDescriptor {
+  readonly kind: 'gateway';
+  /** Target encoded in profile requests. */
+  readonly target: string;
+  /** Service base URL. */
   readonly baseUrl: string;
-  /** Static bearer token for the gateway. Prefer `tokenProvider` for rotation. */
-  readonly token?: string;
-  /** Token callback used to fetch a fresh gateway bearer token per request. */
-  readonly tokenProvider?: RemoteTokenProvider;
+  readonly routes?: {
+    readonly query?: string;
+    readonly chat?: string;
+    readonly embed?: string;
+  };
+  readonly authentication?: GatewayAuthentication;
+  readonly staticHeaders?: Readonly<Record<string, string>>;
   /** Request timeout in milliseconds. */
   readonly timeoutMs?: number;
+  readonly protocolOptions?: EndpointOptions;
 }
 
 export interface LocalEndpointDescriptor {
   readonly kind: 'local';
   readonly source: ModelSource;
   readonly options?: ModelLoadOptions;
-}
-
-export interface GatewayEndpointDescriptor extends RemoteGatewayConfig {
-  readonly kind: 'gateway' | 'remote';
 }
 
 export interface ProviderStaticHeader {
@@ -557,15 +572,15 @@ export type QueryErrorCode =
 
 export class QueryError extends Error {
   public readonly code: QueryErrorCode;
-  /** HTTP status returned by a remote gateway, when available. */
+  /** HTTP status returned by a gateway or provider endpoint, when available. */
   public readonly status?: number;
-  /** Gateway error code returned by the normalized gateway protocol. */
-  public readonly gatewayCode?: string;
+  /** Error code returned by the endpoint protocol. */
+  public readonly protocolCode?: string;
   /** Direct provider label for provider endpoint failures. */
   public readonly provider?: string;
   /** Provider error code returned by the upstream provider. */
   public readonly providerCode?: string;
-  /** Gateway request id returned by `x-request-id` or a stream response. */
+  /** Endpoint request id returned by the protocol. */
   public readonly requestId?: string;
   /** Retry delay in milliseconds returned by `retry-after-ms` or `retry-after`. */
   public readonly retryAfterMs?: number;
@@ -575,7 +590,7 @@ export class QueryError extends Error {
     this.name = 'QueryError';
     this.code = code;
     this.status = options?.status;
-    this.gatewayCode = options?.gatewayCode;
+    this.protocolCode = options?.protocolCode;
     this.provider = options?.provider;
     this.providerCode = options?.providerCode;
     this.requestId = options?.requestId;
@@ -586,15 +601,15 @@ export class QueryError extends Error {
 /** Optional structured metadata attached to browser query failures. */
 export interface QueryErrorOptions {
   readonly cause?: unknown;
-  /** HTTP status returned by a remote gateway, when available. */
+  /** HTTP status returned by a gateway or provider endpoint, when available. */
   readonly status?: number;
-  /** Gateway error code returned by the normalized gateway protocol. */
-  readonly gatewayCode?: string;
+  /** Error code returned by the endpoint protocol. */
+  readonly protocolCode?: string;
   /** Direct provider label for provider endpoint failures. */
   readonly provider?: string;
   /** Provider error code returned by the upstream provider. */
   readonly providerCode?: string;
-  /** Gateway request id returned by `x-request-id` or a stream response. */
+  /** Endpoint request id returned by the protocol. */
   readonly requestId?: string;
   /** Retry delay in milliseconds returned by `retry-after-ms` or `retry-after`. */
   readonly retryAfterMs?: number;

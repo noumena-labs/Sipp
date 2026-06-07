@@ -12,7 +12,7 @@ import {
 } from './_support.mjs';
 
 const { CogentClient, setLlamaLogQuiet } = native;
-const { model, alias, input } = readGatewayArgs(
+const { model, target, input } = readGatewayArgs(
   'gateway_embed',
   'CogentClient gateway embedding example input.',
 );
@@ -23,12 +23,15 @@ const localEndpoint = await client.add('local', {
   modelPath: model,
   config: runtimeConfig({ embeddings: true }),
 });
-const gateway = {
-  alias,
+const gatewayEndpoint = await client.add('gateway', {
+  kind: 'gateway',
+  target,
   baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-  token: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-};
-const gatewayEndpoint = await client.add('gateway', { kind: 'gateway', ...gateway });
+  authentication: {
+    kind: 'bearer',
+    value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
+  },
+});
 
 const local = await client.embed({
   endpoint: localEndpoint,
@@ -39,7 +42,7 @@ const local = await client.embed({
   },
 }).response;
 
-const remote = await client.embed({
+const gateway = await client.embed({
   endpoint: gatewayEndpoint,
   input,
 }).response;
@@ -47,7 +50,7 @@ const remote = await client.embed({
 console.log('local:');
 printEmbedding(local);
 console.log('gateway:');
-printEmbedding(remote);
+printEmbedding(gateway);
 
 function runtimeConfig({ embeddings, projectorPath = undefined }) {
   const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };
@@ -58,6 +61,7 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
       n_threads: intEnv('COGENTLM_THREADS'),
       n_threads_batch: intEnv('COGENTLM_THREADS'),
       embeddings,
+      pooling: embeddings ? 'mean' : undefined,
     },
     sampling: {
       temperature: numberEnv('COGENTLM_TEMPERATURE', DEFAULT_TEMPERATURE),

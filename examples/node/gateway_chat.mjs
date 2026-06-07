@@ -14,7 +14,7 @@ import {
 } from './_support.mjs';
 
 const { CogentClient, setLlamaLogQuiet } = native;
-const { model, alias, input } = readGatewayArgs(
+const { model, target, input } = readGatewayArgs(
   'gateway_chat',
   'Explain gateway-backed inference in one sentence.',
 );
@@ -25,12 +25,15 @@ const localEndpoint = await client.add('local', {
   modelPath: model,
   config: runtimeConfig({ embeddings: false }),
 });
-const gateway = {
-  alias,
+const gatewayEndpoint = await client.add('gateway', {
+  kind: 'gateway',
+  target,
   baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-  token: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-};
-const gatewayEndpoint = await client.add('gateway', { kind: 'gateway', ...gateway });
+  authentication: {
+    kind: 'bearer',
+    value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
+  },
+});
 
 const localRun = client.chat({
   endpoint: localEndpoint,
@@ -49,12 +52,12 @@ const gatewayRun = client.chat({
   options: textOptions(),
   emitTokens: true,
 });
-const remote = await collectStreamedText('gateway', gatewayRun);
+const gateway = await collectStreamedText('gateway', gatewayRun);
 
 console.log('local:');
 printText(local);
 console.log('gateway:');
-printText(remote);
+printText(gateway);
 
 function chatMessages(prompt) {
   return [

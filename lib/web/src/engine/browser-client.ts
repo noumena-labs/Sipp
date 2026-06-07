@@ -24,11 +24,11 @@ import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.j
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
 import type { BackendObservability } from './inference-types.js';
 import {
-  RemoteGatewayRegistry,
-  runRemoteChat,
-  runRemoteEmbedding,
-  runRemoteQuery,
-} from './remote-gateway.js';
+  GatewayEndpointRegistry,
+  runGatewayChat,
+  runGatewayEmbedding,
+  runGatewayQuery,
+} from './gateway-endpoint.js';
 import {
   ProviderEndpointRegistry,
   runProviderChat,
@@ -100,7 +100,7 @@ function shouldUseWorker(config: CogentClientOptions): boolean {
 export class CogentClient implements CogentClientShape {
   public readonly observability: EngineObservability;
   #service: ModelLifecycleService;
-  #remotes = new RemoteGatewayRegistry();
+  #gatewayEndpoints = new GatewayEndpointRegistry();
   #providers = new ProviderEndpointRegistry();
   #localEndpoint: EndpointRef | null = null;
   #closed = false;
@@ -151,24 +151,24 @@ export class CogentClient implements CogentClientShape {
     assertEndpointDescriptor(descriptor);
     if (descriptor.kind === 'local') {
       await this.#service.load(descriptor.source, descriptor.options);
-      this.#remotes.remove(normalizedId);
+      this.#gatewayEndpoints.remove(normalizedId);
       this.#providers.remove(normalizedId);
       const endpoint = { kind: 'local', id: normalizedId } as const;
       this.#localEndpoint = endpoint;
       return endpoint;
     }
-    if (descriptor.kind === 'gateway' || descriptor.kind === 'remote') {
-      const remote = this.#remotes.prepare(normalizedId, descriptor);
+    if (descriptor.kind === 'gateway') {
+      const endpoint = this.#gatewayEndpoints.prepare(normalizedId, descriptor);
       await this.removeLocalEndpoint(normalizedId);
       this.#providers.remove(normalizedId);
-      return this.#remotes.commit(remote);
+      return this.#gatewayEndpoints.commit(endpoint);
     }
     const provider = this.#providers.prepare(
       normalizedId,
       descriptor as ProviderEndpointDescriptor
     );
     await this.removeLocalEndpoint(normalizedId);
-    this.#remotes.remove(normalizedId);
+    this.#gatewayEndpoints.remove(normalizedId);
     return this.#providers.commit(provider);
   }
 
@@ -198,10 +198,10 @@ export class CogentClient implements CogentClientShape {
 
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
     this.assertOpen();
-    const remote = this.#remotes.get(options.endpoint);
-    if (remote != null) {
+    const endpoint = this.#gatewayEndpoints.get(options.endpoint);
+    if (endpoint != null) {
       return createBrowserTextRun(options, (tokenBatchSink, signal) =>
-        runRemoteQuery(remote, input, options, tokenBatchSink, signal)
+        runGatewayQuery(endpoint, input, options, tokenBatchSink, signal)
       );
     }
     const provider = this.#providers.get(options.endpoint);
@@ -219,10 +219,10 @@ export class CogentClient implements CogentClientShape {
 
   public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
     this.assertOpen();
-    const remote = this.#remotes.get(options.endpoint);
-    if (remote != null) {
+    const endpoint = this.#gatewayEndpoints.get(options.endpoint);
+    if (endpoint != null) {
       return createBrowserTextRun(options, (tokenBatchSink, signal) =>
-        runRemoteChat(remote, input, options, tokenBatchSink, signal)
+        runGatewayChat(endpoint, input, options, tokenBatchSink, signal)
       );
     }
     const provider = this.#providers.get(options.endpoint);
@@ -240,10 +240,10 @@ export class CogentClient implements CogentClientShape {
 
   public embed(input: string, options: EmbedOptions = {}): BrowserEmbeddingRun {
     this.assertOpen();
-    const remote = this.#remotes.get(options.endpoint);
-    if (remote != null) {
+    const endpoint = this.#gatewayEndpoints.get(options.endpoint);
+    if (endpoint != null) {
       return createBrowserEmbeddingRun(options.signal, (signal) =>
-        runRemoteEmbedding(remote, input, options, signal)
+        runGatewayEmbedding(endpoint, input, options, signal)
       );
     }
     const provider = this.#providers.get(options.endpoint);
@@ -302,10 +302,10 @@ export class CogentClient implements CogentClientShape {
 }
 
 function localQueryOptions(options: QueryOptions): QueryOptions {
-  rejectLocalGatewayProviderOptions(options.gatewayOptions, options.providerOptions);
+  rejectLocalEndpointProviderOptions(options.endpointOptions, options.providerOptions);
   const {
     endpoint: _endpoint,
-    gatewayOptions: _gatewayOptions,
+    endpointOptions: _endpointOptions,
     providerOptions: _providerOptions,
     ...localOptions
   } = options;
@@ -313,19 +313,19 @@ function localQueryOptions(options: QueryOptions): QueryOptions {
 }
 
 function localEmbedOptions(options: EmbedOptions): EmbedOptions {
-  rejectLocalGatewayProviderOptions(options.gatewayOptions, options.providerOptions);
+  rejectLocalEndpointProviderOptions(options.endpointOptions, options.providerOptions);
   const {
     endpoint: _endpoint,
-    gatewayOptions: _gatewayOptions,
+    endpointOptions: _endpointOptions,
     providerOptions: _providerOptions,
     ...localOptions
   } = options;
   return localOptions;
 }
 
-function rejectLocalGatewayProviderOptions(gatewayOptions: unknown, providerOptions: unknown): void {
-  if (gatewayOptions != null) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'gatewayOptions are not valid for local endpoints');
+function rejectLocalEndpointProviderOptions(endpointOptions: unknown, providerOptions: unknown): void {
+  if (endpointOptions != null) {
+    throw new QueryError('UNSUPPORTED_OPERATION', 'endpointOptions are not valid for local endpoints');
   }
   if (providerOptions != null) {
     throw new QueryError('UNSUPPORTED_OPERATION', 'providerOptions are not valid for local endpoints');
@@ -351,10 +351,10 @@ function assertEndpointDescriptor(value: unknown): asserts value is EndpointDesc
     throw new QueryError('QUERY_FAILED', 'endpoint descriptor must be an object');
   }
   const kind = (value as { readonly kind?: unknown }).kind;
-  if (kind !== 'local' && kind !== 'gateway' && kind !== 'remote' && kind !== 'provider') {
+  if (kind !== 'local' && kind !== 'gateway' && kind !== 'provider') {
     throw new QueryError(
       'QUERY_FAILED',
-      'endpoint descriptor kind must be local, gateway, remote, or provider'
+      'endpoint descriptor kind must be local, gateway, or provider'
     );
   }
 }

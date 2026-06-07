@@ -2,6 +2,13 @@ use cogentlm_core::ChatMessage;
 
 pub type ProviderOptions = serde_json::Map<String, serde_json::Value>;
 
+/// Request-scoped metadata propagated to provider transports.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProviderRequestContext {
+    /// Canonical request ID assigned by the calling gateway or application.
+    pub request_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProviderGenerationOptions {
     pub max_tokens: Option<u32>,
