@@ -14,8 +14,8 @@ or services that run in a Node.js runtime.
   gateway proxies, and streaming.
 - [TanStack](tanstack.md): TanStack Start server functions and TanStack Query
   patterns.
-- [React And Vite](vite-react.md): Baseline browser package setup, WASM asset
-  behavior, OPFS model loading, and gateway examples.
+- [React And Vite](vite-react.md): Baseline browser-local setup, WebGPU/WASM
+  asset behavior, OPFS model loading, and local development headers.
 
 ## Package Selection
 
@@ -24,6 +24,13 @@ or services that run in a Node.js runtime.
 | Browser component | `cogentlm` | Use for browser-local GGUF inference or direct gateway calls. |
 | Node server route | `cogentlm-server` | Use only in Node runtime code; do not bundle into browser code. |
 | Gateway proxy | Either | Browser code can call the gateway directly with short-lived tokens, or server code can proxy calls with server-held secrets. |
+
+## Gateway Route Field Names
+
+Browser gateway descriptors require an absolute `http` or `https` `baseUrl`
+and use `routes: { query, chat, embed }` for route overrides. Node gateway
+descriptors use `queryRoute`, `chatRoute`, and `embedRoute` when server code
+calls a gateway through `cogentlm-server`.
 
 Keep provider credentials and long-lived gateway tokens out of browser bundles.
 When a browser app needs gateway access, issue short-lived application tokens or

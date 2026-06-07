@@ -3,7 +3,9 @@
 TanStack apps usually need two CogentLM patterns:
 
 - TanStack Start server functions for server-only CogentLM work, gateway
-  tokens, provider credentials, and local model paths.
+  tokens, provider credentials, local model paths, and typed app RPC.
+- TanStack Start server routes when browser code should register the route as
+  a `kind: 'gateway'` endpoint through the CogentLM browser package.
 - TanStack Query for client-side final responses that can be cached or
   refetched by query key.
 
@@ -56,6 +58,146 @@ export const queryCogent = createServerFn({ method: 'POST' })
 Validate server-function inputs with the same rigor as any public endpoint.
 Server functions are callable network endpoints, so apply application auth and
 tenant checks inside the function or middleware.
+
+Server functions are a good fit for typed application calls that return
+application-owned shapes such as `{ text }`. They are not the right surface for
+browser `client.add({ kind: 'gateway' })` endpoints, because those endpoints
+expect the first-party gateway HTTP profile.
+
+## TanStack Start Gateway Route
+
+Use a server route when the browser package should call the framework route as
+a gateway endpoint. The route accepts the first-party query profile and returns
+the fields consumed by browser gateway endpoints.
+
+```ts
+// src/routes/api/cogent/query.ts
+import { createFileRoute } from '@tanstack/react-router';
+import { CogentClient } from 'cogentlm-server';
+
+interface GatewayQueryBody {
+  readonly model?: unknown;
+  readonly prompt?: unknown;
+  readonly max_tokens?: unknown;
+  readonly temperature?: unknown;
+  readonly top_p?: unknown;
+  readonly stop?: unknown;
+  readonly stream?: unknown;
+}
+
+interface GatewayUsage {
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  readonly total_tokens?: number;
+}
+
+interface ClientUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name];
+  if (value == null || value === '') {
+    throw new Error(`${name} is required`);
+  }
+  return value;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined;
+}
+
+function optionalStrings(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+    ? value
+    : undefined;
+}
+
+function gatewayUsage(usage: ClientUsage | undefined): GatewayUsage | undefined {
+  if (usage == null) return undefined;
+  return {
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    total_tokens: usage.totalTokens,
+  };
+}
+
+export const Route = createFileRoute('/api/cogent/query')({
+  server: {
+    handlers: {
+      POST: async ({ request }) => {
+        const body = (await request.json()) as GatewayQueryBody;
+        if (body.stream === true) {
+          return Response.json(
+            {
+              error: {
+                code: 'unsupported_stream',
+                message: 'this route supports non-streaming query requests',
+              },
+            },
+            { status: 400 },
+          );
+        }
+        if (
+          typeof body.model !== 'string' ||
+          body.model.trim() === '' ||
+          typeof body.prompt !== 'string' ||
+          body.prompt.trim() === ''
+        ) {
+          return Response.json(
+            {
+              error: {
+                code: 'invalid_request',
+                message: 'model and prompt are required',
+              },
+            },
+            { status: 400 },
+          );
+        }
+
+        const target = body.model;
+        const prompt = body.prompt;
+        const client = new CogentClient();
+        const endpoint = await client.add('gateway', {
+          kind: 'gateway',
+          target,
+          baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
+          authentication: {
+            kind: 'bearer',
+            value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
+          },
+        });
+        const response = await client.query({
+          endpoint,
+          prompt,
+          options: {
+            maxTokens: optionalNumber(body.max_tokens),
+            temperature: optionalNumber(body.temperature),
+            topP: optionalNumber(body.top_p),
+            stop: optionalStrings(body.stop),
+          },
+        }).response;
+        return Response.json({
+          id:
+            response.metadata.upstreamResponseId ??
+            response.metadata.requestId ??
+            'response',
+          model: target,
+          text: response.text,
+          finish_reason: response.finishReason,
+          usage: gatewayUsage(response.usage),
+        });
+      },
+    },
+  },
+});
+```
+
+This route uses the browser profile field `model` as the public gateway target
+and keeps the long-lived gateway token on the server. Add application auth or
+target allowlists before exposing the route to users.
 
 ## TanStack Query For Final Responses
 
@@ -124,27 +266,107 @@ export function StreamingAnswer(): JSX.Element {
 ## Browser Package
 
 Use browser `cogentlm` from components that run in the browser. That includes
-browser-local GGUF inference and direct browser gateway endpoints with
-short-lived tokens.
+browser-local GGUF inference and gateway endpoints with short-lived tokens or
+same-origin server routes.
 
-```ts
+```tsx
+import { useState } from 'react';
 import { CogentClient } from 'cogentlm';
 
-const client = new CogentClient();
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
-  target: 'local',
-  baseUrl: 'https://gateway.example.com',
-  authentication: {
-    kind: 'bearer',
-    valueProvider: fetchShortLivedGatewayToken,
-  },
-});
+export function LocalAnswer(): JSX.Element {
+  const [text, setText] = useState('');
+
+  async function run(prompt: string): Promise<void> {
+    const client = new CogentClient();
+    try {
+      const endpoint = await client.add('browser-local', {
+        kind: 'local',
+        source: '/models/model.gguf',
+      });
+      const response = await client.query(prompt, {
+        endpoint,
+        maxTokens: 64,
+      }).response;
+      setText(response.text);
+    } finally {
+      await client.close();
+    }
+  }
+
+  return (
+    <button type="button" onClick={() => void run('Explain local inference.')}>
+      {text || 'Run'}
+    </button>
+  );
+}
 ```
 
 Do not import `cogentlm-server` from browser modules.
 
+## Browser Hybrid Endpoints
+
+Register browser-local and same-origin gateway endpoints on one browser
+`CogentClient`, then choose the endpoint reference for each request.
+
+```tsx
+import { useState } from 'react';
+import { CogentClient, type EndpointRef } from 'cogentlm';
+
+type InferenceMode = 'local' | 'gateway';
+
+export function HybridAnswer(): JSX.Element {
+  const [mode, setMode] = useState<InferenceMode>('local');
+  const [text, setText] = useState('');
+
+  async function run(prompt: string): Promise<void> {
+    const client = new CogentClient();
+    try {
+      const localEndpoint = await client.add('browser-local', {
+        kind: 'local',
+        source: '/models/model.gguf',
+      });
+      const gatewayEndpoint = await client.add('app-route', {
+        kind: 'gateway',
+        target: 'local',
+        baseUrl: window.location.origin,
+        routes: { query: '/api/cogent/query' },
+        authentication: { kind: 'none' },
+      });
+      const endpoint: EndpointRef =
+        mode === 'local' ? localEndpoint : gatewayEndpoint;
+      const response = await client.query(prompt, {
+        endpoint,
+        maxTokens: 64,
+      }).response;
+      setText(response.text);
+    } finally {
+      await client.close();
+    }
+  }
+
+  return (
+    <>
+      <select
+        value={mode}
+        onChange={(event) => setMode(event.currentTarget.value as InferenceMode)}
+      >
+        <option value="local">Browser local</option>
+        <option value="gateway">Server route</option>
+      </select>
+      <button type="button" onClick={() => void run('Explain hybrid inference.')}>
+        {text || 'Run'}
+      </button>
+    </>
+  );
+}
+```
+
+Browser gateway descriptors need an absolute `http` or `https` `baseUrl`.
+Same-origin TanStack routes should use `window.location.origin` and route
+overrides such as `routes: { query: '/api/cogent/query' }`.
+
 ## References
 
 - [TanStack Start Server Functions](https://tanstack.com/start/latest/docs/framework/react/guide/server-functions)
+- [TanStack Start Server Routes](https://tanstack.com/start/latest/docs/framework/react/guide/server-routes)
 - [TanStack Query useQuery](https://tanstack.com/query/latest/docs/framework/react/reference/useQuery)

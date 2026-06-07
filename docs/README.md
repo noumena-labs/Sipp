@@ -31,7 +31,7 @@ workflow live in the maintainer section.
 The documentation uses mdBook pinned to version `0.5.3`.
 
 ```bash
-cargo install mdbook --version 0.5.3 --locked
+cargo install mdbook
 mdbook build
 mdbook serve --open
 ```

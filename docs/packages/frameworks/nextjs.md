@@ -7,17 +7,44 @@ Next.js App Router pages and layouts are Server Components by default. Add
 `'use client'` only to modules that need browser APIs, state, event handlers,
 or browser-local CogentLM runtime access.
 
-## Server Route With Gateway
+## Profile-Compatible Server Route
 
 Route handlers are a good place to keep gateway tokens and provider credentials
 off the client. Set `runtime = 'nodejs'` for routes that import
 `cogentlm-server`.
+
+Routes that are registered from a browser `kind: 'gateway'` endpoint must speak
+the first-party gateway profile. The request body uses `model`, `prompt`,
+`max_tokens`, and related gateway fields. The response must return `id`,
+`model`, `text`, `finish_reason`, and optional `usage`.
 
 ```ts
 // app/api/cogent/query/route.ts
 import { CogentClient } from 'cogentlm-server';
 
 export const runtime = 'nodejs';
+
+interface GatewayQueryBody {
+  readonly model?: unknown;
+  readonly prompt?: unknown;
+  readonly max_tokens?: unknown;
+  readonly temperature?: unknown;
+  readonly top_p?: unknown;
+  readonly stop?: unknown;
+  readonly stream?: unknown;
+}
+
+interface GatewayUsage {
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  readonly total_tokens?: number;
+}
+
+interface ClientUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+}
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -27,16 +54,61 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined;
+}
+
+function optionalStrings(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+    ? value
+    : undefined;
+}
+
+function gatewayUsage(usage: ClientUsage | undefined): GatewayUsage | undefined {
+  if (usage == null) return undefined;
+  return {
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    total_tokens: usage.totalTokens,
+  };
+}
+
 export async function POST(request: Request): Promise<Response> {
-  const { prompt } = await request.json() as { prompt?: string };
-  if (prompt == null || prompt.trim() === '') {
-    return Response.json({ error: 'prompt is required' }, { status: 400 });
+  const body = (await request.json()) as GatewayQueryBody;
+  if (body.stream === true) {
+    return Response.json(
+      {
+        error: {
+          code: 'unsupported_stream',
+          message: 'this route supports non-streaming query requests',
+        },
+      },
+      { status: 400 },
+    );
+  }
+  if (
+    typeof body.model !== 'string' ||
+    body.model.trim() === '' ||
+    typeof body.prompt !== 'string' ||
+    body.prompt.trim() === ''
+  ) {
+    return Response.json(
+      {
+        error: {
+          code: 'invalid_request',
+          message: 'model and prompt are required',
+        },
+      },
+      { status: 400 },
+    );
   }
 
+  const target = body.model;
+  const prompt = body.prompt;
   const client = new CogentClient();
   const endpoint = await client.add('gateway', {
     kind: 'gateway',
-    target: requiredEnv('COGENTLM_GATEWAY_TARGET'),
+    target,
     baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
     authentication: {
       kind: 'bearer',
@@ -46,12 +118,31 @@ export async function POST(request: Request): Promise<Response> {
   const run = client.query({
     endpoint,
     prompt,
-    options: { maxTokens: 128 },
+    options: {
+      maxTokens: optionalNumber(body.max_tokens),
+      temperature: optionalNumber(body.temperature),
+      topP: optionalNumber(body.top_p),
+      stop: optionalStrings(body.stop),
+    },
   });
   const response = await run.response;
-  return Response.json({ text: response.text, usage: response.usage });
+  return Response.json({
+    id:
+      response.metadata.upstreamResponseId ??
+      response.metadata.requestId ??
+      'response',
+    model: target,
+    text: response.text,
+    finish_reason: response.finishReason,
+    usage: gatewayUsage(response.usage),
+  });
 }
 ```
+
+Do not return an app-specific shape such as `{ text }` from a route that the
+browser package calls through `client.add({ kind: 'gateway' })`. That route is
+an HTTP gateway endpoint from the browser client's perspective, even when it is
+implemented inside the Next application.
 
 For high-throughput services, keep endpoint setup in a server-only module and
 reuse the client lifecycle according to your deployment model. Do not import
@@ -168,6 +259,72 @@ If you override `moduleUrl`, `wasmUrl`, `pthreadModuleUrl`, or
 `pthreadWasmUrl`, provide both the JavaScript and WASM asset URLs for the
 selected runtime. Use `wasmThreading: 'pthread'` only when the app is served
 with cross-origin isolation headers that enable `SharedArrayBuffer`.
+
+## Hybrid Client Component
+
+Use one browser `CogentClient` to register a browser-local endpoint and a
+same-origin gateway route. Select the endpoint reference at request time; the
+`query` call stays the same.
+
+```tsx
+// app/hybrid-chat/HybridChat.tsx
+'use client';
+
+import { useState } from 'react';
+import { CogentClient, type EndpointRef } from 'cogentlm';
+
+type InferenceMode = 'local' | 'gateway';
+
+export function HybridChat(): JSX.Element {
+  const [mode, setMode] = useState<InferenceMode>('local');
+  const [text, setText] = useState('');
+
+  async function run(prompt: string): Promise<void> {
+    const client = new CogentClient();
+    try {
+      const localEndpoint = await client.add('browser-local', {
+        kind: 'local',
+        source: '/models/model.gguf',
+      });
+      const gatewayEndpoint = await client.add('app-route', {
+        kind: 'gateway',
+        target: 'local',
+        baseUrl: window.location.origin,
+        routes: { query: '/api/cogent/query' },
+        authentication: { kind: 'none' },
+      });
+      const endpoint: EndpointRef =
+        mode === 'local' ? localEndpoint : gatewayEndpoint;
+      const response = await client.query(prompt, {
+        endpoint,
+        maxTokens: 64,
+      }).response;
+      setText(response.text);
+    } finally {
+      await client.close();
+    }
+  }
+
+  return (
+    <>
+      <select
+        value={mode}
+        onChange={(event) => setMode(event.currentTarget.value as InferenceMode)}
+      >
+        <option value="local">Browser local</option>
+        <option value="gateway">Server route</option>
+      </select>
+      <button type="button" onClick={() => void run('Explain hybrid inference.')}>
+        {text || 'Run'}
+      </button>
+    </>
+  );
+}
+```
+
+Browser gateway descriptors require an absolute `http` or `https` `baseUrl`.
+For same-origin Next routes, use `window.location.origin` and set route
+overrides such as `routes: { query: '/api/cogent/query' }`.
 
 ## Gateway Token Pattern
 
