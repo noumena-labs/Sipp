@@ -38,10 +38,18 @@ const endpoint = await client.add('default', {
     observability: { runtime_metrics: true },
   },
 });
+const queryPrompt = [
+  '<|system|>',
+  'Answer concisely.',
+  '<|user|>',
+  'Explain CogentLM in one sentence.',
+  '<|assistant|>',
+].join('\n');
 
 const run = client.query({
   endpoint,
-  prompt: 'Explain CogentLM in one sentence.',
+  // query: raw prompt; replace markers with the target model's template.
+  prompt: queryPrompt,
   emitTokens: true,
   options: { maxTokens: 64, temperature: 0.7 },
   local: { contextKey: 'node-local' },
@@ -59,7 +67,11 @@ Set `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 See [Runtime Options](../reference/runtime-options.md) for local runtime config
 groups and request option boundaries.
 
-## Gateway Query
+Use local `query` only with an already-rendered prompt template, a
+completion-style/base model, or an encoder-decoder text model. Use `chat` for
+role messages and runtime chat template handling.
+
+## Gateway Chat
 
 ```ts
 function requiredEnv(name: string): string {
@@ -79,9 +91,13 @@ const endpoint = await client.add('gateway', {
     value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
   },
 });
-const run = client.query({
+const messages = [
+  { role: 'system', content: 'Answer concisely.' },
+  { role: 'user', content: 'Explain gateway inference.' },
+];
+const run = client.chat({
   endpoint,
-  prompt: 'Explain gateway inference.',
+  messages,
   options: { maxTokens: 64 },
 });
 console.log((await run.response).text);
@@ -90,7 +106,7 @@ console.log((await run.response).text);
 The application only needs the gateway URL, bearer token, and public target.
 Provider credentials and local model paths stay in the gateway process.
 
-## Direct Provider Query
+## Direct Provider Chat
 
 Use direct provider endpoints only in trusted server code. Keep the provider
 key in the server environment; `OPENAI_API_KEY="<mock-openai-key>"` is only a
@@ -111,9 +127,13 @@ const endpoint = await client.add('provider', {
   model: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
   apiKey: requiredEnv('OPENAI_API_KEY'),
 });
-const run = client.query({
+const messages = [
+  { role: 'system', content: 'Answer concisely.' },
+  { role: 'user', content: 'Explain provider inference.' },
+];
+const run = client.chat({
   endpoint,
-  prompt: 'Explain provider inference.',
+  messages,
   options: { maxTokens: 64 },
 });
 console.log((await run.response).text);
