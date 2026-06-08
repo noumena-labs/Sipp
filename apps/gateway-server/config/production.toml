@@ -5,6 +5,15 @@ max_concurrent_requests = 4
 allowed_origins = []
 admin_password = "replace-me"
 
+[security.client_ip]
+source = "peer"
+trusted_proxy_cidrs = []
+
+[security.rate_limit]
+enabled = true
+requests_per_minute = 120
+burst = 240
+
 [routes]
 query = "/v1/query"
 chat = "/v1/chat"

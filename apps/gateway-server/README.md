@@ -33,6 +33,12 @@ toolkit crates.
   Docker use and adjust container bind/model paths.
 - `config/production.toml`: production-oriented example; copy it before adding
   real secrets.
+- `admin-ui/`: React Admin Dashboard built by `clm build gateway-server` and
+  copied beside the generated gateway binary.
 - `development.yml.example`: copyable local Compose template.
 - `production.yml`: production Compose template for a prebuilt image.
 - `Dockerfile`: image build for CPU, Vulkan, and CUDA gateway variants.
+
+Dashboard observability history, rate-limit buckets, manual blocklists,
+sessions, CSRF tokens, and runtime control overrides are in-memory only and
+reset when the server restarts.

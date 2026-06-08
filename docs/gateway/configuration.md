@@ -15,6 +15,15 @@ max_concurrent_requests = 4
 allowed_origins = []
 admin_password = "replace-me"
 
+[security.client_ip]
+source = "peer"
+trusted_proxy_cidrs = []
+
+[security.rate_limit]
+enabled = false
+requests_per_minute = 60
+burst = 60
+
 [routes]
 query = "/v1/query"
 chat = "/v1/chat"
@@ -48,6 +57,7 @@ stats = "basic"
 | `max_concurrent_requests` | Optional application-wide request admission limit. Omit for unbounded. |
 | `allowed_origins` | CORS allowlist for browser requests to the public listener. Empty disables the CORS layer. |
 | `admin_password` | Literal Admin Dashboard password. Required and non-blank. Keep production TOML private. |
+| `security` | Required in-memory client identification and rate limiting settings. |
 
 `check` validates these fields without reading token env vars, loading models,
 contacting providers, or binding ports.
@@ -61,12 +71,12 @@ management routes:
 - `health`: optional liveness route returning `ok`.
 - `readiness`: optional readiness route returning `ready`.
 - `metrics`: optional Prometheus text route.
-- `admin`: optional Admin Dashboard route. Login and logout are derived as
-  `<admin>/login` and `<admin>/logout`.
+- `admin`: optional Admin Dashboard route. Session JSON endpoints live under
+  `<admin>/api/session`.
 
 Routes must be absolute paths and must not contain query strings or fragments.
-Public routes cannot duplicate each other. Management routes, including
-derived admin login/logout routes, cannot duplicate each other.
+Public routes cannot duplicate each other. Management routes cannot duplicate
+each other.
 
 ## Tokens
 
@@ -87,6 +97,40 @@ targets = ["local", "openai-chat"]
 
 Token values must be non-empty and contain no whitespace. They are read only
 when `serve` starts.
+
+## In-Memory Security Controls
+
+Gateway security controls are process-local in v1. Admin Dashboard sessions,
+CSRF tokens, rolling dashboard history, per-client rate-limit buckets, manual
+blocklist entries, and runtime control overrides disappear when the server
+restarts. The gateway does not write TOML, create a state file, or use an
+external cache or database for these controls.
+
+The checked-in examples use the TCP peer address for client IP extraction:
+
+```toml
+[security.client_ip]
+source = "peer"
+trusted_proxy_cidrs = []
+```
+
+`source` can be `peer`, `x_forwarded_for`, or `x_real_ip`. Forwarded headers
+are ignored unless `trusted_proxy_cidrs` contains the proxy CIDR that is
+allowed to supply them. Keep `source = "peer"` unless the gateway sits behind
+a trusted reverse proxy that preserves the real client address.
+
+Per-client rate limiting is configured explicitly:
+
+```toml
+[security.rate_limit]
+enabled = false
+requests_per_minute = 60
+burst = 60
+```
+
+When enabled, the limiter uses an in-memory token bucket keyed by the resolved
+client IP. `requests_per_minute` controls refill rate. `burst` controls bucket
+capacity.
 
 ## Targets
 
@@ -189,3 +233,9 @@ The dashboard is served only on the management listener. It uses
 `admin_password` for login, stores short-lived HTTP-only sessions, and does not
 render the password, bearer tokens, or provider secrets.
 
+The dashboard serves a React single-page application from the gateway
+distribution's `admin-ui` asset directory and exposes session-protected JSON
+endpoints under `<admin>/api/*`. Login uses `POST <admin>/api/session`, logout
+uses `DELETE <admin>/api/session`, and mutating admin API calls require the
+session CSRF token in the `x-cogentlm-admin-csrf` header. Runtime edits made
+from the dashboard affect only the running process and reset on restart.

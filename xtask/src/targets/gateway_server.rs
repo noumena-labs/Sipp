@@ -1,6 +1,7 @@
 //! Standalone gateway-server distribution build target.
 
 use crate::cli::Backend;
+use crate::javascript;
 use crate::output;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
@@ -25,7 +26,9 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
 
     let dist_dir = ctx.gateway_server_artifacts_dir();
     output::path("Artifact directory", &dist_dir);
+    let admin_ui_dist = build_admin_ui(sh, ctx)?;
     prepare_dist_dir(sh, &dist_dir)?;
+    copy_admin_ui(sh, &admin_ui_dist, &dist_dir.join("admin-ui"))?;
 
     let best_effort = matches!(backend, Some(Backend::All));
     let backends_to_build = backends_to_build(backend);
@@ -63,6 +66,52 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
         output::detail("Skipped optional variants", output::backend_list(&skipped));
     }
 
+    Ok(())
+}
+
+fn build_admin_ui(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
+    let admin_ui_dir = ctx
+        .workspace_root()
+        .join("apps")
+        .join("gateway-server")
+        .join("admin-ui");
+    javascript::install_root_workspace_dependencies(
+        sh,
+        ctx,
+        "Installing gateway Admin Dashboard dependencies",
+        std::slice::from_ref(&admin_ui_dir),
+    )?;
+    let _dir = sh.push_dir(ctx.workspace_root());
+    output::run_build_command(
+        "Building gateway Admin Dashboard",
+        cmd!(sh, "bun run --filter cogentlm-gateway-admin-ui build"),
+    )?;
+    let dist = admin_ui_dir.join("dist");
+    if !dist.join("index.html").is_file() {
+        anyhow::bail!(
+            "gateway Admin Dashboard build did not produce {}",
+            dist.join("index.html").display()
+        );
+    }
+    Ok(dist)
+}
+
+fn copy_admin_ui(sh: &Shell, source: &Path, dest: &Path) -> Result<()> {
+    if dest.exists() {
+        sh.remove_path(dest)?;
+    }
+    sh.create_dir(dest)?;
+    for file in collect_files_recursive_flat(source)? {
+        let relative = file
+            .strip_prefix(source)
+            .with_context(|| format!("dashboard asset is outside {}", source.display()))?;
+        let target = dest.join(relative);
+        if let Some(parent) = target.parent() {
+            sh.create_dir(parent)?;
+        }
+        sh.copy_file(&file, &target)?;
+    }
+    output::artifact(dest);
     Ok(())
 }
 
@@ -263,6 +312,12 @@ fn collect_files_recursive(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> 
     }
 
     Ok(())
+}
+
+fn collect_files_recursive_flat(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_files_recursive(root, &mut files)?;
+    Ok(files)
 }
 
 fn runtime_file_kind(file_name: &str) -> Option<RuntimeFileKind> {

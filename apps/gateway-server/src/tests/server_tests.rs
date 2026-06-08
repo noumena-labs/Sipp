@@ -1,8 +1,14 @@
+//! Tests for gateway-server configuration, routing, admin APIs, and
+//! process-local runtime controls using model-free upstream fixtures.
+
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::{to_bytes, Body};
+use axum::extract::ConnectInfo;
 use axum::http::{
     header::{COOKIE, SET_COOKIE},
     Request, StatusCode,
@@ -18,13 +24,18 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::config::{
-    local_backend_plan_with_capabilities, EndpointConfig, GatewayBackendPreference,
-    GatewayServerConfig, GatewayServerRuntime, LoadedToken, RouteConfig, TargetKind, TargetSummary,
+    local_backend_plan_with_capabilities, ClientIpConfig, ClientIpSource, EndpointConfig,
+    GatewayBackendPreference, GatewayServerConfig, GatewayServerRuntime, LoadedToken,
+    RateLimitConfig, RouteConfig, SecurityConfig, TargetKind, TargetSummary,
 };
 use crate::http::GatewayHttpService;
 use crate::metrics::GatewayMetrics;
 
 async fn service(base_url: String) -> GatewayHttpService {
+    service_with_security(base_url, test_security_config()).await
+}
+
+async fn service_with_security(base_url: String, security: SecurityConfig) -> GatewayHttpService {
     let routes = RouteConfig {
         query: "/generate".to_string(),
         chat: "/conversation".to_string(),
@@ -76,8 +87,51 @@ async fn service(base_url: String) -> GatewayHttpService {
         1024,
         &[],
         None,
+        security,
+        admin_asset_dir(),
     )
     .expect("service")
+}
+
+fn test_security_config() -> SecurityConfig {
+    SecurityConfig {
+        client_ip: ClientIpConfig {
+            source: ClientIpSource::Peer,
+            trusted_proxy_cidrs: Vec::new(),
+        },
+        rate_limit: RateLimitConfig {
+            enabled: false,
+            requests_per_minute: 60,
+            burst: 60,
+        },
+    }
+}
+
+fn test_gateway_config() -> GatewayServerConfig {
+    GatewayServerConfig {
+        public_bind: "127.0.0.1:8080".parse().expect("public bind"),
+        management_bind: "127.0.0.1:9090".parse().expect("management bind"),
+        max_request_bytes: 1024,
+        allowed_origins: Vec::new(),
+        admin_password: "admin-password".to_string(),
+        routes: RouteConfig::default(),
+        tokens: vec![crate::config::TokenConfig {
+            env: "GATEWAY_TEST_TOKEN".to_string(),
+            caller: "developer".to_string(),
+            targets: vec!["local".to_string()],
+        }],
+        targets: vec![crate::config::TargetConfig {
+            name: "local".to_string(),
+            endpoint: EndpointConfig::Local {
+                model: "model.gguf".into(),
+                backend: GatewayBackendPreference::Auto,
+                stats: StatsMode::Basic,
+                runtime: NativeRuntimeConfig::default(),
+            },
+        }],
+        max_concurrent_requests: None,
+        security: test_security_config(),
+    }
 }
 
 #[test]
@@ -86,6 +140,15 @@ fn config_accepts_typed_custom_routes() {
         public_bind = "127.0.0.1:8080"
         management_bind = "127.0.0.1:9090"
         admin_password = "admin-password"
+
+        [security.client_ip]
+        source = "peer"
+        trusted_proxy_cidrs = []
+
+        [security.rate_limit]
+        enabled = false
+        requests_per_minute = 60
+        burst = 60
 
         [routes]
         query = "/generate"
@@ -128,6 +191,15 @@ fn local_target_accepts_backend_and_stats_overrides() {
     let source = r#"
         admin_password = "admin-password"
 
+        [security.client_ip]
+        source = "peer"
+        trusted_proxy_cidrs = []
+
+        [security.rate_limit]
+        enabled = false
+        requests_per_minute = 60
+        burst = 60
+
         [[tokens]]
         env = "GATEWAY_TEST_TOKEN"
         caller = "developer"
@@ -157,6 +229,15 @@ fn local_target_rejects_unsupported_backend_names() {
     let source = r#"
         admin_password = "admin-password"
 
+        [security.client_ip]
+        source = "peer"
+        trusted_proxy_cidrs = []
+
+        [security.rate_limit]
+        enabled = false
+        requests_per_minute = 60
+        burst = 60
+
         [[tokens]]
         env = "GATEWAY_TEST_TOKEN"
         caller = "developer"
@@ -179,6 +260,15 @@ fn local_target_rejects_unsupported_backend_names() {
 fn provider_targets_keep_server_side_secret_envs() {
     let source = r#"
         admin_password = "admin-password"
+
+        [security.client_ip]
+        source = "peer"
+        trusted_proxy_cidrs = []
+
+        [security.rate_limit]
+        enabled = false
+        requests_per_minute = 60
+        burst = 60
 
         [[tokens]]
         env = "GATEWAY_TEST_TOKEN"
@@ -265,13 +355,34 @@ fn explicit_unavailable_backend_returns_an_error() {
 
 #[test]
 fn config_rejects_missing_application_policy() {
-    let config = GatewayServerConfig {
-        routes: RouteConfig::default(),
-        admin_password: "admin-password".to_string(),
-        ..GatewayServerConfig::default()
-    };
+    let mut config = test_gateway_config();
+    config.tokens.clear();
+    config.targets.clear();
 
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn config_rejects_missing_security_section() {
+    let source = r#"
+        admin_password = "admin-password"
+
+        [[tokens]]
+        env = "GATEWAY_TEST_TOKEN"
+        caller = "developer"
+        targets = ["local"]
+
+        [[targets]]
+        name = "local"
+        type = "local"
+        model = "model.gguf"
+    "#;
+
+    let error = match toml::from_str::<GatewayServerConfig>(source) {
+        Ok(_) => panic!("security section is required"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("security"));
 }
 
 #[test]
@@ -281,6 +392,15 @@ fn config_rejects_missing_admin_password() {
         env = "GATEWAY_TEST_TOKEN"
         caller = "developer"
         targets = ["local"]
+
+        [security.client_ip]
+        source = "peer"
+        trusted_proxy_cidrs = []
+
+        [security.rate_limit]
+        enabled = false
+        requests_per_minute = 60
+        burst = 60
 
         [[targets]]
         name = "local"
@@ -295,27 +415,8 @@ fn config_rejects_missing_admin_password() {
 
 #[test]
 fn config_rejects_duplicate_routes_on_the_same_listener() {
-    let mut routes = RouteConfig::default();
-    routes.chat = routes.query.clone();
-    let config = GatewayServerConfig {
-        routes,
-        admin_password: "admin-password".to_string(),
-        tokens: vec![crate::config::TokenConfig {
-            env: "GATEWAY_TEST_TOKEN".to_string(),
-            caller: "developer".to_string(),
-            targets: vec!["local".to_string()],
-        }],
-        targets: vec![crate::config::TargetConfig {
-            name: "local".to_string(),
-            endpoint: EndpointConfig::Local {
-                model: "model.gguf".into(),
-                backend: GatewayBackendPreference::Auto,
-                stats: StatsMode::Basic,
-                runtime: NativeRuntimeConfig::default(),
-            },
-        }],
-        ..GatewayServerConfig::default()
-    };
+    let mut config = test_gateway_config();
+    config.routes.chat = config.routes.query.clone();
 
     assert!(config.validate().is_err());
 }
@@ -349,6 +450,7 @@ async fn public_routes_require_authentication_apply_policy_and_call_client() {
         .clone()
         .oneshot(
             Request::post("/generate")
+                .extension(ConnectInfo(test_peer()))
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"model":"allowed","prompt":"hello"}"#))
                 .expect("request"),
@@ -361,6 +463,7 @@ async fn public_routes_require_authentication_apply_policy_and_call_client() {
         .clone()
         .oneshot(
             Request::post("/generate")
+                .extension(ConnectInfo(test_peer()))
                 .header("authorization", "Bearer test-secret")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"model":"blocked","prompt":"hello"}"#))
@@ -373,6 +476,7 @@ async fn public_routes_require_authentication_apply_policy_and_call_client() {
     let allowed = router
         .oneshot(
             Request::post("/generate")
+                .extension(ConnectInfo(test_peer()))
                 .header("authorization", "Bearer test-secret")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"model":"allowed","prompt":"hello"}"#))
@@ -385,6 +489,107 @@ async fn public_routes_require_authentication_apply_policy_and_call_client() {
     let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
     assert_eq!(body["text"], "hello");
     assert_eq!(body["model"], "allowed");
+}
+
+#[tokio::test]
+async fn security_controls_are_in_memory_and_reset_with_service_state() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "upstream-response",
+            "model": "upstream",
+            "text": "hello",
+            "finish_reason": "stop"
+        })))
+        .mount(&upstream)
+        .await;
+    let security = SecurityConfig {
+        client_ip: ClientIpConfig {
+            source: ClientIpSource::XRealIp,
+            trusted_proxy_cidrs: vec!["0.0.0.0/0".to_string()],
+        },
+        rate_limit: RateLimitConfig {
+            enabled: true,
+            requests_per_minute: 1,
+            burst: 1,
+        },
+    };
+    let service = service_with_security(upstream.uri(), security.clone()).await;
+    let public = service.public_router();
+
+    let allowed = public
+        .clone()
+        .oneshot(authorized_query("127.0.0.8"))
+        .await
+        .expect("response");
+    assert_eq!(allowed.status(), StatusCode::OK);
+
+    let limited = public
+        .clone()
+        .oneshot(authorized_query("127.0.0.8"))
+        .await
+        .expect("response");
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let management = service.management_router();
+    let login = management
+        .clone()
+        .oneshot(
+            Request::post("/admin/api/session")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"password":"admin-password"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let cookie = login
+        .headers()
+        .get(SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .expect("session cookie")
+        .to_string();
+    let session = management
+        .clone()
+        .oneshot(
+            Request::get("/admin/api/session")
+                .header(COOKIE, cookie.as_str())
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let csrf = response_json(session).await["csrfToken"]
+        .as_str()
+        .expect("csrf token")
+        .to_string();
+    let block = management
+        .oneshot(
+            Request::post("/admin/api/security/blocklist/127.0.0.9")
+                .header(COOKIE, cookie)
+                .header("x-cogentlm-admin-csrf", csrf)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(block.status(), StatusCode::OK);
+
+    let blocked = public
+        .oneshot(authorized_query("127.0.0.9"))
+        .await
+        .expect("response");
+    assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+
+    let restarted = service_with_security(upstream.uri(), security)
+        .await
+        .public_router();
+    let reset = restarted
+        .oneshot(authorized_query("127.0.0.9"))
+        .await
+        .expect("response");
+    assert_eq!(reset.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -414,28 +619,64 @@ async fn management_routes_are_application_owned() {
     assert_eq!(metrics.status(), StatusCode::OK);
 }
 
+fn authorized_query(client: &str) -> Request<Body> {
+    Request::post("/generate")
+        .extension(ConnectInfo(test_peer()))
+        .header("authorization", "Bearer test-secret")
+        .header("content-type", "application/json")
+        .header("x-real-ip", client)
+        .body(Body::from(r#"{"model":"allowed","prompt":"hello"}"#))
+        .expect("request")
+}
+
+fn test_peer() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 50000))
+}
+
 #[tokio::test]
 async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
     let upstream = MockServer::start().await;
     let router = service(upstream.uri()).await.management_router();
 
-    let login_page = router
+    let login_redirect = router
         .clone()
         .oneshot(Request::get("/admin").body(Body::empty()).expect("request"))
         .await
         .expect("response");
-    assert_eq!(login_page.status(), StatusCode::OK);
-    let login_body = response_text(login_page).await;
-    assert!(login_body.contains("Gateway Admin"));
-    assert!(!login_body.contains("admin-password"));
-    assert!(!login_body.contains("test-secret"));
+    assert_eq!(login_redirect.status(), StatusCode::PERMANENT_REDIRECT);
+
+    let spa = router
+        .clone()
+        .oneshot(
+            Request::get("/admin/")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(spa.status(), StatusCode::OK);
+    let spa_body = response_text(spa).await;
+    assert!(spa_body.contains("CogentLM Gateway Admin"));
+    assert!(!spa_body.contains("admin-password"));
+    assert!(!spa_body.contains("test-secret"));
+
+    let unauthorized_session = router
+        .clone()
+        .oneshot(
+            Request::get("/admin/api/session")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(unauthorized_session.status(), StatusCode::UNAUTHORIZED);
 
     let wrong_password = router
         .clone()
         .oneshot(
-            Request::post("/admin/login")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("password=wrong"))
+            Request::post("/admin/api/session")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"password":"wrong"}"#))
                 .expect("request"),
         )
         .await
@@ -445,14 +686,14 @@ async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
     let login = router
         .clone()
         .oneshot(
-            Request::post("/admin/login")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("password=admin-password"))
+            Request::post("/admin/api/session")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"password":"admin-password"}"#))
                 .expect("request"),
         )
         .await
         .expect("response");
-    assert_eq!(login.status(), StatusCode::SEE_OTHER);
+    assert_eq!(login.status(), StatusCode::OK);
     let cookie = login
         .headers()
         .get(SET_COOKIE)
@@ -464,7 +705,7 @@ async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
     let dashboard = router
         .clone()
         .oneshot(
-            Request::get("/admin")
+            Request::get("/admin/")
                 .header(COOKIE, cookie.as_str())
                 .body(Body::empty())
                 .expect("request"),
@@ -473,27 +714,118 @@ async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
         .expect("response");
     assert_eq!(dashboard.status(), StatusCode::OK);
     let dashboard_body = response_text(dashboard).await;
-    assert!(dashboard_body.contains("allowed"));
-    assert!(dashboard_body.contains("Admin password: configured in TOML"));
+    assert!(dashboard_body.contains("CogentLM Gateway Admin"));
+    assert!(!dashboard_body.contains("<base"));
     assert!(!dashboard_body.contains("admin-password"));
     assert!(!dashboard_body.contains("test-secret"));
 
+    let session = router
+        .clone()
+        .oneshot(
+            Request::get("/admin/api/session")
+                .header(COOKIE, cookie.as_str())
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(session.status(), StatusCode::OK);
+    let session = response_json(session).await;
+    let csrf = session["csrfToken"]
+        .as_str()
+        .expect("csrf token")
+        .to_string();
+
+    let targets = router
+        .clone()
+        .oneshot(
+            Request::get("/admin/api/targets")
+                .header(COOKIE, cookie.as_str())
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(targets.status(), StatusCode::OK);
+    let targets_body = response_text(targets).await;
+    assert!(targets_body.contains("allowed"));
+    assert!(!targets_body.contains("admin-password"));
+    assert!(!targets_body.contains("test-secret"));
+
+    let blocked_without_csrf = router
+        .clone()
+        .oneshot(
+            Request::post("/admin/api/security/blocklist/127.0.0.9")
+                .header(COOKIE, cookie.as_str())
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(blocked_without_csrf.status(), StatusCode::FORBIDDEN);
+
+    let block = router
+        .clone()
+        .oneshot(
+            Request::post("/admin/api/security/blocklist/127.0.0.9")
+                .header(COOKIE, cookie.as_str())
+                .header("x-cogentlm-admin-csrf", csrf.as_str())
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(block.status(), StatusCode::OK);
+    assert!(response_text(block).await.contains("127.0.0.9"));
+
+    let concurrency = router
+        .clone()
+        .oneshot(
+            Request::put("/admin/api/controls/concurrency")
+                .header(COOKIE, cookie.as_str())
+                .header("x-cogentlm-admin-csrf", csrf.as_str())
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"limit":1}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(concurrency.status(), StatusCode::OK);
+
     let logout = router
         .oneshot(
-            Request::post("/admin/logout")
+            Request::delete("/admin/api/session")
                 .header(COOKIE, cookie)
                 .body(Body::empty())
                 .expect("request"),
         )
         .await
         .expect("response");
-    assert_eq!(logout.status(), StatusCode::SEE_OTHER);
+    assert_eq!(logout.status(), StatusCode::OK);
     let cleared = logout
         .headers()
         .get(SET_COOKIE)
         .and_then(|value| value.to_str().ok())
         .expect("clear cookie");
     assert!(cleared.contains("Max-Age=0"));
+}
+
+fn admin_asset_dir() -> std::path::PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_nanos();
+    let dir = std::env::temp_dir()
+        .join("cogentlm-gateway-admin-test")
+        .join(format!("{}-{now}", std::process::id()));
+    std::fs::create_dir_all(dir.join("assets")).expect("asset dir");
+    std::fs::write(
+        dir.join("index.html"),
+        r#"<!doctype html><title>CogentLM Gateway Admin</title><div id="root"></div>"#,
+    )
+    .expect("index");
+    std::fs::write(dir.join("assets").join("app.js"), "export {};").expect("asset");
+    dir
 }
 
 fn backend_capabilities(
@@ -513,4 +845,9 @@ async fn response_text(response: axum::http::Response<Body>) -> String {
         .await
         .expect("body");
     String::from_utf8(bytes.to_vec()).expect("utf8 body")
+}
+
+async fn response_json(response: axum::http::Response<Body>) -> serde_json::Value {
+    let text = response_text(response).await;
+    serde_json::from_str(&text).expect("json body")
 }

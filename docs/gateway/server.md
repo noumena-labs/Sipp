@@ -48,9 +48,14 @@ TOML, binds both listeners, and exits cleanly on Ctrl-C.
 `clm build gateway-server --backend <backend>` stages a runnable distribution
 in `.build/artifacts/gateway-server`. The directory contains the
 `cogentlm-gateway` executable, base runtime libraries, and selected GGML
-backend plugins. Keep the executable and its companion files together.
+backend plugins. The build also compiles the React Admin Dashboard from
+`apps/gateway-server/admin-ui` and copies its Vite output to
+`.build/artifacts/gateway-server/admin-ui`. Keep the executable, dashboard
+asset directory, and runtime libraries together.
 
 Direct execution must put the artifact directory on the dynamic loader path.
+The executable reads dashboard assets from `admin-ui` beside the binary unless
+`COGENTLM_GATEWAY_ADMIN_ASSETS_DIR` points at another Vite `dist` directory.
 
 Linux:
 
@@ -113,6 +118,14 @@ directly on the host machine:
 For local development, bind both listeners to `127.0.0.1`. In production, keep
 the management listener private or behind trusted access control.
 
+## Admin Dashboard State
+
+The Admin Dashboard is an in-process observability and control surface. It
+stores sessions, CSRF tokens, rolling charts, rate-limit buckets, manual
+blocklists, and runtime control overrides only in memory. These values reset
+when the gateway process restarts. The dashboard never rewrites TOML and does
+not require Redis, SQLite, or a state file.
+
 ## Admin Password
 
 The Admin Dashboard password is configured directly in the TOML file:
@@ -131,4 +144,3 @@ keep real production config files private and out of source control.
 - [Configuration](configuration.md)
 - [Testing](testing.md)
 - [Operations](operations.md)
-

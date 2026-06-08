@@ -27,7 +27,7 @@ expose a gateway:
 
 - `ProtocolCodec` for request, response, stream, and error wire formats.
 - `Authenticator` for arbitrary authentication.
-- `ErrorTranslator` and `GatewayObservability`.
+- `ErrorTranslator` for application HTTP error mapping.
 - `GatewayCodec` for the first-party Cogent JSON/SSE profile.
 - `GatewayHttpError` and SSE/error response encoders.
 
@@ -70,4 +70,3 @@ metrics, and TOML format are application-owned.
 Default `/v1/query`, `/v1/chat`, and `/v1/embed` paths belong only to
 applications that choose them. The library supplies codecs and endpoint
 transports, not route ownership.
-

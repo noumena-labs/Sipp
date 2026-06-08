@@ -21,11 +21,17 @@ RUN apt-get update \
         libvulkan-dev \
         ninja-build \
         pkg-config \
+        unzip \
     && if [ "${COGENTLM_GATEWAY_INSTALL_RUSTUP}" = "1" ]; then \
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain stable; \
     fi \
     && rm -rf /var/lib/apt/lists/*
+
+ENV BUN_INSTALL=/usr/local/bun
+ENV PATH=/usr/local/bun/bin:${PATH}
+
+RUN curl -fsSL https://bun.sh/install | bash
 
 WORKDIR /src
 COPY . .

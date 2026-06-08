@@ -21,42 +21,53 @@ use serde::Deserialize;
 
 /// Standalone application configuration.
 #[derive(Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct GatewayServerConfig {
     /// Public inference listener.
+    #[serde(default = "default_public_bind")]
     pub public_bind: SocketAddr,
     /// Management listener.
+    #[serde(default = "default_management_bind")]
     pub management_bind: SocketAddr,
     /// Maximum request body bytes.
+    #[serde(default = "default_max_request_bytes")]
     pub max_request_bytes: usize,
     /// Browser origins accepted by the public listener.
+    #[serde(default)]
     pub allowed_origins: Vec<String>,
     /// Admin Dashboard password.
+    #[serde(default)]
     pub admin_password: String,
     /// Application-owned route selection.
+    #[serde(default = "default_routes")]
     pub routes: RouteConfig,
     /// Bearer tokens and target access loaded from environment variables.
+    #[serde(default)]
     pub tokens: Vec<TokenConfig>,
     /// Public targets backed by local or provider endpoints.
+    #[serde(default)]
     pub targets: Vec<TargetConfig>,
     /// Application-wide concurrent request limit.
+    #[serde(default)]
     pub max_concurrent_requests: Option<usize>,
+    /// In-memory security and client identification settings.
+    pub security: SecurityConfig,
 }
 
-impl Default for GatewayServerConfig {
-    fn default() -> Self {
-        Self {
-            public_bind: SocketAddr::from(([0, 0, 0, 0], 8080)),
-            management_bind: SocketAddr::from(([0, 0, 0, 0], 9090)),
-            max_request_bytes: 1 << 20,
-            allowed_origins: Vec::new(),
-            admin_password: String::new(),
-            routes: RouteConfig::default(),
-            tokens: Vec::new(),
-            targets: Vec::new(),
-            max_concurrent_requests: None,
-        }
-    }
+fn default_public_bind() -> SocketAddr {
+    SocketAddr::from(([0, 0, 0, 0], 8080))
+}
+
+fn default_management_bind() -> SocketAddr {
+    SocketAddr::from(([0, 0, 0, 0], 9090))
+}
+
+const fn default_max_request_bytes() -> usize {
+    1 << 20
+}
+
+fn default_routes() -> RouteConfig {
+    RouteConfig::default()
 }
 
 impl GatewayServerConfig {
@@ -81,6 +92,7 @@ impl GatewayServerConfig {
         if self.max_concurrent_requests == Some(0) {
             bail!("max_concurrent_requests must be greater than zero");
         }
+        self.security.validate()?;
         if self.admin_password.trim().is_empty() {
             bail!("admin_password must not be empty");
         }
@@ -161,6 +173,88 @@ impl GatewayServerConfig {
     }
 }
 
+/// Runtime security configuration for the standalone gateway.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityConfig {
+    /// Client IP extraction settings.
+    pub client_ip: ClientIpConfig,
+    /// In-memory per-client rate limiting settings.
+    pub rate_limit: RateLimitConfig,
+}
+
+impl SecurityConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        self.client_ip.validate()?;
+        self.rate_limit.validate()
+    }
+}
+
+/// Client IP extraction settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientIpConfig {
+    /// Source used for the client address.
+    pub source: ClientIpSource,
+    /// Trusted proxy CIDRs allowed to supply forwarding headers.
+    pub trusted_proxy_cidrs: Vec<String>,
+}
+
+impl ClientIpConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        for cidr in &self.trusted_proxy_cidrs {
+            validate_ip_cidr(cidr)?;
+        }
+        Ok(())
+    }
+}
+
+/// Source used to identify public clients for in-memory controls.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientIpSource {
+    /// Use the TCP peer address.
+    Peer,
+    /// Use the leftmost `X-Forwarded-For` value from trusted proxies.
+    XForwardedFor,
+    /// Use `X-Real-IP` from trusted proxies.
+    XRealIp,
+}
+
+impl ClientIpSource {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Peer => "peer",
+            Self::XForwardedFor => "x_forwarded_for",
+            Self::XRealIp => "x_real_ip",
+        }
+    }
+}
+
+/// In-memory per-client rate limiting settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimitConfig {
+    /// Whether per-client rate limiting is enabled.
+    pub enabled: bool,
+    /// Token refill rate in requests per minute.
+    pub requests_per_minute: u32,
+    /// Token bucket capacity.
+    pub burst: u32,
+}
+
+impl RateLimitConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.requests_per_minute == 0 {
+            bail!("security.rate_limit.requests_per_minute must be greater than zero");
+        }
+        if self.burst == 0 {
+            bail!("security.rate_limit.burst must be greater than zero");
+        }
+        Ok(())
+    }
+}
+
 /// Loaded application runtime used by explicit route handlers.
 #[derive(Clone)]
 pub struct GatewayServerRuntime {
@@ -213,16 +307,12 @@ impl RouteConfig {
             ("chat", Some(self.chat.as_str())),
             ("embed", Some(self.embed.as_str())),
         ])?;
-        let admin_login = self.admin.as_deref().map(admin_login_route);
-        let admin_logout = self.admin.as_deref().map(admin_logout_route);
         reject_duplicate_routes([
             ("index", self.index.as_deref()),
             ("health", self.health.as_deref()),
             ("readiness", self.readiness.as_deref()),
             ("metrics", self.metrics.as_deref()),
             ("admin", self.admin.as_deref()),
-            ("admin_login", admin_login.as_deref()),
-            ("admin_logout", admin_logout.as_deref()),
         ])?;
         Ok(())
     }
@@ -230,14 +320,6 @@ impl RouteConfig {
 
 fn default_admin_route() -> Option<String> {
     Some("/admin".to_string())
-}
-
-pub(crate) fn admin_login_route(route: &str) -> String {
-    format!("{}/login", route.trim_end_matches('/'))
-}
-
-pub(crate) fn admin_logout_route(route: &str) -> String {
-    format!("{}/logout", route.trim_end_matches('/'))
 }
 
 fn reject_duplicate_routes<const N: usize>(
@@ -612,6 +694,26 @@ fn validate_name(value: &str, field: &str) -> anyhow::Result<()> {
 fn validate_timeout(value: Option<u64>) -> anyhow::Result<()> {
     if value == Some(0) {
         bail!("timeout_seconds must be greater than zero");
+    }
+    Ok(())
+}
+
+fn validate_ip_cidr(value: &str) -> anyhow::Result<()> {
+    let (address, prefix) = value
+        .split_once('/')
+        .with_context(|| format!("trusted proxy CIDR must include a prefix: {value}"))?;
+    let address = address
+        .parse::<std::net::IpAddr>()
+        .with_context(|| format!("invalid trusted proxy CIDR address: {value}"))?;
+    let prefix = prefix
+        .parse::<u8>()
+        .with_context(|| format!("invalid trusted proxy CIDR prefix: {value}"))?;
+    let max_prefix = match address {
+        std::net::IpAddr::V4(_) => 32,
+        std::net::IpAddr::V6(_) => 128,
+    };
+    if prefix > max_prefix {
+        bail!("trusted proxy CIDR prefix is too large: {value}");
     }
     Ok(())
 }

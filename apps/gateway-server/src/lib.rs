@@ -7,6 +7,7 @@ pub mod config;
 pub mod http;
 /// Application-owned metrics.
 pub mod metrics;
+pub(crate) mod runtime;
 
 #[cfg(test)]
 #[path = "tests/server_tests.rs"]

@@ -1,29 +1,36 @@
 use std::collections::BTreeMap;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Path as AxumPath, State};
 use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
-use axum::routing::{get, post};
-use axum::Router;
-use bytes::Bytes;
+use axum::routing::{get, put};
+use axum::{Json, Router};
 use cogentlm_engine::backend::backend_observability_json;
 use rand::random;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use crate::config::{admin_login_route, admin_logout_route, RouteConfig, TargetSummary};
+use crate::config::{RouteConfig, TargetSummary};
 use crate::metrics::GatewayMetrics;
+use crate::runtime::{GatewayControls, GatewaySecurity};
 
+const CSRF_HEADER: &str = "x-cogentlm-admin-csrf";
 const SESSION_COOKIE: &str = "cogentlm_gateway_admin";
 const SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 
 #[derive(Clone)]
 pub(crate) struct AdminDashboardState {
     password: Arc<String>,
-    sessions: Arc<Mutex<BTreeMap<String, Instant>>>,
+    sessions: Arc<Mutex<BTreeMap<String, AdminSession>>>,
     view: Arc<AdminDashboardView>,
     metrics: Arc<GatewayMetrics>,
+    controls: Arc<GatewayControls>,
+    security: Arc<GatewaySecurity>,
+    assets: Arc<AdminAssets>,
 }
 
 impl AdminDashboardState {
@@ -31,13 +38,19 @@ impl AdminDashboardState {
         password: String,
         view: AdminDashboardView,
         metrics: Arc<GatewayMetrics>,
-    ) -> Self {
-        Self {
+        controls: Arc<GatewayControls>,
+        security: Arc<GatewaySecurity>,
+        assets_dir: PathBuf,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             password: Arc::new(password),
             sessions: Arc::new(Mutex::new(BTreeMap::new())),
             view: Arc::new(view),
             metrics,
-        }
+            controls,
+            security,
+            assets: Arc::new(AdminAssets::new(assets_dir)?),
+        })
     }
 }
 
@@ -50,311 +63,650 @@ pub(crate) struct AdminDashboardView {
     pub(crate) started_at: Instant,
 }
 
-pub(crate) fn router(route: &str, state: AdminDashboardState) -> Router {
-    Router::new()
-        .route(route, get(dashboard))
-        .route(&admin_login_route(route), post(login))
-        .route(&admin_logout_route(route), post(logout))
-        .with_state(state)
-}
-
-async fn dashboard(State(state): State<AdminDashboardState>, headers: HeaderMap) -> Response<Body> {
-    if !state.authenticated(&headers) {
-        return html_response(StatusCode::OK, login_html(&state.view, false), None);
+impl AdminDashboardView {
+    fn admin_base(&self) -> String {
+        self.routes
+            .admin
+            .as_deref()
+            .map(admin_base_path)
+            .unwrap_or_else(|| "/admin".to_string())
     }
 
-    html_response(
-        StatusCode::OK,
-        dashboard_html(&state.view, &state.metrics),
-        None,
-    )
+    fn admin_base_with_slash(&self) -> String {
+        admin_base_with_slash(&self.admin_base())
+    }
 }
 
-async fn login(State(state): State<AdminDashboardState>, body: Bytes) -> Response<Body> {
-    let password = form_value(&body, "password").unwrap_or_default();
-    if !constant_time_eq(&password, &state.password) {
-        return html_response(
-            StatusCode::UNAUTHORIZED,
-            login_html(&state.view, true),
+#[derive(Clone)]
+struct AdminSession {
+    expires_at: Instant,
+    csrf_token: String,
+}
+
+struct AuthenticatedSession {
+    csrf_token: String,
+}
+
+struct AdminAssets {
+    root: PathBuf,
+}
+
+impl AdminAssets {
+    fn new(root: PathBuf) -> anyhow::Result<Self> {
+        let index = root.join("index.html");
+        if !index.is_file() {
+            anyhow::bail!(
+                "gateway Admin Dashboard assets are missing; expected {}",
+                index.display()
+            );
+        }
+        Ok(Self { root })
+    }
+
+    async fn read(&self, path: &str) -> Result<Option<AdminAsset>, AdminApiError> {
+        let Some(relative) = clean_asset_path(path) else {
+            return Ok(None);
+        };
+        let path = self.root.join(relative);
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => Ok(Some(AdminAsset {
+                content_type: content_type(&path),
+                bytes,
+            })),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(AdminApiError::internal("failed to read dashboard asset")),
+        }
+    }
+}
+
+struct AdminAsset {
+    content_type: &'static str,
+    bytes: Vec<u8>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionResponse {
+    authenticated: bool,
+    csrf_token: String,
+    csrf_header: &'static str,
+    base_path: String,
+}
+
+#[derive(Clone)]
+struct AdminApiError {
+    status: StatusCode,
+    code: &'static str,
+    message: String,
+}
+
+impl AdminApiError {
+    fn unauthorized() -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code: "unauthorized",
+            message: "admin session is required".to_string(),
+        }
+    }
+
+    fn forbidden(code: &'static str, message: &'static str) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+            message: message.to_string(),
+        }
+    }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request",
+            message: message.into(),
+        }
+    }
+
+    fn internal(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "internal",
+            message: message.to_string(),
+        }
+    }
+
+    fn into_response(self) -> Response<Body> {
+        json_response(
+            self.status,
+            &json!({
+                "error": self.code,
+                "message": self.message,
+            }),
             None,
-        );
+        )
     }
-
-    let session = state.create_session();
-    redirect_response(
-        state.view.routes.admin.as_deref().unwrap_or("/admin"),
-        Some(session_cookie(&session)),
-    )
 }
 
-async fn logout(State(state): State<AdminDashboardState>, headers: HeaderMap) -> Response<Body> {
-    if let Some(session) = session_cookie_value(&headers) {
-        state.remove_session(session);
+pub(crate) fn router(route: &str, state: AdminDashboardState) -> Router {
+    let root = admin_base_path(route);
+    let root_with_slash = admin_base_with_slash(&root);
+    let api_session_route = join_admin_route(&root, "api/session");
+    let api_overview_route = join_admin_route(&root, "api/overview");
+    let api_timeseries_route = join_admin_route(&root, "api/timeseries");
+    let api_routes_route = join_admin_route(&root, "api/routes");
+    let api_targets_route = join_admin_route(&root, "api/targets");
+    let api_clients_route = join_admin_route(&root, "api/clients");
+    let api_security_route = join_admin_route(&root, "api/security");
+    let api_rate_limit_route = join_admin_route(&root, "api/security/rate-limit");
+    let api_blocklist_route = join_admin_route(&root, "api/security/blocklist/{client}");
+    let api_concurrency_route = join_admin_route(&root, "api/controls/concurrency");
+    let wildcard = join_admin_route(&root, "{*path}");
+
+    let mut router = Router::new()
+        .route(
+            &api_session_route,
+            get(api_session)
+                .post(api_create_session)
+                .delete(api_delete_session),
+        )
+        .route(&api_overview_route, get(api_overview))
+        .route(&api_timeseries_route, get(api_timeseries))
+        .route(&api_routes_route, get(api_routes))
+        .route(&api_targets_route, get(api_targets))
+        .route(&api_clients_route, get(api_clients))
+        .route(&api_security_route, get(api_security))
+        .route(&api_rate_limit_route, put(api_update_rate_limit))
+        .route(
+            &api_blocklist_route,
+            get(api_not_found)
+                .post(api_block_client)
+                .delete(api_unblock_client),
+        )
+        .route(&api_concurrency_route, put(api_update_concurrency))
+        .route(&root_with_slash, get(dashboard_index))
+        .route(&wildcard, get(dashboard_path));
+
+    if root != root_with_slash {
+        router = router.route(&root, get(redirect_to_dashboard_root));
     }
-    redirect_response(
-        state.view.routes.admin.as_deref().unwrap_or("/admin"),
+
+    router.with_state(state)
+}
+
+async fn redirect_to_dashboard_root(State(state): State<AdminDashboardState>) -> Response<Body> {
+    redirect_response(&state.view.admin_base_with_slash(), None)
+}
+
+async fn dashboard_index(State(state): State<AdminDashboardState>) -> Response<Body> {
+    match asset_response(&state, "index.html").await {
+        Ok(Some(response)) => response,
+        Ok(None) => AdminApiError::internal("dashboard index asset is missing").into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn dashboard_path(
+    State(state): State<AdminDashboardState>,
+    AxumPath(path): AxumPath<String>,
+) -> Response<Body> {
+    if path.starts_with("api/") {
+        return api_not_found().await;
+    }
+
+    match asset_response(&state, &path).await {
+        Ok(Some(response)) => response,
+        Ok(None) if path.starts_with("assets/") => empty_response(StatusCode::NOT_FOUND, None),
+        Ok(None) => dashboard_index(State(state)).await,
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn api_session(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    match state.api_session(&headers) {
+        Ok(session) => session_response(&state, session, None),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn api_create_session(
+    State(state): State<AdminDashboardState>,
+    Json(payload): Json<LoginPayload>,
+) -> Response<Body> {
+    if !constant_time_eq(&payload.password, &state.password) {
+        return AdminApiError::unauthorized().into_response();
+    }
+
+    match state.create_session() {
+        Ok((session, authenticated)) => {
+            session_response(&state, authenticated, Some(session_cookie(&session)))
+        }
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn api_delete_session(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    if let Some(session) = session_cookie_value(&headers) {
+        if let Err(error) = state.remove_session(session) {
+            return error.into_response();
+        }
+    }
+    json_response(
+        StatusCode::OK,
+        &json!({ "authenticated": false }),
         Some(clear_session_cookie()),
     )
 }
 
-impl AdminDashboardState {
-    fn authenticated(&self, headers: &HeaderMap) -> bool {
-        let Some(session) = session_cookie_value(headers) else {
-            return false;
-        };
-        let Ok(mut sessions) = self.sessions.lock() else {
-            return false;
-        };
-        prune_sessions(&mut sessions);
-        sessions
-            .get(session)
-            .is_some_and(|expires_at| *expires_at > Instant::now())
+async fn api_overview(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    if let Err(error) = state.api_session(&headers) {
+        return error.into_response();
     }
-
-    fn create_session(&self) -> String {
-        let session = random_session_id();
-        if let Ok(mut sessions) = self.sessions.lock() {
-            prune_sessions(&mut sessions);
-            sessions.insert(session.clone(), Instant::now() + SESSION_TTL);
+    let backend_json = match backend_observability_json(true) {
+        Ok(value) => value,
+        Err(_) => {
+            return AdminApiError::internal("failed to collect backend observability")
+                .into_response()
         }
-        session
+    };
+    let backend_value = match serde_json::from_str::<serde_json::Value>(&backend_json) {
+        Ok(value) => value,
+        Err(_) => {
+            return AdminApiError::internal("failed to parse backend observability").into_response()
+        }
+    };
+    let metrics = match state.metrics.dashboard_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => return AdminApiError::internal(error).into_response(),
+    };
+    let concurrency = match state.controls.snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => return AdminApiError::internal(error).into_response(),
+    };
+    let security = match state.security.snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => return AdminApiError::internal(error).into_response(),
+    };
+    json_response(
+        StatusCode::OK,
+        &json!({
+            "uptimeSeconds": state.view.started_at.elapsed().as_secs(),
+            "maxRequestBytes": state.view.max_request_bytes,
+            "configuredConcurrencyLimit": state.view.max_concurrent_requests,
+            "metrics": metrics,
+            "controls": {
+                "concurrency": concurrency,
+            },
+            "security": security,
+            "backends": backend_value,
+        }),
+        None,
+    )
+}
+
+async fn api_timeseries(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    if let Err(error) = state.api_session(&headers) {
+        return error.into_response();
     }
+    let snapshot = match state.metrics.dashboard_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => return AdminApiError::internal(error).into_response(),
+    };
+    json_response(
+        StatusCode::OK,
+        &json!({ "timeseries": snapshot.timeseries }),
+        None,
+    )
+}
 
-    fn remove_session(&self, session: &str) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.remove(session);
-        }
+async fn api_routes(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    if let Err(error) = state.api_session(&headers) {
+        return error.into_response();
+    }
+    json_response(
+        StatusCode::OK,
+        &json!({ "routes": route_values(&state.view.routes) }),
+        None,
+    )
+}
+
+async fn api_targets(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    if let Err(error) = state.api_session(&headers) {
+        return error.into_response();
+    }
+    let snapshot = match state.metrics.dashboard_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => return AdminApiError::internal(error).into_response(),
+    };
+    json_response(
+        StatusCode::OK,
+        &json!({
+            "targets": state.view.targets.iter().map(target_value).collect::<Vec<_>>(),
+            "metrics": snapshot.targets,
+        }),
+        None,
+    )
+}
+
+async fn api_clients(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    if let Err(error) = state.api_session(&headers) {
+        return error.into_response();
+    }
+    let snapshot = match state.metrics.dashboard_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(error) => return AdminApiError::internal(error).into_response(),
+    };
+    json_response(
+        StatusCode::OK,
+        &json!({
+            "clients": snapshot.clients,
+            "recent": snapshot.recent,
+        }),
+        None,
+    )
+}
+
+async fn api_security(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+) -> Response<Body> {
+    if let Err(error) = state.api_session(&headers) {
+        return error.into_response();
+    }
+    match state.security.snapshot() {
+        Ok(snapshot) => json_response(StatusCode::OK, &json!({ "security": snapshot }), None),
+        Err(error) => AdminApiError::internal(error).into_response(),
     }
 }
 
-fn prune_sessions(sessions: &mut BTreeMap<String, Instant>) {
+async fn api_update_rate_limit(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+    Json(payload): Json<RateLimitPayload>,
+) -> Response<Body> {
+    if let Err(error) = state.require_csrf(&headers) {
+        return error.into_response();
+    }
+    match state.security.update_rate_limit(
+        payload.enabled,
+        payload.requests_per_minute,
+        payload.burst,
+    ) {
+        Ok(snapshot) => json_response(StatusCode::OK, &json!({ "security": snapshot }), None),
+        Err(error) => control_error_response(error),
+    }
+}
+
+async fn api_block_client(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+    AxumPath(client): AxumPath<String>,
+) -> Response<Body> {
+    if let Err(error) = state.require_csrf(&headers) {
+        return error.into_response();
+    }
+    match state.security.block_client(&client) {
+        Ok(snapshot) => json_response(StatusCode::OK, &json!({ "security": snapshot }), None),
+        Err(error) => control_error_response(error),
+    }
+}
+
+async fn api_unblock_client(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+    AxumPath(client): AxumPath<String>,
+) -> Response<Body> {
+    if let Err(error) = state.require_csrf(&headers) {
+        return error.into_response();
+    }
+    match state.security.unblock_client(&client) {
+        Ok(snapshot) => json_response(StatusCode::OK, &json!({ "security": snapshot }), None),
+        Err(error) => control_error_response(error),
+    }
+}
+
+async fn api_update_concurrency(
+    State(state): State<AdminDashboardState>,
+    headers: HeaderMap,
+    Json(payload): Json<ConcurrencyPayload>,
+) -> Response<Body> {
+    if let Err(error) = state.require_csrf(&headers) {
+        return error.into_response();
+    }
+    match state.controls.set_concurrency_limit(payload.limit) {
+        Ok(()) => match state.controls.snapshot() {
+            Ok(snapshot) => {
+                json_response(StatusCode::OK, &json!({ "concurrency": snapshot }), None)
+            }
+            Err(error) => AdminApiError::internal(error).into_response(),
+        },
+        Err(error) => control_error_response(error),
+    }
+}
+
+async fn api_not_found() -> Response<Body> {
+    json_response(
+        StatusCode::NOT_FOUND,
+        &json!({ "error": "not_found" }),
+        None,
+    )
+}
+
+#[derive(Deserialize)]
+struct LoginPayload {
+    password: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RateLimitPayload {
+    enabled: bool,
+    requests_per_minute: u32,
+    burst: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConcurrencyPayload {
+    limit: Option<usize>,
+}
+
+impl AdminDashboardState {
+    fn api_session(&self, headers: &HeaderMap) -> Result<AuthenticatedSession, AdminApiError> {
+        let Some(session) = session_cookie_value(headers) else {
+            return Err(AdminApiError::unauthorized());
+        };
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| AdminApiError::internal("admin session state is unavailable"))?;
+        prune_sessions(&mut sessions);
+        sessions
+            .get(session)
+            .filter(|session| session.expires_at > Instant::now())
+            .map(|session| AuthenticatedSession {
+                csrf_token: session.csrf_token.clone(),
+            })
+            .ok_or_else(AdminApiError::unauthorized)
+    }
+
+    fn require_csrf(&self, headers: &HeaderMap) -> Result<AuthenticatedSession, AdminApiError> {
+        let session = self.api_session(headers)?;
+        let supplied = headers
+            .get(CSRF_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !constant_time_eq(supplied, &session.csrf_token) {
+            return Err(AdminApiError::forbidden(
+                "csrf_failed",
+                "admin CSRF token is invalid",
+            ));
+        }
+        Ok(session)
+    }
+
+    fn create_session(&self) -> Result<(String, AuthenticatedSession), AdminApiError> {
+        let session = random_session_id();
+        let csrf_token = random_session_id();
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| AdminApiError::internal("admin session state is unavailable"))?;
+        prune_sessions(&mut sessions);
+        sessions.insert(
+            session.clone(),
+            AdminSession {
+                expires_at: Instant::now() + SESSION_TTL,
+                csrf_token: csrf_token.clone(),
+            },
+        );
+        Ok((session, AuthenticatedSession { csrf_token }))
+    }
+
+    fn remove_session(&self, session: &str) -> Result<(), AdminApiError> {
+        self.sessions
+            .lock()
+            .map_err(|_| AdminApiError::internal("admin session state is unavailable"))?
+            .remove(session);
+        Ok(())
+    }
+}
+
+fn session_response(
+    state: &AdminDashboardState,
+    session: AuthenticatedSession,
+    cookie: Option<String>,
+) -> Response<Body> {
+    json_response(
+        StatusCode::OK,
+        &SessionResponse {
+            authenticated: true,
+            csrf_token: session.csrf_token,
+            csrf_header: CSRF_HEADER,
+            base_path: state.view.admin_base(),
+        },
+        cookie,
+    )
+}
+
+fn control_error_response(error: &'static str) -> Response<Body> {
+    if error.contains("unavailable") {
+        AdminApiError::internal(error).into_response()
+    } else {
+        AdminApiError::bad_request(error).into_response()
+    }
+}
+
+fn prune_sessions(sessions: &mut BTreeMap<String, AdminSession>) {
     let now = Instant::now();
-    sessions.retain(|_, expires_at| *expires_at > now);
+    sessions.retain(|_, session| session.expires_at > now);
 }
 
 fn random_session_id() -> String {
     hex(&random::<[u8; 32]>())
 }
 
-fn html_response(status: StatusCode, body: String, cookie: Option<String>) -> Response<Body> {
+async fn asset_response(
+    state: &AdminDashboardState,
+    path: &str,
+) -> Result<Option<Response<Body>>, AdminApiError> {
+    state.assets.read(path).await.map(|asset| {
+        asset.map(|asset| {
+            response_with_body(
+                StatusCode::OK,
+                asset.content_type,
+                Body::from(asset.bytes),
+                None,
+            )
+        })
+    })
+}
+
+fn json_response<T: Serialize>(
+    status: StatusCode,
+    value: &T,
+    cookie: Option<String>,
+) -> Response<Body> {
+    match serde_json::to_vec(value) {
+        Ok(body) => response_with_body(status, "application/json", Body::from(body), cookie),
+        Err(_) => response_with_body(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "application/json",
+            Body::from(r#"{"error":"encoding_failed"}"#),
+            cookie,
+        ),
+    }
+}
+
+fn response_with_body(
+    status: StatusCode,
+    content_type: &'static str,
+    body: Body,
+    cookie: Option<String>,
+) -> Response<Body> {
     let mut builder = Response::builder()
         .status(status)
-        .header("content-type", "text/html; charset=utf-8")
+        .header("content-type", content_type)
         .header("cache-control", "no-store");
     if let Some(cookie) = cookie.and_then(|value| HeaderValue::from_str(&value).ok()) {
         builder = builder.header(SET_COOKIE, cookie);
     }
-    builder.body(Body::from(body)).unwrap_or_else(|_| {
-        let mut response = Response::new(Body::empty());
-        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-        response
-    })
+    match builder.body(body) {
+        Ok(response) => response,
+        Err(_) => empty_response(StatusCode::INTERNAL_SERVER_ERROR, None),
+    }
 }
 
 fn redirect_response(location: &str, cookie: Option<String>) -> Response<Body> {
     let mut builder = Response::builder()
-        .status(StatusCode::SEE_OTHER)
+        .status(StatusCode::PERMANENT_REDIRECT)
         .header(LOCATION, location)
         .header("cache-control", "no-store");
     if let Some(cookie) = cookie.and_then(|value| HeaderValue::from_str(&value).ok()) {
         builder = builder.header(SET_COOKIE, cookie);
     }
-    builder.body(Body::empty()).unwrap_or_else(|_| {
-        let mut response = Response::new(Body::empty());
-        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-        response
-    })
+    match builder.body(Body::empty()) {
+        Ok(response) => response,
+        Err(_) => empty_response(StatusCode::INTERNAL_SERVER_ERROR, None),
+    }
 }
 
-fn login_html(view: &AdminDashboardView, failed: bool) -> String {
-    let error = if failed {
-        r#"<p class="error">Invalid password.</p>"#
-    } else {
-        ""
-    };
-    let login_route = view
-        .routes
-        .admin
-        .as_deref()
-        .map(admin_login_route)
-        .unwrap_or_else(|| "/admin/login".to_string());
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CogentLM Gateway Admin</title>
-<style>{style}</style>
-</head>
-<body>
-<main class="login">
-<section class="panel">
-<h1>Gateway Admin</h1>
-{error}
-<form method="post" action="{login_route}">
-<label>Password<input type="password" name="password" autofocus autocomplete="current-password"></label>
-<button type="submit">Sign in</button>
-</form>
-</section>
-</main>
-</body>
-</html>"#,
-        style = STYLE,
-        error = error,
-        login_route = html_escape(&login_route)
-    )
+fn empty_response(status: StatusCode, cookie: Option<String>) -> Response<Body> {
+    let mut builder = Response::builder()
+        .status(status)
+        .header("cache-control", "no-store");
+    if let Some(cookie) = cookie.and_then(|value| HeaderValue::from_str(&value).ok()) {
+        builder = builder.header(SET_COOKIE, cookie);
+    }
+    match builder.body(Body::empty()) {
+        Ok(response) => response,
+        Err(_) => {
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = status;
+            response
+        }
+    }
 }
 
-fn dashboard_html(view: &AdminDashboardView, metrics: &GatewayMetrics) -> String {
-    let uptime = human_duration(view.started_at.elapsed());
-    let backend_json = backend_observability_json(true).unwrap_or_else(|_| "{}".to_string());
-    let backend_value = serde_json::from_str::<serde_json::Value>(&backend_json)
-        .unwrap_or_else(|_| serde_json::json!({}));
-    let metrics = metrics.snapshot();
-    let target_rows = target_rows(&view.targets);
-    let metric_rows = metrics
-        .iter()
-        .map(|metric| {
-            format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
-                html_escape(metric.operation),
-                metric.requests,
-                metric.errors
-            )
-        })
-        .collect::<String>();
-    let backend_rows = backend_rows(&backend_value);
-    let route_rows = route_rows(&view.routes);
-
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CogentLM Gateway Admin</title>
-<style>{style}</style>
-</head>
-<body>
-<header>
-<div>
-<h1>Gateway Admin</h1>
-<p>Uptime {uptime}</p>
-</div>
-<form method="post" action="{logout_route}"><button type="submit">Sign out</button></form>
-</header>
-<main>
-<section>
-<h2>Status</h2>
-<div class="stats">
-<div><strong>Health</strong><span>ok</span></div>
-<div><strong>Readiness</strong><span>ready</span></div>
-<div><strong>Max request bytes</strong><span>{max_request_bytes}</span></div>
-<div><strong>Concurrency limit</strong><span>{max_concurrent_requests}</span></div>
-</div>
-</section>
-<section>
-<h2>Targets</h2>
-<table><thead><tr><th>Name</th><th>Kind</th><th>Model</th><th>Backend</th><th>Provider URL</th></tr></thead><tbody>{target_rows}</tbody></table>
-</section>
-<section>
-<h2>Metrics</h2>
-<table><thead><tr><th>Operation</th><th>Requests</th><th>Errors</th></tr></thead><tbody>{metric_rows}</tbody></table>
-</section>
-<section>
-<h2>Backends</h2>
-<table><thead><tr><th>Name</th><th>Devices</th></tr></thead><tbody>{backend_rows}</tbody></table>
-</section>
-<section>
-<h2>Routes</h2>
-<table><thead><tr><th>Name</th><th>Path</th></tr></thead><tbody>{route_rows}</tbody></table>
-</section>
-<section>
-<h2>Runtime</h2>
-<p class="muted">Admin password: configured in TOML</p>
-</section>
-</main>
-</body>
-</html>"#,
-        style = STYLE,
-        uptime = html_escape(&uptime),
-        logout_route = html_escape(
-            &view
-                .routes
-                .admin
-                .as_deref()
-                .map(admin_logout_route)
-                .unwrap_or_else(|| "/admin/logout".to_string())
-        ),
-        max_request_bytes = view.max_request_bytes,
-        max_concurrent_requests = view
-            .max_concurrent_requests
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "unbounded".to_string()),
-        target_rows = target_rows,
-        metric_rows = metric_rows,
-        backend_rows = backend_rows,
-        route_rows = route_rows,
-    )
-}
-
-fn target_rows(targets: &[TargetSummary]) -> String {
-    targets
-        .iter()
-        .map(|target| {
-            let backend = target
-                .backend
-                .as_ref()
-                .map(|backend| {
-                    format!(
-                        "{} ({})",
-                        backend.selected,
-                        backend.reason.as_deref().unwrap_or("selected")
-                    )
-                })
-                .unwrap_or_else(|| "provider".to_string());
-            format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                html_escape(&target.name),
-                html_escape(target.kind.as_str()),
-                html_escape(&target.model),
-                html_escape(&backend),
-                html_escape(target.provider_base_url.as_deref().unwrap_or("-"))
-            )
-        })
-        .collect()
-}
-
-fn backend_rows(value: &serde_json::Value) -> String {
-    value
-        .get("availableBackends")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| {
-                    let name = item
-                        .get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown");
-                    let device_count = item
-                        .get("deviceCount")
-                        .and_then(serde_json::Value::as_u64)
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "-".to_string());
-                    format!(
-                        "<tr><td>{}</td><td>{}</td></tr>",
-                        html_escape(name),
-                        html_escape(&device_count)
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_else(|| "<tr><td>unknown</td><td>-</td></tr>".to_string())
-}
-
-fn route_rows(routes: &RouteConfig) -> String {
+fn route_values(routes: &RouteConfig) -> Vec<serde_json::Value> {
     [
         ("query", Some(routes.query.as_str())),
         ("chat", Some(routes.chat.as_str())),
@@ -366,15 +718,25 @@ fn route_rows(routes: &RouteConfig) -> String {
         ("admin", routes.admin.as_deref()),
     ]
     .into_iter()
-    .filter_map(|(name, route)| route.map(|route| (name, route)))
-    .map(|(name, route)| {
-        format!(
-            "<tr><td>{}</td><td>{}</td></tr>",
-            html_escape(name),
-            html_escape(route)
-        )
-    })
+    .filter_map(|(name, route)| route.map(|route| json!({ "name": name, "path": route })))
     .collect()
+}
+
+fn target_value(target: &TargetSummary) -> serde_json::Value {
+    json!({
+        "name": &target.name,
+        "kind": target.kind.as_str(),
+        "model": &target.model,
+        "backend": target.backend.as_ref().map(|backend| {
+            json!({
+                "selected": &backend.selected,
+                "requested": backend.requested.as_str(),
+                "reason": &backend.reason,
+                "gpuOffloadExpected": backend.gpu_offload_expected,
+            })
+        }),
+        "providerBaseUrl": &target.provider_base_url,
+    })
 }
 
 fn session_cookie(session: &str) -> String {
@@ -400,77 +762,59 @@ fn session_cookie_value(headers: &HeaderMap) -> Option<&str> {
         })
 }
 
-fn form_value(body: &[u8], key: &str) -> Option<String> {
-    let body = std::str::from_utf8(body).ok()?;
-    body.split('&').find_map(|pair| {
-        let (name, value) = pair.split_once('=')?;
-        (percent_decode(name) == key).then(|| percent_decode(value))
-    })
-}
-
-fn percent_decode(value: &str) -> String {
-    let mut bytes = Vec::with_capacity(value.len());
-    let mut input = value.as_bytes().iter().copied();
-    while let Some(byte) = input.next() {
-        match byte {
-            b'+' => bytes.push(b' '),
-            b'%' => {
-                let hi = input.next();
-                let lo = input.next();
-                match (hi.and_then(hex_value), lo.and_then(hex_value)) {
-                    (Some(hi), Some(lo)) => bytes.push((hi << 4) | lo),
-                    _ => {
-                        bytes.push(b'%');
-                        if let Some(hi) = hi {
-                            bytes.push(hi);
-                        }
-                        if let Some(lo) = lo {
-                            bytes.push(lo);
-                        }
-                    }
-                }
-            }
-            _ => bytes.push(byte),
+fn clean_asset_path(path: &str) -> Option<PathBuf> {
+    let mut clean = PathBuf::new();
+    for component in Path::new(path.trim_start_matches('/')).components() {
+        match component {
+            Component::Normal(part) => clean.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => return None,
         }
     }
-    String::from_utf8_lossy(&bytes).into_owned()
+    if clean.as_os_str().is_empty() {
+        clean.push("index.html");
+    }
+    Some(clean)
 }
 
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
+fn content_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("json") => "application/json",
+        Some("ico") => "image/x-icon",
+        Some("map") => "application/json",
+        Some("woff2") => "font/woff2",
+        _ => "application/octet-stream",
     }
 }
 
-fn html_escape(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '"' => output.push_str("&quot;"),
-            '\'' => output.push_str("&#39;"),
-            _ => output.push(ch),
-        }
-    }
-    output
-}
-
-fn human_duration(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let seconds = seconds % 60;
-    if hours > 0 {
-        format!("{hours}h {minutes}m {seconds}s")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
+fn admin_base_path(route: &str) -> String {
+    let route = route.trim_end_matches('/');
+    if route.is_empty() {
+        "/".to_string()
     } else {
-        format!("{seconds}s")
+        route.to_string()
+    }
+}
+
+fn admin_base_with_slash(route: &str) -> String {
+    if route == "/" {
+        "/".to_string()
+    } else {
+        format!("{}/", route.trim_end_matches('/'))
+    }
+}
+
+fn join_admin_route(base: &str, path: &str) -> String {
+    let base = admin_base_path(base);
+    if base == "/" {
+        format!("/{path}")
+    } else {
+        format!("{base}/{path}")
     }
 }
 
@@ -495,28 +839,3 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
     }
     difference == 0
 }
-
-const STYLE: &str = r#"
-:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1d252c; background: #f6f7f8; }
-body { margin: 0; }
-header { align-items: center; background: #ffffff; border-bottom: 1px solid #d9dee3; display: flex; justify-content: space-between; padding: 18px 32px; }
-header h1, .panel h1 { font-size: 22px; margin: 0 0 4px; }
-header p { color: #5d6873; margin: 0; }
-main { display: grid; gap: 20px; margin: 0 auto; max-width: 1180px; padding: 24px; }
-section, .panel { background: #ffffff; border: 1px solid #d9dee3; border-radius: 8px; padding: 18px; }
-h2 { font-size: 16px; margin: 0 0 14px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border-bottom: 1px solid #e7eaee; padding: 10px 8px; text-align: left; vertical-align: top; }
-th { color: #53606b; font-size: 12px; text-transform: uppercase; }
-button { background: #1f6feb; border: 0; border-radius: 6px; color: #ffffff; cursor: pointer; font-weight: 600; padding: 9px 14px; }
-.login { min-height: 100vh; place-items: center; }
-.login .panel { width: min(420px, calc(100vw - 48px)); }
-label { display: grid; font-weight: 600; gap: 8px; }
-input { border: 1px solid #bac3cc; border-radius: 6px; font: inherit; padding: 10px; }
-.panel form { display: grid; gap: 14px; }
-.error { color: #b42318; font-weight: 600; }
-.stats { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-.stats div { border: 1px solid #e1e5e9; border-radius: 6px; padding: 12px; }
-.stats strong { color: #53606b; display: block; font-size: 12px; margin-bottom: 6px; text-transform: uppercase; }
-.muted { color: #5d6873; margin: 0; }
-"#;

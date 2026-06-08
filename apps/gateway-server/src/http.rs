@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, Method, Response, StatusCode};
 use axum::response::IntoResponse;
@@ -11,19 +14,23 @@ use axum::routing::{get, post};
 use axum::Router;
 use bytes::Bytes;
 use cogentlm_client::{CogentRequestContext, CogentTextResponseFuture, CogentTokenBatches};
+use cogentlm_core::TokenUsage;
 use cogentlm_gateway::{
     request_context, request_id, AuthenticatedRequest, Authenticator, GatewayCodec,
-    GatewayHttpError, GatewayObservability, GatewayRoutes, ProtocolCodec, ToolkitResult,
+    GatewayHttpError, GatewayRoutes, ProtocolCodec, ToolkitResult,
 };
 use cogentlm_gateway_core::{GatewayStreamEvent, Operation};
 use futures_util::future::{select, Either};
 use futures_util::{stream, Stream, StreamExt};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower_http::cors::CorsLayer;
 
 use crate::admin::{self, AdminDashboardState, AdminDashboardView};
-use crate::config::{GatewayServerRuntime, LoadedToken, RouteConfig};
-use crate::metrics::GatewayMetrics;
+use crate::config::{GatewayServerRuntime, LoadedToken, RouteConfig, SecurityConfig};
+use crate::metrics::{GatewayMetrics, GatewayRejectionKind, GatewayRequestRecord};
+use crate::runtime::{
+    ConcurrencyAcquireError, ConcurrencyPermit, GatewayControls, GatewaySecurity,
+    SecurityCheckError,
+};
 
 /// Standalone application HTTP composition.
 pub struct GatewayHttpService {
@@ -42,13 +49,18 @@ impl GatewayHttpService {
         max_request_bytes: usize,
         allowed_origins: &[String],
         max_concurrent_requests: Option<usize>,
+        security_config: SecurityConfig,
+        admin_assets_dir: PathBuf,
     ) -> anyhow::Result<Self> {
         let gateway_routes: GatewayRoutes = routes.clone().into();
+        let controls = Arc::new(GatewayControls::new(max_concurrent_requests));
+        let security = Arc::new(GatewaySecurity::new(&security_config)?);
         let state = PublicState {
             runtime: runtime.clone(),
             authenticator: Arc::new(BearerAuthenticator { tokens }),
             metrics: metrics.clone(),
-            semaphore: max_concurrent_requests.map(|limit| Arc::new(Semaphore::new(limit))),
+            controls: controls.clone(),
+            security: security.clone(),
             codec: GatewayCodec,
         };
         let mut public = Router::new()
@@ -83,7 +95,22 @@ impl GatewayHttpService {
                 &route,
                 get(move || {
                     let metrics = metrics.clone();
-                    async move { metrics.render() }
+                    async move {
+                        match metrics.render() {
+                            Ok(body) => response(
+                                StatusCode::OK,
+                                "text/plain; version=0.0.4",
+                                Body::from(body),
+                                None,
+                            ),
+                            Err(error) => response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "text/plain; charset=utf-8",
+                                Body::from(error),
+                                None,
+                            ),
+                        }
+                    }
                 }),
             );
         }
@@ -100,7 +127,14 @@ impl GatewayHttpService {
             };
             management = management.merge(admin::router(
                 route,
-                AdminDashboardState::new(admin_password, view, metrics),
+                AdminDashboardState::new(
+                    admin_password,
+                    view,
+                    metrics,
+                    controls,
+                    security,
+                    admin_assets_dir,
+                )?,
             ));
         }
         Ok(Self { public, management })
@@ -122,48 +156,64 @@ struct PublicState {
     runtime: GatewayServerRuntime,
     authenticator: Arc<dyn Authenticator>,
     metrics: Arc<GatewayMetrics>,
-    semaphore: Option<Arc<Semaphore>>,
+    controls: Arc<GatewayControls>,
+    security: Arc<GatewaySecurity>,
     codec: GatewayCodec,
 }
 
 async fn query(
     State(state): State<PublicState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
-    text_handler(state, Operation::Query, headers, body).await
+    text_handler(state, Operation::Query, peer, headers, body).await
 }
 
-async fn chat(State(state): State<PublicState>, headers: HeaderMap, body: Bytes) -> Response<Body> {
-    text_handler(state, Operation::Chat, headers, body).await
+async fn chat(
+    State(state): State<PublicState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response<Body> {
+    text_handler(state, Operation::Chat, peer, headers, body).await
 }
 
 async fn embed(
     State(state): State<PublicState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
     let request_id = request_id(&headers);
+    let trace = RequestTrace::new(&state, Operation::Embed, request_id, peer, &headers, false);
+    state
+        .metrics
+        .request_started(Operation::Embed, trace.request_id());
+    if let Err(rejection) = state.security.check_client(&trace.client) {
+        return security_rejection_response(&state, trace, rejection);
+    }
     let authenticated = match state.authenticator.authenticate(&headers) {
         Ok(authenticated) => authenticated,
-        Err(error) => return error_response(&state, Operation::Embed, request_id, error),
+        Err(error) => return error_response(&state, trace, None, None, error),
     };
-    state.metrics.request_started(Operation::Embed, request_id);
+    let caller = caller_label(&authenticated);
     let context = request_context(request_id, authenticated.clone());
     let decoded = match state.codec.decode_embed(&body) {
         Ok(decoded) => decoded,
-        Err(error) => return error_response(&state, Operation::Embed, request_id, error),
+        Err(error) => return error_response(&state, trace, caller, None, error),
     };
+    let target = decoded.target.clone();
     if let Err(error) = authorize(&context, &decoded.target) {
-        return error_response(&state, Operation::Embed, request_id, error);
+        return error_response(&state, trace, caller, Some(target), error);
     }
     let endpoint = match resolve_endpoint(&state, &decoded.target) {
         Ok(endpoint) => endpoint,
-        Err(error) => return error_response(&state, Operation::Embed, request_id, error),
+        Err(error) => return error_response(&state, trace, caller, Some(target), error),
     };
     let _permit = match acquire(&state) {
         Ok(permit) => permit,
-        Err(error) => return error_response(&state, Operation::Embed, request_id, error),
+        Err(error) => return error_response(&state, trace, caller, Some(target), error),
     };
     let mut request = decoded.request;
     request.endpoint = Some(endpoint);
@@ -174,14 +224,23 @@ async fn embed(
         request,
     );
     match run.await {
-        Ok(response) => match state.codec.encode_embedding(&decoded.target, &response) {
-            Ok(body) => success_response(&state, Operation::Embed, request_id, false, body),
-            Err(error) => error_response(&state, Operation::Embed, request_id, error),
+        Ok(response) => match state.codec.encode_embedding(&target, &response) {
+            Ok(body) => success_response(
+                &state,
+                trace,
+                caller,
+                Some(target),
+                false,
+                response.usage,
+                body,
+            ),
+            Err(error) => error_response(&state, trace, caller, Some(target), error),
         },
         Err(error) => error_response(
             &state,
-            Operation::Embed,
-            request_id,
+            trace,
+            caller,
+            Some(target),
             GatewayHttpError::from_gateway_error(error.into()),
         ),
     }
@@ -190,32 +249,39 @@ async fn embed(
 async fn text_handler(
     state: PublicState,
     operation: Operation,
+    peer: SocketAddr,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
     let request_id = request_id(&headers);
+    let trace = RequestTrace::new(&state, operation, request_id, peer, &headers, false);
+    state.metrics.request_started(operation, trace.request_id());
+    if let Err(rejection) = state.security.check_client(&trace.client) {
+        return security_rejection_response(&state, trace, rejection);
+    }
     let authenticated = match state.authenticator.authenticate(&headers) {
         Ok(authenticated) => authenticated,
-        Err(error) => return error_response(&state, operation, request_id, error),
+        Err(error) => return error_response(&state, trace, None, None, error),
     };
-    state.metrics.request_started(operation, request_id);
+    let caller = caller_label(&authenticated);
     let context = request_context(request_id, authenticated.clone());
     match operation {
         Operation::Query => {
             let decoded = match state.codec.decode_query(&body) {
                 Ok(decoded) => decoded,
-                Err(error) => return error_response(&state, operation, request_id, error),
+                Err(error) => return error_response(&state, trace, caller, None, error),
             };
+            let target = decoded.target.clone();
             if let Err(error) = authorize(&context, &decoded.target) {
-                return error_response(&state, operation, request_id, error);
+                return error_response(&state, trace, caller, Some(target), error);
             }
             let endpoint = match resolve_endpoint(&state, &decoded.target) {
                 Ok(endpoint) => endpoint,
-                Err(error) => return error_response(&state, operation, request_id, error),
+                Err(error) => return error_response(&state, trace, caller, Some(target), error),
             };
             let permit = match acquire(&state) {
                 Ok(permit) => permit,
-                Err(error) => return error_response(&state, operation, request_id, error),
+                Err(error) => return error_response(&state, trace, caller, Some(target), error),
             };
             let mut request = decoded.request;
             request.endpoint = Some(endpoint);
@@ -227,18 +293,34 @@ async fn text_handler(
                 request,
             );
             if decoded.stream {
-                stream_response(&state, operation, request_id, run.into_parts(), permit)
+                stream_response(
+                    &state,
+                    trace.into_streaming(),
+                    caller,
+                    Some(target),
+                    run.into_parts(),
+                    permit,
+                )
             } else {
                 let _permit = permit;
                 match run.await {
-                    Ok(response) => match state.codec.encode_text(&decoded.target, &response) {
-                        Ok(body) => success_response(&state, operation, request_id, false, body),
-                        Err(error) => error_response(&state, operation, request_id, error),
+                    Ok(response) => match state.codec.encode_text(&target, &response) {
+                        Ok(body) => success_response(
+                            &state,
+                            trace,
+                            caller,
+                            Some(target),
+                            false,
+                            response.usage,
+                            body,
+                        ),
+                        Err(error) => error_response(&state, trace, caller, Some(target), error),
                     },
                     Err(error) => error_response(
                         &state,
-                        operation,
-                        request_id,
+                        trace,
+                        caller,
+                        Some(target),
                         GatewayHttpError::from_gateway_error(error.into()),
                     ),
                 }
@@ -247,18 +329,19 @@ async fn text_handler(
         Operation::Chat => {
             let decoded = match state.codec.decode_chat(&body) {
                 Ok(decoded) => decoded,
-                Err(error) => return error_response(&state, operation, request_id, error),
+                Err(error) => return error_response(&state, trace, caller, None, error),
             };
+            let target = decoded.target.clone();
             if let Err(error) = authorize(&context, &decoded.target) {
-                return error_response(&state, operation, request_id, error);
+                return error_response(&state, trace, caller, Some(target), error);
             }
             let endpoint = match resolve_endpoint(&state, &decoded.target) {
                 Ok(endpoint) => endpoint,
-                Err(error) => return error_response(&state, operation, request_id, error),
+                Err(error) => return error_response(&state, trace, caller, Some(target), error),
             };
             let permit = match acquire(&state) {
                 Ok(permit) => permit,
-                Err(error) => return error_response(&state, operation, request_id, error),
+                Err(error) => return error_response(&state, trace, caller, Some(target), error),
             };
             let mut request = decoded.request;
             request.endpoint = Some(endpoint);
@@ -270,18 +353,34 @@ async fn text_handler(
                 request,
             );
             if decoded.stream {
-                stream_response(&state, operation, request_id, run.into_parts(), permit)
+                stream_response(
+                    &state,
+                    trace.into_streaming(),
+                    caller,
+                    Some(target),
+                    run.into_parts(),
+                    permit,
+                )
             } else {
                 let _permit = permit;
                 match run.await {
-                    Ok(response) => match state.codec.encode_text(&decoded.target, &response) {
-                        Ok(body) => success_response(&state, operation, request_id, false, body),
-                        Err(error) => error_response(&state, operation, request_id, error),
+                    Ok(response) => match state.codec.encode_text(&target, &response) {
+                        Ok(body) => success_response(
+                            &state,
+                            trace,
+                            caller,
+                            Some(target),
+                            false,
+                            response.usage,
+                            body,
+                        ),
+                        Err(error) => error_response(&state, trace, caller, Some(target), error),
                     },
                     Err(error) => error_response(
                         &state,
-                        operation,
-                        request_id,
+                        trace,
+                        caller,
+                        Some(target),
                         GatewayHttpError::from_gateway_error(error.into()),
                     ),
                 }
@@ -289,6 +388,85 @@ async fn text_handler(
         }
         Operation::Embed => unreachable!("embed uses its dedicated handler"),
     }
+}
+
+struct RequestTrace {
+    operation: Operation,
+    request_id: Option<String>,
+    client: String,
+    started_at: Instant,
+    streaming: bool,
+}
+
+impl RequestTrace {
+    fn new(
+        state: &PublicState,
+        operation: Operation,
+        request_id: Option<&str>,
+        peer: SocketAddr,
+        headers: &HeaderMap,
+        streaming: bool,
+    ) -> Self {
+        Self {
+            operation,
+            request_id: request_id.map(str::to_string),
+            client: state.security.client_identity(headers, peer),
+            started_at: Instant::now(),
+            streaming,
+        }
+    }
+
+    fn request_id(&self) -> Option<&str> {
+        self.request_id.as_deref()
+    }
+
+    fn into_streaming(mut self) -> Self {
+        self.streaming = true;
+        self
+    }
+
+    fn record(
+        &self,
+        state: &PublicState,
+        caller: Option<String>,
+        target: Option<String>,
+        status: StatusCode,
+        usage: Option<TokenUsage>,
+        rejection: Option<GatewayRejectionKind>,
+    ) {
+        self.record_with_metrics(&state.metrics, caller, target, status, usage, rejection);
+    }
+
+    fn record_with_metrics(
+        &self,
+        metrics: &GatewayMetrics,
+        caller: Option<String>,
+        target: Option<String>,
+        status: StatusCode,
+        usage: Option<TokenUsage>,
+        rejection: Option<GatewayRejectionKind>,
+    ) {
+        metrics.request_finished(GatewayRequestRecord {
+            operation: self.operation,
+            request_id: self.request_id.clone(),
+            client: self.client.clone(),
+            caller,
+            target,
+            status,
+            duration: self.started_at.elapsed(),
+            usage,
+            streaming: self.streaming,
+            rejection,
+        });
+    }
+}
+
+fn caller_label(authenticated: &AuthenticatedRequest) -> Option<String> {
+    authenticated
+        .metadata
+        .get("caller")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 fn resolve_endpoint(
@@ -321,29 +499,41 @@ fn authorize(
     }
 }
 
-fn acquire(state: &PublicState) -> ToolkitResult<Option<OwnedSemaphorePermit>> {
-    state
-        .semaphore
-        .as_ref()
-        .map(|semaphore| semaphore.clone().try_acquire_owned())
-        .transpose()
-        .map_err(|_| {
-            GatewayHttpError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "admission",
-                "application concurrency limit exceeded",
-            )
-        })
+fn acquire(state: &PublicState) -> ToolkitResult<ConcurrencyPermit> {
+    state.controls.try_acquire().map_err(|error| match error {
+        ConcurrencyAcquireError::LimitExceeded => GatewayHttpError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "admission",
+            "application concurrency limit exceeded",
+        ),
+        ConcurrencyAcquireError::Unavailable => GatewayHttpError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "admission",
+            "application concurrency controls are unavailable",
+        ),
+    })
 }
 
 fn stream_response(
     state: &PublicState,
-    operation: Operation,
-    request_id: Option<&str>,
+    trace: RequestTrace,
+    caller: Option<String>,
+    target: Option<String>,
     run: (CogentTokenBatches, CogentTextResponseFuture),
-    permit: Option<OwnedSemaphorePermit>,
+    permit: ConcurrencyPermit,
 ) -> Response<Body> {
-    let stream = text_event_stream(run, permit).map({
+    let response_request_id = trace.request_id.clone();
+    let stream = text_event_stream(
+        run,
+        permit,
+        StreamTelemetry {
+            metrics: state.metrics.clone(),
+            trace,
+            caller,
+            target,
+        },
+    )
+    .map({
         let codec = state.codec;
         move |event| {
             let bytes = match event {
@@ -355,14 +545,11 @@ fn stream_response(
             Ok::<Bytes, Infallible>(bytes)
         }
     });
-    state
-        .metrics
-        .request_finished(operation, request_id, StatusCode::OK);
     response(
         StatusCode::OK,
         state.codec.content_type(true),
         Body::from_stream(stream),
-        request_id,
+        response_request_id.as_deref(),
     )
 }
 
@@ -371,19 +558,31 @@ struct TextStreamState {
     response: Option<CogentTextResponseFuture>,
     pending: VecDeque<ToolkitResult<GatewayStreamEvent>>,
     terminal: bool,
-    _permit: Option<OwnedSemaphorePermit>,
+    recorded: bool,
+    telemetry: StreamTelemetry,
+    _permit: Option<ConcurrencyPermit>,
+}
+
+struct StreamTelemetry {
+    metrics: Arc<GatewayMetrics>,
+    trace: RequestTrace,
+    caller: Option<String>,
+    target: Option<String>,
 }
 
 fn text_event_stream(
     (tokens, response): (CogentTokenBatches, CogentTextResponseFuture),
-    permit: Option<OwnedSemaphorePermit>,
+    permit: ConcurrencyPermit,
+    telemetry: StreamTelemetry,
 ) -> impl Stream<Item = ToolkitResult<GatewayStreamEvent>> + Send {
     let state = TextStreamState {
         tokens,
         response: Some(response),
         pending: VecDeque::new(),
         terminal: false,
-        _permit: permit,
+        recorded: false,
+        telemetry,
+        _permit: Some(permit),
     };
     stream::unfold(state, |mut state| async move {
         if let Some(event) = state.pending.pop_front() {
@@ -419,6 +618,7 @@ fn finish_text_stream(
     state._permit.take();
     match response {
         Ok(response) => {
+            state.record(StatusCode::OK, response.usage, None);
             if let Some(usage) = response.usage {
                 state
                     .pending
@@ -430,46 +630,115 @@ fn finish_text_stream(
             }));
         }
         Err(error) => {
-            state
-                .pending
-                .push_back(Err(GatewayHttpError::from_gateway_error(error.into())));
+            let error = GatewayHttpError::from_gateway_error(error.into());
+            state.record(error.status, None, None);
+            state.pending.push_back(Err(error));
+        }
+    }
+}
+
+impl TextStreamState {
+    fn record(
+        &mut self,
+        status: StatusCode,
+        usage: Option<TokenUsage>,
+        rejection: Option<GatewayRejectionKind>,
+    ) {
+        if self.recorded {
+            return;
+        }
+        self.recorded = true;
+        self.telemetry.trace.record_with_metrics(
+            &self.telemetry.metrics,
+            self.telemetry.caller.clone(),
+            self.telemetry.target.clone(),
+            status,
+            usage,
+            rejection,
+        );
+    }
+}
+
+impl Drop for TextStreamState {
+    fn drop(&mut self) {
+        if !self.recorded {
+            self.record(
+                StatusCode::REQUEST_TIMEOUT,
+                None,
+                Some(GatewayRejectionKind::ClientClosed),
+            );
         }
     }
 }
 
 fn success_response(
     state: &PublicState,
-    operation: Operation,
-    request_id: Option<&str>,
+    trace: RequestTrace,
+    caller: Option<String>,
+    target: Option<String>,
     streaming: bool,
+    usage: Option<TokenUsage>,
     body: Bytes,
 ) -> Response<Body> {
-    state
-        .metrics
-        .request_finished(operation, request_id, StatusCode::OK);
+    trace.record(state, caller, target, StatusCode::OK, usage, None);
     response(
         StatusCode::OK,
         state.codec.content_type(streaming),
         Body::from(body),
-        request_id,
+        trace.request_id(),
     )
 }
 
 fn error_response(
     state: &PublicState,
-    operation: Operation,
-    request_id: Option<&str>,
+    trace: RequestTrace,
+    caller: Option<String>,
+    target: Option<String>,
     error: GatewayHttpError,
 ) -> Response<Body> {
-    state
-        .metrics
-        .request_finished(operation, request_id, error.status);
+    trace.record(state, caller, target, error.status, None, None);
     let body = state.codec.encode_error(&error);
     response(
         error.status,
         state.codec.content_type(false),
         Body::from(body),
-        request_id,
+        trace.request_id(),
+    )
+}
+
+fn security_rejection_response(
+    state: &PublicState,
+    trace: RequestTrace,
+    rejection: SecurityCheckError,
+) -> Response<Body> {
+    let (status, code, message, kind) = match rejection {
+        SecurityCheckError::Blocked => (
+            StatusCode::FORBIDDEN,
+            "blocked",
+            "client is blocked by the gateway",
+            Some(GatewayRejectionKind::Blocked),
+        ),
+        SecurityCheckError::RateLimited => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "client rate limit exceeded",
+            Some(GatewayRejectionKind::RateLimited),
+        ),
+        SecurityCheckError::Unavailable => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "security_controls",
+            "gateway security controls are unavailable",
+            None,
+        ),
+    };
+    let error = GatewayHttpError::new(status, code, message);
+    trace.record(state, None, None, status, None, kind);
+    let body = state.codec.encode_error(&error);
+    response(
+        status,
+        state.codec.content_type(false),
+        Body::from(body),
+        trace.request_id(),
     )
 }
 
