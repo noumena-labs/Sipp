@@ -595,6 +595,17 @@ char * cogent_common_sampler_print(const cogent_common_sampler * sampler) {
     }
 }
 
+void cogent_common_sampler_reset(cogent_common_sampler * sampler) {
+    if (sampler == nullptr || sampler->inner == nullptr) {
+        return;
+    }
+    try {
+        common_sampler_reset(sampler->inner);
+    } catch (const std::exception &) {
+    } catch (...) {
+    }
+}
+
 int32_t cogent_common_sampler_sample(
     cogent_common_sampler * sampler,
     llama_context * context,

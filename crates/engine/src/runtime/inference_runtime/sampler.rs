@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::error::{Error, Result};
 use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::config::{NativeRuntimeConfig, RequestSampling};
+use crate::runtime::llama_seq_id;
 use crate::runtime::scheduler::{SamplerCacheKey, SamplerHandle, SlotPhase, SlotState};
 
 use super::InferenceRuntime;
@@ -21,6 +22,13 @@ mod sampler_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
+
+/// Backend sampler ownership parked on the physical llama sequence.
+#[derive(Debug)]
+pub(super) struct ResidentBackendSampler {
+    pub(super) key: SamplerCacheKey,
+    pub(super) sampler: SamplerHandle,
+}
 
 /// Hands the slot's CPU sampler to the backend so it can sample inside the
 /// decode kernel. Returns `false` if the slot is not eligible or the FFI call
@@ -86,31 +94,47 @@ pub(super) fn create_sampler(
 }
 
 impl InferenceRuntime {
-    pub(super) fn detach_terminal_backend_samplers_locked(&mut self) {
-        for slot in &mut self.slot_scheduler.slots {
-            if matches!(slot.phase, SlotPhase::Completed | SlotPhase::Failed) {
-                detach_backend_sampler(&mut self.native_runtime, slot);
-            }
-        }
-    }
-
-    pub(super) fn reclaim_and_pool_samplers_locked(&mut self) {
-        reclaim_terminal_samplers(&mut self.slot_scheduler, &mut self.sampler_pool);
+    pub(super) fn settle_terminal_samplers_locked(&mut self) {
+        settle_terminal_samplers(
+            &mut self.slot_scheduler,
+            &mut self.native_runtime,
+            &mut self.sampler_pool,
+            &mut self.resident_backend_samplers,
+        );
     }
 
     pub(super) fn detach_all_backend_samplers_locked(&mut self) {
         for slot in &mut self.slot_scheduler.slots {
             detach_backend_sampler(&mut self.native_runtime, slot);
         }
+        let resident_seq_ids = self
+            .resident_backend_samplers
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for seq_id in resident_seq_ids {
+            detach_resident_backend_sampler(
+                &mut self.native_runtime,
+                &mut self.resident_backend_samplers,
+                seq_id,
+            );
+        }
     }
 }
 
-fn reclaim_terminal_samplers(
+fn settle_terminal_samplers(
     slot_scheduler: &mut crate::runtime::scheduler::SlotScheduler,
+    native_runtime: &mut NativeRuntimeHandle,
     sampler_pool: &mut HashMap<SamplerCacheKey, Vec<SamplerHandle>>,
+    resident_backend_samplers: &mut HashMap<llama_seq_id, ResidentBackendSampler>,
 ) {
     for slot in &mut slot_scheduler.slots {
         if !matches!(slot.phase, SlotPhase::Completed | SlotPhase::Failed) {
+            continue;
+        }
+
+        if slot.backend_sampler_attached {
+            settle_terminal_backend_sampler(slot, native_runtime, resident_backend_samplers);
             continue;
         }
 
@@ -124,6 +148,42 @@ fn reclaim_terminal_samplers(
             sampler_pool.entry(key).or_default().push(sampler);
         }
     }
+}
+
+fn settle_terminal_backend_sampler(
+    slot: &mut SlotState,
+    native_runtime: &mut NativeRuntimeHandle,
+    resident_backend_samplers: &mut HashMap<llama_seq_id, ResidentBackendSampler>,
+) {
+    let completed = slot.phase == SlotPhase::Completed;
+    if completed && slot.seq_id >= 0 {
+        if let (Some(key), Some(mut sampler)) = (slot.sampler_key.take(), slot.sampler.take()) {
+            reset_sampler(&mut sampler);
+            slot.backend_sampler_attached = false;
+            let replaced = resident_backend_samplers
+                .insert(slot.seq_id, ResidentBackendSampler { key, sampler });
+            debug_assert!(
+                replaced.is_none(),
+                "resident backend sampler already existed for completed slot seq_id"
+            );
+            return;
+        }
+    }
+
+    detach_backend_sampler(native_runtime, slot);
+    slot.sampler_key = None;
+    slot.sampler = None;
+}
+
+fn detach_resident_backend_sampler(
+    native_runtime: &mut NativeRuntimeHandle,
+    resident_backend_samplers: &mut HashMap<llama_seq_id, ResidentBackendSampler>,
+    seq_id: llama_seq_id,
+) {
+    if seq_id < 0 || resident_backend_samplers.remove(&seq_id).is_none() {
+        return;
+    }
+    native_runtime.detach_sampler(seq_id);
 }
 
 fn reset_sampler(sampler: &mut SamplerHandle) {

@@ -2,6 +2,7 @@
 //!
 //! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
 
+use super::super::sampler::ResidentBackendSampler;
 use super::recovery::normalize_runnable_slot_state;
 use super::run_initial_prefill;
 use super::sampler_attach::ensure_slot_sampler;
@@ -208,13 +209,15 @@ fn ensure_slot_sampler_reuses_matching_pooled_sampler_without_native_creation() 
         json_schema: String::new(),
     };
     let mut sampler_pool = std::collections::HashMap::new();
+    let mut resident_backend_samplers = std::collections::HashMap::new();
     sampler_pool.insert(key.clone(), vec![SamplerHandle::empty_for_tests()]);
 
     assert!(ensure_slot_sampler(
         &mut slot,
         &mut native_runtime,
         &config,
-        &mut sampler_pool
+        &mut sampler_pool,
+        &mut resident_backend_samplers
     ));
 
     assert!(slot.sampler.is_some());
@@ -224,17 +227,91 @@ fn ensure_slot_sampler_reuses_matching_pooled_sampler_without_native_creation() 
 }
 
 #[test]
-fn ensure_slot_sampler_reports_plain_creation_failure_without_grammar() {
+fn ensure_slot_sampler_reuses_matching_resident_sampler_without_native_attach() {
+    let mut slot = decode_slot(vec![1, 2], 4);
+    let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
+    let config = NativeRuntimeConfig::default();
+    let sampling_json = config
+        .try_sampling_json_with_override(None)
+        .expect("sampling json");
+    let key = SamplerCacheKey {
+        sampling_json,
+        grammar: String::new(),
+        json_schema: String::new(),
+    };
+    let mut sampler_pool = std::collections::HashMap::new();
+    let mut resident_backend_samplers = std::collections::HashMap::new();
+    resident_backend_samplers.insert(
+        slot.seq_id,
+        ResidentBackendSampler {
+            key: key.clone(),
+            sampler: SamplerHandle::empty_for_tests(),
+        },
+    );
+
+    assert!(ensure_slot_sampler(
+        &mut slot,
+        &mut native_runtime,
+        &config,
+        &mut sampler_pool,
+        &mut resident_backend_samplers
+    ));
+
+    assert!(slot.sampler.is_some());
+    assert_eq!(slot.sampler_key, Some(key));
+    assert!(slot.backend_sampler_attached);
+    assert!(resident_backend_samplers.is_empty());
+    assert!(sampler_pool.is_empty());
+}
+
+#[test]
+fn ensure_slot_sampler_drops_mismatched_resident_sampler_before_creation() {
     let mut slot = decode_slot(vec![1, 2], 4);
     let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
     let config = NativeRuntimeConfig::default();
     let mut sampler_pool = std::collections::HashMap::new();
+    let mut resident_backend_samplers = std::collections::HashMap::new();
+    resident_backend_samplers.insert(
+        slot.seq_id,
+        ResidentBackendSampler {
+            key: SamplerCacheKey {
+                sampling_json: r#"{"temperature":0.1}"#.to_string(),
+                grammar: String::new(),
+                json_schema: String::new(),
+            },
+            sampler: SamplerHandle::empty_for_tests(),
+        },
+    );
 
     assert!(!ensure_slot_sampler(
         &mut slot,
         &mut native_runtime,
         &config,
-        &mut sampler_pool
+        &mut sampler_pool,
+        &mut resident_backend_samplers
+    ));
+
+    assert!(resident_backend_samplers.is_empty());
+    assert_eq!(
+        slot.terminal_error_message,
+        "Failed to create per-slot sampler."
+    );
+}
+
+#[test]
+fn ensure_slot_sampler_reports_plain_creation_failure_without_grammar() {
+    let mut slot = decode_slot(vec![1, 2], 4);
+    let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
+    let config = NativeRuntimeConfig::default();
+    let mut sampler_pool = std::collections::HashMap::new();
+    let mut resident_backend_samplers = std::collections::HashMap::new();
+
+    assert!(!ensure_slot_sampler(
+        &mut slot,
+        &mut native_runtime,
+        &config,
+        &mut sampler_pool,
+        &mut resident_backend_samplers
     ));
 
     assert_eq!(slot.phase, SlotPhase::Failed);
@@ -251,12 +328,14 @@ fn ensure_slot_sampler_reports_grammar_creation_failure_with_grammar() {
     let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
     let config = NativeRuntimeConfig::default();
     let mut sampler_pool = std::collections::HashMap::new();
+    let mut resident_backend_samplers = std::collections::HashMap::new();
 
     assert!(!ensure_slot_sampler(
         &mut slot,
         &mut native_runtime,
         &config,
-        &mut sampler_pool
+        &mut sampler_pool,
+        &mut resident_backend_samplers
     ));
 
     assert_eq!(slot.phase, SlotPhase::Failed);

@@ -89,6 +89,8 @@ bool cogent_common_sampler_backend_sampling(const cogent_common_sampler * sample
 
 char * cogent_common_sampler_print(const cogent_common_sampler * sampler);
 
+void cogent_common_sampler_reset(cogent_common_sampler * sampler);
+
 int32_t cogent_common_sampler_sample(
     cogent_common_sampler * sampler,
     struct llama_context * context,

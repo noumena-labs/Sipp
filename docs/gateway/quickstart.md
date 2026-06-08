@@ -4,7 +4,7 @@ This page gives the shortest path to a local first-party gateway and a raw
 HTTP request. Read [Server](server.md) and [Docker](docker.md) before
 production deployment.
 
-## Source Checkout
+## Running from Source
 
 From the repository root, copy the development config to an ignored local file:
 
@@ -31,7 +31,7 @@ clm run gateway-server serve --config apps/gateway-server/config/local.toml --ba
 `clm` is the setup-installed launcher for `cargo xtask`. If it is unavailable,
 use `cargo xtask` with the same arguments.
 
-## Docker
+## Running in Docker
 
 Copy the Docker inputs:
 

@@ -770,7 +770,7 @@ bool CommonSampler::sampler_accept(std::int32_t token, bool accept_grammar) {
 }
 
 void CommonSampler::sampler_reset() {
-  llama_sampler_reset(cogent_common_sampler_raw(impl_->sampler));
+  cogent_common_sampler_reset(impl_->sampler);
 }
 
 bool CommonSampler::sampler_backend_sampling() const {

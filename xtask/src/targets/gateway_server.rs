@@ -6,10 +6,19 @@ use crate::output;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use xshell::{cmd, Shell};
+
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../tests/targets/gateway_server_tests.rs"]
+mod gateway_server_tests;
 
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
@@ -17,6 +26,7 @@ use xshell::{cmd, Shell};
 
 const GATEWAY_BINARY_NAME: &str = "cogentlm-gateway";
 const BACKEND_DL_FEATURE: &str = "backend-dl";
+const ADMIN_UI_FINGERPRINT_FILE: &str = "admin-ui.sha256";
 
 /// Builds a staged gateway-server distribution for the selected backend set.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {
@@ -39,12 +49,16 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
 
     let mut built = Vec::new();
     let mut skipped = Vec::new();
+    let mut expected_runtime_files = HashSet::new();
 
     for backend in backends_to_build {
         let copy_executable = built.is_empty();
         let optional = best_effort && backend != Backend::Cpu;
         match build_backend_variant(sh, ctx, &dist_dir, &backend, copy_executable) {
-            Ok(()) => built.push(backend),
+            Ok(files) => {
+                expected_runtime_files.extend(files);
+                built.push(backend);
+            }
             Err(error) if optional => {
                 output::warning(format!(
                     "Skipped optional gateway-server {} backend: {error:#}",
@@ -55,6 +69,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
             Err(error) => return Err(error),
         }
     }
+    clean_stale_runtime_artifacts(sh, &dist_dir, &expected_runtime_files)?;
 
     output::success(format!(
         "Gateway-server distribution build complete in {}",
@@ -75,6 +90,18 @@ fn build_admin_ui(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
         .join("apps")
         .join("gateway-server")
         .join("admin-ui");
+    let dist = admin_ui_dir.join("dist");
+    let fingerprint = admin_ui_fingerprint(ctx, &admin_ui_dir)?;
+    let fingerprint_path = admin_ui_fingerprint_path(ctx);
+    if dist.join("index.html").is_file()
+        && std::fs::read_to_string(&fingerprint_path)
+            .map(|current| current.trim() == fingerprint)
+            .unwrap_or(false)
+    {
+        output::step("Gateway Admin Dashboard inputs unchanged; skipping build");
+        return Ok(dist);
+    }
+
     javascript::install_root_workspace_dependencies(
         sh,
         ctx,
@@ -86,32 +113,126 @@ fn build_admin_ui(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
         "Building gateway Admin Dashboard",
         cmd!(sh, "bun run --filter cogentlm-gateway-admin-ui build"),
     )?;
-    let dist = admin_ui_dir.join("dist");
     if !dist.join("index.html").is_file() {
         anyhow::bail!(
             "gateway Admin Dashboard build did not produce {}",
             dist.join("index.html").display()
         );
     }
+    if let Some(parent) = fingerprint_path.parent() {
+        sh.create_dir(parent)?;
+    }
+    std::fs::write(&fingerprint_path, fingerprint)
+        .with_context(|| format!("failed to write {}", fingerprint_path.display()))?;
     Ok(dist)
 }
 
 fn copy_admin_ui(sh: &Shell, source: &Path, dest: &Path) -> Result<()> {
-    if dest.exists() {
-        sh.remove_path(dest)?;
-    }
     sh.create_dir(dest)?;
+    let mut expected_files = HashSet::new();
     for file in collect_files_recursive_flat(source)? {
         let relative = file
             .strip_prefix(source)
             .with_context(|| format!("dashboard asset is outside {}", source.display()))?;
+        expected_files.insert(relative.to_path_buf());
         let target = dest.join(relative);
         if let Some(parent) = target.parent() {
             sh.create_dir(parent)?;
         }
-        sh.copy_file(&file, &target)?;
+        replace_file(sh, &file, &target)?;
     }
+    remove_stale_files(sh, dest, &expected_files)?;
     output::artifact(dest);
+    Ok(())
+}
+
+fn admin_ui_fingerprint(ctx: &BuildContext, admin_ui_dir: &Path) -> Result<String> {
+    let mut files = Vec::new();
+    collect_admin_ui_fingerprint_files(admin_ui_dir, &mut files)?;
+    for path in [
+        ctx.workspace_root().join("package.json"),
+        ctx.workspace_root().join("bun.lock"),
+        ctx.workspace_root().join("bun.lockb"),
+    ] {
+        if path.is_file() {
+            files.push(path);
+        }
+    }
+    files.sort();
+    files.dedup();
+
+    let mut hasher = Sha256::new();
+    for file in files {
+        let relative = file
+            .strip_prefix(ctx.workspace_root())
+            .unwrap_or(file.as_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        hasher.update(relative.as_bytes());
+        hasher.update([0]);
+        let bytes =
+            std::fs::read(&file).with_context(|| format!("failed to read {}", file.display()))?;
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn admin_ui_fingerprint_path(ctx: &BuildContext) -> PathBuf {
+    ctx.tmp_dir()
+        .join("gateway-server")
+        .join(ADMIN_UI_FINGERPRINT_FILE)
+}
+
+fn collect_admin_ui_fingerprint_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut entries = std::fs::read_dir(&dir)
+            .with_context(|| format!("failed to read {}", dir.display()))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                if is_ignored_admin_ui_dir(&path) {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.is_file() {
+                files.push(path);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_ignored_admin_ui_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("dist" | "node_modules")
+    )
+}
+
+fn remove_stale_files(sh: &Shell, dest: &Path, expected_files: &HashSet<PathBuf>) -> Result<()> {
+    if !dest.exists() {
+        return Ok(());
+    }
+
+    for file in collect_files_recursive_flat(dest)? {
+        let relative = file
+            .strip_prefix(dest)
+            .with_context(|| format!("dashboard artifact is outside {}", dest.display()))?;
+        if !expected_files.contains(relative) {
+            sh.remove_path(file)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -121,7 +242,7 @@ fn build_backend_variant(
     dist_dir: &Path,
     backend: &Backend,
     copy_executable: bool,
-) -> Result<()> {
+) -> Result<HashSet<String>> {
     if matches!(backend, Backend::All) {
         anyhow::bail!("Backend::All cannot be built as a single gateway-server variant");
     }
@@ -156,8 +277,12 @@ fn build_backend_variant(
     )
     .with_context(|| format!("failed to build gateway-server {feature} backend"))?;
 
+    let mut copied_files = HashSet::new();
     if copy_executable {
         let executable = copy_gateway_executable(sh, &target_dir, dist_dir)?;
+        if let Some(file_name) = executable.file_name().and_then(|name| name.to_str()) {
+            copied_files.insert(file_name.to_owned());
+        }
         output::artifact(&executable);
     }
 
@@ -181,8 +306,9 @@ fn build_backend_variant(
         );
     }
     output::detail("Runtime files copied", summary.total_files);
+    copied_files.extend(summary.copied_names);
 
-    Ok(())
+    Ok(copied_files)
 }
 
 fn backends_to_build(backend: Option<&Backend>) -> Vec<Backend> {
@@ -200,15 +326,43 @@ fn backends_to_build(backend: Option<&Backend>) -> Vec<Backend> {
 }
 
 fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
-    if dist_dir.exists() {
-        output::step(format!(
-            "Removing stale gateway-server artifact directory {}",
-            dist_dir.display()
-        ));
-        sh.remove_path(dist_dir)?;
-    }
     sh.create_dir(dist_dir)?;
     Ok(())
+}
+
+fn clean_stale_runtime_artifacts(
+    sh: &Shell,
+    dist_dir: &Path,
+    expected_files: &HashSet<String>,
+) -> Result<()> {
+    if !dist_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(dist_dir)
+        .with_context(|| format!("failed to read {}", dist_dir.display()))?
+    {
+        let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if is_gateway_runtime_artifact(file_name) && !expected_files.contains(file_name) {
+            output::step(format!(
+                "Removing stale gateway-server runtime artifact {}",
+                path.display()
+            ));
+            sh.remove_path(path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn is_gateway_runtime_artifact(file_name: &str) -> bool {
+    file_name == gateway_binary_file_name() || runtime_file_kind(file_name).is_some()
 }
 
 fn copy_gateway_executable(sh: &Shell, target_dir: &Path, dist_dir: &Path) -> Result<PathBuf> {
@@ -229,7 +383,6 @@ fn copy_runtime_artifacts(
     copy_base: bool,
     plugin_backend: Option<&Backend>,
 ) -> Result<RuntimeCopySummary> {
-    let mut copied_names = HashSet::new();
     let mut summary = RuntimeCopySummary::default();
 
     for file in collect_runtime_candidates(cmake_dir)? {
@@ -249,7 +402,7 @@ fn copy_runtime_artifacts(
                 copy_base || matches!(plugin_backend, Some(Backend::Metal))
             }
         };
-        if !copy || !copied_names.insert(file_name.to_owned()) {
+        if !copy || !summary.copied_names.insert(file_name.to_owned()) {
             continue;
         }
 
@@ -268,11 +421,29 @@ fn copy_runtime_artifacts(
 }
 
 fn replace_file(sh: &Shell, source: &Path, dest: &Path) -> Result<()> {
+    if dest.exists() && files_equal(source, dest)? {
+        return Ok(());
+    }
     if dest.exists() {
         sh.remove_path(dest)?;
     }
     sh.copy_file(source, dest)?;
     Ok(())
+}
+
+fn files_equal(left: &Path, right: &Path) -> Result<bool> {
+    let left_meta =
+        std::fs::metadata(left).with_context(|| format!("failed to stat {}", left.display()))?;
+    let right_meta =
+        std::fs::metadata(right).with_context(|| format!("failed to stat {}", right.display()))?;
+    if left_meta.len() != right_meta.len() {
+        return Ok(false);
+    }
+    let left_bytes =
+        std::fs::read(left).with_context(|| format!("failed to read {}", left.display()))?;
+    let right_bytes =
+        std::fs::read(right).with_context(|| format!("failed to read {}", right.display()))?;
+    Ok(left_bytes == right_bytes)
 }
 
 fn collect_runtime_candidates(cmake_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -419,6 +590,7 @@ struct RuntimeCopySummary {
     total_files: usize,
     base_files: usize,
     plugin_files: usize,
+    copied_names: HashSet<String>,
 }
 
 #[derive(Clone, Copy)]
