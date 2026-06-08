@@ -133,7 +133,7 @@ Local endpoint tuning, browser WebGPU options, worker/threading choices,
 generation options, and provider/gateway option buckets are documented in
 [Runtime Options](../reference/runtime-options.md).
 
-## Source Checkout Examples
+## Building and Running from Source Code
 
 Runnable source examples and demos live in the maintainer lane:
 [Source Builds](../maintainers/source-builds.md).

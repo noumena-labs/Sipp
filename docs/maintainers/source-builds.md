@@ -36,16 +36,20 @@ clm build all
 Use `--backend vulkan`, `--backend cuda`, `--backend metal`, or
 `--backend all` where a native package target supports those backends.
 
-## Source Examples
+## Examples
+Browser examples and demos. Run examples through the `clm` commands. Use `--backend <backend>` to specify the backend to use. 
 
 ```bash
-cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> "Explain local inference."
-node examples/node/query.mjs <model.gguf> "Explain local inference."
-python examples/python/query.py <model.gguf> "Explain local inference."
+clm run examples serve browser --backend vulkan 
+clm run demos serve avatar --backend cuda 
+clm run demos serve simulation --backend metal 
+clm run demos serve simulation
 ```
 
+## Run Gateway Toy Examples
+
 Gateway example workflows start a local gateway, run a client example, and stop
-the gateway when the client exits:
+the gateway when the client exits. This will both start the `examples/gateway` and start a client `examples/rust`, `examples/node`, or `examples/python` to use the gateway. The `--case <case>` flag is used to specify the case to run. The available cases are `query`, `chat`, and `embed`. The `--backend <backend>` flag is used to specify the backend to use. 
 
 ```bash
 clm run examples gateway rust --case query
@@ -53,17 +57,15 @@ clm run examples gateway node --case chat
 clm run examples gateway python --case embed
 ```
 
-Browser examples and demos:
+## Run Playground 
+
+The playground is a web application that allows you to interact with CogentLM. It is served locally from the `apps/playground` directory. It will show you how local inference works, how vision models work, and how to set up GGUF files. It intentially built for getting observability into how the library works.
 
 ```bash
-clm run examples serve browser
-clm run demos serve chat
-clm run demos serve avatar
-clm run demos serve simulation
 clm run tools serve playground
 ```
 
-## Gateway Server From Source
+# Gateway Server 
 
 The release workflow does not yet publish a standalone gateway-server binary or
 container image. Use `clm` for source checkout checks and raw Docker commands
@@ -82,7 +84,7 @@ The source development config expects a local GGUF model under `.build/models`
 and a literal `admin_password` in the selected TOML file. Keep production TOML
 files private because they contain the Admin Dashboard password.
 
-## Validation
+# Validation
 
 Use the narrowest relevant target from [Testing](../testing.md). Common
 entry points are:
