@@ -149,5 +149,5 @@ the first-party gateway server.
 - [Local Inference](../../guides/local-inference.md)
 - [Runtime Options](../../reference/runtime-options.md)
 - [Providers](../../guides/providers.md)
-- [Gateway Server](../gateway-server.md)
+- [Gateway Server](../../gateway/server.md)
 - [Browser Caching](../../guides/browser-caching.md)

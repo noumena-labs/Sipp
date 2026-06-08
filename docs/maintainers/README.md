@@ -12,7 +12,8 @@ Application developers who only need the published packages should start with
 - [Source Builds](source-builds.md) covers checkout setup, `clm`, source
   examples, demos, and package build targets.
 - [Architecture](../architecture.md) explains crate and package boundaries.
-- [Gateway Architecture](../gateway.md) explains gateway layering.
+- [Gateway Architecture](../gateway/architecture.md) explains gateway
+  layering.
 - [Testing](../testing.md) lists the cataloged test suites.
 - [Coverage](../coverage.md) covers coverage commands and outputs.
 - [Contributing](../contributing.md) documents contribution expectations.

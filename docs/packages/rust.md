@@ -134,8 +134,8 @@ println!("{}", response.text);
 
 ## Related Docs
 
-- [Gateway Server](gateway-server.md)
-- [Gateway Toolkit](gateway.md)
+- [Gateway Server](../gateway/server.md)
+- [Gateway Toolkit](../gateway/toolkit.md)
 - [Local Inference](../guides/local-inference.md)
 - [Providers](../guides/providers.md)
 - [Runtime Options](../reference/runtime-options.md)

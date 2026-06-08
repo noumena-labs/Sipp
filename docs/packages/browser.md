@@ -100,7 +100,7 @@ local runtime config groups.
 
 ## Related Docs
 
-- [Gateway Server](gateway-server.md)
+- [Gateway](../gateway/README.md)
 - [Next.js](frameworks/nextjs.md)
 - [TanStack](frameworks/tanstack.md)
 - [React And Vite](frameworks/vite-react.md)

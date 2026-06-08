@@ -33,4 +33,5 @@ layers.
 - `demos`: browser experiences built on the public package surfaces.
 - `xtask`: build, test, run, packaging, and maintenance orchestration.
 
-For gateway-specific layering, read [Gateway Architecture](gateway.md).
+For gateway-specific layering, read
+[Gateway Architecture](gateway/architecture.md).

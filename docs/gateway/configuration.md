@@ -1,10 +1,9 @@
-# Gateway Server Reference
+# Gateway Configuration
 
 `apps/gateway-server` is configured by one TOML file. The same schema is used
 for source/exe runs and Docker runs; only path and bind interpretation changes.
-Use [Gateway Server](../packages/gateway-server.md) for source/exe commands and
-[Gateway Server Docker](../packages/gateway-server-docker.md) for container
-commands.
+Use [Gateway Server](server.md) for source/exe commands and [Docker](docker.md)
+for container commands.
 
 ## Example
 
@@ -51,7 +50,7 @@ stats = "basic"
 | `admin_password` | Literal Admin Dashboard password. Required and non-blank. Keep production TOML private. |
 
 `check` validates these fields without reading token env vars, loading models,
-or binding ports.
+contacting providers, or binding ports.
 
 ## Routes
 
@@ -66,8 +65,8 @@ management routes:
   `<admin>/login` and `<admin>/logout`.
 
 Routes must be absolute paths and must not contain query strings or fragments.
-Public routes cannot duplicate each other. Management routes, including derived
-admin login/logout routes, cannot duplicate each other.
+Public routes cannot duplicate each other. Management routes, including
+derived admin login/logout routes, cannot duplicate each other.
 
 ## Tokens
 
@@ -168,13 +167,16 @@ from `api_key_env` when `serve` starts.
 
 ## Bind Behavior
 
-Source/exe mode binds `public_bind` and `management_bind` directly on the host.
-Docker mode binds those addresses inside the container; Compose `ports` decide
-host exposure.
+Source/exe mode binds `public_bind` and `management_bind` directly on the
+host. Docker mode binds those addresses inside the container; Compose `ports`
+decide host exposure.
 
 For Docker:
 
-- Local testing keeps both host ports on `127.0.0.1`.
+- The gateway process should listen on container interfaces such as
+  `0.0.0.0:8080` and `0.0.0.0:9090`.
+- Local testing keeps both host ports on `127.0.0.1` through Compose port
+  bindings.
 - Production exposes public traffic through the configured host port and keeps
   management on `127.0.0.1` by default.
 - Local model paths should match the container mount point:
@@ -186,3 +188,4 @@ For Docker:
 The dashboard is served only on the management listener. It uses
 `admin_password` for login, stores short-lived HTTP-only sessions, and does not
 render the password, bearer tokens, or provider secrets.
+

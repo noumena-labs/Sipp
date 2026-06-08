@@ -32,7 +32,8 @@ provider callback.
 
 ## Related Docs
 
-- [Gateway Server](../packages/gateway-server.md)
-- [Gateway Architecture](../gateway.md)
-- [Gateway Server Reference](../reference/gateway-server.md)
-- [Gateway Toolkit](../packages/gateway.md)
+- [Gateway](../gateway/README.md)
+- [Gateway Server](../gateway/server.md)
+- [Gateway Architecture](../gateway/architecture.md)
+- [Gateway Configuration](../gateway/configuration.md)
+- [Gateway Toolkit](../gateway/toolkit.md)

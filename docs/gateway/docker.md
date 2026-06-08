@@ -1,11 +1,14 @@
-# Gateway Server Docker
+# Gateway Docker
 
 This page covers local Docker testing and production Docker deployment for the
-CogentLM Gateway Server. Source and generated-exe workflows are documented in
-[Gateway Server](gateway-server.md).
+CogentLM Gateway Server. Source and generated-executable workflows are
+documented in [Gateway Server](server.md).
 
-Docker workflows use raw `docker` commands. The image runs
-`cogentlm-gateway serve --config /etc/cogentlm/gateway.toml`.
+Docker workflows use raw `docker` commands. The image runs:
+
+```bash
+cogentlm-gateway serve --config /etc/cogentlm/gateway.toml
+```
 
 ## Files
 
@@ -30,10 +33,11 @@ cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.
 Edit `apps/gateway-server/config/local.toml`:
 
 - Set `admin_password` to the local Admin Dashboard password.
-- Set `model` to the path the container will see. The default local Compose
+- Set `model` to the path the container will see. The development Compose
   mount exposes the host model directory as `/workspace/.build/models`.
-- Keep `public_bind = "127.0.0.1:8080"` and
-  `management_bind = "127.0.0.1:9090"` for local-only access.
+- Use `public_bind = "0.0.0.0:8080"` and
+  `management_bind = "0.0.0.0:9090"` so the process listens on the
+  container network interface.
 
 Edit `apps/gateway-server/.env`:
 
@@ -53,13 +57,18 @@ docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/develo
 docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up
 ```
 
+The development Compose file maps both host ports to `127.0.0.1`, so the
+gateway stays local to the workstation even though the process binds
+`0.0.0.0` inside the container.
+
 Open `http://127.0.0.1:9090/admin` and log in with the TOML
 `admin_password`. Send client requests to `http://127.0.0.1:8080`.
 
 ## Production Docker Deployment
 
 Use production Docker deployment when running a prebuilt local image or a
-private-registry image. The production Compose file does not build from source.
+private-registry image. The production Compose file does not build from
+source.
 
 Prepare a private production TOML file from
 `apps/gateway-server/config/production.toml`, set a real `admin_password`, and
@@ -96,16 +105,22 @@ and binds the management port to `127.0.0.1` on the host by default.
 
 ## Bind And Mount Behavior
 
-`public_bind` and `management_bind` are addresses inside the container. Compose
-`ports` decide which host interfaces expose those container listeners.
+The TOML file always uses the same schema, but bind and path interpretation
+changes by runtime mode.
 
-- Local Compose maps both host ports to `127.0.0.1`.
-- Production Compose maps the public host port normally and maps management to
-  `127.0.0.1` by default.
-- Local Compose mounts the model directory at `/workspace/.build/models`.
-- Production Compose mounts the model directory at `/models`.
-- Both Compose files mount the selected TOML as
-  `/etc/cogentlm/gateway.toml`.
+| Runtime | TOML bind values | Host exposure | Local target `model` path |
+| --- | --- | --- | --- |
+| Source/exe | Host addresses, usually `127.0.0.1:*` for development | The process binds directly on the host | Path seen from the process working directory |
+| Local Compose | Container addresses, usually `0.0.0.0:8080` and `0.0.0.0:9090` | `development.yml` maps host ports to `127.0.0.1` | `/workspace/.build/models/<file>.gguf` |
+| Production Compose | Container addresses, usually `0.0.0.0:8080` and `0.0.0.0:9090` | `production.yml` exposes public and keeps management host-local by default | `/models/<file>.gguf` |
+
+Compose mount variables:
+
+| Variable | Host value | Container path |
+| --- | --- | --- |
+| `COGENTLM_GATEWAY_CONFIG` | TOML file path | `/etc/cogentlm/gateway.toml` |
+| `COGENTLM_MODEL_DIR` in development | Directory containing local GGUF files | `/workspace/.build/models` |
+| `COGENTLM_MODEL_DIR` in production | Directory containing local GGUF files | `/models` |
 
 Keep management private in production. Put public ingress, TLS, and external
 auth controls in front of the public listener when needed.
@@ -146,3 +161,4 @@ curl --fail --silent http://127.0.0.1:9090/readyz
 ```
 
 If you change the readiness route in TOML, update the Compose healthcheck too.
+

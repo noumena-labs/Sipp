@@ -68,8 +68,8 @@ clm run tools serve playground
 The release workflow does not yet publish a standalone gateway-server binary or
 container image. Use `clm` for source checkout checks and raw Docker commands
 for container deployment. The canonical source guide is
-[Gateway Server](../packages/gateway-server.md); Docker deployment is covered
-in [Gateway Server Docker](../packages/gateway-server-docker.md).
+[Gateway Server](../gateway/server.md); Docker deployment is covered in
+[Gateway Docker](../gateway/docker.md).
 
 ```bash
 export COGENTLM_GATEWAY_TOKEN="replace-me"

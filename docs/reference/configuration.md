@@ -21,7 +21,7 @@ application:
   allowed targets.
 - `[[targets]]` defines local, OpenAI, OpenAI-compatible, or Anthropic targets.
   Local targets can select `backend = "auto"`, `cpu`, `cuda`, `metal`, or
-  `vulkan`. See [Gateway Server Reference](gateway-server.md) for the full
+  `vulkan`. See [Gateway Configuration](../gateway/configuration.md) for the full
   schema.
 
 Custom wire formats, authentication schemes, and route layouts belong in
