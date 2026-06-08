@@ -27,8 +27,6 @@ public server artifact is added.
 export COGENTLM_GATEWAY_TOKEN="replace-me"
 cargo run -p cogentlm-gateway-server -- \
   check --config apps/gateway-server/config/production.toml
-cargo run -p cogentlm-gateway-server -- \
-  serve --config apps/gateway-server/config/production.toml
 ```
 
 `check` validates TOML without reading secrets or loading endpoints. `serve`
