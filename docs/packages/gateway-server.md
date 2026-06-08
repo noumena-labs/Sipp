@@ -84,6 +84,7 @@ Tokens are read from environment variables. Each token gets a stable caller
 label and an allowlist of public target names. Targets can be local GGUF,
 OpenAI, OpenAI-compatible, or Anthropic endpoints. Provider credentials stay in
 the gateway environment and are never needed by browser or client applications.
+See [Providers](../guides/providers.md) for provider-backed target snippets.
 
 ## Client Shape
 
@@ -238,6 +239,7 @@ println!("{}", response.text);
 ## Related Docs
 
 - [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
+- [Providers](../guides/providers.md)
 - [Gateway Server Reference](../reference/gateway-server.md)
 - [Configuration](../reference/configuration.md)
 - [Source Builds](../maintainers/source-builds.md)

@@ -28,9 +28,14 @@ deployment surface, but it does not yet have a published binary or public image.
   or Rust application owns the GGUF model lifecycle.
 - Use a gateway endpoint when a separate gateway owns model paths, provider
   credentials, access policy, concurrency, and metrics.
+- Use a direct provider endpoint only in trusted server-side code that owns
+  credential handling and application policy.
 - Use framework guides when integrating the JavaScript packages with
   [Next.js](frameworks/nextjs.md), [TanStack](frameworks/tanstack.md), or
   [React and Vite](frameworks/vite-react.md).
+- Use [Providers](../guides/providers.md) and
+  [Runtime Options](../reference/runtime-options.md) for cross-package provider
+  and local runtime option details.
 - Use [Source Builds](../maintainers/source-builds.md) when developing the
   repo, staging packages, running demos, or deploying the gateway server from
   this checkout.

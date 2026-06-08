@@ -60,7 +60,8 @@ print(run.result()["text"])
 ```
 
 Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native
-backend.
+backend. See [Runtime Options](../reference/runtime-options.md) for local
+runtime config groups and request option boundaries.
 
 ## Gateway Query
 
@@ -96,5 +97,7 @@ Provider credentials and local model paths stay in the gateway process.
 - [Gateway Server](gateway-server.md)
 - [Installation](../getting-started/installation.md)
 - [Local Inference](../guides/local-inference.md)
+- [Providers](../guides/providers.md)
+- [Runtime Options](../reference/runtime-options.md)
 - [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
 - [Maintainer source builds](../maintainers/source-builds.md)

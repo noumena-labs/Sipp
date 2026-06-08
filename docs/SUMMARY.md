@@ -24,6 +24,7 @@
   - [Vision](guides/vision.md)
 - [Reference](reference/README.md)
   - [Gateway Server](reference/gateway-server.md)
+  - [Runtime Options](reference/runtime-options.md)
   - [CLI](reference/cli.md)
   - [Configuration](reference/configuration.md)
 - [Examples And Demos](examples-demos.md)

@@ -88,6 +88,9 @@ fn runtime_config() -> NativeRuntimeConfig {
 }
 ```
 
+See [Runtime Options](../reference/runtime-options.md) for the shared runtime
+config groups and request option boundaries.
+
 ## Gateway Query
 
 ```rust
@@ -134,6 +137,8 @@ println!("{}", response.text);
 - [Gateway Server](gateway-server.md)
 - [Gateway Toolkit](gateway.md)
 - [Local Inference](../guides/local-inference.md)
+- [Providers](../guides/providers.md)
+- [Runtime Options](../reference/runtime-options.md)
 - [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
 - [Architecture](../architecture.md)
 - [Maintainer source builds](../maintainers/source-builds.md)

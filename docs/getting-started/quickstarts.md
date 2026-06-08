@@ -119,6 +119,20 @@ console.log((await run.response).text);
 await client.close();
 ```
 
+## Provider Query
+
+Trusted server code can register a direct provider endpoint with
+`kind: 'provider'`. Keep provider credentials in server environment variables
+such as `OPENAI_API_KEY`; never put long-lived provider keys in browser
+bundles. See [Providers](../guides/providers.md) for copyable server and
+gateway-backed provider patterns.
+
+## Runtime Tuning
+
+Local endpoint tuning, browser WebGPU options, worker/threading choices,
+generation options, and provider/gateway option buckets are documented in
+[Runtime Options](../reference/runtime-options.md).
+
 ## Source Checkout Examples
 
 Runnable source examples and demos live in the maintainer lane:

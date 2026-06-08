@@ -7,7 +7,8 @@ not own HTTP routes, authentication schemes, TOML files, or deployment policy.
 
 Local runtime configuration belongs to the endpoint descriptor or package-level
 runtime options. Common areas include context size, scheduler behavior, cache
-mode, observability, sampling, and backend selection.
+mode, observability, sampling, and backend selection. See
+[Runtime Options](runtime-options.md) for the shared option map.
 
 ## Gateway Configuration
 

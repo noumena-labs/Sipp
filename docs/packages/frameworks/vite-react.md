@@ -1,10 +1,12 @@
 # React And Vite
 
-React and Vite are the baseline browser integration for the `cogentlm` package.
-This guide focuses on browser-local GGUF inference through the CogentLM
-WebAssembly/WebGPU runtime. Vite handles the browser bundle; production
-server routes should live in a separate route-owning framework or the
-first-party gateway server.
+React and Vite are the baseline browser integration for the `cogentlm`
+package. Use this guide for Vite-specific setup, local development headers,
+runtime asset overrides, and the source browser examples.
+
+For the full local inference option map, see
+[Local Inference](../../guides/local-inference.md) and
+[Runtime Options](../../reference/runtime-options.md).
 
 ## Install
 
@@ -12,32 +14,11 @@ first-party gateway server.
 npm install cogentlm
 ```
 
-## Browser Local WebGPU Setup
-
-Use `cogentlm` only in browser code. The local endpoint `source` can be a
-model URL served by the app, a user-provided `File`, or an installed model id
-returned by `listLocal()`.
-
-When WebGPU is available, request it on the local endpoint load options. The
-runtime can fall back to compatible CPU execution when `backend` is omitted.
-
-```ts
-const endpoint = await client.add('browser-local', {
-  kind: 'local',
-  source: '/models/model.gguf',
-  options: {
-    backend: 'webgpu',
-    runtime: {
-      context: { n_ctx: 2048 },
-      scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
-      cache: { mode: 'live_slot_prefix' },
-      observability: { runtime_metrics: true },
-    },
-  },
-});
-```
-
 ## Browser Local Query
+
+Use `cogentlm` only in browser code. A local endpoint `source` can be a model
+URL served by the app, a user-provided `File`, an installed model id, or shard
+sources.
 
 ```tsx
 import { useState } from 'react';
@@ -56,9 +37,6 @@ export function LocalQuery(): JSX.Element {
           backend: 'webgpu',
           runtime: {
             context: { n_ctx: 2048 },
-            scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
-            cache: { mode: 'live_slot_prefix' },
-            observability: { runtime_metrics: true },
           },
         },
       });
@@ -80,51 +58,15 @@ export function LocalQuery(): JSX.Element {
 }
 ```
 
-Keep route setup out of this React/Vite guide for now. When the app needs
-server-owned inference, use the first-party gateway server or a framework guide
-with production route handlers.
+Omit `backend` to let the browser runtime choose a compatible backend. Use
+`backend: 'webgpu'` when the UI should explicitly request WebGPU and surface
+errors or fallbacks itself.
 
-## WASM Assets
+## Local Development Headers
 
-The browser package resolves its packaged Emscripten JavaScript and WASM assets
-from the package at runtime. Vite optimized dependency paths are handled by the
-package runtime, so most apps can use `new CogentClient()` without asset
-overrides.
-
-Override runtime asset URLs only when your bundler or deployment moves package
-assets:
-
-```ts
-const client = new CogentClient({
-  moduleUrl: '/assets/cogentlm-wasm.js',
-  wasmUrl: '/assets/cogentlm-wasm.wasm',
-});
-```
-
-When overriding assets, provide both `moduleUrl` and `wasmUrl`. For pthread
-runtime assets, provide both `pthreadModuleUrl` and `pthreadWasmUrl`.
-
-## Workers And Pthreads
-
-`CogentClient` uses worker execution automatically when the browser environment
-supports it. You can force main-thread execution for debugging:
-
-```ts
-const client = new CogentClient({ executionMode: 'main-thread' });
-```
-
-The pthread runtime requires `SharedArrayBuffer` and cross-origin isolation.
-Serve the app with COOP/COEP headers before using:
-
-```ts
-const client = new CogentClient({ wasmThreading: 'pthread' });
-```
-
-Use `wasmThreading: 'single-thread'` when cross-origin isolation is not
-available.
-
-For local development, configure Vite dev and preview headers before enabling
-the pthread runtime:
+The pthread WASM runtime requires `SharedArrayBuffer` and cross-origin
+isolation. Configure Vite dev and preview headers before using
+`wasmThreading: 'pthread'`:
 
 ```ts
 // vite.config.ts
@@ -146,57 +88,38 @@ export default defineConfig({
 });
 ```
 
-## Model Loading And Cache
+Use `wasmThreading: 'single-thread'` when the app cannot serve those headers.
+Use `executionMode: 'main-thread'` only for debugging or constrained hosts.
 
-Browser local endpoints accept a URL, installed model id, `File` object,
-multiple shard URLs, or multiple shard files as the `source`. The browser
-runtime stores model data through OPFS where available so repeated loads can
-stay local after the first import or fetch.
+## Runtime Asset Overrides
 
-```tsx
-import { useState } from 'react';
-import { CogentClient } from 'cogentlm';
+The browser package resolves its packaged Emscripten JavaScript and WASM assets
+at runtime. Most Vite apps can use `new CogentClient()` without asset
+overrides.
 
-export function FileModelQuery(): JSX.Element {
-  const [file, setFile] = useState<File | null>(null);
-  const [text, setText] = useState('');
+Override runtime asset URLs only when your bundler or deployment moves package
+assets:
 
-  async function run(): Promise<void> {
-    if (file == null) return;
-    const client = new CogentClient();
-    try {
-      const endpoint = await client.add('file-model', {
-        kind: 'local',
-        source: file,
-        options: { backend: 'webgpu' },
-      });
-      const response = await client.query('Summarize this local model setup.', {
-        endpoint,
-        maxTokens: 64,
-      }).response;
-      setText(response.text);
-    } finally {
-      await client.close();
-    }
-  }
-
-  return (
-    <>
-      <input
-        type="file"
-        accept=".gguf"
-        onChange={(event) => setFile(event.currentTarget.files?.[0] ?? null)}
-      />
-      <button type="button" onClick={() => void run()}>
-        {text || 'Run'}
-      </button>
-    </>
-  );
-}
+```ts
+const client = new CogentClient({
+  moduleUrl: '/assets/cogentlm-wasm.js',
+  wasmUrl: '/assets/cogentlm-wasm.wasm',
+});
 ```
 
-Tune browser cache behavior with `browserCache` on the client options and local
-runtime cache behavior with `options.runtime.cache` on the endpoint descriptor.
+When overriding assets, provide both `moduleUrl` and `wasmUrl`. For pthread
+runtime assets, provide both `pthreadModuleUrl` and `pthreadWasmUrl`.
+
+## Model Files And Cache
+
+Serve model URLs from the application or let users select local `.gguf` files.
+The browser runtime stores model data through OPFS where available, so repeated
+loads can stay local after the first import or fetch.
+
+Tune browser storage with `browserCache` on `CogentClient` and tune local
+runtime behavior with `options.runtime` on the local endpoint descriptor. See
+[Browser Caching](../../guides/browser-caching.md) and
+[Runtime Options](../../reference/runtime-options.md).
 
 ## Existing Examples
 
@@ -211,13 +134,20 @@ Then open the printed URL and use:
 - `/query.html`
 - `/chat.html`
 - `/embed.html`
+- `/gateway_local.html`
+- `/gateway_query.html`
+- `/gateway_chat.html`
+- `/gateway_embed.html`
 
-The same example app also contains gateway pages, but this guide intentionally
-keeps the React/Vite setup focused on browser-local inference.
+The gateway pages demonstrate browser calls to gateway-profile endpoints. Keep
+production server routes in a route-owning framework, an application server, or
+the first-party gateway server.
 
 ## Related Docs
 
 - [Browser Package](../browser.md)
+- [Local Inference](../../guides/local-inference.md)
+- [Runtime Options](../../reference/runtime-options.md)
+- [Providers](../../guides/providers.md)
 - [Gateway Server](../gateway-server.md)
 - [Browser Caching](../../guides/browser-caching.md)
-- [Source Builds](../../maintainers/source-builds.md)

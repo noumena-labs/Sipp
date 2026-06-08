@@ -10,10 +10,10 @@ or services that run in a Node.js runtime.
 
 ## Guides
 
-- [Next.js](nextjs.md): App Router route handlers, Client Components,
-  gateway proxies, and streaming.
-- [TanStack](tanstack.md): TanStack Start server functions and TanStack Query
-  patterns.
+- [Next.js](nextjs.md): App Router provider routes, Client Components,
+  gateway-profile compatibility, and streaming.
+- [TanStack](tanstack.md): TanStack Start provider functions, server routes,
+  and TanStack Query patterns.
 - [React And Vite](vite-react.md): Baseline browser-local setup, WebGPU/WASM
   asset behavior, OPFS model loading, and local development headers.
 
@@ -22,8 +22,27 @@ or services that run in a Node.js runtime.
 | Environment | Package | Notes |
 | --- | --- | --- |
 | Browser component | `cogentlm` | Use for browser-local GGUF inference or direct gateway calls. |
-| Node server route | `cogentlm-server` | Use only in Node runtime code; do not bundle into browser code. |
-| Gateway proxy | Either | Browser code can call the gateway directly with short-lived tokens, or server code can proxy calls with server-held secrets. |
+| Node server route | `cogentlm-server` | Use for direct provider endpoints, local server inference, or gateway clients. |
+| Gateway profile route | `cogentlm-server` | Use when a browser `kind: 'gateway'` endpoint calls a framework route. |
+| Gateway client | Either | Browser code can call a separate gateway with short-lived tokens, or server code can use server-held secrets. |
+
+## Provider-First Server Routes
+
+Next.js and TanStack server routes should usually demonstrate direct provider
+endpoints when the framework server owns the credential. Register a provider in
+server-only code:
+
+```ts
+const endpoint = await client.add('provider', {
+  kind: 'provider',
+  provider: 'openai',
+  model: requiredEnv('OPENAI_MODEL'),
+  apiKey: requiredEnv('OPENAI_API_KEY'),
+});
+```
+
+Use `OPENAI_API_KEY="<mock-openai-key>"` only as a placeholder in docs and
+examples. Do not expose real provider keys in browser bundles.
 
 ## Gateway Route Field Names
 
@@ -40,4 +59,5 @@ Use `decodeGatewayQueryBody()`, `decodeGatewayChatBody()`,
 `decodeGatewayEmbedBody()`, and the matching response helpers from
 `cogentlm-server` when a framework route should be registered as a browser
 `kind: 'gateway'` endpoint. Those helpers keep route examples focused on auth,
-target policy, and client lifecycle instead of gateway profile JSON shaping.
+target policy, provider selection, and client lifecycle instead of gateway
+profile JSON shaping.

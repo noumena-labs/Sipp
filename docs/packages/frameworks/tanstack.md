@@ -2,8 +2,8 @@
 
 TanStack apps usually need two CogentLM patterns:
 
-- TanStack Start server functions for server-only CogentLM work, gateway
-  tokens, provider credentials, local model paths, and typed app RPC.
+- TanStack Start server functions for server-only CogentLM work, provider
+  credentials, local model paths, gateway tokens, and typed app RPC.
 - TanStack Start server routes when browser code should register the route as
   a `kind: 'gateway'` endpoint through the CogentLM browser package.
 - TanStack Query for client-side final responses that can be cached or
@@ -16,8 +16,11 @@ they arrive.
 ## TanStack Start Server Function
 
 Server functions run on the server and can be called from loaders, components,
-hooks, or other server functions. Keep `cogentlm-server`, provider credentials,
-and gateway tokens in server-only functions.
+hooks, or other server functions. Keep `cogentlm-server`, provider
+credentials, and gateway tokens in server-only functions.
+
+Use `OPENAI_API_KEY="<mock-openai-key>"` as a placeholder in examples. In a
+real deployment, keep the key in your server environment or secret manager.
 
 ```ts
 // src/server/cogent.ts
@@ -36,14 +39,11 @@ export const queryCogent = createServerFn({ method: 'POST' })
   .inputValidator((data: { prompt: string }) => data)
   .handler(async ({ data }) => {
     const client = new CogentClient();
-    const endpoint = await client.add('gateway', {
-      kind: 'gateway',
-      target: requiredEnv('COGENTLM_GATEWAY_TARGET'),
-      baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-      authentication: {
-        kind: 'bearer',
-        value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-      },
+    const endpoint = await client.add('provider', {
+      kind: 'provider',
+      provider: 'openai',
+      model: requiredEnv('OPENAI_MODEL'),
+      apiKey: requiredEnv('OPENAI_API_KEY'),
     });
     const run = client.query({
       endpoint,
@@ -64,12 +64,13 @@ application-owned shapes such as `{ text }`. They are not the right surface for
 browser `client.add({ kind: 'gateway' })` endpoints, because those endpoints
 expect the first-party gateway HTTP profile.
 
-## TanStack Start Gateway Route
+## TanStack Start Provider Route
 
 Use a server route when the browser package should call the framework route as
 a gateway endpoint. The route accepts the first-party query profile and returns
 the fields consumed by browser gateway endpoints. The gateway profile helpers
-decode the browser request and format JSON or SSE responses.
+decode the browser request and format JSON or SSE responses. The route can
+then execute the request against a direct provider endpoint.
 
 ```ts
 // src/routes/api/cogent/query.ts
@@ -97,14 +98,11 @@ export const Route = createFileRoute('/api/cogent/query')({
         try {
           const decoded = decodeGatewayQueryBody(await request.json());
           const client = new CogentClient();
-          const endpoint = await client.add('gateway', {
-            kind: 'gateway',
-            target: decoded.target,
-            baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-            authentication: {
-              kind: 'bearer',
-              value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-            },
+          const endpoint = await client.add('provider', {
+            kind: 'provider',
+            provider: 'openai',
+            model: decoded.target,
+            apiKey: requiredEnv('OPENAI_API_KEY'),
           });
           const run = client.query({
             ...decoded.request,
@@ -126,9 +124,13 @@ export const Route = createFileRoute('/api/cogent/query')({
 });
 ```
 
-This route uses the browser profile field `model` as the public gateway target
-and keeps the long-lived gateway token on the server. Add application auth or
-target allowlists before exposing the route to users.
+This route uses the browser profile field `model` as the provider model and
+keeps the provider credential on the server. Add application auth or model
+allowlists before exposing the route to users.
+
+Use a separate CogentLM gateway when you want central target policy, shared
+provider credentials, local model hosting, rate controls, or metrics across
+multiple applications.
 
 ## TanStack Query For Final Responses
 
@@ -237,13 +239,15 @@ Do not import `cogentlm-server` from browser modules.
 ## Browser Hybrid Endpoints
 
 Register browser-local and same-origin gateway endpoints on one browser
-`CogentClient`, then choose the endpoint reference for each request.
+`CogentClient`, then choose the endpoint reference for each request. The
+same-origin route can execute against a provider while still speaking the
+gateway profile to the browser client.
 
 ```tsx
 import { useState } from 'react';
 import { CogentClient, type EndpointRef } from 'cogentlm';
 
-type InferenceMode = 'local' | 'gateway';
+type InferenceMode = 'local' | 'providerRoute';
 
 export function HybridAnswer(): JSX.Element {
   const [mode, setMode] = useState<InferenceMode>('local');
@@ -256,15 +260,15 @@ export function HybridAnswer(): JSX.Element {
         kind: 'local',
         source: '/models/model.gguf',
       });
-      const gatewayEndpoint = await client.add('app-route', {
+      const providerRouteEndpoint = await client.add('app-route', {
         kind: 'gateway',
-        target: 'local',
+        target: 'gpt-5-mini',
         baseUrl: window.location.origin,
         routes: { query: '/api/cogent/query' },
         authentication: { kind: 'none' },
       });
       const endpoint: EndpointRef =
-        mode === 'local' ? localEndpoint : gatewayEndpoint;
+        mode === 'local' ? localEndpoint : providerRouteEndpoint;
       const response = await client.query(prompt, {
         endpoint,
         maxTokens: 64,
@@ -282,7 +286,7 @@ export function HybridAnswer(): JSX.Element {
         onChange={(event) => setMode(event.currentTarget.value as InferenceMode)}
       >
         <option value="local">Browser local</option>
-        <option value="gateway">Server route</option>
+        <option value="providerRoute">Provider route</option>
       </select>
       <button type="button" onClick={() => void run('Explain hybrid inference.')}>
         {text || 'Run'}
@@ -294,7 +298,8 @@ export function HybridAnswer(): JSX.Element {
 
 Browser gateway descriptors need an absolute `http` or `https` `baseUrl`.
 Same-origin TanStack routes should use `window.location.origin` and route
-overrides such as `routes: { query: '/api/cogent/query' }`.
+overrides such as `routes: { query: '/api/cogent/query' }`. The `target`
+value becomes the provider model in the server route above.
 
 ## References
 

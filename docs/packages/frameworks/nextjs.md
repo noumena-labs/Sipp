@@ -7,15 +7,19 @@ Next.js App Router pages and layouts are Server Components by default. Add
 `'use client'` only to modules that need browser APIs, state, event handlers,
 or browser-local CogentLM runtime access.
 
-## Profile-Compatible Server Route
+## Profile-Compatible Provider Route
 
-Route handlers are a good place to keep gateway tokens and provider credentials
-off the client. Set `runtime = 'nodejs'` for routes that import
-`cogentlm-server`.
+Route handlers are a good place to keep provider credentials off the client.
+Set `runtime = 'nodejs'` for routes that import `cogentlm-server`.
 
 Routes that are registered from a browser `kind: 'gateway'` endpoint must speak
 the first-party gateway profile. Use the gateway profile helpers from
-`cogentlm-server` to decode the incoming body and format JSON or SSE responses.
+`cogentlm-server` to decode the incoming body and format JSON or SSE
+responses. The route can still execute the request against a direct provider
+endpoint.
+
+Use `OPENAI_API_KEY="<mock-openai-key>"` as a placeholder in examples. In a
+real deployment, keep the key in your server environment or secret manager.
 
 ```ts
 // app/api/cogent/query/route.ts
@@ -41,14 +45,11 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new CogentClient();
-    const endpoint = await client.add('gateway', {
-      kind: 'gateway',
-      target: decoded.target,
-      baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-      authentication: {
-        kind: 'bearer',
-        value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-      },
+    const endpoint = await client.add('provider', {
+      kind: 'provider',
+      provider: 'openai',
+      model: decoded.target,
+      apiKey: requiredEnv('OPENAI_API_KEY'),
     });
     const run = client.query({
       ...decoded.request,
@@ -70,7 +71,8 @@ export async function POST(request: Request): Promise<Response> {
 Do not return an app-specific shape such as `{ text }` from a route that the
 browser package calls through `client.add({ kind: 'gateway' })`. That route is
 an HTTP gateway endpoint from the browser client's perspective, even when it is
-implemented inside the Next application.
+implemented inside the Next application. The server-side implementation can
+resolve the request to a provider, a local endpoint, or a separate gateway.
 
 For high-throughput services, keep endpoint setup in a server-only module and
 reuse the client lifecycle according to your deployment model. Do not import
@@ -79,7 +81,7 @@ that module from Client Components.
 ## Streaming Route Handler
 
 Use a route handler when the browser should receive token updates but the
-server should keep the gateway token.
+server should keep the provider credential.
 
 ```ts
 // app/api/cogent/stream/route.ts
@@ -104,14 +106,11 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const client = new CogentClient();
-  const endpoint = await client.add('gateway', {
-    kind: 'gateway',
-    target: requiredEnv('COGENTLM_GATEWAY_TARGET'),
-    baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-    authentication: {
-      kind: 'bearer',
-      value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-    },
+  const endpoint = await client.add('provider', {
+    kind: 'provider',
+    provider: 'openai',
+    model: requiredEnv('OPENAI_MODEL'),
+    apiKey: requiredEnv('OPENAI_API_KEY'),
   });
   const run = client.query({
     endpoint,
@@ -191,8 +190,8 @@ with cross-origin isolation headers that enable `SharedArrayBuffer`.
 ## Hybrid Client Component
 
 Use one browser `CogentClient` to register a browser-local endpoint and a
-same-origin gateway route. Select the endpoint reference at request time; the
-`query` call stays the same.
+same-origin provider route that speaks the gateway profile. Select the endpoint
+reference at request time; the `query` call stays the same.
 
 ```tsx
 // app/hybrid-chat/HybridChat.tsx
@@ -201,7 +200,7 @@ same-origin gateway route. Select the endpoint reference at request time; the
 import { useState } from 'react';
 import { CogentClient, type EndpointRef } from 'cogentlm';
 
-type InferenceMode = 'local' | 'gateway';
+type InferenceMode = 'local' | 'providerRoute';
 
 export function HybridChat(): JSX.Element {
   const [mode, setMode] = useState<InferenceMode>('local');
@@ -214,15 +213,15 @@ export function HybridChat(): JSX.Element {
         kind: 'local',
         source: '/models/model.gguf',
       });
-      const gatewayEndpoint = await client.add('app-route', {
+      const providerRouteEndpoint = await client.add('app-route', {
         kind: 'gateway',
-        target: 'local',
+        target: 'gpt-5-mini',
         baseUrl: window.location.origin,
         routes: { query: '/api/cogent/query' },
         authentication: { kind: 'none' },
       });
       const endpoint: EndpointRef =
-        mode === 'local' ? localEndpoint : gatewayEndpoint;
+        mode === 'local' ? localEndpoint : providerRouteEndpoint;
       const response = await client.query(prompt, {
         endpoint,
         maxTokens: 64,
@@ -240,7 +239,7 @@ export function HybridChat(): JSX.Element {
         onChange={(event) => setMode(event.currentTarget.value as InferenceMode)}
       >
         <option value="local">Browser local</option>
-        <option value="gateway">Server route</option>
+        <option value="providerRoute">Provider route</option>
       </select>
       <button type="button" onClick={() => void run('Explain hybrid inference.')}>
         {text || 'Run'}
@@ -252,13 +251,16 @@ export function HybridChat(): JSX.Element {
 
 Browser gateway descriptors require an absolute `http` or `https` `baseUrl`.
 For same-origin Next routes, use `window.location.origin` and set route
-overrides such as `routes: { query: '/api/cogent/query' }`.
+overrides such as `routes: { query: '/api/cogent/query' }`. The `target`
+value becomes the provider model in the server route above.
 
-## Gateway Token Pattern
+## Separate Gateway Pattern
 
-For direct browser-to-gateway calls, do not embed a long-lived gateway token in
-the client bundle. Have a Next route issue a short-lived app token, then use a
-browser `valueProvider`:
+Use a separate CogentLM gateway when you want central target policy, shared
+provider credentials, local model hosting, rate controls, or metrics across
+multiple applications. For direct browser-to-gateway calls, do not embed a
+long-lived gateway token in the client bundle. Have a Next route issue a
+short-lived app token, then use a browser `valueProvider`:
 
 ```ts
 const endpoint = await client.add('gateway', {
