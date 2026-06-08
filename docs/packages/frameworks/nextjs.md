@@ -14,37 +14,20 @@ off the client. Set `runtime = 'nodejs'` for routes that import
 `cogentlm-server`.
 
 Routes that are registered from a browser `kind: 'gateway'` endpoint must speak
-the first-party gateway profile. The request body uses `model`, `prompt`,
-`max_tokens`, and related gateway fields. The response must return `id`,
-`model`, `text`, `finish_reason`, and optional `usage`.
+the first-party gateway profile. Use the gateway profile helpers from
+`cogentlm-server` to decode the incoming body and format JSON or SSE responses.
 
 ```ts
 // app/api/cogent/query/route.ts
-import { CogentClient } from 'cogentlm-server';
+import {
+  CogentClient,
+  decodeGatewayQueryBody,
+  gatewayErrorResponse,
+  gatewayTextResponseBody,
+  gatewayTextStreamResponse,
+} from 'cogentlm-server';
 
 export const runtime = 'nodejs';
-
-interface GatewayQueryBody {
-  readonly model?: unknown;
-  readonly prompt?: unknown;
-  readonly max_tokens?: unknown;
-  readonly temperature?: unknown;
-  readonly top_p?: unknown;
-  readonly stop?: unknown;
-  readonly stream?: unknown;
-}
-
-interface GatewayUsage {
-  readonly input_tokens?: number;
-  readonly output_tokens?: number;
-  readonly total_tokens?: number;
-}
-
-interface ClientUsage {
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
-  readonly totalTokens?: number;
-}
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -54,88 +37,33 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' ? value : undefined;
-}
-
-function optionalStrings(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string')
-    ? value
-    : undefined;
-}
-
-function gatewayUsage(usage: ClientUsage | undefined): GatewayUsage | undefined {
-  if (usage == null) return undefined;
-  return {
-    input_tokens: usage.inputTokens,
-    output_tokens: usage.outputTokens,
-    total_tokens: usage.totalTokens,
-  };
-}
-
 export async function POST(request: Request): Promise<Response> {
-  const body = (await request.json()) as GatewayQueryBody;
-  if (body.stream === true) {
-    return Response.json(
-      {
-        error: {
-          code: 'unsupported_stream',
-          message: 'this route supports non-streaming query requests',
-        },
+  try {
+    const decoded = decodeGatewayQueryBody(await request.json());
+    const client = new CogentClient();
+    const endpoint = await client.add('gateway', {
+      kind: 'gateway',
+      target: decoded.target,
+      baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
+      authentication: {
+        kind: 'bearer',
+        value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
       },
-      { status: 400 },
-    );
-  }
-  if (
-    typeof body.model !== 'string' ||
-    body.model.trim() === '' ||
-    typeof body.prompt !== 'string' ||
-    body.prompt.trim() === ''
-  ) {
+    });
+    const run = client.query({
+      ...decoded.request,
+      endpoint,
+    });
+    if (decoded.stream) {
+      return gatewayTextStreamResponse(run);
+    }
     return Response.json(
-      {
-        error: {
-          code: 'invalid_request',
-          message: 'model and prompt are required',
-        },
-      },
-      { status: 400 },
+      gatewayTextResponseBody(decoded.target, await run.response),
     );
+  } catch (error) {
+    const response = gatewayErrorResponse(error);
+    return Response.json(response.body, response.init);
   }
-
-  const target = body.model;
-  const prompt = body.prompt;
-  const client = new CogentClient();
-  const endpoint = await client.add('gateway', {
-    kind: 'gateway',
-    target,
-    baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-    authentication: {
-      kind: 'bearer',
-      value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-    },
-  });
-  const run = client.query({
-    endpoint,
-    prompt,
-    options: {
-      maxTokens: optionalNumber(body.max_tokens),
-      temperature: optionalNumber(body.temperature),
-      topP: optionalNumber(body.top_p),
-      stop: optionalStrings(body.stop),
-    },
-  });
-  const response = await run.response;
-  return Response.json({
-    id:
-      response.metadata.upstreamResponseId ??
-      response.metadata.requestId ??
-      'response',
-    model: target,
-    text: response.text,
-    finish_reason: response.finishReason,
-    usage: gatewayUsage(response.usage),
-  });
 }
 ```
 

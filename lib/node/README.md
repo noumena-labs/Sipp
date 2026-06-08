@@ -58,6 +58,50 @@ await client.close();
 Gateway clients use `kind: 'gateway'` descriptors when a Node process calls a
 separate CogentLM gateway.
 
+## Gateway Profile Helpers
+
+Use the gateway profile helpers when a Node route should behave like a
+first-party gateway endpoint for browser `kind: 'gateway'` clients:
+
+```ts
+import {
+  CogentClient,
+  decodeGatewayQueryBody,
+  gatewayErrorResponse,
+  gatewayTextResponseBody,
+  gatewayTextStreamResponse,
+} from 'cogentlm-server';
+
+export async function handleQuery(request: Request): Promise<Response> {
+  try {
+    const decoded = decodeGatewayQueryBody(await request.json());
+    const client = new CogentClient();
+    const endpoint = await client.add('gateway', {
+      kind: 'gateway',
+      target: decoded.target,
+      baseUrl: process.env.COGENTLM_GATEWAY_URL!,
+      authentication: {
+        kind: 'bearer',
+        value: process.env.COGENTLM_GATEWAY_TOKEN!,
+      },
+    });
+    const run = client.query({ ...decoded.request, endpoint });
+    return decoded.stream
+      ? gatewayTextStreamResponse(run)
+      : Response.json(
+          gatewayTextResponseBody(decoded.target, await run.response),
+        );
+  } catch (error) {
+    const response = gatewayErrorResponse(error);
+    return Response.json(response.body, response.init);
+  }
+}
+```
+
+`decodeGatewayChatBody()`, `decodeGatewayEmbedBody()`,
+`gatewayTextResponseBody()`, and `gatewayEmbeddingResponseBody()` mirror the
+first-party gateway JSON profile used by CogentLM clients.
+
 ## Learn More
 
 - [Node.js package docs](../../docs/packages/node.md)

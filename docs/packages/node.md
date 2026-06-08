@@ -88,6 +88,52 @@ console.log((await run.response).text);
 The application only needs the gateway URL, bearer token, and public target.
 Provider credentials and local model paths stay in the gateway process.
 
+## Gateway Profile Helpers
+
+Use the gateway profile helpers when a Node route should behave like a
+first-party gateway endpoint for browser `kind: 'gateway'` clients. The helpers
+decode `model`, `prompt`, `messages`, `input`, and snake_case generation
+options, then format JSON or SSE responses.
+
+```ts
+import {
+  CogentClient,
+  decodeGatewayQueryBody,
+  gatewayErrorResponse,
+  gatewayTextResponseBody,
+  gatewayTextStreamResponse,
+} from 'cogentlm-server';
+
+export async function handleQuery(request: Request): Promise<Response> {
+  try {
+    const decoded = decodeGatewayQueryBody(await request.json());
+    const client = new CogentClient();
+    const endpoint = await client.add('gateway', {
+      kind: 'gateway',
+      target: decoded.target,
+      baseUrl: process.env.COGENTLM_GATEWAY_URL!,
+      authentication: {
+        kind: 'bearer',
+        value: process.env.COGENTLM_GATEWAY_TOKEN!,
+      },
+    });
+    const run = client.query({ ...decoded.request, endpoint });
+    return decoded.stream
+      ? gatewayTextStreamResponse(run)
+      : Response.json(
+          gatewayTextResponseBody(decoded.target, await run.response),
+        );
+  } catch (error) {
+    const response = gatewayErrorResponse(error);
+    return Response.json(response.body, response.init);
+  }
+}
+```
+
+Use `decodeGatewayChatBody()` and `decodeGatewayEmbedBody()` for `/v1/chat`
+and `/v1/embed` compatible routes. Use `gatewayEmbeddingResponseBody()` for
+finite embedding responses.
+
 ## Framework Routes
 
 Use `cogentlm-server` in server-only code such as Next.js App Router route

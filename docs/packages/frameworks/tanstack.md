@@ -68,34 +68,19 @@ expect the first-party gateway HTTP profile.
 
 Use a server route when the browser package should call the framework route as
 a gateway endpoint. The route accepts the first-party query profile and returns
-the fields consumed by browser gateway endpoints.
+the fields consumed by browser gateway endpoints. The gateway profile helpers
+decode the browser request and format JSON or SSE responses.
 
 ```ts
 // src/routes/api/cogent/query.ts
 import { createFileRoute } from '@tanstack/react-router';
-import { CogentClient } from 'cogentlm-server';
-
-interface GatewayQueryBody {
-  readonly model?: unknown;
-  readonly prompt?: unknown;
-  readonly max_tokens?: unknown;
-  readonly temperature?: unknown;
-  readonly top_p?: unknown;
-  readonly stop?: unknown;
-  readonly stream?: unknown;
-}
-
-interface GatewayUsage {
-  readonly input_tokens?: number;
-  readonly output_tokens?: number;
-  readonly total_tokens?: number;
-}
-
-interface ClientUsage {
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
-  readonly totalTokens?: number;
-}
+import {
+  CogentClient,
+  decodeGatewayQueryBody,
+  gatewayErrorResponse,
+  gatewayTextResponseBody,
+  gatewayTextStreamResponse,
+} from 'cogentlm-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -105,90 +90,36 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' ? value : undefined;
-}
-
-function optionalStrings(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string')
-    ? value
-    : undefined;
-}
-
-function gatewayUsage(usage: ClientUsage | undefined): GatewayUsage | undefined {
-  if (usage == null) return undefined;
-  return {
-    input_tokens: usage.inputTokens,
-    output_tokens: usage.outputTokens,
-    total_tokens: usage.totalTokens,
-  };
-}
-
 export const Route = createFileRoute('/api/cogent/query')({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const body = (await request.json()) as GatewayQueryBody;
-        if (body.stream === true) {
-          return Response.json(
-            {
-              error: {
-                code: 'unsupported_stream',
-                message: 'this route supports non-streaming query requests',
-              },
+        try {
+          const decoded = decodeGatewayQueryBody(await request.json());
+          const client = new CogentClient();
+          const endpoint = await client.add('gateway', {
+            kind: 'gateway',
+            target: decoded.target,
+            baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
+            authentication: {
+              kind: 'bearer',
+              value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
             },
-            { status: 400 },
-          );
-        }
-        if (
-          typeof body.model !== 'string' ||
-          body.model.trim() === '' ||
-          typeof body.prompt !== 'string' ||
-          body.prompt.trim() === ''
-        ) {
+          });
+          const run = client.query({
+            ...decoded.request,
+            endpoint,
+          });
+          if (decoded.stream) {
+            return gatewayTextStreamResponse(run);
+          }
           return Response.json(
-            {
-              error: {
-                code: 'invalid_request',
-                message: 'model and prompt are required',
-              },
-            },
-            { status: 400 },
+            gatewayTextResponseBody(decoded.target, await run.response),
           );
+        } catch (error) {
+          const response = gatewayErrorResponse(error);
+          return Response.json(response.body, response.init);
         }
-
-        const target = body.model;
-        const prompt = body.prompt;
-        const client = new CogentClient();
-        const endpoint = await client.add('gateway', {
-          kind: 'gateway',
-          target,
-          baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-          authentication: {
-            kind: 'bearer',
-            value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-          },
-        });
-        const response = await client.query({
-          endpoint,
-          prompt,
-          options: {
-            maxTokens: optionalNumber(body.max_tokens),
-            temperature: optionalNumber(body.temperature),
-            topP: optionalNumber(body.top_p),
-            stop: optionalStrings(body.stop),
-          },
-        }).response;
-        return Response.json({
-          id:
-            response.metadata.upstreamResponseId ??
-            response.metadata.requestId ??
-            'response',
-          model: target,
-          text: response.text,
-          finish_reason: response.finishReason,
-          usage: gatewayUsage(response.usage),
-        });
       },
     },
   },

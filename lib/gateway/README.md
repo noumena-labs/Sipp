@@ -37,6 +37,8 @@ they expose a compatible profile.
 
 Use `apps/gateway-server` for the first-party server application with TOML,
 bearer tokens, target policy, CORS, metrics, probes, and deployment behavior.
+Node framework routes can use the matching gateway profile helpers exported by
+`cogentlm-server`.
 
 ## Learn More
 

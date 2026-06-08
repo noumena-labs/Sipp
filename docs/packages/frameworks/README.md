@@ -35,3 +35,9 @@ calls a gateway through `cogentlm-server`.
 Keep provider credentials and long-lived gateway tokens out of browser bundles.
 When a browser app needs gateway access, issue short-lived application tokens or
 proxy through a server route.
+
+Use `decodeGatewayQueryBody()`, `decodeGatewayChatBody()`,
+`decodeGatewayEmbedBody()`, and the matching response helpers from
+`cogentlm-server` when a framework route should be registered as a browser
+`kind: 'gateway'` endpoint. Those helpers keep route examples focused on auth,
+target policy, and client lifecycle instead of gateway profile JSON shaping.
