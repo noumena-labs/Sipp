@@ -25,6 +25,7 @@
   - [Architecture](gateway/architecture.md)
   - [Troubleshooting](gateway/troubleshooting.md)
 - [Guides](guides/README.md)
+  - [Inference Operations](guides/inference-operations.md)
   - [Local Inference](guides/local-inference.md)
   - [Gateway And Hybrid Inference](guides/gateway-hybrid.md)
   - [Browser Caching](guides/browser-caching.md)
