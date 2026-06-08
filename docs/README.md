@@ -15,15 +15,15 @@ workflow live in the maintainer section.
   install commands.
 - [Quickstarts](getting-started/quickstarts.md) shows short Browser, Node.js,
   Python, Rust, and gateway paths.
-- [Using Published Packages](packages/README.md) describes the public package
+- [Using Published Packages](packages/) describes the public package
   surfaces in depth.
 - [Gateway Server](packages/gateway-server.md) explains how to deploy the
   first-party gateway and call it from the core clients.
-- [Frameworks](packages/frameworks/README.md) covers Next.js, TanStack, and
+- [Frameworks](packages/frameworks/) covers Next.js, TanStack, and
   React/Vite integration patterns.
 - [Gateway And Hybrid Inference](guides/gateway-hybrid.md) explains when to use
   local endpoints, gateway endpoints, and provider endpoints.
-- [Maintainers](maintainers/README.md) covers source builds, tests, repo
+- [Maintainers](maintainers/) covers source builds, tests, repo
   structure, and contribution workflow.
 
 ## Build The Book Locally
