@@ -1,15 +1,7 @@
 # Rust Examples
 
-Each file in `src/` is a focused tutorial. `support.rs` only handles argument
-parsing, environment helpers, and output formatting.
-
-Endpoints use the unified descriptor API:
-
-```rust
-let endpoint = client
-    .add("local", EndpointDescriptor::local(model_path, runtime))
-    .await?;
-```
+Each file in `src/` is a focused Rust tutorial. `support.rs` only handles
+argument parsing, environment helpers, and output formatting.
 
 ## Local GGUF
 
@@ -22,24 +14,14 @@ cargo run -p cogentlm-rust-examples --bin vision_chat -- <model.gguf> <projector
 
 ## Gateway Clients
 
-To start the local gateway and run one Rust gateway client from a single
-terminal:
+Use the one-command gateway workflow when possible:
 
 ```bash
 cargo xtask run examples gateway rust --case query
 ```
 
-The cached sample model under `.build/models` is used by default; pass
-`--model <model.gguf>` to override it.
-
-Start a gateway first, then set:
-
-```bash
-export COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
-export COGENTLM_GATEWAY_TOKEN="dev-token"
-```
-
-Run:
+For a manually started gateway, set `COGENTLM_GATEWAY_URL` and
+`COGENTLM_GATEWAY_TOKEN`, then run:
 
 ```bash
 cargo run -p cogentlm-rust-examples --features gateway --bin gateway_query -- <model.gguf> local [input]
@@ -49,14 +31,14 @@ cargo run -p cogentlm-rust-examples --features gateway --bin gateway_embed -- <m
 
 `gateway_embed` requires a model/runtime that reports embedding support.
 
-## OpenAI Provider
-
-These examples require `OPENAI_API_KEY`:
+## Provider Example
 
 ```bash
 export OPENAI_API_KEY="<openai-api-key>"
 cargo run -p cogentlm-rust-examples --bin openai_provider_chat -- [input]
 ```
 
-`openai_provider_chat.rs` shows direct provider inference. Provider credentials
-belong in gateway/server processes, not distributed app clients.
+Provider credentials belong in trusted server or gateway processes, not
+distributed app clients.
+
+See [../README.md](../README.md) for shared gateway setup details.

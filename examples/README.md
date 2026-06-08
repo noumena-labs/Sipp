@@ -1,23 +1,23 @@
 # CogentLM Examples
 
-These examples are real integrations, not mocks. They are meant to be opened as
-tutorials: each file demonstrates one workflow clearly, with CogentLM API usage
-kept in the example file instead of hidden in shared helpers.
+The examples are real integrations, not mocks. Each file keeps the CogentLM
+client construction, endpoint registration, request construction, streaming,
+and cleanup visible in the example itself.
 
-Recommended learning order:
+Use examples when you want small, copyable code. Use demos when you want a
+larger browser experience.
 
-1. `rust`, `node`, or `python`: direct local GGUF inference with `query`,
-   `chat`, and `embed`.
-2. `web`: browser GGUF loading and the same local workflows in Vite.
-3. `gateway`: run a gateway proxy separately, then run app examples that call
-   both a local model endpoint and the gateway target.
-4. `rust/openai_provider_chat.rs`: call a provider adapter directly when you
-   need to inspect the server-side provider layer.
+## Learning Order
 
-All client examples register local models, gateways, and direct providers
-through `add(key, descriptor)`. The returned `EndpointRef` is passed to
-`query`, `chat`, or `embed` when explicit routing is required. Reusing a key
-replaces its endpoint configuration.
+1. Run `rust`, `node`, or `python` for local GGUF `query`, `chat`, and `embed`.
+2. Run `web` for browser-local GGUF loading in Vite.
+3. Run `gateway` workflows to compare local endpoints with a gateway target.
+4. Inspect `rust/openai_provider_chat.rs` for direct provider calls from a
+   trusted server-side process.
+
+All client examples register endpoints through `add(key, descriptor)`. The
+returned endpoint reference is passed to `query`, `chat`, or `embed` when a
+request uses a specific destination.
 
 ## Direct Local Examples
 
@@ -34,8 +34,8 @@ and image path.
 
 ## Gateway Examples
 
-Use `xtask` to start the local GGUF gateway and run a gateway client from one
-terminal:
+The one-command gateway workflows start a local gateway, run a selected client,
+and stop the gateway when the client exits:
 
 ```bash
 cargo xtask run examples gateway rust --case query
@@ -44,29 +44,17 @@ cargo xtask run examples gateway python --case embed
 cargo xtask run examples gateway web
 ```
 
-The command uses token `dev-token` by default, starts the gateway on
-`127.0.0.1:8787`, waits for readiness, and stops the gateway after Rust, Node,
-or Python clients exit. The web workflow keeps the gateway running while Vite is
-serving. The cached sample model under `.build/models` is used by default; pass
-`--model <model.gguf>` to override it.
+These commands use token `dev-token`, bind the gateway to `127.0.0.1:8787`,
+wait for readiness, and use the cached sample model under `.build/models`
+unless `--model <model.gguf>` is provided. The web workflow keeps the gateway
+running while Vite serves the browser pages.
 
-The manual flow is still available when you want two terminals:
-
-1. Start a gateway.
-2. Start an app/client that calls the gateway target.
-
-Local GGUF gateway:
+Manual two-terminal gateway flows are still available:
 
 ```bash
 export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
-
-Open `http://127.0.0.1:8787/` to inspect the minimal example proxy page.
-`examples/gateway/README.md` explains how it composes
-`crates/gateway-core` with `lib/gateway`;
-production lifecycle, authentication, metrics, and deployment live in
-`apps/gateway-server`.
 
 In another terminal:
 
@@ -79,20 +67,17 @@ python examples/python/gateway_query.py <model.gguf> local [input]
 ```
 
 Use target `local` for query, chat, and embedding. Embedding examples require a
-model that reports embedding support.
+model/runtime that reports embedding support.
 
-Provider-backed serving belongs to the production gateway server. Start from
-`apps/gateway-server/config/production.toml` and the server README. The xtask
-shortcut below launches that server with generated OpenAI targets:
+Provider-backed serving belongs to `apps/gateway-server`. The OpenAI gateway
+shortcut requires `OPENAI_API_KEY` in the gateway process and exposes targets
+`openai-chat` and `openai-embed`:
 
 ```bash
 export OPENAI_API_KEY="<openai-api-key>"
 export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 ```
-
-Use target `openai-chat` for `gateway_query` and `gateway_chat`; use
-`openai-embed` for `gateway_embed`.
 
 ## Browser Examples
 
@@ -110,7 +95,7 @@ Open:
 - `/gateway_chat.html`
 - `/gateway_embed.html`
 
-The browser gateway pages collect URL, token, and target in the page because
+Browser gateway pages collect URL, token, and target in the page because
 browser code cannot read process environment variables.
 
 ## Smoke Coverage
@@ -125,3 +110,6 @@ cargo xtask test smoke group examples
 ```
 
 OpenAI examples are documented and manual because they require a real API key.
+
+See [docs/examples-demos.md](../docs/examples-demos.md) for the documentation
+index.

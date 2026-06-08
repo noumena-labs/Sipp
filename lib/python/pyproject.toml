@@ -7,7 +7,7 @@ name = "cogentlm"
 version = "0.1.0"
 description = "Native Python bindings for CogentLM"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 
 [dependency-groups]
 dev = ["maturin>=1.5,<2", "pytest>=8,<9", "pytest-cov>=7,<8"]

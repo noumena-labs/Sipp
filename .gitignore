@@ -16,6 +16,7 @@ output_debug.log
 # =========================
 # With a root Cargo workspace, all Rust builds funnel into this single directory
 /target/
+/book/
 **/*.rs.bk
 
 # =========================
