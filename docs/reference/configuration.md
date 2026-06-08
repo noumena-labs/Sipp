@@ -16,9 +16,13 @@ mode, observability, sampling, and backend selection. See
 application:
 
 - `[routes]` selects public and management paths.
+- `admin_password` sets the literal Admin Dashboard password in TOML.
 - `[[tokens]]` maps bearer-token environment variables to caller labels and
   allowed targets.
 - `[[targets]]` defines local, OpenAI, OpenAI-compatible, or Anthropic targets.
+  Local targets can select `backend = "auto"`, `cpu`, `cuda`, `metal`, or
+  `vulkan`. See [Gateway Server Reference](gateway-server.md) for the full
+  schema.
 
 Custom wire formats, authentication schemes, and route layouts belong in
 separate applications composed from `lib/gateway`.
@@ -27,6 +31,13 @@ separate applications composed from `lib/gateway`.
 
 - `COGENTLM_GATEWAY_TOKEN`: development bearer token for examples and gateway
   server commands.
+- `COGENTLM_MODEL_DIR`: Docker-mounted GGUF model directory for
+  `apps/gateway-server`; the development template defaults to `.build/models`.
+- `COGENTLM_GATEWAY_CONFIG`: host TOML path mounted by
+  `apps/gateway-server/development.yml.example` and
+  `apps/gateway-server/production.yml`.
+- `COGENTLM_GATEWAY_IMAGE`: local or private-registry image used by the gateway
+  Docker templates.
 - `COGENTLM_GATEWAY_URL`: gateway base URL for client examples.
 - `COGENTLM_NODE_BACKEND`: Node runtime backend selection.
 - `COGENTLM_PYTHON_BACKEND`: Python runtime backend selection.

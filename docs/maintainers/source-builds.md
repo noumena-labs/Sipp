@@ -28,6 +28,7 @@ package staging.
 clm build core
 clm build node --backend cpu
 clm build python --backend cpu
+clm build gateway-server --backend cpu
 clm build wasm
 clm build all
 ```
@@ -65,25 +66,21 @@ clm run tools serve playground
 ## Gateway Server From Source
 
 The release workflow does not yet publish a standalone gateway-server binary or
-container image. Build or run it from the source checkout when deploying the
-first-party gateway server:
+container image. Use `clm` for source checkout checks and raw Docker commands
+for container deployment. The canonical source guide is
+[Gateway Server](../packages/gateway-server.md); Docker deployment is covered
+in [Gateway Server Docker](../packages/gateway-server-docker.md).
 
 ```bash
 export COGENTLM_GATEWAY_TOKEN="replace-me"
-cargo run -p cogentlm-gateway-server -- \
-  check --config apps/gateway-server/config/production.toml
-cargo run -p cogentlm-gateway-server -- \
-  serve --config apps/gateway-server/config/production.toml
+clm build gateway-server --backend cpu
+clm run gateway-server check --config apps/gateway-server/config/development.toml
+clm run gateway-server serve --config apps/gateway-server/config/development.toml --backend cpu
 ```
 
-The checked-in Dockerfile and compose file are also source artifacts:
-
-```bash
-docker build -f apps/gateway-server/Dockerfile -t cogentlm-gateway:cpu .
-docker compose -f apps/gateway-server/compose.yaml up
-```
-
-Keep the management listener private when deploying the server.
+The source development config expects a local GGUF model under `.build/models`
+and a literal `admin_password` in the selected TOML file. Keep production TOML
+files private because they contain the Admin Dashboard password.
 
 ## Validation
 

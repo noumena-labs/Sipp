@@ -83,6 +83,12 @@ impl BuildContext {
         self.cargo_build_root().join("cli").join(backend.as_str())
     }
 
+    pub(crate) fn cargo_gateway_server_target_dir(&self, backend: &Backend) -> PathBuf {
+        self.cargo_build_root()
+            .join("gateway-server")
+            .join(backend.as_str())
+    }
+
     pub(crate) fn cargo_python_target_dir(&self, backend: Option<&Backend>) -> PathBuf {
         self.cargo_build_root()
             .join("python")
@@ -116,6 +122,18 @@ impl BuildContext {
         }
     }
 
+    pub(crate) fn cmake_gateway_server_sys_dir(&self, backend: &Backend) -> PathBuf {
+        if cfg!(windows) {
+            self.native_build_root()
+                .join("gs")
+                .join(Self::short_backend_build_tag(backend))
+        } else {
+            self.cmake_build_root()
+                .join("gateway-server-sys")
+                .join(backend.as_str())
+        }
+    }
+
     pub(crate) fn artifacts_root(&self) -> PathBuf {
         self.build_root().join("artifacts")
     }
@@ -130,6 +148,10 @@ impl BuildContext {
 
     pub(crate) fn cli_artifacts_dir(&self) -> PathBuf {
         self.artifacts_root().join("cli")
+    }
+
+    pub(crate) fn gateway_server_artifacts_dir(&self) -> PathBuf {
+        self.artifacts_root().join("gateway-server")
     }
 
     pub(crate) fn npm_browser_artifacts_dir(&self) -> PathBuf {
@@ -335,6 +357,16 @@ impl BuildContext {
 
     pub(crate) fn backend_build_tag(backend: Option<&Backend>) -> &'static str {
         backend.map(Backend::as_str).unwrap_or("cpu")
+    }
+
+    fn short_backend_build_tag(backend: &Backend) -> &'static str {
+        match backend {
+            Backend::Cpu => "cpu",
+            Backend::Cuda => "cu",
+            Backend::Metal => "mt",
+            Backend::Vulkan => "vk",
+            Backend::All => "all",
+        }
     }
 
     pub(crate) fn wasm_build_tag(use_pthreads: bool) -> &'static str {

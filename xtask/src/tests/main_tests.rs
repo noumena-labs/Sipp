@@ -4,12 +4,12 @@
 //! binary dispatcher, subprocesses, or build orchestration.
 
 use xtask::cli::{
-    Backend, BackendArgs, BuildCommands, CleanArgs, Commands, DemoServeMode,
-    RunBrowserExampleServeArgs, RunCommands, RunExampleServeArgs, RunExampleServeTarget,
-    RunExamplesCommands, TestCommands, TestGroupFilter, TestListArgs, TestListFormat,
-    TestSmokeArgs, TestSmokeCaseArgs, TestSmokeCommands, TestSmokeModelArgs,
-    TestSmokePlaygroundBrowserArgs, TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestUnitArgs,
-    TestUnitCommands, TestUnitGroupArgs, TestUnitGroupTarget, TestVerifyArgs, TestVerifyTarget,
+    Backend, BackendArgs, BuildCommands, CleanArgs, Commands, RunCommands, RunGatewayServerArgs,
+    RunGatewayServerCommand, RunGatewayServerSourceArgs, TestCommands, TestGroupFilter,
+    TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeCaseArgs, TestSmokeCommands,
+    TestSmokeModelArgs, TestSmokePlaygroundBrowserArgs, TestSmokeSuiteArgs, TestSmokeSuiteTarget,
+    TestUnitArgs, TestUnitCommands, TestUnitGroupArgs, TestUnitGroupTarget, TestVerifyArgs,
+    TestVerifyTarget,
 };
 
 use super::{
@@ -101,6 +101,12 @@ fn build_summary_labels_backend_defaults_and_explicit_backends() {
         })),
         "Build Rust CLI distribution (all)"
     );
+    assert_eq!(
+        build_summary(&BuildCommands::GatewayServer(BackendArgs {
+            backend: Some(Backend::Vulkan),
+        })),
+        "Build gateway-server (vulkan)"
+    );
 }
 
 #[test]
@@ -115,16 +121,12 @@ fn effective_output_options_keep_build_and_run_compact_by_default() {
         target: BuildCommands::Core,
     };
     let run = Commands::Run {
-        command: RunCommands::Examples {
-            command: RunExamplesCommands::Serve(RunExampleServeArgs {
-                target: RunExampleServeTarget::Browser(RunBrowserExampleServeArgs {
-                    mode: DemoServeMode::Dev,
-                    host: None,
-                    port: None,
-                    no_build: false,
-                }),
+        command: RunCommands::GatewayServer(RunGatewayServerArgs {
+            command: RunGatewayServerCommand::Check(RunGatewayServerSourceArgs {
+                config: "apps/gateway-server/config/development.toml".into(),
+                backend: Backend::Cpu,
             }),
-        },
+        }),
     };
 
     assert_eq!(

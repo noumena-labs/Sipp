@@ -17,8 +17,9 @@ workflow live in the maintainer section.
   Python, Rust, and gateway paths.
 - [Using Published Packages](packages/) describes the public package
   surfaces in depth.
-- [Gateway Server](packages/gateway-server.md) explains how to deploy the
-  first-party gateway and call it from the core clients.
+- [Gateway Server](packages/gateway-server.md) explains source/exe operation
+  for the first-party gateway. [Gateway Server Docker](packages/gateway-server-docker.md)
+  covers container deployment.
 - [Frameworks](packages/frameworks/) covers Next.js, TanStack, and
   React/Vite integration patterns.
 - [Gateway And Hybrid Inference](guides/gateway-hybrid.md) explains when to use

@@ -1,61 +1,34 @@
 # CogentLM Gateway Server
 
 `apps/gateway-server` is the first-party CogentLM HTTP gateway application. It
-is built from `cogentlm-gateway-core` and `cogentlm-gateway`, then adds
-application-owned configuration and deployment behavior.
+adds TOML configuration, bearer-token policy, local/provider targets,
+management routes, metrics, and the Admin Dashboard on top of the gateway
+toolkit crates.
 
-The server owns:
+## Start Here
 
-- Public and management listeners.
-- Query, chat, embed, index, health, readiness, and metrics routes.
-- Environment-backed bearer tokens and per-token target access.
-- Local and provider-backed target construction.
-- Application-wide concurrency admission.
-- CORS, body limits, metrics, logging, TOML, and container policy.
+- Source and generated-exe workflows:
+  [Gateway Server](../../docs/packages/gateway-server.md)
 
-## Source Checkout
+  ```bash
+  clm run gateway-server check --config apps/gateway-server/config/development.toml
+  ```
 
-From the repository root, after `source ./setup.sh`:
+- Docker workflows:
+  [Gateway Server Docker](../../docs/packages/gateway-server-docker.md)
 
-```bash
-clm build core && cargo run -p cogentlm-gateway-server -- check --config apps/gateway-server/config/production.toml
-```
+  ```bash
+  docker compose --env-file apps/gateway-server/.env.example -f apps/gateway-server/development.yml.example config
+  ```
 
-`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
-if the launcher is not active.
+- TOML schema and route behavior:
+  [Gateway Server Reference](../../docs/reference/gateway-server.md)
 
-## Run The Server
+## Local Files
 
-```bash
-export COGENTLM_GATEWAY_TOKEN="replace-me"
-cargo run -p cogentlm-gateway-server -- \
-  check --config apps/gateway-server/config/production.toml
-cargo run -p cogentlm-gateway-server -- \
-  serve --config apps/gateway-server/config/production.toml
-```
-
-`check` validates TOML without reading secrets or loading endpoints. `serve`
-loads endpoints before binding either listener, then applies graceful HTTP
-shutdown on Ctrl-C.
-
-## Configuration
-
-`[routes]` selects paths. `[[tokens]]` selects bearer-token environment
-variables, caller labels, and allowed targets. `[[targets]]` selects local,
-OpenAI, OpenAI-compatible, or Anthropic endpoints.
-
-Custom codecs and authentication schemes belong in a separate application
-composed from `lib/gateway`.
-
-## Deployment
-
-```bash
-docker build -f apps/gateway-server/Dockerfile -t cogentlm-gateway:cpu .
-docker compose -f apps/gateway-server/compose.yaml up
-```
-
-The image runs as a non-root user. Mount model files read-only and keep the
-management listener private.
-
-See the [gateway server reference](../../docs/reference/gateway-server.md) and
-[gateway layering](../../docs/gateway.md) for more detail.
+- `config/development.toml`: source and local Docker example.
+- `config/production.toml`: production-oriented example; copy it before adding
+  real secrets.
+- `development.yml.example`: copyable local Compose template.
+- `production.yml`: production Compose template for a prebuilt image.
+- `Dockerfile`: image build for CPU, Vulkan, and CUDA gateway variants.

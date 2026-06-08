@@ -11,6 +11,7 @@
   - [Python](packages/python.md)
   - [Rust](packages/rust.md)
   - [Gateway Server](packages/gateway-server.md)
+  - [Gateway Server Docker](packages/gateway-server-docker.md)
   - [Gateway Toolkit](packages/gateway.md)
   - [Frameworks](packages/frameworks/README.md)
     - [Next.js](packages/frameworks/nextjs.md)

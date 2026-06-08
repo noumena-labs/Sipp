@@ -11,6 +11,14 @@ pub struct GatewayMetrics {
     errors: [AtomicU64; 3],
 }
 
+/// Point-in-time metric values for one gateway operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperationMetricSnapshot {
+    pub operation: &'static str,
+    pub requests: u64,
+    pub errors: u64,
+}
+
 impl GatewayMetrics {
     /// Create empty metrics.
     pub fn new() -> Self {
@@ -38,6 +46,18 @@ impl GatewayMetrics {
             );
         }
         output
+    }
+
+    /// Return low-cardinality metric counters for dashboard rendering.
+    pub fn snapshot(&self) -> [OperationMetricSnapshot; 3] {
+        [Operation::Query, Operation::Chat, Operation::Embed].map(|operation| {
+            let index = operation_index(operation);
+            OperationMetricSnapshot {
+                operation: operation_name(operation),
+                requests: self.requests[index].load(Ordering::Relaxed),
+                errors: self.errors[index].load(Ordering::Relaxed),
+            }
+        })
     }
 }
 

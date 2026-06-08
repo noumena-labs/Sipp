@@ -103,8 +103,10 @@ Use `cargo xtask run examples serve browser` to manually serve browser examples.
 Use `cargo xtask run examples serve gateway-local --model <model.gguf>` to
 serve the minimal local gateway proxy. Provider-backed and production serving
 use `apps/gateway-server`; validate its configuration with
-`cogentlm-gateway check --config <path>`. Playground validation remains under
-`test smoke suite playground-browser`.
+`clm run gateway-server check --config <path>` and use raw Docker commands from
+[Gateway Server Docker](packages/gateway-server-docker.md) for container
+testing. Playground validation remains under `test smoke suite
+playground-browser`.
 
 `test unit` and `test smoke` print a final suite and test/check summary, then
 write `.build/test/run-report.json` and `.build/test/run-report.md`.

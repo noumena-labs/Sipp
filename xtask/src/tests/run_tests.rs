@@ -6,6 +6,7 @@
 
 use crate::cli::{
     Backend, LlamaBackendOpsMode, LlamaBackendOpsOutput, RunCommands, RunGatewayExampleCase,
+    RunGatewayServerArgs, RunGatewayServerCommand, RunGatewayServerSourceArgs,
     RunLlamaBackendOpsArgs, RunLlamaCommands,
 };
 use crate::test_support::TempDir;
@@ -150,4 +151,25 @@ fn gateway_example_backend_all_is_rejected() {
 
     assert!(format!("{error:#}").contains("concrete backend"));
     assert!(validate_gateway_example_backend(&Backend::Cpu).is_ok());
+}
+
+#[test]
+fn gateway_server_source_run_rejects_missing_config_before_building() {
+    let temp = TempDir::new("run-gateway-server-missing-config");
+    let ctx = BuildContext::from_workspace_root_for_test(temp.path());
+    let sh = xshell::Shell::new().unwrap();
+
+    let error = run(
+        &sh,
+        &ctx,
+        RunCommands::GatewayServer(RunGatewayServerArgs {
+            command: RunGatewayServerCommand::Check(RunGatewayServerSourceArgs {
+                config: "missing.toml".into(),
+                backend: Backend::Cpu,
+            }),
+        }),
+    )
+    .unwrap_err();
+
+    assert!(format!("{error:#}").contains("gateway config file does not exist"));
 }

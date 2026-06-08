@@ -24,6 +24,10 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
         temp.join(".build/cargo/cli/cuda")
     );
     assert_eq!(
+        ctx.cargo_gateway_server_target_dir(&Backend::Vulkan),
+        temp.join(".build/cargo/gateway-server/vulkan")
+    );
+    assert_eq!(
         ctx.cargo_python_target_dir(None),
         temp.join(".build/cargo/python/cpu")
     );
@@ -34,6 +38,15 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
     assert_eq!(
         ctx.cmake_llama_build_dir(&Backend::Cpu),
         temp.join(".build/cmake/llama/cpu")
+    );
+    let expected_gateway_cmake = if cfg!(windows) {
+        temp.join(".build/c/gs/vk")
+    } else {
+        temp.join(".build/cmake/gateway-server-sys/vulkan")
+    };
+    assert_eq!(
+        ctx.cmake_gateway_server_sys_dir(&Backend::Vulkan),
+        expected_gateway_cmake
     );
     assert_eq!(ctx.node_artifacts_dir(), temp.join(".build/artifacts/node"));
     assert_eq!(

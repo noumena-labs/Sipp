@@ -1,243 +1,91 @@
 # Gateway Server
 
-The CogentLM Gateway Server is the first-party HTTP gateway application for
-teams that want a central inference boundary. It can expose local GGUF targets
-or provider-backed targets while keeping model paths, provider credentials,
-target access policy, concurrency limits, and operational metrics inside the
-gateway process.
+The CogentLM Gateway Server is the first-party HTTP application for teams that
+want one inference boundary for local GGUF targets and provider-backed targets.
+This page covers source and generated-exe operation from a checkout. Use
+[Gateway Server Docker](gateway-server-docker.md) for container workflows and
+[Gateway Server Reference](../reference/gateway-server.md) for the TOML schema.
 
-The gateway server is a user-facing deployment surface, but the current release
-workflow does not publish a standalone binary, public container image, or
-`cargo install` target. Build and deploy it from the source checkout until a
-public server artifact is added.
+The current release workflow does not publish a standalone binary, public
+container image, or `cargo install` target. Build it from the source checkout.
 
-## When To Use It
+## Source Workflow
 
-- Browser applications need inference without exposing provider credentials.
-- Multiple clients should share one local model host or provider routing
-  policy.
-- Operators need a stable HTTP boundary with health, readiness, metrics, CORS,
-  body limits, and concurrency admission.
-- Applications want the same `query`, `chat`, and `embed` client API while
-  moving endpoint ownership to a server process.
-
-## Run From Source
+Use `clm` for source checkout workflows. `clm` is the setup-installed launcher
+for `cargo xtask`; when the launcher is unavailable, use `cargo xtask` with the
+same arguments.
 
 ```bash
 export COGENTLM_GATEWAY_TOKEN="replace-me"
-cargo run -p cogentlm-gateway-server -- \
-  check --config apps/gateway-server/config/production.toml
+clm build gateway-server --backend cpu
+clm run gateway-server check --config apps/gateway-server/config/development.toml
+clm run gateway-server serve --config apps/gateway-server/config/development.toml --backend cpu
 ```
 
-`check` validates TOML without reading secrets or loading endpoints. `serve`
-loads targets, reads token environment variables, binds the public and
-management listeners, and shuts down gracefully on Ctrl-C.
-
-The checked-in Dockerfile and compose file are source deployment helpers:
+Before running real local tests, copy the development TOML to an ignored local
+file and set the literal `admin_password`, token env names, and model path:
 
 ```bash
-docker build -f apps/gateway-server/Dockerfile -t cogentlm-gateway:cpu .
-docker compose -f apps/gateway-server/compose.yaml up
+cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.toml
+clm run gateway-server check --config apps/gateway-server/config/local.toml
+clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
 ```
 
-Treat `cogentlm-gateway:cpu` as a local image name from this build command, not
-as a published image.
+`check` parses and validates TOML only. It does not read bearer-token
+environment variables, load model files, contact providers, or bind ports.
 
-## Configuration
+`serve` first builds the staged gateway distribution for the requested backend,
+then runs the generated `cogentlm-gateway` executable from the workspace root.
+It reads token environment variables, loads targets, uses `admin_password` from
+TOML, binds both listeners, and exits cleanly on Ctrl-C.
 
-The production example config uses separate public and management listeners:
+## Generated Executable
+
+`clm build gateway-server --backend <backend>` stages the runnable distribution
+in `.build/artifacts/gateway-server`. The executable depends on the runtime
+libraries and backend plugins in that same directory, so direct execution must
+put that directory on the dynamic loader path.
+
+```bash
+export COGENTLM_GATEWAY_TOKEN="replace-me"
+export LD_LIBRARY_PATH="$(pwd)/.build/artifacts/gateway-server${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+.build/artifacts/gateway-server/cogentlm-gateway check --config apps/gateway-server/config/local.toml
+.build/artifacts/gateway-server/cogentlm-gateway serve --config apps/gateway-server/config/local.toml
+```
+
+Bash on macOS uses `DYLD_LIBRARY_PATH` instead of `LD_LIBRARY_PATH`.
+
+Relative `model` paths in TOML are resolved from the process working directory.
+The `clm run gateway-server ...` workflow runs from the workspace root. When
+running the executable from another directory, use absolute model paths.
+
+## Binds And Routes
+
+In source/exe mode, `public_bind` and `management_bind` bind directly on the
+host machine:
+
+- The public listener serves `query`, `chat`, and `embed`.
+- The management listener serves optional `index`, `health`, `readiness`,
+  `metrics`, and password-protected `admin` routes.
+
+For local development, bind both listeners to `127.0.0.1`. In production, keep
+the management listener private or behind trusted access control.
+
+## Admin Password
+
+The Admin Dashboard password is configured directly in the TOML file:
 
 ```toml
-public_bind = "0.0.0.0:8080"
-management_bind = "0.0.0.0:9090"
-max_request_bytes = 1048576
-max_concurrent_requests = 4
-allowed_origins = []
-
-[routes]
-query = "/v1/query"
-chat = "/v1/chat"
-embed = "/v1/embed"
-index = "/"
-health = "/healthz"
-readiness = "/readyz"
-metrics = "/metrics"
-
-[[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
-caller = "production-client"
-targets = ["local"]
-
-[[targets]]
-name = "local"
-type = "local"
-model = "/models/model.gguf"
+admin_password = "replace-me"
 ```
 
-The public listener serves `query`, `chat`, and `embed`. The management
-listener serves optional `index`, `health`, `readiness`, and `metrics` routes.
-Keep the management listener private in production.
-
-Tokens are read from environment variables. Each token gets a stable caller
-label and an allowlist of public target names. Targets can be local GGUF,
-OpenAI, OpenAI-compatible, or Anthropic endpoints. Provider credentials stay in
-the gateway environment and are never needed by browser or client applications.
-See [Providers](../guides/providers.md) for provider-backed target snippets.
-
-## Client Shape
-
-Gateway clients register a gateway endpoint, keep the returned endpoint
-reference, and call the normal client methods. The client needs only:
-
-- `target`: the public target name from gateway config.
-- `baseUrl`: the public gateway URL.
-- `authentication`: the bearer or header value issued by the application.
-- Optional route overrides when the gateway config changes from the defaults.
-
-### Browser
-
-```ts
-import { CogentClient } from 'cogentlm';
-
-const client = new CogentClient();
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
-  target: 'local',
-  baseUrl: 'https://gateway.example.com',
-  authentication: {
-    kind: 'bearer',
-    valueProvider: getShortLivedGatewayToken,
-  },
-});
-
-const run = client.query('Explain gateway inference.', {
-  endpoint,
-  emitTokens: true,
-  maxTokens: 64,
-});
-
-for await (const batch of run.tokens) {
-  console.log(batch.text);
-}
-console.log((await run.response).text);
-await client.close();
-```
-
-### Node.js
-
-```ts
-import { CogentClient } from 'cogentlm-server';
-
-function requiredEnv(name: string): string {
-  const value = process.env[name];
-  if (value == null || value === '') {
-    throw new Error(`${name} is required`);
-  }
-  return value;
-}
-
-const client = new CogentClient();
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
-  target: requiredEnv('COGENTLM_GATEWAY_TARGET'),
-  baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
-  authentication: {
-    kind: 'bearer',
-    value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
-  },
-});
-
-const run = client.query({
-  endpoint,
-  prompt: 'Explain gateway inference.',
-  options: { maxTokens: 64 },
-  emitTokens: true,
-});
-console.log((await run.response).text);
-```
-
-### Python
-
-```python
-import os
-
-from cogentlm import CogentClient, CogentTextOptions, GatewayDescriptor
-
-
-client = CogentClient()
-endpoint = client.add(
-    "gateway",
-    GatewayDescriptor(
-        "local",
-        os.environ["COGENTLM_GATEWAY_URL"],
-        authentication_kind="bearer",
-        authentication_value=os.environ["COGENTLM_GATEWAY_TOKEN"],
-    ),
-)
-run = client.query(
-    "Explain gateway inference.",
-    endpoint=endpoint,
-    options=CogentTextOptions(max_tokens=64),
-)
-print(run.result()["text"])
-```
-
-### Rust
-
-```rust
-use cogentlm::{
-    CogentClient, CogentQueryRequest, CogentTextOptions, EndpointDescriptor,
-    GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
-    GatewayTimeoutPolicy,
-};
-
-let mut client = CogentClient::new();
-let endpoint = client
-    .add(
-        "gateway",
-        EndpointDescriptor::gateway(GatewayEndpointConfig {
-            target: "local".to_string(),
-            base_url: std::env::var("COGENTLM_GATEWAY_URL")?,
-            routes: GatewayRoutes::default(),
-            authentication: GatewayAuthentication::Bearer(GatewaySecret::new(
-                std::env::var("COGENTLM_GATEWAY_TOKEN")?,
-            )),
-            static_headers: Default::default(),
-            timeouts: GatewayTimeoutPolicy::default(),
-            protocol_options: Default::default(),
-        }),
-    )
-    .await?;
-
-let response = client
-    .query(CogentQueryRequest {
-        endpoint: Some(endpoint),
-        prompt: "Explain gateway inference.".to_string(),
-        options: CogentTextOptions {
-            max_tokens: Some(64),
-            ..Default::default()
-        },
-        ..Default::default()
-    })
-    .await?;
-println!("{}", response.text);
-```
-
-## Operations
-
-- Health and readiness run on the management listener.
-- Metrics use Prometheus text exposition with per-operation request and error
-  counters.
-- CORS applies to the public listener when `allowed_origins` is non-empty.
-- `max_request_bytes` bounds incoming request bodies.
-- `max_concurrent_requests` applies application-wide admission control.
-- JSON tracing is enabled through the gateway process and can be filtered with
-  `RUST_LOG`.
+`check` fails when the field is missing or blank. The dashboard uses the value
+for login but never renders it. Because production TOML contains a secret, keep
+real production config files private and out of source control.
 
 ## Related Docs
 
+- [Gateway Server Docker](gateway-server-docker.md)
+- [Gateway Server Reference](../reference/gateway-server.md)
 - [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
 - [Providers](../guides/providers.md)
-- [Gateway Server Reference](../reference/gateway-server.md)
-- [Configuration](../reference/configuration.md)
-- [Source Builds](../maintainers/source-builds.md)

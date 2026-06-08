@@ -21,7 +21,8 @@ use futures_util::{stream, Stream, StreamExt};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower_http::cors::CorsLayer;
 
-use crate::config::{GatewayServerRuntime, LoadedToken};
+use crate::admin::{self, AdminDashboardState, AdminDashboardView};
+use crate::config::{GatewayServerRuntime, LoadedToken, RouteConfig};
 use crate::metrics::GatewayMetrics;
 
 /// Standalone application HTTP composition.
@@ -34,24 +35,26 @@ impl GatewayHttpService {
     /// Compose public and management routers from application-owned handlers.
     pub fn new(
         runtime: GatewayServerRuntime,
-        routes: GatewayRoutes,
+        routes: RouteConfig,
         tokens: Vec<LoadedToken>,
+        admin_password: String,
         metrics: Arc<GatewayMetrics>,
         max_request_bytes: usize,
         allowed_origins: &[String],
         max_concurrent_requests: Option<usize>,
     ) -> anyhow::Result<Self> {
+        let gateway_routes: GatewayRoutes = routes.clone().into();
         let state = PublicState {
-            runtime,
+            runtime: runtime.clone(),
             authenticator: Arc::new(BearerAuthenticator { tokens }),
             metrics: metrics.clone(),
             semaphore: max_concurrent_requests.map(|limit| Arc::new(Semaphore::new(limit))),
             codec: GatewayCodec,
         };
         let mut public = Router::new()
-            .route(&routes.query, post(query))
-            .route(&routes.chat, post(chat))
-            .route(&routes.embed, post(embed))
+            .route(&gateway_routes.query, post(query))
+            .route(&gateway_routes.chat, post(chat))
+            .route(&gateway_routes.embed, post(embed))
             .with_state(state)
             .layer(axum::extract::DefaultBodyLimit::max(max_request_bytes));
         if !allowed_origins.is_empty() {
@@ -68,13 +71,13 @@ impl GatewayHttpService {
         }
 
         let mut management = Router::new();
-        if let Some(route) = routes.health {
+        if let Some(route) = gateway_routes.health {
             management = management.route(&route, get(health));
         }
-        if let Some(route) = routes.readiness {
+        if let Some(route) = gateway_routes.readiness {
             management = management.route(&route, get(readiness));
         }
-        if let Some(route) = routes.metrics {
+        if let Some(route) = gateway_routes.metrics {
             let metrics = metrics.clone();
             management = management.route(
                 &route,
@@ -84,8 +87,21 @@ impl GatewayHttpService {
                 }),
             );
         }
-        if let Some(route) = routes.index {
+        if let Some(route) = gateway_routes.index {
             management = management.route(&route, get(index));
+        }
+        if let Some(route) = routes.admin.as_deref() {
+            let view = AdminDashboardView {
+                routes: routes.clone(),
+                targets: runtime.target_summaries.as_ref().clone(),
+                max_request_bytes,
+                max_concurrent_requests,
+                started_at: std::time::Instant::now(),
+            };
+            management = management.merge(admin::router(
+                route,
+                AdminDashboardState::new(admin_password, view, metrics),
+            ));
         }
         Ok(Self { public, management })
     }

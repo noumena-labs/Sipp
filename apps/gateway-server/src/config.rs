@@ -11,11 +11,16 @@ use cogentlm_client::{
     ProviderEndpointConfig, ProviderSecret,
 };
 use cogentlm_engine::engine::NativeRuntimeConfig;
+#[cfg(test)]
+use cogentlm_engine::lifecycle::BackendCapabilities;
+use cogentlm_engine::lifecycle::{
+    BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
+};
 use cogentlm_gateway::GatewayRoutes;
 use serde::Deserialize;
 
 /// Standalone application configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GatewayServerConfig {
     /// Public inference listener.
@@ -26,6 +31,8 @@ pub struct GatewayServerConfig {
     pub max_request_bytes: usize,
     /// Browser origins accepted by the public listener.
     pub allowed_origins: Vec<String>,
+    /// Admin Dashboard password.
+    pub admin_password: String,
     /// Application-owned route selection.
     pub routes: RouteConfig,
     /// Bearer tokens and target access loaded from environment variables.
@@ -43,6 +50,7 @@ impl Default for GatewayServerConfig {
             management_bind: SocketAddr::from(([0, 0, 0, 0], 9090)),
             max_request_bytes: 1 << 20,
             allowed_origins: Vec::new(),
+            admin_password: String::new(),
             routes: RouteConfig::default(),
             tokens: Vec::new(),
             targets: Vec::new(),
@@ -72,6 +80,9 @@ impl GatewayServerConfig {
         }
         if self.max_concurrent_requests == Some(0) {
             bail!("max_concurrent_requests must be greater than zero");
+        }
+        if self.admin_password.trim().is_empty() {
+            bail!("admin_password must not be empty");
         }
         self.routes.validate()?;
         if self.tokens.is_empty() {
@@ -109,16 +120,20 @@ impl GatewayServerConfig {
     pub async fn build_runtime(&self) -> anyhow::Result<GatewayServerRuntime> {
         let mut client = CogentClient::new();
         let mut targets = BTreeMap::new();
+        let mut summaries = Vec::new();
         for target in &self.targets {
+            let (descriptor, summary) = target.endpoint.descriptor_and_summary(&target.name)?;
             let endpoint = client
-                .add(target.name.clone(), target.endpoint.descriptor()?)
+                .add(target.name.clone(), descriptor)
                 .await
                 .with_context(|| format!("failed to load target {}", target.name))?;
             targets.insert(target.name.clone(), endpoint);
+            summaries.push(summary);
         }
         Ok(GatewayServerRuntime {
             client: Arc::new(client),
             targets: Arc::new(targets),
+            target_summaries: Arc::new(summaries),
         })
     }
 
@@ -151,6 +166,7 @@ impl GatewayServerConfig {
 pub struct GatewayServerRuntime {
     pub(crate) client: Arc<CogentClient>,
     pub(crate) targets: Arc<BTreeMap<String, EndpointRef>>,
+    pub(crate) target_summaries: Arc<Vec<TargetSummary>>,
 }
 
 /// TOML-selectable routes.
@@ -164,6 +180,8 @@ pub struct RouteConfig {
     pub health: Option<String>,
     pub readiness: Option<String>,
     pub metrics: Option<String>,
+    #[serde(default = "default_admin_route")]
+    pub admin: Option<String>,
 }
 
 impl Default for RouteConfig {
@@ -182,6 +200,7 @@ impl RouteConfig {
             ("health", self.health.as_deref()),
             ("readiness", self.readiness.as_deref()),
             ("metrics", self.metrics.as_deref()),
+            ("admin", self.admin.as_deref()),
         ] {
             if let Some(route) = route {
                 if !route.starts_with('/') || route.contains('?') || route.contains('#') {
@@ -194,14 +213,31 @@ impl RouteConfig {
             ("chat", Some(self.chat.as_str())),
             ("embed", Some(self.embed.as_str())),
         ])?;
+        let admin_login = self.admin.as_deref().map(admin_login_route);
+        let admin_logout = self.admin.as_deref().map(admin_logout_route);
         reject_duplicate_routes([
             ("index", self.index.as_deref()),
             ("health", self.health.as_deref()),
             ("readiness", self.readiness.as_deref()),
             ("metrics", self.metrics.as_deref()),
+            ("admin", self.admin.as_deref()),
+            ("admin_login", admin_login.as_deref()),
+            ("admin_logout", admin_logout.as_deref()),
         ])?;
         Ok(())
     }
+}
+
+fn default_admin_route() -> Option<String> {
+    Some("/admin".to_string())
+}
+
+pub(crate) fn admin_login_route(route: &str) -> String {
+    format!("{}/login", route.trim_end_matches('/'))
+}
+
+pub(crate) fn admin_logout_route(route: &str) -> String {
+    format!("{}/logout", route.trim_end_matches('/'))
 }
 
 fn reject_duplicate_routes<const N: usize>(
@@ -243,6 +279,7 @@ impl From<GatewayRoutes> for RouteConfig {
             health: routes.health,
             readiness: routes.readiness,
             metrics: routes.metrics,
+            admin: default_admin_route(),
         }
     }
 }
@@ -268,12 +305,70 @@ pub struct TargetConfig {
     pub endpoint: EndpointConfig,
 }
 
+/// Dashboard-safe target metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TargetSummary {
+    pub(crate) name: String,
+    pub(crate) kind: TargetKind,
+    pub(crate) model: String,
+    pub(crate) backend: Option<BackendSelection>,
+    pub(crate) provider_base_url: Option<String>,
+}
+
+/// Target implementation family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetKind {
+    Local,
+    OpenAi,
+    OpenAiCompatible,
+    Anthropic,
+}
+
+impl TargetKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::OpenAi => "openai",
+            Self::OpenAiCompatible => "openai_compatible",
+            Self::Anthropic => "anthropic",
+        }
+    }
+}
+
+/// Gateway-supported local inference backend selection.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayBackendPreference {
+    #[default]
+    Auto,
+    Cpu,
+    Cuda,
+    Metal,
+    Vulkan,
+}
+
+impl GatewayBackendPreference {
+    pub(crate) const fn as_engine(self) -> BackendPreference {
+        match self {
+            Self::Auto => BackendPreference::Auto,
+            Self::Cpu => BackendPreference::Cpu,
+            Self::Cuda => BackendPreference::Cuda,
+            Self::Metal => BackendPreference::Metal,
+            Self::Vulkan => BackendPreference::Vulkan,
+        }
+    }
+}
+
 /// Endpoint variants selected by this first-party application.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EndpointConfig {
     Local {
         model: PathBuf,
+        #[serde(default)]
+        backend: GatewayBackendPreference,
+        #[serde(default)]
+        stats: StatsMode,
         #[serde(default)]
         runtime: NativeRuntimeConfig,
     },
@@ -342,23 +437,50 @@ impl EndpointConfig {
         Ok(())
     }
 
-    fn descriptor(&self) -> anyhow::Result<EndpointDescriptor> {
+    fn descriptor_and_summary(
+        &self,
+        target_name: &str,
+    ) -> anyhow::Result<(EndpointDescriptor, TargetSummary)> {
         match self {
-            Self::Local { model, runtime } => {
-                Ok(EndpointDescriptor::local(model.clone(), runtime.clone()))
+            Self::Local {
+                model,
+                backend,
+                stats,
+                runtime,
+            } => {
+                let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
+                Ok((
+                    EndpointDescriptor::local(model.clone(), plan.config),
+                    TargetSummary {
+                        name: target_name.to_string(),
+                        kind: TargetKind::Local,
+                        model: display_model_name(model),
+                        backend: Some(plan.selection),
+                        provider_base_url: None,
+                    },
+                ))
             }
             Self::Openai {
                 model,
                 api_key_env,
                 base_url,
                 timeout_seconds,
-            } => Ok(EndpointDescriptor::provider(
-                ProviderEndpointConfig::OpenAi(OpenAiProviderConfig {
+            } => Ok((
+                EndpointDescriptor::provider(ProviderEndpointConfig::OpenAi(
+                    OpenAiProviderConfig {
+                        model: model.clone(),
+                        api_key: ProviderSecret::new(required_env(api_key_env)?),
+                        base_url: base_url.clone(),
+                        timeout: timeout(*timeout_seconds),
+                    },
+                )),
+                TargetSummary {
+                    name: target_name.to_string(),
+                    kind: TargetKind::OpenAi,
                     model: model.clone(),
-                    api_key: ProviderSecret::new(required_env(api_key_env)?),
-                    base_url: base_url.clone(),
-                    timeout: timeout(*timeout_seconds),
-                }),
+                    backend: None,
+                    provider_base_url: base_url.clone(),
+                },
             )),
             Self::OpenaiCompatible {
                 model,
@@ -366,15 +488,26 @@ impl EndpointConfig {
                 token_env,
                 correlation_header,
                 timeout_seconds,
-            } => Ok(EndpointDescriptor::provider(
-                ProviderEndpointConfig::OpenAiCompatible(OpenAiCompatibleProviderConfig {
+            } => Ok((
+                EndpointDescriptor::provider(ProviderEndpointConfig::OpenAiCompatible(
+                    OpenAiCompatibleProviderConfig {
+                        model: model.clone(),
+                        base_url: base_url.clone(),
+                        auth: ProviderAuthConfig::Bearer(ProviderSecret::new(required_env(
+                            token_env,
+                        )?)),
+                        static_headers: Vec::new(),
+                        correlation_header: correlation_header.clone(),
+                        timeout: timeout(*timeout_seconds),
+                    },
+                )),
+                TargetSummary {
+                    name: target_name.to_string(),
+                    kind: TargetKind::OpenAiCompatible,
                     model: model.clone(),
-                    base_url: base_url.clone(),
-                    auth: ProviderAuthConfig::Bearer(ProviderSecret::new(required_env(token_env)?)),
-                    static_headers: Vec::new(),
-                    correlation_header: correlation_header.clone(),
-                    timeout: timeout(*timeout_seconds),
-                }),
+                    backend: None,
+                    provider_base_url: Some(base_url.clone()),
+                },
             )),
             Self::Anthropic {
                 model,
@@ -382,17 +515,64 @@ impl EndpointConfig {
                 base_url,
                 version,
                 timeout_seconds,
-            } => Ok(EndpointDescriptor::provider(
-                ProviderEndpointConfig::Anthropic(AnthropicProviderConfig {
+            } => Ok((
+                EndpointDescriptor::provider(ProviderEndpointConfig::Anthropic(
+                    AnthropicProviderConfig {
+                        model: model.clone(),
+                        api_key: ProviderSecret::new(required_env(api_key_env)?),
+                        base_url: base_url.clone(),
+                        version: version.clone(),
+                        timeout: timeout(*timeout_seconds),
+                    },
+                )),
+                TargetSummary {
+                    name: target_name.to_string(),
+                    kind: TargetKind::Anthropic,
                     model: model.clone(),
-                    api_key: ProviderSecret::new(required_env(api_key_env)?),
-                    base_url: base_url.clone(),
-                    version: version.clone(),
-                    timeout: timeout(*timeout_seconds),
-                }),
+                    backend: None,
+                    provider_base_url: base_url.clone(),
+                },
             )),
         }
     }
+}
+
+fn local_backend_plan(
+    backend: GatewayBackendPreference,
+    stats: StatsMode,
+    runtime: NativeRuntimeConfig,
+) -> anyhow::Result<BackendPlan> {
+    BackendPolicy::select(&ModelLoadOptions {
+        backend: backend.as_engine(),
+        stats,
+        runtime,
+    })
+    .map_err(anyhow::Error::from)
+}
+
+#[cfg(test)]
+pub(crate) fn local_backend_plan_with_capabilities(
+    backend: GatewayBackendPreference,
+    stats: StatsMode,
+    runtime: NativeRuntimeConfig,
+    capabilities: &BackendCapabilities,
+) -> anyhow::Result<BackendPlan> {
+    BackendPolicy::select_with_capabilities(
+        &ModelLoadOptions {
+            backend: backend.as_engine(),
+            stats,
+            runtime,
+        },
+        capabilities,
+    )
+    .map_err(anyhow::Error::from)
+}
+
+fn display_model_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("model.gguf")
+        .to_string()
 }
 
 /// Loaded application authentication policy.

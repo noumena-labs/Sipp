@@ -1,5 +1,6 @@
 //! First-party CogentLM gateway application components.
 
+pub(crate) mod admin;
 /// Application-owned configuration and endpoint construction.
 pub mod config;
 /// Axum HTTP service for the standalone gateway server.
