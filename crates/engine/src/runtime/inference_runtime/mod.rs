@@ -11,7 +11,6 @@ use crate::error::Error;
 use crate::native_bridge::{NativeRuntimeHandle, SamplerHandle};
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
 use crate::runtime::llama::LlamaBatchBuilder;
-use crate::runtime::llama_token;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
 use crate::runtime::numeric::duration_ms;
 use crate::runtime::request::{GenerateRequestId, RequestQueue, NO_SAMPLED_TOKEN_ID};
@@ -20,6 +19,7 @@ use crate::runtime::scheduler::{
     BatchPlanner, SamplerCacheKey, SharedBatchPlan, SlotPhase, SlotScheduler,
 };
 use crate::runtime::session::KvCacheManager;
+use crate::runtime::{llama_seq_id, llama_token};
 
 pub(crate) mod capabilities;
 mod decode;
@@ -136,6 +136,8 @@ pub struct InferenceRuntime {
     total_cache_hits: usize,
     total_prefill_tokens: usize,
     sampler_pool: std::collections::HashMap<SamplerCacheKey, Vec<SamplerHandle>>,
+    resident_backend_samplers:
+        std::collections::HashMap<llama_seq_id, sampler::ResidentBackendSampler>,
 }
 
 impl InferenceRuntime {
@@ -169,8 +171,7 @@ impl InferenceRuntime {
         }
 
         let tick_executed = self.run_policy_batch_tick_locked();
-        self.detach_terminal_backend_samplers_locked();
-        self.reclaim_and_pool_samplers_locked();
+        self.settle_terminal_samplers_locked();
         self.slot_scheduler.finalize_completed_slots(
             &mut self.request_queue,
             &mut self.kv_cache,
@@ -206,8 +207,7 @@ impl InferenceRuntime {
                 }
             }
 
-            self.detach_terminal_backend_samplers_locked();
-            self.reclaim_and_pool_samplers_locked();
+            self.settle_terminal_samplers_locked();
             self.slot_scheduler.finalize_completed_slots(
                 &mut self.request_queue,
                 &mut self.kv_cache,

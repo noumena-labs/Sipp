@@ -5,7 +5,8 @@ use crate::cli::{
     RunCommands, RunDemoServeArgs, RunDemosCommands, RunExampleServeArgs, RunExampleServeTarget,
     RunExamplesCommands, RunGatewayExampleArgs, RunGatewayExampleCase, RunGatewayExampleClientArgs,
     RunGatewayExampleCommonArgs, RunGatewayExampleTarget, RunGatewayExampleWebArgs,
-    RunGatewayLocalServeArgs, RunGatewayOpenAiServeArgs, RunLlamaBackendOpsArgs, RunLlamaCommands,
+    RunGatewayLocalServeArgs, RunGatewayOpenAiServeArgs, RunGatewayServerArgs,
+    RunGatewayServerCommand, RunGatewayServerSourceArgs, RunLlamaBackendOpsArgs, RunLlamaCommands,
     RunToolServeArgs, RunToolsCommands, ToolName,
 };
 use crate::javascript;
@@ -22,7 +23,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-use xshell::{cmd, Shell};
+use xshell::{cmd, Cmd, Shell};
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -43,6 +44,7 @@ const GATEWAY_RUN_START_TIMEOUT: Duration = Duration::from_secs(300);
 /// Runs a developer workflow.
 pub fn run(sh: &Shell, ctx: &BuildContext, command: RunCommands) -> Result<()> {
     match command {
+        RunCommands::GatewayServer(args) => run_gateway_server(sh, ctx, &args),
         RunCommands::Demos { command } => run_demos(sh, ctx, command),
         RunCommands::Examples { command } => run_examples(sh, ctx, command),
         RunCommands::Tools { command } => run_tools(sh, ctx, command),
@@ -81,6 +83,88 @@ fn run_llama(sh: &Shell, ctx: &BuildContext, command: RunLlamaCommands) -> Resul
             }
             run_llama_backend_ops(sh, ctx, &args)
         }
+    }
+}
+
+fn run_gateway_server(sh: &Shell, ctx: &BuildContext, args: &RunGatewayServerArgs) -> Result<()> {
+    match &args.command {
+        RunGatewayServerCommand::Check(args) => {
+            run_gateway_server_source(sh, ctx, args, "check", false)
+        }
+        RunGatewayServerCommand::Serve(args) => {
+            run_gateway_server_source(sh, ctx, args, "serve", true)
+        }
+    }
+}
+
+fn run_gateway_server_source(
+    sh: &Shell,
+    ctx: &BuildContext,
+    args: &RunGatewayServerSourceArgs,
+    command: &'static str,
+    long_running: bool,
+) -> Result<()> {
+    let phase = format!("Gateway-server {command}");
+    output::phase(&phase);
+    output::detail("Backend", args.backend.as_str());
+    let config = resolve_gateway_server_config_path(ctx, &args.config)?;
+    output::path("Config", &config);
+
+    targets::gateway_server::build(sh, ctx, Some(&args.backend))?;
+    let dist_dir = ctx.gateway_server_artifacts_dir();
+    let gateway = dist_dir.join(targets::gateway_server::gateway_binary_file_name());
+    if !gateway.is_file() {
+        anyhow::bail!("gateway-server binary is missing: {}", gateway.display());
+    }
+
+    let _dir = sh.push_dir(ctx.workspace_root());
+    let mut gateway_cmd = cmd!(sh, "{gateway} {command} --config {config}");
+    gateway_cmd = apply_toolchains(sh, ctx, gateway_cmd, Some(&args.backend))?;
+    gateway_cmd = apply_gateway_server_runtime_env(gateway_cmd, &dist_dir);
+
+    if long_running {
+        output::run_long_command("Starting gateway-server", gateway_cmd)
+            .context("gateway-server failed")
+    } else {
+        output::run_command("Checking gateway-server config", gateway_cmd)
+            .context("gateway-server config check failed")
+    }
+}
+
+fn resolve_gateway_server_config_path(ctx: &BuildContext, config: &Path) -> Result<PathBuf> {
+    let path = if config.is_absolute() {
+        config.to_path_buf()
+    } else {
+        ctx.workspace_root().join(config)
+    };
+    if !path.is_file() {
+        anyhow::bail!("gateway config file does not exist: {}", path.display());
+    }
+    path.canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", path.display()))
+}
+
+fn apply_gateway_server_runtime_env<'a>(command: Cmd<'a>, dist_dir: &Path) -> Cmd<'a> {
+    let path = dist_dir.display().to_string();
+    if cfg!(windows) {
+        let current = env::var("PATH").unwrap_or_default();
+        return command.env("PATH", prepend_path(&path, &current));
+    }
+    if cfg!(target_os = "macos") {
+        let current = env::var("DYLD_LIBRARY_PATH").unwrap_or_default();
+        return command.env("DYLD_LIBRARY_PATH", prepend_path(&path, &current));
+    }
+    let current = env::var("LD_LIBRARY_PATH").unwrap_or_default();
+    command.env("LD_LIBRARY_PATH", prepend_path(&path, &current))
+}
+
+fn prepend_path(path: &str, current: &str) -> String {
+    if current.is_empty() {
+        path.to_string()
+    } else if cfg!(windows) {
+        format!("{path};{current}")
+    } else {
+        format!("{path}:{current}")
     }
 }
 
@@ -737,11 +821,15 @@ impl Drop for ManagedGatewayProcess {
 }
 
 fn validate_secret_env(name: &str) -> Result<()> {
+    read_secret_env(name).map(|_| ())
+}
+
+fn read_secret_env(name: &str) -> Result<String> {
     let value = env::var(name).with_context(|| format!("{name} is required"))?;
     if value.trim().is_empty() {
         anyhow::bail!("{name} must not be empty");
     }
-    Ok(())
+    Ok(value)
 }
 
 fn toml_string(value: &str) -> String {

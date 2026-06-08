@@ -94,7 +94,7 @@ Provider credentials and local model paths stay in the gateway process.
 
 ## Related Docs
 
-- [Gateway Server](gateway-server.md)
+- [Gateway Server](../gateway/server.md)
 - [Installation](../getting-started/installation.md)
 - [Local Inference](../guides/local-inference.md)
 - [Providers](../guides/providers.md)

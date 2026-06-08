@@ -109,6 +109,9 @@ fn build_summary(target: &BuildCommands) -> String {
                 backend_summary(args.backend)
             )
         }
+        BuildCommands::GatewayServer(args) => {
+            format!("Build gateway-server ({})", backend_summary(args.backend))
+        }
     }
 }
 
@@ -130,6 +133,9 @@ fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()
         BuildCommands::Python(args) => targets::python::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Node(args) => targets::node::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Cli(args) => targets::cli::build(sh, ctx, args.backend.as_ref())?,
+        BuildCommands::GatewayServer(args) => {
+            targets::gateway_server::build(sh, ctx, args.backend.as_ref())?
+        }
     }
 
     Ok(())

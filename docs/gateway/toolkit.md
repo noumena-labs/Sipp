@@ -7,7 +7,7 @@ The toolkit provides codecs, authentication and observability traits, HTTP
 error helpers, and the first-party JSON/SSE profile. Applications bind sockets,
 register routes, load configuration, and define deployment policy.
 
-Use [Gateway Server](gateway-server.md) when you want the first-party server
+Use [Gateway Server](server.md) when you want the first-party server
 application with TOML, bearer tokens, target policy, metrics, probes, and
 listener management.
 
@@ -15,8 +15,8 @@ listener management.
 
 The toolkit crate target is `cogentlm-gateway`. The current release workflow
 packages Rust source artifacts but does not publish Rust crates to crates.io.
-Use [Source Builds](../maintainers/source-builds.md) when consuming the toolkit
-from this checkout until Rust crate publishing is enabled.
+Use [Source Builds](../maintainers/source-builds.md) when consuming the
+toolkit from this checkout until Rust crate publishing is enabled.
 
 ## Use It For
 
@@ -43,9 +43,22 @@ Node route handlers can use the matching gateway profile helpers exported by
 `cogentlm-server` when implementing the same first-party profile in framework
 routes.
 
+## Boundaries
+
+`lib/gateway` supplies helpers, not an application:
+
+- It does not register routes.
+- It does not bind listeners.
+- It does not own bearer-token policy.
+- It does not own TOML, CORS, metrics, or deployment behavior.
+
+Default `/v1/query`, `/v1/chat`, and `/v1/embed` paths belong only to
+applications that choose them.
+
 ## Related Docs
 
-- [Gateway Server](gateway-server.md)
-- [Gateway Architecture](../gateway.md)
+- [Architecture](architecture.md)
 - [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
-- [Maintainer source builds](../maintainers/source-builds.md)
+- [Frameworks](../packages/frameworks/README.md)
+- [Source Builds](../maintainers/source-builds.md)
+

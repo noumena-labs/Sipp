@@ -8,11 +8,11 @@ use clap::Parser;
 use super::{
     Backend, Cli, Commands, DemoName, DemoServeMode, DoctorTarget, LlamaBackendOpsMode,
     LlamaBackendOpsOutput, RunCommands, RunDemosCommands, RunExampleServeTarget,
-    RunExamplesCommands, RunGatewayExampleCase, RunGatewayExampleTarget, RunLlamaCommands,
-    RunToolsCommands, SetupProfile, TestCommands, TestGroupFilter, TestListFormat,
-    TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget, TestSuiteId, TestUnitCommands,
-    TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, ToolName, ToolchainCommands,
-    ToolchainComponent,
+    RunExamplesCommands, RunGatewayExampleCase, RunGatewayExampleTarget, RunGatewayServerCommand,
+    RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands, TestGroupFilter,
+    TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget, TestSuiteId,
+    TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, ToolName,
+    ToolchainCommands, ToolchainComponent,
 };
 
 #[test]
@@ -34,6 +34,60 @@ fn build_commands_parse_backend_defaults_and_overrides() {
         panic!("expected cli build");
     };
     assert_eq!(args.backend, Some(Backend::All));
+
+    let cli = Cli::parse_from(["xtask", "build", "gateway-server", "--backend", "vulkan"]);
+    let Commands::Build { target } = cli.command else {
+        panic!("expected build command");
+    };
+    let super::BuildCommands::GatewayServer(args) = target else {
+        panic!("expected gateway-server build");
+    };
+    assert_eq!(args.backend, Some(Backend::Vulkan));
+}
+
+#[test]
+fn run_gateway_server_parses_source_check_and_serve_commands() {
+    let cli = Cli::parse_from([
+        "xtask",
+        "run",
+        "gateway-server",
+        "check",
+        "--config",
+        "apps/gateway-server/config/development.toml",
+        "--backend",
+        "cuda",
+    ]);
+
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::GatewayServer(args) = command else {
+        panic!("expected gateway-server run");
+    };
+    let RunGatewayServerCommand::Check(args) = args.command else {
+        panic!("expected gateway-server check");
+    };
+    assert_eq!(args.backend, Backend::Cuda);
+    assert_eq!(
+        args.config,
+        std::path::PathBuf::from("apps/gateway-server/config/development.toml")
+    );
+
+    let cli = Cli::parse_from(["xtask", "run", "gateway-server", "serve"]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::GatewayServer(args) = command else {
+        panic!("expected gateway-server run");
+    };
+    let RunGatewayServerCommand::Serve(args) = args.command else {
+        panic!("expected gateway-server serve");
+    };
+    assert_eq!(args.backend, Backend::Cpu);
+    assert_eq!(
+        args.config,
+        std::path::PathBuf::from("apps/gateway-server/config/development.toml")
+    );
 }
 
 #[test]

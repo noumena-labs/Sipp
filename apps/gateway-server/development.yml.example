@@ -1,0 +1,35 @@
+name: cogentlm-gateway-development
+
+services:
+  gateway:
+    image: ${COGENTLM_GATEWAY_IMAGE:-cogentlm-gateway:cpu}
+    build:
+      context: ../..
+      dockerfile: apps/gateway-server/Dockerfile
+      args:
+        COGENTLM_GATEWAY_BACKEND: ${COGENTLM_GATEWAY_BACKEND:-cpu}
+        COGENTLM_GATEWAY_BUILDER_IMAGE: ${COGENTLM_GATEWAY_BUILDER_IMAGE:-rust:bookworm}
+        COGENTLM_GATEWAY_RUNTIME_IMAGE: ${COGENTLM_GATEWAY_RUNTIME_IMAGE:-debian:bookworm-slim}
+        COGENTLM_GATEWAY_INSTALL_RUSTUP: ${COGENTLM_GATEWAY_INSTALL_RUSTUP:-0}
+    environment:
+      COGENTLM_GATEWAY_TOKEN: ${COGENTLM_GATEWAY_TOKEN:?required}
+      RUST_LOG: ${RUST_LOG:-info}
+    working_dir: /workspace
+    volumes:
+      - ${COGENTLM_GATEWAY_CONFIG:-./config/development.toml}:/etc/cogentlm/gateway.toml:ro
+      - ${COGENTLM_MODEL_DIR:-../../.build/models}:/workspace/.build/models:ro
+    ports:
+      - "127.0.0.1:${COGENTLM_GATEWAY_PUBLIC_PORT:-8080}:8080"
+      - "127.0.0.1:${COGENTLM_GATEWAY_MANAGEMENT_PORT:-9090}:9090"
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9090/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

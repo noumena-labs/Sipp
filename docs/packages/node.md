@@ -182,7 +182,7 @@ routes, or background workers. Do not import it from browser bundles.
 
 ## Related Docs
 
-- [Gateway Server](gateway-server.md)
+- [Gateway Server](../gateway/server.md)
 - [Next.js](frameworks/nextjs.md)
 - [TanStack](frameworks/tanstack.md)
 - [Local Inference](../guides/local-inference.md)

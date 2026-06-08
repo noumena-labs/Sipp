@@ -3,6 +3,16 @@ management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 4
 allowed_origins = []
+admin_password = "replace-me"
+
+[security.client_ip]
+source = "peer"
+trusted_proxy_cidrs = []
+
+[security.rate_limit]
+enabled = true
+requests_per_minute = 120
+burst = 240
 
 [routes]
 query = "/v1/query"
@@ -12,6 +22,7 @@ index = "/"
 health = "/healthz"
 readiness = "/readyz"
 metrics = "/metrics"
+admin = "/admin"
 
 [[tokens]]
 env = "COGENTLM_GATEWAY_TOKEN"
@@ -22,3 +33,5 @@ targets = ["local"]
 name = "local"
 type = "local"
 model = "/models/model.gguf"
+backend = "auto"
+stats = "basic"

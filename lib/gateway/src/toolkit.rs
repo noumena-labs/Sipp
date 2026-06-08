@@ -5,7 +5,7 @@ use cogentlm_client::{
     CogentChatRequest, CogentEmbedRequest, CogentEmbeddingResponse, CogentQueryRequest,
     CogentTextResponse,
 };
-use cogentlm_gateway_core::{GatewayError, GatewayErrorKind, GatewayRequestContext, Operation};
+use cogentlm_gateway_core::{GatewayError, GatewayErrorKind, GatewayRequestContext};
 use http::{HeaderMap, StatusCode};
 use thiserror::Error;
 
@@ -70,14 +70,6 @@ pub trait ErrorTranslator: Send + Sync {
     fn translate(&self, error: GatewayError) -> GatewayHttpError;
 }
 
-/// Observe request boundaries from application-owned route handlers.
-pub trait GatewayObservability: Send + Sync {
-    /// Called after authentication and before decoding.
-    fn request_started(&self, operation: Operation, request_id: Option<&str>);
-    /// Called when an HTTP response is selected.
-    fn request_finished(&self, operation: Operation, request_id: Option<&str>, status: StatusCode);
-}
-
 /// Authenticator that accepts every request without metadata.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoAuthentication;
@@ -85,22 +77,6 @@ pub struct NoAuthentication;
 impl Authenticator for NoAuthentication {
     fn authenticate(&self, _headers: &HeaderMap) -> ToolkitResult<AuthenticatedRequest> {
         Ok(AuthenticatedRequest::default())
-    }
-}
-
-/// Observability implementation with no hooks.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoopObservability;
-
-impl GatewayObservability for NoopObservability {
-    fn request_started(&self, _operation: Operation, _request_id: Option<&str>) {}
-
-    fn request_finished(
-        &self,
-        _operation: Operation,
-        _request_id: Option<&str>,
-        _status: StatusCode,
-    ) {
     }
 }
 

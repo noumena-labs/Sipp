@@ -38,6 +38,8 @@ Start with:
   cargo xtask build node --backend cpu
   cargo xtask build python --backend cuda
   cargo xtask build cli --backend all
+  cargo xtask build gateway-server --backend cpu
+  cargo xtask run gateway-server check --config apps/gateway-server/config/development.toml
   cargo xtask setup";
 
 const BUILD_HELP: &str = "\
@@ -51,10 +53,11 @@ Examples:
   cargo xtask build node --backend all
   cargo xtask build python --backend cuda
   cargo xtask build cli --backend all
+  cargo xtask build gateway-server --backend vulkan
 
 Notes:
   `build all` builds every target family with default CPU native outputs.
-  It does not build every Node/Python/CLI backend variant.";
+  It does not build every Node/Python/CLI/Gateway backend variant.";
 
 const BACKEND_HELP: &str = "\
 Backend values:
@@ -77,6 +80,7 @@ Examples:
   cargo xtask run examples gateway web --port 5173
   cargo xtask run tools build playground
   cargo xtask run tools serve playground --mode preview --port 4173
+  cargo xtask run gateway-server serve --config apps/gateway-server/config/development.toml --backend cpu
   cargo xtask run llama backend-ops --backend cpu --mode support
   cargo xtask run llama backend-ops --backend cuda --mode perf --op MUL_MAT
 
@@ -84,6 +88,21 @@ Notes:
   Test execution, smoke checks, and coverage live under `cargo xtask test`.
   Serve commands are intentionally long-running and start Vite servers.
   Playground validation lives under `cargo xtask test smoke suite playground-browser`.";
+
+const RUN_GATEWAY_SERVER_HELP: &str = "\
+Check or serve the source-built standalone gateway-server.
+
+Examples:
+  cargo xtask run gateway-server check --config apps/gateway-server/config/development.toml
+  cargo xtask run gateway-server serve --config apps/gateway-server/config/development.toml --backend cpu
+  cargo xtask run gateway-server serve --config apps/gateway-server/config/production.toml --backend vulkan
+
+`check` builds the staged gateway binary and validates TOML without loading
+targets or reading secrets. `serve` builds the staged binary, loads the
+selected config, and runs it from .build/artifacts/gateway-server.
+
+Use raw Docker commands for container workflows; start from
+apps/gateway-server/development.yml.example or apps/gateway-server/production.yml.";
 
 const RUN_DEMOS_HELP: &str = "\
 Build or serve individual browser demos.
@@ -440,11 +459,33 @@ contains the cogentlm executable, base runtime libraries, and any selected
 ggml backend plugins in .build/artifacts/cli.")]
     #[command(after_long_help = BACKEND_HELP)]
     Cli(BackendArgs),
+
+    /// Build the standalone gateway-server distribution directory.
+    #[command(long_about = "\
+Build the gateway-server binary and stage a runnable distribution directory.
+
+Examples:
+  cargo xtask build gateway-server
+  cargo xtask build gateway-server --backend cpu
+  cargo xtask build gateway-server --backend cuda
+  cargo xtask build gateway-server --backend vulkan
+  cargo xtask build gateway-server --backend all
+
+The gateway-server build uses llama.cpp dynamic backend loading. The staged
+artifact contains cogentlm-gateway, base runtime libraries, and selected ggml
+backend plugins in .build/artifacts/gateway-server.")]
+    #[command(after_long_help = BACKEND_HELP)]
+    GatewayServer(BackendArgs),
 }
 
 /// Developer run workflows.
 #[derive(Subcommand)]
 pub enum RunCommands {
+    /// Check or serve the source-built standalone gateway-server.
+    #[command(long_about = RUN_GATEWAY_SERVER_HELP)]
+    #[command(after_long_help = BACKEND_HELP)]
+    GatewayServer(RunGatewayServerArgs),
+
     /// Build or serve browser demos.
     #[command(long_about = RUN_DEMOS_HELP)]
     #[command(arg_required_else_help = true)]
@@ -480,6 +521,35 @@ pub enum RunCommands {
         #[command(subcommand)]
         command: RunLlamaCommands,
     },
+}
+
+/// Source gateway-server workflows.
+#[derive(Args)]
+pub struct RunGatewayServerArgs {
+    /// Gateway-server source workflow to run.
+    #[command(subcommand)]
+    pub command: RunGatewayServerCommand,
+}
+
+/// Source gateway-server command variants.
+#[derive(Subcommand)]
+pub enum RunGatewayServerCommand {
+    /// Validate a TOML config without loading targets or reading secrets.
+    Check(RunGatewayServerSourceArgs),
+    /// Build and run the gateway-server from a TOML config.
+    Serve(RunGatewayServerSourceArgs),
+}
+
+/// Shared source gateway-server options.
+#[derive(Args)]
+pub struct RunGatewayServerSourceArgs {
+    /// Path to the gateway-server TOML config.
+    #[arg(long, default_value = "apps/gateway-server/config/development.toml")]
+    pub config: PathBuf,
+
+    /// Native backend variant to compile into the staged gateway distribution.
+    #[arg(long, short, value_enum, default_value = "cpu")]
+    pub backend: Backend,
 }
 
 /// Workspace test workflows.

@@ -2,6 +2,7 @@
   "private": true,
   "packageManager": "bun@1.3.11",
   "workspaces": [
+    "apps/gateway-server/admin-ui",
     "lib/node",
     "lib/web",
     "demos/*",

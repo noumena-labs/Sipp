@@ -11,44 +11,63 @@ use cogentlm_client::{
     ProviderEndpointConfig, ProviderSecret,
 };
 use cogentlm_engine::engine::NativeRuntimeConfig;
+#[cfg(test)]
+use cogentlm_engine::lifecycle::BackendCapabilities;
+use cogentlm_engine::lifecycle::{
+    BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
+};
 use cogentlm_gateway::GatewayRoutes;
 use serde::Deserialize;
 
 /// Standalone application configuration.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GatewayServerConfig {
     /// Public inference listener.
+    #[serde(default = "default_public_bind")]
     pub public_bind: SocketAddr,
     /// Management listener.
+    #[serde(default = "default_management_bind")]
     pub management_bind: SocketAddr,
     /// Maximum request body bytes.
+    #[serde(default = "default_max_request_bytes")]
     pub max_request_bytes: usize,
     /// Browser origins accepted by the public listener.
+    #[serde(default)]
     pub allowed_origins: Vec<String>,
+    /// Admin Dashboard password.
+    #[serde(default)]
+    pub admin_password: String,
     /// Application-owned route selection.
+    #[serde(default = "default_routes")]
     pub routes: RouteConfig,
     /// Bearer tokens and target access loaded from environment variables.
+    #[serde(default)]
     pub tokens: Vec<TokenConfig>,
     /// Public targets backed by local or provider endpoints.
+    #[serde(default)]
     pub targets: Vec<TargetConfig>,
     /// Application-wide concurrent request limit.
+    #[serde(default)]
     pub max_concurrent_requests: Option<usize>,
+    /// In-memory security and client identification settings.
+    pub security: SecurityConfig,
 }
 
-impl Default for GatewayServerConfig {
-    fn default() -> Self {
-        Self {
-            public_bind: SocketAddr::from(([0, 0, 0, 0], 8080)),
-            management_bind: SocketAddr::from(([0, 0, 0, 0], 9090)),
-            max_request_bytes: 1 << 20,
-            allowed_origins: Vec::new(),
-            routes: RouteConfig::default(),
-            tokens: Vec::new(),
-            targets: Vec::new(),
-            max_concurrent_requests: None,
-        }
-    }
+fn default_public_bind() -> SocketAddr {
+    SocketAddr::from(([0, 0, 0, 0], 8080))
+}
+
+fn default_management_bind() -> SocketAddr {
+    SocketAddr::from(([0, 0, 0, 0], 9090))
+}
+
+const fn default_max_request_bytes() -> usize {
+    1 << 20
+}
+
+fn default_routes() -> RouteConfig {
+    RouteConfig::default()
 }
 
 impl GatewayServerConfig {
@@ -72,6 +91,10 @@ impl GatewayServerConfig {
         }
         if self.max_concurrent_requests == Some(0) {
             bail!("max_concurrent_requests must be greater than zero");
+        }
+        self.security.validate()?;
+        if self.admin_password.trim().is_empty() {
+            bail!("admin_password must not be empty");
         }
         self.routes.validate()?;
         if self.tokens.is_empty() {
@@ -109,16 +132,20 @@ impl GatewayServerConfig {
     pub async fn build_runtime(&self) -> anyhow::Result<GatewayServerRuntime> {
         let mut client = CogentClient::new();
         let mut targets = BTreeMap::new();
+        let mut summaries = Vec::new();
         for target in &self.targets {
+            let (descriptor, summary) = target.endpoint.descriptor_and_summary(&target.name)?;
             let endpoint = client
-                .add(target.name.clone(), target.endpoint.descriptor()?)
+                .add(target.name.clone(), descriptor)
                 .await
                 .with_context(|| format!("failed to load target {}", target.name))?;
             targets.insert(target.name.clone(), endpoint);
+            summaries.push(summary);
         }
         Ok(GatewayServerRuntime {
             client: Arc::new(client),
             targets: Arc::new(targets),
+            target_summaries: Arc::new(summaries),
         })
     }
 
@@ -146,11 +173,94 @@ impl GatewayServerConfig {
     }
 }
 
+/// Runtime security configuration for the standalone gateway.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityConfig {
+    /// Client IP extraction settings.
+    pub client_ip: ClientIpConfig,
+    /// In-memory per-client rate limiting settings.
+    pub rate_limit: RateLimitConfig,
+}
+
+impl SecurityConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        self.client_ip.validate()?;
+        self.rate_limit.validate()
+    }
+}
+
+/// Client IP extraction settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientIpConfig {
+    /// Source used for the client address.
+    pub source: ClientIpSource,
+    /// Trusted proxy CIDRs allowed to supply forwarding headers.
+    pub trusted_proxy_cidrs: Vec<String>,
+}
+
+impl ClientIpConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        for cidr in &self.trusted_proxy_cidrs {
+            validate_ip_cidr(cidr)?;
+        }
+        Ok(())
+    }
+}
+
+/// Source used to identify public clients for in-memory controls.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientIpSource {
+    /// Use the TCP peer address.
+    Peer,
+    /// Use the leftmost `X-Forwarded-For` value from trusted proxies.
+    XForwardedFor,
+    /// Use `X-Real-IP` from trusted proxies.
+    XRealIp,
+}
+
+impl ClientIpSource {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Peer => "peer",
+            Self::XForwardedFor => "x_forwarded_for",
+            Self::XRealIp => "x_real_ip",
+        }
+    }
+}
+
+/// In-memory per-client rate limiting settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RateLimitConfig {
+    /// Whether per-client rate limiting is enabled.
+    pub enabled: bool,
+    /// Token refill rate in requests per minute.
+    pub requests_per_minute: u32,
+    /// Token bucket capacity.
+    pub burst: u32,
+}
+
+impl RateLimitConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.requests_per_minute == 0 {
+            bail!("security.rate_limit.requests_per_minute must be greater than zero");
+        }
+        if self.burst == 0 {
+            bail!("security.rate_limit.burst must be greater than zero");
+        }
+        Ok(())
+    }
+}
+
 /// Loaded application runtime used by explicit route handlers.
 #[derive(Clone)]
 pub struct GatewayServerRuntime {
     pub(crate) client: Arc<CogentClient>,
     pub(crate) targets: Arc<BTreeMap<String, EndpointRef>>,
+    pub(crate) target_summaries: Arc<Vec<TargetSummary>>,
 }
 
 /// TOML-selectable routes.
@@ -164,6 +274,8 @@ pub struct RouteConfig {
     pub health: Option<String>,
     pub readiness: Option<String>,
     pub metrics: Option<String>,
+    #[serde(default = "default_admin_route")]
+    pub admin: Option<String>,
 }
 
 impl Default for RouteConfig {
@@ -182,6 +294,7 @@ impl RouteConfig {
             ("health", self.health.as_deref()),
             ("readiness", self.readiness.as_deref()),
             ("metrics", self.metrics.as_deref()),
+            ("admin", self.admin.as_deref()),
         ] {
             if let Some(route) = route {
                 if !route.starts_with('/') || route.contains('?') || route.contains('#') {
@@ -199,9 +312,14 @@ impl RouteConfig {
             ("health", self.health.as_deref()),
             ("readiness", self.readiness.as_deref()),
             ("metrics", self.metrics.as_deref()),
+            ("admin", self.admin.as_deref()),
         ])?;
         Ok(())
     }
+}
+
+fn default_admin_route() -> Option<String> {
+    Some("/admin".to_string())
 }
 
 fn reject_duplicate_routes<const N: usize>(
@@ -243,6 +361,7 @@ impl From<GatewayRoutes> for RouteConfig {
             health: routes.health,
             readiness: routes.readiness,
             metrics: routes.metrics,
+            admin: default_admin_route(),
         }
     }
 }
@@ -268,12 +387,70 @@ pub struct TargetConfig {
     pub endpoint: EndpointConfig,
 }
 
+/// Dashboard-safe target metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TargetSummary {
+    pub(crate) name: String,
+    pub(crate) kind: TargetKind,
+    pub(crate) model: String,
+    pub(crate) backend: Option<BackendSelection>,
+    pub(crate) provider_base_url: Option<String>,
+}
+
+/// Target implementation family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetKind {
+    Local,
+    OpenAi,
+    OpenAiCompatible,
+    Anthropic,
+}
+
+impl TargetKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::OpenAi => "openai",
+            Self::OpenAiCompatible => "openai_compatible",
+            Self::Anthropic => "anthropic",
+        }
+    }
+}
+
+/// Gateway-supported local inference backend selection.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayBackendPreference {
+    #[default]
+    Auto,
+    Cpu,
+    Cuda,
+    Metal,
+    Vulkan,
+}
+
+impl GatewayBackendPreference {
+    pub(crate) const fn as_engine(self) -> BackendPreference {
+        match self {
+            Self::Auto => BackendPreference::Auto,
+            Self::Cpu => BackendPreference::Cpu,
+            Self::Cuda => BackendPreference::Cuda,
+            Self::Metal => BackendPreference::Metal,
+            Self::Vulkan => BackendPreference::Vulkan,
+        }
+    }
+}
+
 /// Endpoint variants selected by this first-party application.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EndpointConfig {
     Local {
         model: PathBuf,
+        #[serde(default)]
+        backend: GatewayBackendPreference,
+        #[serde(default)]
+        stats: StatsMode,
         #[serde(default)]
         runtime: NativeRuntimeConfig,
     },
@@ -342,23 +519,50 @@ impl EndpointConfig {
         Ok(())
     }
 
-    fn descriptor(&self) -> anyhow::Result<EndpointDescriptor> {
+    fn descriptor_and_summary(
+        &self,
+        target_name: &str,
+    ) -> anyhow::Result<(EndpointDescriptor, TargetSummary)> {
         match self {
-            Self::Local { model, runtime } => {
-                Ok(EndpointDescriptor::local(model.clone(), runtime.clone()))
+            Self::Local {
+                model,
+                backend,
+                stats,
+                runtime,
+            } => {
+                let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
+                Ok((
+                    EndpointDescriptor::local(model.clone(), plan.config),
+                    TargetSummary {
+                        name: target_name.to_string(),
+                        kind: TargetKind::Local,
+                        model: display_model_name(model),
+                        backend: Some(plan.selection),
+                        provider_base_url: None,
+                    },
+                ))
             }
             Self::Openai {
                 model,
                 api_key_env,
                 base_url,
                 timeout_seconds,
-            } => Ok(EndpointDescriptor::provider(
-                ProviderEndpointConfig::OpenAi(OpenAiProviderConfig {
+            } => Ok((
+                EndpointDescriptor::provider(ProviderEndpointConfig::OpenAi(
+                    OpenAiProviderConfig {
+                        model: model.clone(),
+                        api_key: ProviderSecret::new(required_env(api_key_env)?),
+                        base_url: base_url.clone(),
+                        timeout: timeout(*timeout_seconds),
+                    },
+                )),
+                TargetSummary {
+                    name: target_name.to_string(),
+                    kind: TargetKind::OpenAi,
                     model: model.clone(),
-                    api_key: ProviderSecret::new(required_env(api_key_env)?),
-                    base_url: base_url.clone(),
-                    timeout: timeout(*timeout_seconds),
-                }),
+                    backend: None,
+                    provider_base_url: base_url.clone(),
+                },
             )),
             Self::OpenaiCompatible {
                 model,
@@ -366,15 +570,26 @@ impl EndpointConfig {
                 token_env,
                 correlation_header,
                 timeout_seconds,
-            } => Ok(EndpointDescriptor::provider(
-                ProviderEndpointConfig::OpenAiCompatible(OpenAiCompatibleProviderConfig {
+            } => Ok((
+                EndpointDescriptor::provider(ProviderEndpointConfig::OpenAiCompatible(
+                    OpenAiCompatibleProviderConfig {
+                        model: model.clone(),
+                        base_url: base_url.clone(),
+                        auth: ProviderAuthConfig::Bearer(ProviderSecret::new(required_env(
+                            token_env,
+                        )?)),
+                        static_headers: Vec::new(),
+                        correlation_header: correlation_header.clone(),
+                        timeout: timeout(*timeout_seconds),
+                    },
+                )),
+                TargetSummary {
+                    name: target_name.to_string(),
+                    kind: TargetKind::OpenAiCompatible,
                     model: model.clone(),
-                    base_url: base_url.clone(),
-                    auth: ProviderAuthConfig::Bearer(ProviderSecret::new(required_env(token_env)?)),
-                    static_headers: Vec::new(),
-                    correlation_header: correlation_header.clone(),
-                    timeout: timeout(*timeout_seconds),
-                }),
+                    backend: None,
+                    provider_base_url: Some(base_url.clone()),
+                },
             )),
             Self::Anthropic {
                 model,
@@ -382,17 +597,64 @@ impl EndpointConfig {
                 base_url,
                 version,
                 timeout_seconds,
-            } => Ok(EndpointDescriptor::provider(
-                ProviderEndpointConfig::Anthropic(AnthropicProviderConfig {
+            } => Ok((
+                EndpointDescriptor::provider(ProviderEndpointConfig::Anthropic(
+                    AnthropicProviderConfig {
+                        model: model.clone(),
+                        api_key: ProviderSecret::new(required_env(api_key_env)?),
+                        base_url: base_url.clone(),
+                        version: version.clone(),
+                        timeout: timeout(*timeout_seconds),
+                    },
+                )),
+                TargetSummary {
+                    name: target_name.to_string(),
+                    kind: TargetKind::Anthropic,
                     model: model.clone(),
-                    api_key: ProviderSecret::new(required_env(api_key_env)?),
-                    base_url: base_url.clone(),
-                    version: version.clone(),
-                    timeout: timeout(*timeout_seconds),
-                }),
+                    backend: None,
+                    provider_base_url: base_url.clone(),
+                },
             )),
         }
     }
+}
+
+fn local_backend_plan(
+    backend: GatewayBackendPreference,
+    stats: StatsMode,
+    runtime: NativeRuntimeConfig,
+) -> anyhow::Result<BackendPlan> {
+    BackendPolicy::select(&ModelLoadOptions {
+        backend: backend.as_engine(),
+        stats,
+        runtime,
+    })
+    .map_err(anyhow::Error::from)
+}
+
+#[cfg(test)]
+pub(crate) fn local_backend_plan_with_capabilities(
+    backend: GatewayBackendPreference,
+    stats: StatsMode,
+    runtime: NativeRuntimeConfig,
+    capabilities: &BackendCapabilities,
+) -> anyhow::Result<BackendPlan> {
+    BackendPolicy::select_with_capabilities(
+        &ModelLoadOptions {
+            backend: backend.as_engine(),
+            stats,
+            runtime,
+        },
+        capabilities,
+    )
+    .map_err(anyhow::Error::from)
+}
+
+fn display_model_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("model.gguf")
+        .to_string()
 }
 
 /// Loaded application authentication policy.
@@ -432,6 +694,26 @@ fn validate_name(value: &str, field: &str) -> anyhow::Result<()> {
 fn validate_timeout(value: Option<u64>) -> anyhow::Result<()> {
     if value == Some(0) {
         bail!("timeout_seconds must be greater than zero");
+    }
+    Ok(())
+}
+
+fn validate_ip_cidr(value: &str) -> anyhow::Result<()> {
+    let (address, prefix) = value
+        .split_once('/')
+        .with_context(|| format!("trusted proxy CIDR must include a prefix: {value}"))?;
+    let address = address
+        .parse::<std::net::IpAddr>()
+        .with_context(|| format!("invalid trusted proxy CIDR address: {value}"))?;
+    let prefix = prefix
+        .parse::<u8>()
+        .with_context(|| format!("invalid trusted proxy CIDR prefix: {value}"))?;
+    let max_prefix = match address {
+        std::net::IpAddr::V4(_) => 32,
+        std::net::IpAddr::V6(_) => 128,
+    };
+    if prefix > max_prefix {
+        bail!("trusted proxy CIDR prefix is too large: {value}");
     }
     Ok(())
 }

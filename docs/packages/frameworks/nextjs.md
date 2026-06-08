@@ -147,7 +147,7 @@ export async function POST(request: Request): Promise<Response> {
 Browser-local inference needs browser APIs and should live behind a Client
 Component boundary.
 
-```tsx
+```ts
 // app/local-chat/LocalChat.tsx
 'use client';
 
@@ -193,7 +193,7 @@ Use one browser `CogentClient` to register a browser-local endpoint and a
 same-origin provider route that speaks the gateway profile. Select the endpoint
 reference at request time; the `query` call stays the same.
 
-```tsx
+```ts
 // app/hybrid-chat/HybridChat.tsx
 'use client';
 

@@ -1,0 +1,33 @@
+name: cogentlm-gateway-production
+
+services:
+  gateway:
+    image: ${COGENTLM_GATEWAY_IMAGE:?set a prebuilt gateway image}
+    environment:
+      COGENTLM_GATEWAY_TOKEN: ${COGENTLM_GATEWAY_TOKEN:?required}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - type: bind
+        source: ${COGENTLM_GATEWAY_CONFIG:?set the host production TOML path}
+        target: /etc/cogentlm/gateway.toml
+        read_only: true
+      - type: bind
+        source: ${COGENTLM_MODEL_DIR:?set the host model directory}
+        target: /models
+        read_only: true
+    ports:
+      - "${COGENTLM_GATEWAY_PUBLIC_PORT:-8080}:8080"
+      - "127.0.0.1:${COGENTLM_GATEWAY_MANAGEMENT_PORT:-9090}:9090"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9090/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

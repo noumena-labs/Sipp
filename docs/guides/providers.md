@@ -115,6 +115,6 @@ user-facing risks explicit.
 ## Related Docs
 
 - [Frameworks](../packages/frameworks/)
-- [Gateway Server](../packages/gateway-server.md)
+- [Gateway Server](../gateway/server.md)
 - [Gateway And Hybrid Inference](gateway-hybrid.md)
 - [Runtime Options](../reference/runtime-options.md)

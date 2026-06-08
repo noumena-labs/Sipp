@@ -77,6 +77,7 @@ impl InferenceRuntime {
             total_cache_hits: 0,
             total_prefill_tokens: 0,
             sampler_pool: std::collections::HashMap::<SamplerCacheKey, Vec<SamplerHandle>>::new(),
+            resident_backend_samplers: std::collections::HashMap::new(),
         })
     }
 }
@@ -88,6 +89,7 @@ impl Drop for InferenceRuntime {
         self.kv_cache.evict_all_active_and_idle();
 
         self.sampler_pool.clear();
+        self.resident_backend_samplers.clear();
     }
 }
 

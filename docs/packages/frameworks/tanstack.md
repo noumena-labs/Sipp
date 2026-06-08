@@ -137,7 +137,7 @@ multiple applications.
 Use TanStack Query when the UI needs a final response and normal query cache
 behavior.
 
-```tsx
+```ts
 import { useQuery } from '@tanstack/react-query';
 import { queryCogent } from '../server/cogent';
 
@@ -162,7 +162,7 @@ options that change the result.
 For token streaming, create a server route or server function that returns a
 stream, then append chunks with component state.
 
-```tsx
+```ts
 import { useState } from 'react';
 
 export function StreamingAnswer(): JSX.Element {
@@ -202,7 +202,7 @@ Use browser `cogentlm` from components that run in the browser. That includes
 browser-local GGUF inference and gateway endpoints with short-lived tokens or
 same-origin server routes.
 
-```tsx
+```ts
 import { useState } from 'react';
 import { CogentClient } from 'cogentlm';
 
@@ -243,7 +243,7 @@ Register browser-local and same-origin gateway endpoints on one browser
 same-origin route can execute against a provider while still speaking the
 gateway profile to the browser client.
 
-```tsx
+```ts
 import { useState } from 'react';
 import { CogentClient, type EndpointRef } from 'cogentlm';
 

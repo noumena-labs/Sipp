@@ -433,6 +433,7 @@ dependencies = [
  "cogentlm-gateway-core",
  "futures-util",
  "http",
+ "rand",
  "serde",
  "serde_json",
  "tokio",

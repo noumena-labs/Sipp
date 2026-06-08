@@ -50,15 +50,20 @@ impl InferenceRuntime {
                 live_retained_prefix_tokens(&self.config),
             );
 
-            // Embedding-only slots have no sampler — they never visit the
-            // sample/decode loop. Skip sampler creation, backend attachment,
-            // and sampler-pool accounting entirely.
-            if slot.plan.terminal == TerminalAction::SampleTokens && slot.sampler.is_none() {
+            // Embedding-only slots have no sampler; any resident sampler for
+            // this physical sequence belongs to a previous text request.
+            if slot.plan.terminal != TerminalAction::SampleTokens {
+                let seq_id = slot.seq_id;
+                if seq_id >= 0 && self.resident_backend_samplers.remove(&seq_id).is_some() {
+                    self.native_runtime.detach_sampler(seq_id);
+                }
+            } else if slot.sampler.is_none() {
                 if !ensure_slot_sampler(
                     slot,
                     &mut self.native_runtime,
                     &self.config,
                     &mut self.sampler_pool,
+                    &mut self.resident_backend_samplers,
                 ) {
                     continue;
                 }

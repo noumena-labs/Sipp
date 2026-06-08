@@ -15,12 +15,14 @@ Most developers should start here instead of building from source.
 | [Node.js](node.md) | `npm install cogentlm-server` | Node server processes, route handlers, and backend services. |
 | [Python](python.md) | `pip install cogentlm` | Python services, scripts, and gateway clients. |
 | [Rust](rust.md) | `cargo add cogentlm` | Rust applications and services. |
-| [Gateway Server](gateway-server.md) | Source-built today | First-party HTTP gateway for local and provider targets. |
-| [Gateway Toolkit](gateway.md) | Rust source artifact today | Rust toolkit for custom gateway applications. |
+| [Gateway Server](../gateway/server.md) | Source-built today | First-party HTTP gateway for local and provider targets. |
+| [Gateway Docker](../gateway/docker.md) | Docker from source | Local and production container workflows for the gateway server. |
+| [Gateway Toolkit](../gateway/toolkit.md) | Rust source artifact today | Rust toolkit for custom gateway applications. |
 
 The current release workflow publishes browser npm, Node npm, Python wheel,
-and Rust source artifacts. The gateway server is documented as a user-facing
-deployment surface, but it does not yet have a published binary or public image.
+and Rust source artifacts. The gateway server is documented in the
+[Gateway](../gateway/) section as a user-facing deployment surface, but it does
+not yet have a published binary or public image.
 
 ## Common Workflows
 

@@ -14,6 +14,6 @@ pub use cogentlm_client::{
 pub use profile::GatewayCodec;
 pub use toolkit::{
     request_context, request_id, AuthenticatedRequest, Authenticator, DecodedRequest,
-    DefaultErrorTranslator, ErrorTranslator, GatewayHttpError, GatewayObservability,
-    NoAuthentication, NoopObservability, ProtocolCodec, ToolkitResult,
+    DefaultErrorTranslator, ErrorTranslator, GatewayHttpError, NoAuthentication, ProtocolCodec,
+    ToolkitResult,
 };

@@ -38,5 +38,5 @@ added.
 - [Node.js package](../packages/node.md)
 - [Python package](../packages/python.md)
 - [Rust package](../packages/rust.md)
-- [Gateway Server](../packages/gateway-server.md)
+- [Gateway](../gateway/README.md)
 - [Maintainer source builds](../maintainers/source-builds.md)

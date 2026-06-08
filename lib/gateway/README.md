@@ -42,7 +42,7 @@ Node framework routes can use the matching gateway profile helpers exported by
 
 ## Learn More
 
-- [Gateway toolkit docs](../../docs/packages/gateway.md)
-- [Gateway architecture](../../docs/gateway.md)
-- [Gateway server reference](../../docs/reference/gateway-server.md)
+- [Gateway toolkit docs](../../docs/gateway/toolkit.md)
+- [Gateway architecture](../../docs/gateway/architecture.md)
+- [Gateway configuration](../../docs/gateway/configuration.md)
 - [Gateway route example](../../examples/gateway/README.md)

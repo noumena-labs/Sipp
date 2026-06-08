@@ -51,15 +51,19 @@ async fn serve(path: PathBuf) -> anyhow::Result<()> {
     let config = GatewayServerConfig::from_path(&path)?;
     let runtime = config.build_runtime().await?;
     let tokens = config.load_tokens()?;
+    let admin_password = config.admin_password.clone();
     let metrics = Arc::new(GatewayMetrics::new());
     let service = GatewayHttpService::new(
         runtime,
-        config.gateway_routes(),
+        config.routes.clone(),
         tokens,
+        admin_password,
         metrics,
         config.max_request_bytes,
         &config.allowed_origins,
         config.max_concurrent_requests,
+        config.security.clone(),
+        admin_assets_dir()?,
     )?;
 
     let management_listener = tokio::net::TcpListener::bind(config.management_bind)
@@ -86,9 +90,12 @@ async fn serve(path: PathBuf) -> anyhow::Result<()> {
 
     let public_router = service.public_router();
     let public_task = tokio::spawn(async move {
-        axum::serve(public_listener, public_router.into_make_service())
-            .with_graceful_shutdown(shutdown_signal())
-            .await
+        axum::serve(
+            public_listener,
+            public_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
     });
 
     tracing::info!(
@@ -116,4 +123,19 @@ fn init_tracing() {
     {
         eprintln!("failed to initialize gateway tracing: {error}");
     }
+}
+
+fn admin_assets_dir() -> anyhow::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("COGENTLM_GATEWAY_ADMIN_ASSETS_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+
+    let executable = std::env::current_exe()?;
+    let executable_dir = executable.parent().with_context(|| {
+        format!(
+            "failed to resolve parent directory of {}",
+            executable.display()
+        )
+    })?;
+    Ok(executable_dir.join("admin-ui"))
 }

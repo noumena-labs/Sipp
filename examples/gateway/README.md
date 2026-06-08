@@ -24,4 +24,5 @@ cargo xtask run examples serve gateway-local \
 Use `apps/gateway-server` for the first-party authenticated application, or
 compose `lib/gateway` helpers in your own framework routes.
 
-See [../../docs/gateway.md](../../docs/gateway.md) for gateway layering.
+See [../../docs/gateway/architecture.md](../../docs/gateway/architecture.md)
+for gateway layering.

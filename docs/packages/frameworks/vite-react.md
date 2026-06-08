@@ -20,7 +20,7 @@ Use `cogentlm` only in browser code. A local endpoint `source` can be a model
 URL served by the app, a user-provided `File`, an installed model id, or shard
 sources.
 
-```tsx
+```ts
 import { useState } from 'react';
 import { CogentClient } from 'cogentlm';
 
@@ -149,5 +149,5 @@ the first-party gateway server.
 - [Local Inference](../../guides/local-inference.md)
 - [Runtime Options](../../reference/runtime-options.md)
 - [Providers](../../guides/providers.md)
-- [Gateway Server](../gateway-server.md)
+- [Gateway Server](../../gateway/server.md)
 - [Browser Caching](../../guides/browser-caching.md)
