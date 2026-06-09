@@ -266,7 +266,7 @@ function toRequestStatus(status: QueryObservation['status']): RequestState['stat
 
 function toRequestState(query: QueryObservation, runtime?: RuntimeObservation): RequestState {
   return {
-    id: query.session ?? 'default',
+    id: query.contextKey ?? 'default',
     status: toRequestStatus(query.status),
     inputTokens: runtime?.inputTokens ?? 0,
     outputTokens: query.outputTokens ?? runtime?.outputTokens ?? 0,

@@ -8,6 +8,7 @@ title = "CogentLM Documentation"
 build-dir = "book"
 
 [output.html]
+additional-css = ["theme/cogentlm.css"]
 edit-url-template = "https://github.com/noumena-labs/CogentLM/edit/master/{path}"
 git-repository-url = "https://github.com/noumena-labs/CogentLM"
 site-url = "/CogentLM/"

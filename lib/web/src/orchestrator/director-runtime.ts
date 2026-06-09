@@ -104,7 +104,7 @@ export class DirectorRuntime {
     }
     const contextKey = this.getTaskContextKey(taskName);
     const queryOptions: ChatOptions = {
-      session: contextKey,
+      contextKey,
       maxTokens: request.maxOutputTokens ?? defaultTokenBudget(task.output.shape, this.maxOutputTokens),
       signal: abort.signal,
     };

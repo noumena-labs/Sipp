@@ -169,7 +169,7 @@ export class CharacterRuntime {
       };
     }
     const chatOptions: ChatOptions = {
-      session: `${this.contextKey}:choose`,
+      contextKey: `${this.contextKey}:choose`,
       maxTokens: options.maxOutputTokens ?? 24,
       signal: abort.signal,
     };
@@ -395,7 +395,7 @@ export class CharacterRuntime {
 
     try {
       const queryOptions: ChatOptions = {
-        session: contextKey,
+        contextKey,
         maxTokens: this.maxOutputTokens,
         emitTokens: true,
         signal,

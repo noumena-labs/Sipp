@@ -14,7 +14,7 @@ container image, or `cargo install` target. Build it from the source checkout.
 ## Source Workflow
 
 Use `clm` for source checkout workflows. `clm` is the setup-installed launcher
-for `cargo xtask`; when the launcher is unavailable, use `cargo xtask` with
+for `cargo xtask`, see `setup` scripts; when the launcher is unavailable, use `cargo xtask` with
 the same arguments.
 
 ```bash

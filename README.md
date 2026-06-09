@@ -17,10 +17,9 @@
   <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue">
 </p>
 
-CogentLM uses one endpoint-oriented client model across every public surface:
-register local, gateway, or provider endpoints with `CogentClient.add`, keep
-the returned endpoint reference, then choose that endpoint for `query`, `chat`,
-or `embed`.
+> [!WARNING]
+> CogentLM is under active development. Breaking changes are expected and it might not be suitable for productive environment.
+> If you find any issues, and bugs or need any features, please raise them in the github.
 
 ## Use Published Packages
 
@@ -50,12 +49,17 @@ npm install cogentlm
 ```js
 import { CogentClient } from 'cogentlm';
 
+const messages = [
+  { role: 'system', content: 'Answer concisely.' },
+  { role: 'user', content: 'Explain CogentLM in one sentence.' },
+];
+
 const client = new CogentClient();
 const endpoint = await client.add('default', {
   kind: 'local',
   source: '/models/model.gguf',
 });
-const run = client.query('Explain local inference.', {
+const run = client.chat(messages, {
   endpoint,
   maxTokens: 64,
 });

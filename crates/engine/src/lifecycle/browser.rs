@@ -204,7 +204,7 @@ pub enum BrowserBackendPreference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserQueryObservation {
-    pub session: Option<String>,
+    pub context_key: Option<String>,
     pub status: String,
     pub wall_ms: Option<f64>,
     pub ttft_ms: Option<f64>,
@@ -1376,7 +1376,7 @@ fn entry_asset_ids(entry: &BrowserModelEntry) -> Vec<String> {
 
 fn failed_query_observation(message: Option<String>) -> BrowserQueryObservation {
     BrowserQueryObservation {
-        session: None,
+        context_key: None,
         status: QUERY_STATUS_FAILED.to_string(),
         wall_ms: None,
         ttft_ms: None,

@@ -10,12 +10,13 @@ or services that run in a Node.js runtime.
 
 ## Guides
 
+- [React And Vite](vite-react.md): Baseline browser-local setup, WebGPU/WASM
+  asset behavior, OPFS model loading, and local development headers.
 - [Next.js](nextjs.md): App Router provider routes, Client Components,
   gateway-profile compatibility, and streaming.
 - [TanStack](tanstack.md): TanStack Start provider functions, server routes,
   and TanStack Query patterns.
-- [React And Vite](vite-react.md): Baseline browser-local setup, WebGPU/WASM
-  asset behavior, OPFS model loading, and local development headers.
+
 
 ## Package Selection
 

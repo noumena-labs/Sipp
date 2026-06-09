@@ -22,10 +22,10 @@ Use this package in browser code. For server routes or Node services, use
 - Gateway-backed query, chat, and embedding calls.
 - Character and director helpers used by demos.
 
-## Local GGUF Query
+## Local GGUF Chat
 
 ```ts
-import { CogentClient } from 'cogentlm';
+import { CogentClient, type ChatMessage } from 'cogentlm';
 
 const client = new CogentClient();
 const endpoint = await client.add('default', {
@@ -39,11 +39,18 @@ const endpoint = await client.add('default', {
   },
 });
 
-const run = client.query('Explain CogentLM in one sentence.', {
+const messages: readonly ChatMessage[] = [
+  { role: 'system', content: 'Answer concisely.' },
+  { role: 'user', content: 'Explain CogentLM in one sentence.' },
+];
+
+// chat: role messages; local runtime uses tokenizer.chat_template.
+const run = client.chat(messages, {
   endpoint,
   emitTokens: true,
   maxTokens: 64,
-  session: 'browser-local',
+  // contextKey: browser-local text context/cache key.
+  contextKey: 'browser-local',
 });
 
 let streamed = '';
@@ -55,7 +62,12 @@ console.log(streamed || response.text);
 await client.close();
 ```
 
-## Gateway Query
+Use `query` only when the prompt is already rendered for the target model, or
+when calling a completion-style/base model. `query` does not apply a chat
+template. Browser local text and embedding calls use `contextKey`; text calls
+use the same key name as embedding calls.
+
+## Gateway Chat
 
 Use gateway endpoints when a separate server owns model paths, provider
 credentials, target policy, and metrics.
@@ -70,11 +82,20 @@ const endpoint = await client.add('gateway', {
     valueProvider: getShortLivedGatewayToken,
   },
 });
-const run = client.query('Explain gateway inference.', {
+const messages = [
+  { role: 'system', content: 'Answer concisely.' },
+  { role: 'user', content: 'Explain gateway inference.' },
+];
+
+// chat: gateway maps role messages for the selected target.
+const run = client.chat(messages, {
   endpoint,
   maxTokens: 64,
 });
 ```
+
+Gateway `query` preserves the raw prompt. Use it only with an already-rendered
+template, a completion-style/base model, or an encoder-decoder text target.
 
 Browser apps should use short-lived gateway tokens or proxy through an
 application server route. Do not ship provider credentials or long-lived

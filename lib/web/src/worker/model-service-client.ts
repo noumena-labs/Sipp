@@ -117,7 +117,7 @@ function toWorkerQueryOptions(
   emitTokens: boolean
 ): WorkerQueryOptions {
   return {
-    session: options.session,
+    contextKey: options.contextKey,
     maxTokens: options.maxTokens,
     temperature: options.temperature,
     topP: options.topP,
