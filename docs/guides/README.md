@@ -5,6 +5,7 @@ individual README files.
 
 - [Inference Operations](inference-operations.md)
 - [Local Inference](local-inference.md)
+- [Backend Matrix](backend-matrix.md)
 - [Gateway And Hybrid Inference](gateway-hybrid.md)
 - [Browser Caching](browser-caching.md)
 - [Providers](providers.md)

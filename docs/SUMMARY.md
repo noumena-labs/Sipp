@@ -31,6 +31,7 @@
 - [Guides](guides/README.md)
   - [Inference Operations](guides/inference-operations.md)
   - [Local Inference](guides/local-inference.md)
+  - [Backend Matrix](guides/backend-matrix.md)
   - [Gateway And Hybrid Inference](guides/gateway-hybrid.md)
   - [Browser Caching](guides/browser-caching.md)
   - [Providers](guides/providers.md)

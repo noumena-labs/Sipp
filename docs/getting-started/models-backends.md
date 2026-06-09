@@ -36,3 +36,6 @@ Leave runtime backend variables unset for automatic selection.
 
 Maintainer builds can produce backend-specific artifacts with `clm` or
 `cargo xtask`; see [Source Builds](../maintainers/source-builds.md).
+
+For the full package/backend matrix and llama.cpp/ggml operation support
+guidance, see [Backend Matrix](../guides/backend-matrix.md).
