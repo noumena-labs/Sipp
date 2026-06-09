@@ -18,6 +18,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
+option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for browser-hosted WebGPU execution" OFF)
+option(CE_USE_PTHREADS "Build WebAssembly with pthread (SharedArrayBuffer) support" OFF)
+option(MTMD_NO_LOGGING "Suppress all multimodal logging" OFF)
+
+set(CE_WASM_PTHREADS ${CE_USE_PTHREADS} CACHE BOOL "Enable pthreads support in WASM builds" FORCE)
+
 # Emscripten Config
 # Located in the local bindings/wasm/cmake directory
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmscriptenConfig.cmake)
@@ -25,10 +31,6 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_C_SCAN_FOR_MODULES OFF)
 
 add_compile_options(${CE_WASM_COMPILE_FLAGS})
-
-option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for browser-hosted WebGPU execution" OFF)
-option(MTMD_NO_LOGGING "Suppress all multimodal logging" OFF)
-option(CE_USE_PTHREADS "Build WebAssembly with pthread (SharedArrayBuffer) support" OFF)
 
 set(CE_WASM_RUST_STATICLIB "" CACHE FILEPATH "Rust wasm32 Emscripten staticlib for the browser runtime")
 
@@ -195,8 +197,8 @@ if(CE_WASM_USE_JSPI)
     )
 endif()
 
-if(CE_USE_PTHREADS)
-add_compile_options(-pthread)
+if(CE_WASM_PTHREADS)
+    add_compile_options(-pthread)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -pthread
         -sSHARED_MEMORY=1

@@ -294,7 +294,7 @@ async function loadSelectedModel(): Promise<void> {
   loadStatus.textContent = `Preparing ${resolved.name}...`;
   setModelStatus('loading', 'Loading model');
 
-  const nextClient = new CogentClient();
+  const nextClient = new CogentClient({ wasmThreading: 'pthread' });
   try {
     await nextClient.add('chat-model', {
       kind: 'local',
@@ -440,7 +440,7 @@ async function sendMessage(): Promise<void> {
       };
   const run = currentClient.chat(input, {
     emitTokens: true,
-    session: sessionId,
+    contextKey: sessionId,
     maxTokens: settings.maxTokens,
     temperature: settings.temperature,
     topP: settings.topP,
