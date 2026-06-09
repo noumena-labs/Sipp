@@ -910,7 +910,7 @@ export default function App() {
         const run = await runObservedRequest(client, requestPrompt, {
           operation: requestOperation,
           maxTokens: requestTokenCount,
-          session: `query-${Date.now()}`,
+          contextKey: `query-${Date.now()}`,
           media: image,
           emitTokens: requestEmitTokens,
           onTokenBatch,

@@ -75,9 +75,9 @@ function cloneRuntimeObservation(
   };
 }
 
-function observeSessionCompletion(
+function observeContextKeyCompletion(
   targetClient: CogentClient,
-  session: string
+  contextKey: string
 ): {
   promise: Promise<RequestObservability | null>;
   dispose: () => void;
@@ -87,7 +87,7 @@ function observeSessionCompletion(
   const promise = new Promise<RequestObservability | null>((resolve) => {
     unsubscribe = targetClient.observability.subscribe((event) => {
       const query = event.snapshot.query;
-      if (query?.session !== session) {
+      if (query?.contextKey !== contextKey) {
         return;
       }
       if (event.type !== 'query-complete' && event.type !== 'error') {
@@ -120,7 +120,7 @@ export async function runObservedRequest(
   prompt: string,
   options: {
     operation: BenchmarkOperation;
-    session: string;
+    contextKey: string;
     maxTokens: number;
     onTokenBatch?: (batch: TokenBatch) => void;
     emitTokens?: boolean;
@@ -130,18 +130,18 @@ export async function runObservedRequest(
   const start = performance.now();
   let ttftMs: number | null = null;
   const tokenTimes: number[] = [];
-  const sessionObserver = observeSessionCompletion(targetClient, options.session);
+  const completionObserver = observeContextKeyCompletion(targetClient, options.contextKey);
   const emitTokens = options.operation !== 'embed' && options.emitTokens === true;
 
   try {
     if (options.operation === 'embed') {
       const embedRun = targetClient.embed(prompt, {
-        contextKey: options.session,
+        contextKey: options.contextKey,
         normalize: true,
       });
       const [result, observability] = await Promise.all([
         embedRun.response,
-        sessionObserver.promise,
+        completionObserver.promise,
       ]);
 
       return {
@@ -169,7 +169,7 @@ export async function runObservedRequest(
 
     const requestOptions = {
       maxTokens: options.maxTokens,
-      session: options.session,
+      contextKey: options.contextKey,
       emitTokens,
     };
     const textRun =
@@ -194,7 +194,7 @@ export async function runObservedRequest(
         })();
     const [result, observability] = await Promise.all([
       textRun.response,
-      sessionObserver.promise,
+      completionObserver.promise,
       tokenDrain,
     ]);
 
@@ -211,7 +211,7 @@ export async function runObservedRequest(
       observability,
     };
   } finally {
-    sessionObserver.dispose();
+    completionObserver.dispose();
   }
 }
 
@@ -388,7 +388,7 @@ export async function runPromptGroup(
   tokenCount: number,
   warmupRuns: number,
   measuredRuns: number,
-  sessionFactory: (index: number) => string,
+  contextKeyFactory: (index: number) => string,
   setStatus: (s: string) => void,
   emitTokens = true,
   tokenObserver?: BenchmarkTokenObserver
@@ -398,7 +398,7 @@ export async function runPromptGroup(
     await runObservedRequest(targetClient, prompt, {
       operation,
       maxTokens: tokenCount,
-      session: sessionFactory(i),
+      contextKey: contextKeyFactory(i),
       emitTokens,
       onTokenBatch: emitTokens && operation !== 'embed' ? () => {} : undefined,
     });
@@ -413,7 +413,7 @@ export async function runPromptGroup(
     const run = await runObservedRequest(targetClient, prompt, {
       operation,
       maxTokens: tokenCount,
-      session: sessionFactory(i + warmupRuns),
+      contextKey: contextKeyFactory(i + warmupRuns),
       emitTokens,
       onTokenBatch:
         tokenObserver?.onTokenBatch == null
@@ -594,13 +594,13 @@ export async function runMixedLoadBenchmark(
       runObservedRequest(targetClient, definition.background.prompt, {
         operation,
         maxTokens: definition.background.outputTokenLimit,
-        session: `${definition.background.id}-warmup-${i}`,
+        contextKey: `${definition.background.id}-warmup-${i}`,
         emitTokens,
       }),
       runObservedRequest(targetClient, definition.foreground.prompt, {
         operation,
         maxTokens: definition.foreground.outputTokenLimit,
-        session: `${definition.foreground.id}-warmup-${i}`,
+        contextKey: `${definition.foreground.id}-warmup-${i}`,
         emitTokens,
       }),
     ]);
@@ -619,7 +619,7 @@ export async function runMixedLoadBenchmark(
       runObservedRequest(targetClient, definition.background.prompt, {
         operation,
         maxTokens: definition.background.outputTokenLimit,
-        session: `${definition.background.id}-mixed-${i}`,
+        contextKey: `${definition.background.id}-mixed-${i}`,
         emitTokens,
         onTokenBatch:
           tokenObserver?.onTokenBatch == null
@@ -629,7 +629,7 @@ export async function runMixedLoadBenchmark(
       runObservedRequest(targetClient, definition.foreground.prompt, {
         operation,
         maxTokens: definition.foreground.outputTokenLimit,
-        session: `${definition.foreground.id}-mixed-${i}`,
+        contextKey: `${definition.foreground.id}-mixed-${i}`,
         emitTokens,
         onTokenBatch:
           tokenObserver?.onTokenBatch == null
