@@ -4,10 +4,12 @@ Welcome! This is the primary context and guidance entry point for AI coding agen
 
 ## 1. Quick Navigation & Context
 
-To avoid token bloat, do not read the entire codebase at once. Instead, refer to our specialized context files in the [.agents/](file:///.agents) directory:
-- **General Architecture:** Read [.agents/system/architecture.md](file:///.agents/system/architecture.md) to understand the crate boundaries.
-- **Build Instructions:** Read [.agents/build/instructions.md](file:///.agents/build/instructions.md) before executing build commands.
-- **Troubleshooting & SOPs:** Check the [.agents/SOPs/](file:///.agents/SOPs) directory for specific step-by-step procedures.
+To avoid token bloat, do not read the entire codebase at once. Instead, refer
+to the specialized context files in the [.agents/](.agents/README.md)
+directory:
+- **General Architecture:** Read [.agents/system/architecture.md](.agents/system/architecture.md) to understand the crate boundaries.
+- **Build Instructions:** Read [.agents/build/instructions.md](.agents/build/instructions.md) before executing build commands.
+- **Troubleshooting:** Start with [docs/clm/troubleshooting.md](docs/clm/troubleshooting.md) for setup and launcher issues.
 
 ---
 
@@ -45,6 +47,6 @@ Always use the **`test-runner`** skill when verifying changes.
 
 Before completing any task, you **MUST** run the **`style-checker`** skill:
 - Check git status (`git status --short`) and diffs (`git diff`).
-- Inspect [.skills/style-checker/references/style_guidance.md](file:///.skills/style-checker/references/style_guidance.md).
+- Inspect [.agents/skills/style-checker/references/style_guidance.md](.agents/skills/style-checker/references/style_guidance.md).
 - Apply minimal local fixes directly to any code violating the guidelines.
 - Run the narrowest relevant test/validation command to ensure correctness.

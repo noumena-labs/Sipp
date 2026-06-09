@@ -21,5 +21,5 @@ cargo xtask build core
 ```
 
 See [../docs/reference/cli.md](../docs/reference/cli.md) and
-[../docs/reference/gateway-server.md](../docs/reference/gateway-server.md) for
-application reference docs.
+[../docs/gateway/server.md](../docs/gateway/server.md) for application
+reference docs.

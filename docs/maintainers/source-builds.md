@@ -36,36 +36,44 @@ clm build all
 Use `--backend vulkan`, `--backend cuda`, `--backend metal`, or
 `--backend all` where a native package target supports those backends.
 
-## Examples
-Browser examples and demos. Run examples through the `clm` commands. Use `--backend <backend>` to specify the backend to use. 
+## Examples And Demos
+
+Run browser examples and demos through `clm`. These commands start Vite dev
+servers and do not accept native backend flags:
 
 ```bash
-clm run examples serve browser --backend vulkan 
-clm run demos serve avatar --backend cuda 
-clm run demos serve simulation --backend metal 
+clm run examples serve browser
+clm run demos serve avatar
 clm run demos serve simulation
 ```
 
-## Run Gateway Toy Examples
+## Gateway Hello World Examples
 
 Gateway example workflows start a local gateway, run a client example, and stop
-the gateway when the client exits. This will both start the `examples/gateway` and start a client `examples/rust`, `examples/node`, or `examples/python` to use the gateway. The `--case <case>` flag is used to specify the case to run. The available cases are `query`, `chat`, and `embed`. The `--backend <backend>` flag is used to specify the backend to use. 
+the gateway when the client exits. They start `examples/gateway` and then run a
+client from `examples/rust`, `examples/node`, or `examples/python`.
+
+Use `--case query|chat|embed` to choose the client case. Use
+`--backend cpu|vulkan|cuda|metal` when the gateway process should use a
+specific native backend.
 
 ```bash
 clm run examples gateway rust --case query
 clm run examples gateway node --case chat
-clm run examples gateway python --case embed
+clm run examples gateway python --case embed --backend vulkan
 ```
 
-## Run Playground 
+## Playground
 
-The playground is a web application that allows you to interact with CogentLM. It is served locally from the `apps/playground` directory. It will show you how local inference works, how vision models work, and how to set up GGUF files. It intentially built for getting observability into how the library works.
+The browser playground lives under `tools/playground`. Use it to inspect local
+inference, vision model setup, GGUF loading, runtime observability, and
+repeatable browser runtime smoke checks.
 
 ```bash
 clm run tools serve playground
 ```
 
-# Gateway Server 
+## Gateway Server
 
 The release workflow does not yet publish a standalone gateway-server binary or
 container image. Use `clm` for source checkout checks and raw Docker commands
@@ -84,7 +92,7 @@ The source development config expects a local GGUF model under `.build/models`
 and a literal `admin_password` in the selected TOML file. Keep production TOML
 files private because they contain the Admin Dashboard password.
 
-# Validation
+## Validation
 
 Use the narrowest relevant target from [Testing](../testing.md). Common
 entry points are:

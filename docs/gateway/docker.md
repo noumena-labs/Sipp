@@ -50,12 +50,16 @@ Build and run:
 
 ```bash
 docker build \
-  --build-arg COGENTLM_GATEWAY_BACKEND=cpu \
+  --build-arg COGENTLM_GATEWAY_BACKEND=vulkan \
   -f apps/gateway-server/Dockerfile \
-  -t cogentlm-gateway:cpu .
+  -t cogentlm-gateway:vulkan .
 docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml config
 docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up
 ```
+
+For a CUDA-only image, set `COGENTLM_GATEWAY_IMAGE=cogentlm-gateway:cuda` and
+`COGENTLM_GATEWAY_BACKEND=cuda` in `apps/gateway-server/.env`, then build with
+`--build-arg COGENTLM_GATEWAY_BACKEND=cuda -t cogentlm-gateway:cuda`.
 
 The development Compose file maps both host ports to `127.0.0.1`, so the
 gateway stays local to the workstation even though the process binds
@@ -88,10 +92,13 @@ Build or publish the image:
 
 ```bash
 docker build \
-  --build-arg COGENTLM_GATEWAY_BACKEND=cpu \
+  --build-arg COGENTLM_GATEWAY_BACKEND=vulkan \
   -f apps/gateway-server/Dockerfile \
-  -t registry.example.com/cogentlm-gateway:cpu .
+  -t registry.example.com/cogentlm-gateway:vulkan .
 ```
+
+For other backends, change the `COGENTLM_GATEWAY_BACKEND` build argument and
+`COGENTLM_GATEWAY_IMAGE` tag accordingly.
 
 Deploy:
 
@@ -161,4 +168,3 @@ curl --fail --silent http://127.0.0.1:9090/readyz
 ```
 
 If you change the readiness route in TOML, update the Compose healthcheck too.
-
