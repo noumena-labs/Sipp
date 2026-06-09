@@ -101,8 +101,8 @@ Examples:
 targets or reading secrets. `serve` builds the staged binary, loads the
 selected config, and runs it from .build/artifacts/gateway-server.
 
-Use raw Docker commands for container workflows; start from
-apps/gateway-server/development.yml.example or apps/gateway-server/production.yml.";
+Use raw Docker Compose commands for container workflows; start from the
+checked-in apps/gateway-server/*.yml.example templates.";
 
 const RUN_DEMOS_HELP: &str = "\
 Build or serve individual browser demos.

@@ -39,6 +39,7 @@ toolkit crates.
 - `config/provider-only.toml.example`: provider-router template with no local
   model target.
 - `config/hybrid.toml.example`: local GPU model plus provider target template.
+- `.env.example`: copyable secrets-only env template.
 - `admin-ui/`: React Admin Dashboard built by `clm build gateway-server` and
   copied beside the generated gateway binary.
 - `development.yml.example`: copyable local Compose template.
@@ -50,8 +51,8 @@ toolkit crates.
 - `Dockerfile`: image build for provider-router CPU images and GPU
   model-serving variants.
 
-Files without the `.example` suffix are private runtime copies and should stay
-out of source control.
+Private TOML, `.env`, and copied Compose files should stay out of source
+control.
 
 Dashboard observability history, rate-limit buckets, manual blocklists,
 sessions, CSRF tokens, and runtime control overrides are in-memory only and

@@ -13,7 +13,7 @@ management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 4
 allowed_origins = []
-admin_password = "replace-me"
+admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
 
 [security.client_ip]
 source = "peer"
@@ -136,11 +136,26 @@ example `local-gpu` or `openai-chat`.
 | `max_request_bytes` | Maximum HTTP request body size. Must be greater than zero. |
 | `max_concurrent_requests` | Optional application-wide request admission limit. Omit for unbounded. |
 | `allowed_origins` | CORS allowlist for browser requests to the public listener. Empty disables the CORS layer. |
-| `admin_password` | Literal Admin Dashboard password. Required and non-blank. Keep production TOML private. |
+| `admin_password_env` | Environment variable containing the Admin Dashboard password. Required and non-blank. |
 | `security` | Required in-memory client identification and rate limiting settings. |
 
-`check` validates these fields without reading token env vars, loading models,
-contacting providers, or binding ports.
+`check` validates these fields without reading secret env vars, loading
+models, contacting providers, or binding ports.
+
+## Secrets
+
+TOML names secret environment variables. Secret values belong in a private
+`.env` file or production secret manager, not in TOML.
+
+```bash
+COGENTLM_GATEWAY_ADMIN_PASSWORD=replace-me
+COGENTLM_GATEWAY_TOKEN=replace-me
+OPENAI_API_KEY=replace-me
+ANTHROPIC_API_KEY=replace-me
+```
+
+`serve` rejects missing or blank secret env values at startup. Bearer token
+values must also contain no whitespace.
 
 ## Routes
 
@@ -305,16 +320,16 @@ For Docker:
   bindings.
 - Production exposes public traffic through the configured host port and keeps
   management on `127.0.0.1` by default.
-- Local model paths should match the container mount point. The checked-in
-  Docker examples mount host model directories at `/models`.
-- Provider-only Docker examples do not mount `/models` because no local GGUF
+- Local model paths should match the container mount point in the Compose
+  volume configuration.
+- Provider-only Docker configs do not need a model mount because no local GGUF
   target is loaded.
 
 ## Admin Dashboard
 
 The dashboard is served only on the management listener. It uses
-`admin_password` for login, stores short-lived HTTP-only sessions, and does not
-render the password, bearer tokens, or provider secrets.
+the value of `admin_password_env` for login, stores short-lived HTTP-only
+sessions, and does not render the password, bearer tokens, or provider secrets.
 
 The dashboard serves a React single-page application from the gateway
 distribution's `admin-ui` asset directory and exposes session-protected JSON

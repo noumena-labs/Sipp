@@ -3,7 +3,7 @@ ARG COGENTLM_GATEWAY_RUNTIME_IMAGE=debian:bookworm-slim
 
 FROM ${COGENTLM_GATEWAY_BUILDER_IMAGE} AS builder
 
-ARG COGENTLM_GATEWAY_BACKEND=vulkan
+ARG COGENTLM_GATEWAY_BACKEND
 ARG COGENTLM_GATEWAY_INSTALL_RUSTUP=0
 
 ENV CARGO_HOME=/usr/local/cargo
@@ -35,7 +35,9 @@ RUN curl -fsSL https://bun.sh/install | bash
 
 WORKDIR /src
 COPY . .
-RUN cargo run --target-dir .build/xtask --package xtask -- \
+RUN test -n "${COGENTLM_GATEWAY_BACKEND}" \
+    || (echo "COGENTLM_GATEWAY_BACKEND build arg is required" >&2; exit 1) \
+    && cargo run --target-dir .build/xtask --package xtask -- \
     build gateway-server --backend "${COGENTLM_GATEWAY_BACKEND}"
 
 FROM ${COGENTLM_GATEWAY_RUNTIME_IMAGE}

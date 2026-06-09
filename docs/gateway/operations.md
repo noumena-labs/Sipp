@@ -33,9 +33,9 @@ binds the management host port to `127.0.0.1` by default.
 
 ## Admin Dashboard
 
-The Admin Dashboard uses the literal `admin_password` value from TOML for
-login. It stores short-lived HTTP-only sessions and does not render the
-password, bearer tokens, or provider secrets.
+The Admin Dashboard uses the value of the env var named by
+`admin_password_env` in TOML for login. It stores short-lived HTTP-only
+sessions and does not render the password, bearer tokens, or provider secrets.
 
 Use the dashboard to inspect configured routes, targets, selected local
 backends, and current request metrics. Do not expose it directly to the public
@@ -86,10 +86,9 @@ long-lived tokens embedded in bundles.
 
 The gateway uses two types of secrets:
 
-- `admin_password`: literal TOML field used for dashboard login.
+- `admin_password_env`: TOML field naming the dashboard password env var.
 - Token/provider env vars: names are configured in TOML; values are read from
   the process environment when `serve` starts.
 
-Keep production TOML files and env files private and outside source control.
-Use deployment secret stores where available.
-
+Keep secrets env files private and outside source control. Use deployment
+secret stores where available.

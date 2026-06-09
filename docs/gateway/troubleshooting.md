@@ -11,6 +11,7 @@ variables, load model files, contact providers, or bind ports.
 If `serve` fails after `check` succeeds, verify:
 
 - Bearer token env vars named by `[[tokens]].env` are present and non-empty.
+- The env var named by `admin_password_env` is present and non-empty.
 - Provider secret env vars such as `OPENAI_API_KEY` are present for provider
   targets.
 - Local GGUF paths exist from the process point of view.
@@ -48,8 +49,8 @@ public_bind = "0.0.0.0:8080"
 management_bind = "0.0.0.0:9090"
 ```
 
-Then use Compose `ports` to control host exposure. The local Compose template
-maps both host ports to `127.0.0.1` for workstation-only access.
+Then use Compose `ports` to control host exposure. The local Compose templates
+map both host ports to `127.0.0.1` for workstation-only access.
 
 ## `401 Unauthorized`
 
@@ -99,8 +100,9 @@ Docker GPU builds also require host runtime support:
 
 ## Admin Dashboard Login Fails
 
-The dashboard password is the literal `admin_password` from the selected TOML
-file. If you copied a config, confirm the gateway is using that copy through
-`--config` or `COGENTLM_GATEWAY_CONFIG`.
+The dashboard password is read from the env var named by `admin_password_env`
+in the selected TOML file. Confirm the secrets env file or secret manager has
+that value, and confirm the gateway is using the intended TOML through
+`--config`.
 
 The dashboard is served on the management listener only.

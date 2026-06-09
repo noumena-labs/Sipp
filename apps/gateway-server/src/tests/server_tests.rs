@@ -113,7 +113,7 @@ fn test_gateway_config() -> GatewayServerConfig {
         management_bind: "127.0.0.1:9090".parse().expect("management bind"),
         max_request_bytes: 1024,
         allowed_origins: Vec::new(),
-        admin_password: "admin-password".to_string(),
+        admin_password_env: "GATEWAY_ADMIN_PASSWORD".to_string(),
         routes: RouteConfig::default(),
         tokens: vec![crate::config::TokenConfig {
             env: "GATEWAY_TEST_TOKEN".to_string(),
@@ -139,7 +139,7 @@ fn config_accepts_typed_custom_routes() {
     let source = r#"
         public_bind = "127.0.0.1:8080"
         management_bind = "127.0.0.1:9090"
-        admin_password = "admin-password"
+        admin_password_env = "GATEWAY_ADMIN_PASSWORD"
 
         [security.client_ip]
         source = "peer"
@@ -176,7 +176,7 @@ fn config_accepts_typed_custom_routes() {
     assert_eq!(config.routes.query, "/generate");
     assert_eq!(config.routes.metrics.as_deref(), Some("/telemetry"));
     assert_eq!(config.routes.admin.as_deref(), Some("/admin"));
-    assert_eq!(config.admin_password, "admin-password");
+    assert_eq!(config.admin_password_env, "GATEWAY_ADMIN_PASSWORD");
     match &config.targets[0].endpoint {
         EndpointConfig::Local { backend, stats, .. } => {
             assert_eq!(*backend, GatewayBackendPreference::Auto);
@@ -189,7 +189,7 @@ fn config_accepts_typed_custom_routes() {
 #[test]
 fn local_target_accepts_backend_and_stats_overrides() {
     let source = r#"
-        admin_password = "admin-password"
+        admin_password_env = "GATEWAY_ADMIN_PASSWORD"
 
         [security.client_ip]
         source = "peer"
@@ -227,7 +227,7 @@ fn local_target_accepts_backend_and_stats_overrides() {
 #[test]
 fn local_target_rejects_unsupported_backend_names() {
     let source = r#"
-        admin_password = "admin-password"
+        admin_password_env = "GATEWAY_ADMIN_PASSWORD"
 
         [security.client_ip]
         source = "peer"
@@ -259,7 +259,7 @@ fn local_target_rejects_unsupported_backend_names() {
 #[test]
 fn provider_targets_keep_server_side_secret_envs() {
     let source = r#"
-        admin_password = "admin-password"
+        admin_password_env = "GATEWAY_ADMIN_PASSWORD"
 
         [security.client_ip]
         source = "peer"
@@ -365,7 +365,7 @@ fn config_rejects_missing_application_policy() {
 #[test]
 fn config_rejects_missing_security_section() {
     let source = r#"
-        admin_password = "admin-password"
+        admin_password_env = "GATEWAY_ADMIN_PASSWORD"
 
         [[tokens]]
         env = "GATEWAY_TEST_TOKEN"
@@ -386,7 +386,7 @@ fn config_rejects_missing_security_section() {
 }
 
 #[test]
-fn config_rejects_missing_admin_password() {
+fn config_rejects_missing_admin_password_env() {
     let source = r#"
         [[tokens]]
         env = "GATEWAY_TEST_TOKEN"
@@ -409,8 +409,41 @@ fn config_rejects_missing_admin_password() {
     "#;
 
     let config: GatewayServerConfig = toml::from_str(source).expect("config");
-    let error = config.validate().expect_err("admin password is required");
-    assert!(error.to_string().contains("admin_password"));
+    let error = config
+        .validate()
+        .expect_err("admin password env is required");
+    assert!(error.to_string().contains("admin_password_env"));
+}
+
+#[test]
+fn config_rejects_invalid_admin_password_env_name() {
+    let mut config = test_gateway_config();
+    config.admin_password_env = "COGENTLM GATEWAY ADMIN PASSWORD".to_string();
+
+    let error = config
+        .validate()
+        .expect_err("admin password env name is invalid");
+    assert!(error.to_string().contains("environment variable"));
+}
+
+#[test]
+fn load_admin_password_reads_non_empty_secret_env() {
+    let mut config = test_gateway_config();
+    let env_name = unique_env_name("GATEWAY_ADMIN_PASSWORD");
+    config.admin_password_env = env_name.clone();
+
+    std::env::set_var(&env_name, "admin-secret");
+    assert_eq!(
+        config.load_admin_password().expect("admin password"),
+        "admin-secret"
+    );
+
+    std::env::set_var(&env_name, " ");
+    let error = config
+        .load_admin_password()
+        .expect_err("blank admin password is rejected");
+    assert!(error.to_string().contains("must not be empty"));
+    std::env::remove_var(env_name);
 }
 
 #[test]
@@ -814,6 +847,14 @@ async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
         .and_then(|value| value.to_str().ok())
         .expect("clear cookie");
     assert!(cleared.contains("Max-Age=0"));
+}
+
+fn unique_env_name(prefix: &str) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock")
+        .as_nanos();
+    format!("{prefix}_{}_{}", std::process::id(), now)
 }
 
 fn admin_asset_dir() -> std::path::PathBuf {

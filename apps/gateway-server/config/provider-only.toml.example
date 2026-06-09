@@ -3,7 +3,7 @@ management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 16
 allowed_origins = []
-admin_password = "replace-me"
+admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
 
 [security.client_ip]
 source = "peer"

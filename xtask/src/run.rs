@@ -106,9 +106,9 @@ fn run_gateway_server_source(
 ) -> Result<()> {
     let phase = format!("Gateway-server {command}");
     output::phase(&phase);
-    output::detail("Backend", args.backend.as_str());
     let config = resolve_gateway_server_config_path(ctx, &args.config)?;
     output::path("Config", &config);
+    output::detail("Backend", args.backend.as_str());
 
     targets::gateway_server::build(sh, ctx, Some(&args.backend))?;
     let dist_dir = ctx.gateway_server_artifacts_dir();

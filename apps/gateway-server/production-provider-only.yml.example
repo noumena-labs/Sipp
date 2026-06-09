@@ -2,21 +2,18 @@ name: cogentlm-gateway-provider-production
 
 services:
   gateway:
-    image: ${COGENTLM_GATEWAY_IMAGE:?set a prebuilt provider-only gateway image}
+    image: registry.example.com/cogentlm-gateway:provider-cpu
     env_file:
-      - path: ${COGENTLM_GATEWAY_RUNTIME_ENV_FILE:-./.env}
-        required: false
-    environment:
-      COGENTLM_GATEWAY_TOKEN: ${COGENTLM_GATEWAY_TOKEN:?required}
-      RUST_LOG: ${RUST_LOG:-info}
+      - path: ./.env
+        required: true
     volumes:
       - type: bind
-        source: ${COGENTLM_GATEWAY_CONFIG:?set the host provider-only TOML path}
+        source: ./provider-only.toml
         target: /etc/cogentlm/gateway.toml
         read_only: true
     ports:
-      - "${COGENTLM_GATEWAY_PUBLIC_PORT:-8080}:8080"
-      - "127.0.0.1:${COGENTLM_GATEWAY_MANAGEMENT_PORT:-9090}:9090"
+      - "8080:8080"
+      - "127.0.0.1:9090:9090"
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:

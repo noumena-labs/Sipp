@@ -16,7 +16,8 @@ mode, observability, sampling, and backend selection. See
 application:
 
 - `[routes]` selects public and management paths.
-- `admin_password` sets the literal Admin Dashboard password in TOML.
+- `admin_password_env` names the secret env var containing the Admin Dashboard
+  password.
 - `[[tokens]]` maps bearer-token environment variables to caller labels and
   allowed targets.
 - `[[targets]]` defines local, OpenAI, OpenAI-compatible, or Anthropic targets.
@@ -31,17 +32,8 @@ separate applications composed from `lib/gateway`.
 
 - `COGENTLM_GATEWAY_TOKEN`: development bearer token for examples and gateway
   server commands.
-- `COGENTLM_MODEL_DIR`: Docker-mounted GGUF model directory for
-  `apps/gateway-server`; the development env template defaults to
-  `.build/models` on the host and mounts it at `/models` in the container.
-- `COGENTLM_GATEWAY_CONFIG`: host TOML path mounted by
-  copied gateway Compose files. Start from
-  `apps/gateway-server/config/*.toml.example` and keep the copied TOML private.
-- `COGENTLM_GATEWAY_IMAGE`: local or private-registry image used by the gateway
-  Docker templates.
-- `COGENTLM_GATEWAY_BACKEND`: backend compiled by the gateway Dockerfile.
-- `COGENTLM_GATEWAY_RUNTIME_ENV_FILE`: env file injected into the gateway
-  container for bearer and provider secrets named by TOML.
+- `COGENTLM_GATEWAY_ADMIN_PASSWORD`: Admin Dashboard password used by gateway
+  examples.
 - `COGENTLM_GATEWAY_URL`: gateway base URL for client examples.
 - `COGENTLM_NODE_BACKEND`: Node runtime backend selection.
 - `COGENTLM_PYTHON_BACKEND`: Python runtime backend selection.

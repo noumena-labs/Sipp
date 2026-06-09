@@ -51,7 +51,7 @@ async fn serve(path: PathBuf) -> anyhow::Result<()> {
     let config = GatewayServerConfig::from_path(&path)?;
     let runtime = config.build_runtime().await?;
     let tokens = config.load_tokens()?;
-    let admin_password = config.admin_password.clone();
+    let admin_password = config.load_admin_password()?;
     let metrics = Arc::new(GatewayMetrics::new());
     let service = GatewayHttpService::new(
         runtime,
