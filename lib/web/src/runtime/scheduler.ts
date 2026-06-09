@@ -17,6 +17,7 @@ import { SharedTokenRingReader } from './shared-token-ring.js';
 const CONTINUOUS_LOOP_TICK_LIMIT = 1024;
 const CONTINUOUS_LOOP_TOKEN_LIMIT = 512;
 const MAIN_THREAD_TOKEN_SLICE_US = 8_000;
+const WORKER_TOKEN_SLICE_US = 8_000;
 const REQUEST_STEP_RESULT_INVALID = -1;
 const REQUEST_STEP_RESULT_FATAL_NO_PROGRESS = -2;
 
@@ -262,7 +263,7 @@ export class QueuedRequestScheduler {
     if (this.options.getTransportObservability().executionMode === 'main-thread') {
       return MAIN_THREAD_TOKEN_SLICE_US;
     }
-    return 0;
+    return WORKER_TOKEN_SLICE_US;
   }
 
   private tokenRingBridge: WasmBridge | null = null;

@@ -6,7 +6,7 @@ import type {
   GenerationResult,
   TokenBatch,
 } from './types.js';
-import { createLinkedAbortController } from '../utils/abort.js';
+import { createAbortError, createLinkedAbortController } from '../utils/abort.js';
 
 const TOKEN_QUEUE_CAPACITY = 256;
 
@@ -80,20 +80,48 @@ export function createBrowserTextRun(
 ): BrowserTextRun {
   const linkedAbort = createLinkedAbortController(options.signal);
   const queue = new BoundedTokenBatchQueue();
-  const response = responseFactory(
+  let rejectAbort: ((error: unknown) => void) | null = null;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const rejectOnAbort = (): void => {
+    queue.close();
+    rejectAbort?.(createAbortError(abortMessage(linkedAbort.signal)));
+    rejectAbort = null;
+  };
+  linkedAbort.signal.addEventListener('abort', rejectOnAbort, { once: true });
+  if (linkedAbort.signal.aborted) {
+    rejectOnAbort();
+  }
+
+  const factoryResponse = responseFactory(
     options.emitTokens === true ? (batch) => queue.push(batch) : undefined,
     linkedAbort.signal
-  ).finally(() => {
+  );
+  const response = Promise.race([factoryResponse, abortPromise]).finally(() => {
+    linkedAbort.signal.removeEventListener('abort', rejectOnAbort);
+    rejectAbort = null;
     queue.close();
     linkedAbort.dispose();
   });
   return {
     response,
     tokens: queue,
-    cancel: () => {
-      linkedAbort.controller.abort();
+    cancel: (reason?: unknown) => {
+      linkedAbort.controller.abort(reason);
     },
   };
+}
+
+function abortMessage(signal: AbortSignal): string {
+  const reason = signal.reason;
+  if (reason instanceof Error && reason.message.trim().length > 0) {
+    return reason.message;
+  }
+  if (typeof reason === 'string' && reason.trim().length > 0) {
+    return reason;
+  }
+  return 'Operation aborted.';
 }
 
 function mergeTokenBatches(left: TokenBatch, right: TokenBatch): TokenBatch {
