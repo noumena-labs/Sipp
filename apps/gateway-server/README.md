@@ -36,11 +36,19 @@ toolkit crates.
 - `config/local.toml.example`: source/local host-run template.
 - `config/development.toml.example`: local Docker/development-server template.
 - `config/production.toml.example`: production Docker template.
+- `config/provider-only.toml.example`: provider-router template with no local
+  model target.
+- `config/hybrid.toml.example`: local GPU model plus provider target template.
 - `admin-ui/`: React Admin Dashboard built by `clm build gateway-server` and
   copied beside the generated gateway binary.
 - `development.yml.example`: copyable local Compose template.
+- `development-provider-only.yml.example`: local Compose template without a
+  model mount.
 - `production.yml.example`: production Compose template for a prebuilt image.
-- `Dockerfile`: image build for CPU, Vulkan, and CUDA gateway variants.
+- `production-provider-only.yml.example`: production Compose template without a
+  model mount.
+- `Dockerfile`: image build for provider-router CPU images and GPU
+  model-serving variants.
 
 Files without the `.example` suffix are private runtime copies and should stay
 out of source control.

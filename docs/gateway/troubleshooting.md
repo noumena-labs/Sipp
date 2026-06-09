@@ -86,7 +86,10 @@ An empty `allowed_origins` array disables the CORS layer.
 ## GPU Backend Fails
 
 Explicit local target backends fail when the backend was not compiled or is not
-available at runtime. Try `backend = "auto"` or `backend = "cpu"` first.
+available at runtime. Use `backend = "auto"` to let the gateway pick the best
+compiled and available backend, or select a GPU backend that was included in
+the build. Explicit `cpu` disables GPU offload and is useful only for
+diagnosing local-inference setup issues.
 
 Docker GPU builds also require host runtime support:
 
@@ -101,4 +104,3 @@ file. If you copied a config, confirm the gateway is using that copy through
 `--config` or `COGENTLM_GATEWAY_CONFIG`.
 
 The dashboard is served on the management listener only.
-

@@ -11,6 +11,17 @@ so each request can choose where it runs.
 - Serve local models from a controlled machine.
 - Expose a stable HTTP boundary to multiple language clients.
 
+## Gateway Deployment Shapes
+
+The first-party gateway can be deployed in three shapes:
+
+- **On-board GPU inference**: the gateway loads a local GGUF model and serves
+  it through a GPU backend.
+- **Provider-only router**: the gateway has no local model and forwards
+  requests to provider targets such as OpenAI, Anthropic, or
+  OpenAI-compatible APIs.
+- **Hybrid**: the gateway exposes both local GPU targets and provider targets.
+
 ## Endpoint Model
 
 The client does not route implicitly. Every application registers descriptors

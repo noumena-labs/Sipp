@@ -427,6 +427,8 @@ fn shipped_gateway_configs_match_the_new_schema() {
         "local.toml.example",
         "development.toml.example",
         "production.toml.example",
+        "provider-only.toml.example",
+        "hybrid.toml.example",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")

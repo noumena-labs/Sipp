@@ -47,6 +47,86 @@ backend = "auto"
 stats = "basic"
 ```
 
+## Gateway Deployment Shapes
+
+The same TOML schema supports three deployment shapes. Choose the shape by the
+configured targets.
+
+### On-Board GPU Inference
+
+Use a local GGUF target when the gateway server owns model loading and GPU
+inference:
+
+```toml
+[[tokens]]
+env = "COGENTLM_GATEWAY_TOKEN"
+caller = "gpu-client"
+targets = ["local-gpu"]
+
+[[targets]]
+name = "local-gpu"
+type = "local"
+model = "/models/model.gguf"
+backend = "auto"
+stats = "basic"
+```
+
+Use `backend = "auto"` or an explicit GPU backend such as `cuda`, `metal`, or
+`vulkan`. The process must be able to read the GGUF path. Docker runs usually
+mount the host model directory at `/models`.
+
+### Provider-Only Router
+
+Use provider targets only when the gateway should hold provider credentials
+and route client prompts to upstream APIs without loading a local model:
+
+```toml
+[[tokens]]
+env = "COGENTLM_GATEWAY_TOKEN"
+caller = "provider-client"
+targets = ["openai-chat"]
+
+[[targets]]
+name = "openai-chat"
+type = "openai"
+model = "gpt-5-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 60
+```
+
+Provider-only configs have no `type = "local"` target, no `model` filesystem
+path, and no `backend` field. CPU gateway builds are appropriate here because
+the gateway is not performing on-board inference.
+
+### Hybrid
+
+Use both target families when clients should be able to choose between a
+server-hosted local model and provider endpoints:
+
+```toml
+[[tokens]]
+env = "COGENTLM_GATEWAY_TOKEN"
+caller = "hybrid-client"
+targets = ["local-gpu", "openai-chat"]
+
+[[targets]]
+name = "local-gpu"
+type = "local"
+model = "/models/model.gguf"
+backend = "auto"
+stats = "basic"
+
+[[targets]]
+name = "openai-chat"
+type = "openai"
+model = "gpt-5-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 60
+```
+
+Requests select the public target name through the request `model` field, for
+example `local-gpu` or `openai-chat`.
+
 ## Top-Level Fields
 
 | Field | Meaning |
@@ -155,9 +235,11 @@ stats = "basic"
 - `runtime` can contain advanced native runtime settings from the shared
   runtime options schema.
 
+For on-board inference, prefer `backend = "auto"` or an explicit GPU backend.
 `backend = "auto"` selects the best compiled and available backend in this
-order: CUDA, Metal, Vulkan, then CPU. Explicit `cpu` disables GPU offload.
-Explicit GPU backends fail if that backend was not compiled or is unavailable.
+order: CUDA, Metal, Vulkan, then CPU. Explicit `cpu` disables GPU offload and
+is intended only for diagnostics. Explicit GPU backends fail if that backend
+was not compiled or is unavailable.
 
 `stats = "off"` disables runtime metrics and backend profiling.
 `stats = "basic"` enables runtime metrics. `stats = "profile"` enables runtime
@@ -225,6 +307,8 @@ For Docker:
   management on `127.0.0.1` by default.
 - Local model paths should match the container mount point. The checked-in
   Docker examples mount host model directories at `/models`.
+- Provider-only Docker examples do not mount `/models` because no local GGUF
+  target is loaded.
 
 ## Admin Dashboard
 

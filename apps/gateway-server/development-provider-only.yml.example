@@ -1,13 +1,13 @@
-name: cogentlm-gateway-development
+name: cogentlm-gateway-provider-development
 
 services:
   gateway:
-    image: ${COGENTLM_GATEWAY_IMAGE:-cogentlm-gateway:vulkan}
+    image: ${COGENTLM_GATEWAY_IMAGE:-cogentlm-gateway:provider-cpu}
     build:
       context: ../..
       dockerfile: apps/gateway-server/Dockerfile
       args:
-        COGENTLM_GATEWAY_BACKEND: ${COGENTLM_GATEWAY_BACKEND:-vulkan}
+        COGENTLM_GATEWAY_BACKEND: ${COGENTLM_GATEWAY_BACKEND:-cpu}
         COGENTLM_GATEWAY_BUILDER_IMAGE: ${COGENTLM_GATEWAY_BUILDER_IMAGE:-rust:bookworm}
         COGENTLM_GATEWAY_RUNTIME_IMAGE: ${COGENTLM_GATEWAY_RUNTIME_IMAGE:-debian:bookworm-slim}
         COGENTLM_GATEWAY_INSTALL_RUSTUP: ${COGENTLM_GATEWAY_INSTALL_RUSTUP:-0}
@@ -19,8 +19,7 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
     working_dir: /workspace
     volumes:
-      - ${COGENTLM_GATEWAY_CONFIG:-./config/development.toml}:/etc/cogentlm/gateway.toml:ro
-      - ${COGENTLM_MODEL_DIR:-../../.build/models}:/models:ro
+      - ${COGENTLM_GATEWAY_CONFIG:-./config/provider-only.toml}:/etc/cogentlm/gateway.toml:ro
     ports:
       - "127.0.0.1:${COGENTLM_GATEWAY_PUBLIC_PORT:-8080}:8080"
       - "127.0.0.1:${COGENTLM_GATEWAY_MANAGEMENT_PORT:-9090}:9090"

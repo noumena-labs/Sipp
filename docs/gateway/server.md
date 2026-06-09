@@ -20,17 +20,17 @@ the same arguments.
 ```bash
 export COGENTLM_GATEWAY_TOKEN="replace-me"
 cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
-clm build gateway-server --backend cpu
+clm build gateway-server --backend vulkan
 clm run gateway-server check --config apps/gateway-server/config/local.toml
-clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
+clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend vulkan
 ```
 
-Before running real local tests, update the ignored local file with the
-literal `admin_password`, token env names, and model path:
+Before running real on-board inference tests, update the ignored local file
+with the literal `admin_password`, token env names, and model path:
 
 ```bash
 clm run gateway-server check --config apps/gateway-server/config/local.toml
-clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
+clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend vulkan
 ```
 
 `clm run gateway-server check` builds the staged gateway distribution for the
@@ -42,6 +42,26 @@ environment variables, load model files, contact providers, or bind ports.
 runs the generated `cogentlm-gateway` executable from the workspace root. It
 reads token environment variables, loads targets, uses `admin_password` from
 TOML, binds both listeners, and exits cleanly on Ctrl-C.
+
+Use `cuda` for NVIDIA hosts or `metal` for macOS hosts when those are the
+intended on-board inference backends.
+
+## Provider-Only Source Workflow
+
+Provider-only gateways route to upstream APIs and do not load a local GGUF
+model. They can use a CPU gateway build because inference happens at the
+provider:
+
+```bash
+export COGENTLM_GATEWAY_TOKEN="replace-me"
+export OPENAI_API_KEY="replace-me"
+cp apps/gateway-server/config/provider-only.toml.example apps/gateway-server/config/provider-only.toml
+clm run gateway-server check --config apps/gateway-server/config/provider-only.toml
+clm run gateway-server serve --config apps/gateway-server/config/provider-only.toml --backend cpu
+```
+
+Use [Configuration](configuration.md) for Anthropic and OpenAI-compatible
+target snippets.
 
 ## Generated Executable
 
@@ -95,16 +115,17 @@ paths or start the process from the workspace root.
 The gateway server supports the same native backend names as other native
 targets:
 
-- `cpu`: portable default backend.
+- `cpu`: provider-only router build or local-inference diagnostic backend.
 - `cuda`: NVIDIA CUDA backend.
 - `metal`: Apple Metal backend on macOS.
 - `vulkan`: Vulkan backend.
 - `all`: host-supported backend set for build commands.
 
-For local target TOML, `backend = "auto"` selects the best compiled and
-available backend in this order: CUDA, Metal, Vulkan, then CPU. Explicit
-`cpu` disables GPU offload. Explicit GPU backends fail if that backend was not
-compiled or is unavailable.
+For on-board local target TOML, `backend = "auto"` selects the best compiled
+and available backend in this order: CUDA, Metal, Vulkan, then CPU. Production
+model-serving configs should use `auto` or an explicit GPU backend. Explicit
+`cpu` disables GPU offload and is intended only for diagnostics. Explicit GPU
+backends fail if that backend was not compiled or is unavailable.
 
 ## Binds And Routes
 

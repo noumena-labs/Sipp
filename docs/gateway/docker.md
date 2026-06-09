@@ -18,8 +18,12 @@ The Dockerfile invokes the workspace `xtask` package directly with
 
 - `apps/gateway-server/Dockerfile` builds the staged gateway distribution.
 - `apps/gateway-server/development.yml.example` is the local Compose template.
+- `apps/gateway-server/development-provider-only.yml.example` is the local
+  provider-router Compose template with no model mount.
 - `apps/gateway-server/production.yml.example` is the production Compose
   template for a prebuilt local or registry image.
+- `apps/gateway-server/production-provider-only.yml.example` is the production
+  provider-router Compose template with no model mount.
 - `apps/gateway-server/.env.example` is a copyable Compose env starting point.
 - `apps/gateway-server/config/local.toml.example` is for source/local host
   runs.
@@ -27,11 +31,15 @@ The Dockerfile invokes the workspace `xtask` package directly with
   and development-server runs.
 - `apps/gateway-server/config/production.toml.example` is for production
   Docker runs.
+- `apps/gateway-server/config/provider-only.toml.example` is for gateways that
+  route only to provider APIs.
+- `apps/gateway-server/config/hybrid.toml.example` is for gateways that serve
+  a local GPU model and route to provider APIs.
 
-## Local Docker Testing
+## On-Board GPU Docker Testing
 
-Use local Docker testing when validating the image and Compose wiring on a
-workstation.
+Use the model-serving Docker template when validating on-board GPU inference
+and Compose wiring on a workstation.
 
 ```bash
 cp apps/gateway-server/.env.example apps/gateway-server/.env
@@ -70,7 +78,9 @@ docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/develo
 docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up
 ```
 
-For a other backends, set the `COGENTLM_GATEWAY_BACKEND` to the backend name you want to build (i.e., cpu, cuda, metal, etc.).
+For other GPU backends, set `COGENTLM_GATEWAY_BACKEND` and
+`COGENTLM_GATEWAY_IMAGE` to the backend you want to build, such as `cuda` or
+`metal`.
 
 The development Compose file maps both host ports to `127.0.0.1`, so the
 gateway stays local to the workstation even though the process binds
@@ -78,6 +88,48 @@ gateway stays local to the workstation even though the process binds
 
 Open `http://127.0.0.1:9090/admin` and log in with the TOML
 `admin_password`. Send client requests to `http://127.0.0.1:8080`.
+
+## Provider-Only Docker Testing
+
+Use the provider-only template when the gateway should hold provider secrets
+and route prompts upstream without loading a local GGUF model:
+
+```bash
+cp apps/gateway-server/.env.example apps/gateway-server/.env
+cp apps/gateway-server/development-provider-only.yml.example apps/gateway-server/development-provider-only.yml
+cp apps/gateway-server/config/provider-only.toml.example apps/gateway-server/config/provider-only.toml
+```
+
+Edit `apps/gateway-server/config/provider-only.toml`:
+
+- Set `admin_password` to the local Admin Dashboard password.
+- Keep `public_bind = "0.0.0.0:8080"` and
+  `management_bind = "0.0.0.0:9090"` so the process listens on the container
+  network interface.
+- Do not add a local target unless this gateway is becoming hybrid.
+
+Edit `apps/gateway-server/.env`:
+
+- Set `COGENTLM_GATEWAY_CONFIG=./config/provider-only.toml`.
+- Keep `COGENTLM_GATEWAY_RUNTIME_ENV_FILE=./.env`.
+- Set `COGENTLM_GATEWAY_TOKEN` to the bearer token used by test clients.
+- Set `OPENAI_API_KEY` for the checked-in provider-only TOML, or replace the
+  target with another supported provider and set that provider's secret env
+  var.
+- Leave `COGENTLM_MODEL_DIR` unused.
+
+Build and run the provider-router image:
+
+```bash
+docker build \
+  --build-arg COGENTLM_GATEWAY_BACKEND=cpu \
+  -f apps/gateway-server/Dockerfile \
+  -t cogentlm-gateway:provider-cpu .
+docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development-provider-only.yml config
+docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development-provider-only.yml up
+```
+
+CPU is appropriate here because no local inference target is loaded.
 
 ## Production Docker Deployment
 
@@ -101,7 +153,8 @@ Prepare a private env file from `apps/gateway-server/.env.example`, then set:
 - `COGENTLM_GATEWAY_CONFIG`: host path to the private production TOML file.
 - `COGENTLM_GATEWAY_RUNTIME_ENV_FILE`: absolute path to this private env file,
   so Compose passes bearer and provider secrets into the container.
-- `COGENTLM_MODEL_DIR`: host directory mounted at `/models`.
+- `COGENTLM_MODEL_DIR`: host directory mounted at `/models` for local or
+  hybrid model-serving configs.
 - `COGENTLM_GATEWAY_TOKEN`: production bearer token value.
 - Provider secret variables referenced by production TOML targets.
 - `COGENTLM_GATEWAY_PUBLIC_PORT` and `COGENTLM_GATEWAY_MANAGEMENT_PORT` as
@@ -129,6 +182,12 @@ docker compose --env-file /opt/cogentlm/gateway/gateway.env -f /opt/cogentlm/gat
 The production template publishes public traffic on the configured host port
 and binds the management port to `127.0.0.1` on the host by default.
 
+For provider-only production, copy
+`apps/gateway-server/production-provider-only.yml.example` instead of
+`production.yml.example`, copy `config/provider-only.toml.example`, set
+`COGENTLM_GATEWAY_CONFIG` to that private TOML path, and omit
+`COGENTLM_MODEL_DIR`.
+
 ## Bind And Mount Behavior
 
 The TOML file always uses the same schema, but bind and path interpretation
@@ -139,6 +198,7 @@ changes by runtime mode.
 | Source/exe | Host addresses, usually `127.0.0.1:*` for development | The process binds directly on the host | Path seen from the process working directory |
 | Local Compose | Container addresses, usually `0.0.0.0:8080` and `0.0.0.0:9090` | `development.yml` maps host ports to `127.0.0.1` | `/models/<file>.gguf` |
 | Production Compose | Container addresses, usually `0.0.0.0:8080` and `0.0.0.0:9090` | `production.yml` exposes public and keeps management host-local by default | `/models/<file>.gguf` |
+| Provider-only Compose | Container addresses, usually `0.0.0.0:8080` and `0.0.0.0:9090` | Provider-only templates follow the same port rules | No local model path |
 
 Compose mount variables:
 
@@ -146,6 +206,9 @@ Compose mount variables:
 | --- | --- | --- |
 | `COGENTLM_GATEWAY_CONFIG` | TOML file path | `/etc/cogentlm/gateway.toml` |
 | `COGENTLM_MODEL_DIR` | Directory containing local GGUF files | `/models` |
+
+`COGENTLM_MODEL_DIR` is required only for local or hybrid model-serving
+configs. Provider-only Compose templates do not mount `/models`.
 
 Compose env behavior:
 
@@ -162,6 +225,18 @@ Keep management private in production. Put public ingress, TLS, and external
 auth controls in front of the public listener when needed.
 
 ## GPU Image Builds
+
+Provider-only router:
+
+```bash
+docker build \
+  --build-arg COGENTLM_GATEWAY_BACKEND=cpu \
+  -f apps/gateway-server/Dockerfile \
+  -t cogentlm-gateway:provider-cpu .
+```
+
+Use CPU images for provider-only routing, not for production on-board
+inference.
 
 Vulkan:
 
