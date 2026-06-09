@@ -37,7 +37,7 @@ cargo xtask build wasm
 ```
 
 ### 5. Build Everything
-Builds all targets (Core, Node, Python, and WASM).
+Builds the default target set: core, WASM, Python CPU, Node CPU, and CLI CPU.
 ```bash
 cargo xtask build all
 ```
@@ -55,11 +55,11 @@ cargo xtask run demos serve chat
 cargo xtask run demos build avatar
 cargo xtask run llama backend-ops --backend cpu
 cargo xtask test list
-cargo xtask test unit xtask
-cargo xtask test unit rust --package cogentlm-core
-cargo xtask test unit node --backend cpu
-cargo xtask test smoke model --backend cpu --model <model.gguf>
-cargo xtask test smoke browser
+cargo xtask test unit suite xtask
+cargo xtask test unit suite rust-crates --package cogentlm-core
+cargo xtask test unit suite node-package --backend cpu
+cargo xtask test smoke group local-model --backend cpu --model <model.gguf>
+cargo xtask test smoke suite example-browser
 cargo xtask test verify --target whitebox
 ```
 
