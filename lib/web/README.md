@@ -40,7 +40,7 @@ await client.add('default', {
 const run = client.query('Explain CogentLM in one sentence.', {
   emitTokens: true,
   maxTokens: 64,
-  session: 'web-local',
+  contextKey: 'web-local',
 });
 
 let streamed = '';

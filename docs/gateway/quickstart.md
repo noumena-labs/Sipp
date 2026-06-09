@@ -60,6 +60,8 @@ model = "/workspace/.build/models/model.gguf"
 Edit `apps/gateway-server/.env`:
 
 ```bash
+COGENTLM_GATEWAY_IMAGE=cogentlm-gateway:vulkan
+COGENTLM_GATEWAY_BACKEND=vulkan
 COGENTLM_GATEWAY_CONFIG=./config/local.toml
 COGENTLM_MODEL_DIR=../../.build/models
 COGENTLM_GATEWAY_TOKEN=replace-me
@@ -69,9 +71,9 @@ Build and run:
 
 ```bash
 docker build \
-  --build-arg COGENTLM_GATEWAY_BACKEND=cpu \
+  --build-arg COGENTLM_GATEWAY_BACKEND=vulkan \
   -f apps/gateway-server/Dockerfile \
-  -t cogentlm-gateway:cpu .
+  -t cogentlm-gateway:vulkan .
 docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up
 ```
 
@@ -119,4 +121,3 @@ const run = client.query('Explain gateway inference.', {
 console.log((await run.response).text);
 await client.close();
 ```
-

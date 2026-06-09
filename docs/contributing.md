@@ -3,25 +3,34 @@
 CogentLM is a polyglot monorepo. Keep contributions focused, documented, and
 validated with the narrowest useful commands.
 
-Before submitting issues and PRs, you must understand **the WHY** and **the HOW**. AI assisted coding is fine, even when your code is mostly written by coding agents. However, manual review is required to avoid AI-generated slop over time.
+Before submitting issues or PRs, be ready to explain why the change matters and
+how it works. AI-assisted coding is fine, including agent-generated drafts, but
+the author is responsible for reviewing, understanding, and maintaining the
+final change.
 
-## Identify **the WHY**
+## Identify **The Why**
 
-Whether it is an issue or a feature, you should first think why it should be handled and how it could impact the system in the first place. It helps you to think deeper into the problem, make the right decision, and write a better prompt to describe the issue and expected system behavior.
+For issues and feature requests, explain the problem, who it affects, and how
+it could affect the system. This helps maintainers evaluate the priority and
+choose the right implementation path.
 
-## Explain **the HOW**
+## Explain **The How**
 
-You must understand your code and should be able to explain what you code (or ask the agent to code). If you can't, please revisit **the WHY** or your issues and PRs will be closed. 
+For PRs, describe what changed and how the implementation works. If you cannot
+explain the behavior, risks, and validation, revisit the change before asking
+for review.
 
 ## Communication
 
-Please avoid using agents in the issues and PRs for communication. Use your own words and tones for human interactions. 
+Use your own words in issues and PRs. Keep the main message concise, then add
+supporting detail only when it helps reviewers understand the change.
 
-For each issue and PR, 
-- keep it short and concise for the main message. 
-- Add additional information if necessary to help reviewers to understand the changes.
-- Explain why it matters and what you change.
-- Be atomic, and only change what should be changed. 
+For each issue or PR:
+
+- Explain why it matters.
+- Describe what changed.
+- Keep the scope atomic.
+- Avoid unrelated cleanup.
 
 ## Before Editing
 
@@ -46,6 +55,7 @@ For documentation-only changes:
 ```bash
 mdbook build
 cargo xtask test list
+cargo xtask test verify --target public-docs
 ```
 
 For code changes, use the narrowest relevant test target from

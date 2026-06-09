@@ -18,8 +18,9 @@
 </p>
 
 > [!WARNING]
-> CogentLM is under active development. Breaking changes are expected and it might not be suitable for productive environment.
-> If you find any issues, and bugs or need any features, please raise them in the github.
+> CogentLM is under active development. Breaking changes are expected, so it
+> might not be suitable for production environments yet.
+> If you find issues, bugs, or missing features, please open a GitHub issue.
 
 ## Use Published Packages
 
@@ -32,8 +33,8 @@ from this repository.
 | Node.js | `npm install cogentlm-server` | [Node.js package](docs/packages/node.md) |
 | Python | `pip install cogentlm` | [Python package](docs/packages/python.md) |
 | Rust | `cargo add cogentlm` | [Rust package](docs/packages/rust.md) |
-| Gateway Server | Source-built today | [Gateway Server](docs/packages/gateway-server.md) |
-| Gateway toolkit | Rust source artifact today | [Gateway toolkit](docs/packages/gateway.md) |
+| Gateway Server | Source-built today | [Gateway Server](docs/gateway/server.md) |
+| Gateway toolkit | Rust source artifact today | [Gateway toolkit](docs/gateway/toolkit.md) |
 
 The current release workflow publishes browser npm, Node npm, Python wheel,
 and Rust source artifacts. The gateway server is a user-facing deployment
@@ -116,7 +117,7 @@ Start with:
 - [Installation](docs/getting-started/installation.md)
 - [Quickstarts](docs/getting-started/quickstarts.md)
 - [Using Published Packages](docs/packages/README.md)
-- [Gateway Server](docs/packages/gateway-server.md)
+- [Gateway Server](docs/gateway/server.md)
 - [Frameworks](docs/packages/frameworks/README.md)
 
 ## Maintainers
@@ -155,7 +156,7 @@ See [Source Builds](docs/maintainers/source-builds.md),
 - [examples](examples/README.md): small, runnable integrations.
 - [demos](demos/README.md): browser demos built on public package surfaces.
 - [tools/playground](tools/playground/README.md): browser runtime diagnostics.
-- [xtask](xtask): build, test, run, and packaging automation.
+- `xtask/`: build, test, run, and packaging automation.
 
 ## License
 
