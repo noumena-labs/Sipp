@@ -7,6 +7,9 @@ instruct GGUFs, render the model's template yourself. `chat` sends role-tagged
 messages. `embed` returns vectors and needs an embedding-capable local model
 loaded with embedding mode enabled.
 
+Local context naming differs only by language casing: browser and Node.js use
+`contextKey`; Python and Rust use `context_key`.
+
 See [Examples And Demos](../examples-demos.md) for runnable end-to-end files.
 
 ## Browser Local
@@ -41,12 +44,14 @@ const textEndpoint = await client.add('text', {
 const query = await client.query(queryPrompt, {
   endpoint: textEndpoint,
   maxTokens: 64,
+  contextKey: 'browser-query',
 }).response;
 
 // chat: role messages; local runtime uses tokenizer.chat_template.
 const chat = await client.chat(messages, {
   endpoint: textEndpoint,
   maxTokens: 64,
+  contextKey: 'browser-chat',
 }).response;
 
 const embedEndpoint = await client.add('embed', {
@@ -61,6 +66,7 @@ const embedEndpoint = await client.add('embed', {
 // embed: vector output; local endpoint must be embedding-capable.
 const embedding = await client.embed('CogentLM embedding input.', {
   endpoint: embedEndpoint,
+  contextKey: 'browser-embed',
   normalize: true,
 }).response;
 
@@ -149,6 +155,7 @@ from cogentlm import (
     CogentTextOptions,
     ContextRuntimeConfig,
     LocalEmbedOptions,
+    LocalTextOptions,
     LocalModelDescriptor,
     NativeRuntimeConfig,
 )
@@ -176,6 +183,7 @@ query = client.query(
     query_prompt,
     endpoint=text_endpoint,
     options=text_options,
+    local=LocalTextOptions(context_key="python-query"),
 ).result()
 
 # chat: role messages; local runtime uses tokenizer.chat_template.
@@ -183,6 +191,7 @@ chat = client.chat(
     messages,
     endpoint=text_endpoint,
     options=text_options,
+    local=LocalTextOptions(context_key="python-chat"),
 ).result()
 
 embed_endpoint = client.add(
@@ -221,7 +230,7 @@ use cogentlm::engine::{
 };
 use cogentlm::{
     CogentChatRequest, CogentClient, CogentEmbedRequest, CogentQueryRequest,
-    CogentTextOptions, EndpointDescriptor, LocalEmbedOptions,
+    CogentTextOptions, EndpointDescriptor, LocalEmbedOptions, LocalTextOptions,
 };
 
 let mut client = CogentClient::new();
@@ -252,6 +261,10 @@ let query = client
         endpoint: Some(text_endpoint.clone()),
         prompt: query_prompt,
         options: text_options.clone(),
+        local: LocalTextOptions {
+            context_key: Some("rust-query".to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     })
     .await?;
@@ -262,6 +275,10 @@ let chat = client
         endpoint: Some(text_endpoint),
         messages,
         options: text_options,
+        local: LocalTextOptions {
+            context_key: Some("rust-chat".to_string()),
+            ..Default::default()
+        },
         ..Default::default()
     })
     .await?;

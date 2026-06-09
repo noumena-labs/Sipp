@@ -33,7 +33,7 @@ or CLI process.
 
 Local `chat` is a prompt renderer plus generation call, not a conversation
 store. Pass prior turns in `messages` when they should be visible to the model.
-Use a context key or browser session key only for local KV-cache reuse.
+Use a context key only for local KV-cache reuse.
 Encoder-decoder text models, such as T5 or BART GGUF files, use `query` for
 text generation. Encoder-only models do not generate text and should use
 `embed` when they expose pooled embeddings.
@@ -142,8 +142,8 @@ Anthropic endpoint.
 
 Gateway calls accept shared text options for `query` and `chat`, such as
 `max_tokens`, `temperature`, `top_p`, `stop`, and `stream`. Local-only fields
-such as `contextKey`, `session`, `grammar`, `jsonSchema`, `sampling`, `media`,
-and `normalize` are rejected by gateway endpoints. Direct-provider
+such as `contextKey`, `grammar`, `jsonSchema`, `sampling`, `media`, and
+`normalize` are rejected by gateway endpoints. Direct-provider
 `providerOptions` are also rejected by gateway endpoints; a custom gateway must
 translate provider-specific extensions deliberately.
 
