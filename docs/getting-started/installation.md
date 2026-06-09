@@ -34,6 +34,7 @@ added.
 
 ## Next Steps
 
+- [clm CLI for source checkouts](../clm/README.md)
 - [Browser package](../packages/browser.md)
 - [Node.js package](../packages/node.md)
 - [Python package](../packages/python.md)
