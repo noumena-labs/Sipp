@@ -12,7 +12,7 @@ which boundary receives each field.
 | Client options | `new CogentClient(options)` | Environment and process setup | Browser assets, workers, browser cache, and backend selection. |
 | Local endpoint load options | `client.add(..., { kind: 'local', options })` | `client.add(..., { kind: 'local', config })` | Model source, backend preference, progress, and native runtime config. |
 | Text request options | `client.query(prompt, options)` | `client.query({ options })` | Output length, sampling shortcuts, streaming, cancellation, and stop strings. |
-| Local request options | `session`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | Local-only prompt state, grammars, images, and embedding normalization. |
+| Local request options | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | Local-only prompt state, grammars, images, and embedding normalization. |
 | Gateway extensions | `endpointOptions` | `endpointOptions` | Extra fields consumed by gateway endpoint implementations. |
 | Provider extensions | `providerOptions` | `providerOptions` | Provider-only fields merged into direct provider requests. |
 
@@ -109,9 +109,9 @@ Text-producing calls share common generation controls:
 | `signal` | Cancellation through `AbortSignal` where supported. |
 | `emitTokens` | Enables token streaming through the returned run handle. |
 
-Local text calls can also use a prompt context key or session key, GBNF grammar,
-and media inputs for vision-capable models. Embedding calls can set
-normalization through local embedding options.
+Local text calls can also use a prompt context key, GBNF grammar, and media
+inputs for vision-capable models. Embedding calls can set normalization through
+local embedding options.
 
 Gateway-specific fields belong in `endpointOptions`. Direct provider-specific
 fields belong in `providerOptions`:

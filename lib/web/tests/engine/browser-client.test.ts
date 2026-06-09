@@ -340,6 +340,13 @@ test('gateway endpoints reject local-only inference options', async () => {
       error.message === 'local text options are not valid for gateway endpoints'
   );
   await assert.rejects(
+    client.chat([{ role: 'user', content: 'hello' }], { endpoint, contextKey: 'local' }).response,
+    (error) =>
+      error instanceof QueryError &&
+      error.code === 'UNSUPPORTED_OPERATION' &&
+      error.message === 'local text options are not valid for gateway endpoints'
+  );
+  await assert.rejects(
     client.embed('hello', { endpoint, normalize: true }).response,
     (error) =>
       error instanceof QueryError &&

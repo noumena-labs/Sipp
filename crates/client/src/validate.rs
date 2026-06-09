@@ -151,7 +151,6 @@ fn reject_provider_options(
 const LOCAL_ONLY_ENDPOINT_FIELDS: &[&str] = &[
     "context_key",
     "contextKey",
-    "session",
     "grammar",
     "json_schema",
     "jsonSchema",

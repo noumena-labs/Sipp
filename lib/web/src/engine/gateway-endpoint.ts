@@ -67,7 +67,6 @@ const EMBED_TYPED_FIELDS = new Set(['model', 'input']);
 const LOCAL_ONLY_GATEWAY_FIELDS = new Set([
   'context_key',
   'contextKey',
-  'session',
   'grammar',
   'json_schema',
   'jsonSchema',
@@ -390,7 +389,7 @@ function normalizeId(value: unknown, name: string): string {
 }
 
 function rejectGatewayTextLocalOptions(options: QueryOptions, hasMedia: boolean): void {
-  if (options.session != null || options.grammar != null || hasMedia) {
+  if (options.contextKey != null || options.grammar != null || hasMedia) {
     throw new QueryError(
       'UNSUPPORTED_OPERATION',
       'local text options are not valid for gateway endpoints'

@@ -27,7 +27,7 @@ export interface WorkerRuntimeConfig {
 export type WorkerQueryOptions =
   Pick<
     QueryOptions,
-    'session' | 'maxTokens' | 'temperature' | 'topP' | 'stop' | 'grammar'
+    'contextKey' | 'maxTokens' | 'temperature' | 'topP' | 'stop' | 'grammar'
   > & {
     emitTokens: boolean;
   };

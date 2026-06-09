@@ -185,7 +185,8 @@ export type QueryInput =
 export interface QueryOptions {
   /** Explicit endpoint for this request. Omitted requests use the current local endpoint. */
   endpoint?: EndpointRef;
-  session?: string;
+  /** Local KV-cache context key for browser-local text requests. */
+  contextKey?: string;
   maxTokens?: number;
   temperature?: number;
   topP?: number;
@@ -220,7 +221,7 @@ export interface InternalTextRequestOptions extends QueryOptions {
 }
 
 export interface QueryObservation {
-  session: string | null;
+  contextKey: string | null;
   status: 'running' | 'success' | 'cancelled' | 'failed';
   wallMs: number | null;
   ttftMs: number | null;

@@ -79,7 +79,7 @@ const ANTHROPIC_CHAT_TYPED_FIELDS = new Set([
   'stop_sequences',
   'stream',
 ]);
-const LOCAL_TEXT_FIELDS = new Set(['session', 'grammar']);
+const LOCAL_TEXT_FIELDS = new Set(['contextKey', 'grammar']);
 const LOCAL_EMBED_FIELDS = new Set(['contextKey', 'normalize']);
 const MAX_PROVIDER_ERROR_BYTES = 1 << 20;
 const MAX_PROVIDER_SSE_EVENT_BYTES = 1 << 20;

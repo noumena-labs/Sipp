@@ -78,7 +78,7 @@ interface AssetClassifier {
 }
 
 interface RuntimeRequestOptions {
-  session?: string;
+  contextKey?: string;
   maxTokens?: number;
   temperature?: number;
   topP?: number;
@@ -340,7 +340,7 @@ export class ModelService implements ModelLifecycleService {
     const response = await this.runRuntimeRequest(
       options,
       media,
-      (session, promptOptions) => this.runtime.enqueueQuery(session, prompt, promptOptions),
+      (contextKey, promptOptions) => this.runtime.enqueueQuery(contextKey, prompt, promptOptions),
       'Model query'
     );
     return generationResultFromGenerateResponse(response, {
@@ -361,7 +361,7 @@ export class ModelService implements ModelLifecycleService {
 
     const response = await this.runRuntimeRequest(
       {
-        session: options.contextKey,
+        contextKey: options.contextKey,
         signal: options.signal,
       },
       undefined,
@@ -378,7 +378,7 @@ export class ModelService implements ModelLifecycleService {
   private async runRuntimeRequest(
     options: RuntimeRequestOptions,
     media: Uint8Array[] | undefined,
-    enqueue: (session: string, promptOptions: PromptOptions) => Promise<GenerateRequestId>,
+    enqueue: (contextKey: string, promptOptions: PromptOptions) => Promise<GenerateRequestId>,
     operationLabel = 'Model query'
   ): Promise<GenerateResponse> {
     let tokenDrainMs = 0;
@@ -402,13 +402,13 @@ export class ModelService implements ModelLifecycleService {
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
     };
-    const session = options.session ?? 'default';
+    const contextKey = options.contextKey ?? 'default';
     const emitsTokens = promptOptions.emitTokens === true;
     const start = nowMs();
     this.observability.emit('query-start', {
       state: 'querying',
       query: {
-        session,
+        contextKey,
         status: 'running',
         wallMs: null,
         ttftMs: null,
@@ -418,13 +418,13 @@ export class ModelService implements ModelLifecycleService {
     let requestId = 0;
     let failureRecorded = false;
     try {
-      requestId = await enqueue(session, promptOptions);
+      requestId = await enqueue(contextKey, promptOptions);
       this.emitEngineEvent({ type: 'request-started', requestId: String(requestId), streamId: requestId });
       const response = await this.runtime.awaitQuery(requestId, { signal: options.signal });
       if (response.cancelled) {
         const error = new DOMException(response.errorMessage ?? 'Queued request cancelled.', 'AbortError');
         this.recordQueryFailure(
-          session,
+          contextKey,
           start,
           error,
           response,
@@ -441,7 +441,7 @@ export class ModelService implements ModelLifecycleService {
       if (response.failed) {
         const error = new Error(response.errorMessage ?? 'Queued prompt failed.');
         this.recordQueryFailure(
-          session,
+          contextKey,
           start,
           error,
           response,
@@ -456,7 +456,7 @@ export class ModelService implements ModelLifecycleService {
         throw error;
       }
       this.recordQuerySuccess(
-        session,
+        contextKey,
         start,
         response,
         this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
@@ -469,7 +469,7 @@ export class ModelService implements ModelLifecycleService {
     } catch (error) {
       if (!failureRecorded) {
         this.recordQueryFailure(
-          session,
+          contextKey,
           start,
           error,
           undefined,
@@ -563,7 +563,7 @@ export class ModelService implements ModelLifecycleService {
           ...(shouldDeliverTokens ? { tokenBatchSink: consumeOutputTokens } : {}),
         },
         media == null ? undefined : [...media],
-        (session, promptOptions) => this.runtime.enqueueChat(session, messages, promptOptions),
+        (contextKey, promptOptions) => this.runtime.enqueueChat(contextKey, messages, promptOptions),
         'Model chat'
       );
       const rawText = rawResult.outputText;
@@ -838,7 +838,7 @@ export class ModelService implements ModelLifecycleService {
   }
 
   private recordQuerySuccess(
-    session: string,
+    contextKey: string,
     start: number,
     response: GenerateResponse,
     transport: TransportObservability
@@ -850,13 +850,13 @@ export class ModelService implements ModelLifecycleService {
     );
     this.observability.emit('query-complete', {
       state: 'ready',
-      query: this.toQueryObservation(session, 'success', start, response),
+      query: this.toQueryObservation(contextKey, 'success', start, response),
       ...(runtime == null ? {} : { runtime }),
     });
   }
 
   private recordQueryFailure(
-    session: string,
+    contextKey: string,
     start: number,
     error: unknown,
     response?: GenerateResponse,
@@ -871,7 +871,7 @@ export class ModelService implements ModelLifecycleService {
       state: 'error',
       query: {
         ...this.toQueryObservation(
-          session,
+          contextKey,
           isAbortError(error) || response?.cancelled === true ? 'cancelled' : 'failed',
           start,
           response
@@ -905,14 +905,14 @@ export class ModelService implements ModelLifecycleService {
   }
 
   private toQueryObservation(
-    session: string,
+    contextKey: string,
     status: QueryObservation['status'],
     start: number,
     response?: GenerateResponse
   ): QueryObservation {
     const metrics = response?.observability ?? null;
     return {
-      session,
+      contextKey,
       status,
       wallMs: Math.max(0, nowMs() - start),
       ttftMs: metrics?.ttftMs ?? null,

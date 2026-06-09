@@ -441,6 +441,7 @@ class FakeRuntime implements EngineRuntime {
   public nextLoadError: Error | null = null;
   public stagedDescriptors: InternalBundleDescriptor[] = [];
   public lastPrompt: string | null = null;
+  public lastContextKey: string | null = null;
   public mediaMarker: string | null = null;
   public nextOutputText: string | null = null;
   public streamedTokens: string[] = ['token'];
@@ -611,11 +612,12 @@ class FakeRuntime implements EngineRuntime {
   }
 
   public async enqueueQuery(
-    _contextKey: string,
+    contextKey: string,
     promptText: string,
     options?: number | PromptOptions
   ): Promise<GenerateRequestId> {
     const requestId = this.nextRequestId++;
+    this.lastContextKey = contextKey;
     this.lastPrompt = promptText;
     this.enqueuedOptions.push(options);
     this.queuedRequests.set(requestId, { promptText, options });
@@ -649,11 +651,12 @@ class FakeRuntime implements EngineRuntime {
   }
 
   public async enqueueEmbedding(
-    _contextKey: string,
+    contextKey: string,
     input: string,
     options?: EmbedRuntimeOptions
   ): Promise<GenerateRequestId> {
     const requestId = this.nextRequestId++;
+    this.lastContextKey = contextKey;
     this.lastPrompt = input;
     this.enqueuedOptions.push(options);
     this.queuedRequests.set(requestId, {
@@ -878,7 +881,7 @@ class FakeRustLifecycleBridge {
     return {
       ...this.snapshot('error', null, 'off'),
       query: {
-        session: null,
+        contextKey: null,
         status: 'failed',
         wallMs: null,
         ttftMs: null,
@@ -1028,6 +1031,17 @@ test('ModelService maps common generation options into local prompt options', as
   assert.equal(options.nTokens, 12);
   assert.deepEqual(options.sampling, { temperature: 0.2, top_p: 0.8 });
   assert.deepEqual(options.stop, ['END']);
+});
+
+test('ModelService uses contextKey as the preferred local text context key', async () => {
+  const { service, runtime } = createService();
+  await service.load(file('text-model.gguf'));
+
+  await service.runQuery('hello', {
+    contextKey: 'ctx',
+  });
+
+  assert.equal(runtime.lastContextKey, 'ctx');
 });
 
 test('ModelService.embed returns embedding results without token emission', async () => {
