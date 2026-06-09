@@ -9,7 +9,7 @@ production deployment.
 From the repository root, copy the development config to an ignored local file:
 
 ```bash
-cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.toml
+cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
 ```
 
 Edit `apps/gateway-server/config/local.toml`:
@@ -38,10 +38,10 @@ Copy the Docker inputs:
 ```bash
 cp apps/gateway-server/.env.example apps/gateway-server/.env
 cp apps/gateway-server/development.yml.example apps/gateway-server/development.yml
-cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.toml
+cp apps/gateway-server/config/development.toml.example apps/gateway-server/config/development.toml
 ```
 
-Edit `apps/gateway-server/config/local.toml` for the container:
+Edit `apps/gateway-server/config/development.toml` for the container:
 
 ```toml
 public_bind = "0.0.0.0:8080"
@@ -50,11 +50,10 @@ admin_password = "replace-me"
 ```
 
 Set the local target `model` to the path inside the container. The development
-Compose file mounts `COGENTLM_MODEL_DIR` at `/workspace/.build/models`, so a
-typical value is:
+Compose file mounts `COGENTLM_MODEL_DIR` at `/models`, so a typical value is:
 
 ```toml
-model = "/workspace/.build/models/model.gguf"
+model = "/models/model.gguf"
 ```
 
 Edit `apps/gateway-server/.env`:
@@ -62,10 +61,17 @@ Edit `apps/gateway-server/.env`:
 ```bash
 COGENTLM_GATEWAY_IMAGE=cogentlm-gateway:vulkan
 COGENTLM_GATEWAY_BACKEND=vulkan
-COGENTLM_GATEWAY_CONFIG=./config/local.toml
+COGENTLM_GATEWAY_RUNTIME_ENV_FILE=./.env
+COGENTLM_GATEWAY_CONFIG=./config/development.toml
 COGENTLM_MODEL_DIR=../../.build/models
 COGENTLM_GATEWAY_TOKEN=replace-me
 ```
+
+For a other backends, set the `COGENTLM_GATEWAY_BACKEND` to the backend name you want to build (i.e., cpu, cuda, metal, all, etc.).
+
+The same `.env` file renders the Compose template and is injected into the
+container. Add provider secrets such as `OPENAI_API_KEY` there when your TOML
+targets reference them.
 
 Build and run:
 

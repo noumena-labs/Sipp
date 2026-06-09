@@ -423,7 +423,11 @@ fn config_rejects_duplicate_routes_on_the_same_listener() {
 
 #[test]
 fn shipped_gateway_configs_match_the_new_schema() {
-    for name in ["development.toml", "production.toml"] {
+    for name in [
+        "local.toml.example",
+        "development.toml.example",
+        "production.toml.example",
+    ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
             .join(name);

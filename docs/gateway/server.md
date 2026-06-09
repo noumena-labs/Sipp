@@ -19,16 +19,16 @@ the same arguments.
 
 ```bash
 export COGENTLM_GATEWAY_TOKEN="replace-me"
+cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
 clm build gateway-server --backend cpu
-clm run gateway-server check --config apps/gateway-server/config/development.toml
-clm run gateway-server serve --config apps/gateway-server/config/development.toml --backend cpu
+clm run gateway-server check --config apps/gateway-server/config/local.toml
+clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
 ```
 
-Before running real local tests, copy the development TOML to an ignored local
-file and set the literal `admin_password`, token env names, and model path:
+Before running real local tests, update the ignored local file with the
+literal `admin_password`, token env names, and model path:
 
 ```bash
-cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.toml
 clm run gateway-server check --config apps/gateway-server/config/local.toml
 clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
 ```

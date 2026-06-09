@@ -223,9 +223,8 @@ For Docker:
   bindings.
 - Production exposes public traffic through the configured host port and keeps
   management on `127.0.0.1` by default.
-- Local model paths should match the container mount point:
-  `/workspace/.build/models` for development Compose and `/models` for
-  production Compose.
+- Local model paths should match the container mount point. The checked-in
+  Docker examples mount host model directories at `/models`.
 
 ## Admin Dashboard
 

@@ -3,6 +3,9 @@ name: cogentlm-gateway-production
 services:
   gateway:
     image: ${COGENTLM_GATEWAY_IMAGE:?set a prebuilt gateway image}
+    env_file:
+      - path: ${COGENTLM_GATEWAY_RUNTIME_ENV_FILE:-./.env}
+        required: false
     environment:
       COGENTLM_GATEWAY_TOKEN: ${COGENTLM_GATEWAY_TOKEN:?required}
       RUST_LOG: ${RUST_LOG:-info}

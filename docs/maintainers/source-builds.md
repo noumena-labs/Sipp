@@ -84,13 +84,14 @@ for container deployment. The canonical source guide is
 ```bash
 export COGENTLM_GATEWAY_TOKEN="replace-me"
 clm build gateway-server --backend cpu
-clm run gateway-server check --config apps/gateway-server/config/development.toml
-clm run gateway-server serve --config apps/gateway-server/config/development.toml --backend cpu
+cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
+clm run gateway-server check --config apps/gateway-server/config/local.toml
+clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
 ```
 
-The source development config expects a local GGUF model under `.build/models`
-and a literal `admin_password` in the selected TOML file. Keep production TOML
-files private because they contain the Admin Dashboard password.
+The copied local config expects a local GGUF model under `.build/models` and a
+literal `admin_password` in the selected TOML file. Keep production TOML files
+private because they contain the Admin Dashboard password.
 
 ## Validation
 

@@ -35,7 +35,8 @@ RUN curl -fsSL https://bun.sh/install | bash
 
 WORKDIR /src
 COPY . .
-RUN cargo xtask build gateway-server --backend "${COGENTLM_GATEWAY_BACKEND}"
+RUN cargo run --target-dir .build/xtask --package xtask -- \
+    build gateway-server --backend "${COGENTLM_GATEWAY_BACKEND}"
 
 FROM ${COGENTLM_GATEWAY_RUNTIME_IMAGE}
 
@@ -45,8 +46,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl libgomp1 libvulkan1 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin cogentlm \
-    && mkdir -p /workspace/.build/models \
-    && chown -R cogentlm:cogentlm /workspace
+    && mkdir -p /workspace /models \
+    && chown -R cogentlm:cogentlm /workspace /models
 
 COPY --from=builder /src/.build/artifacts/gateway-server/ /usr/local/bin/
 

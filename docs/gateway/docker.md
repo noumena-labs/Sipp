@@ -10,14 +10,23 @@ Docker workflows use raw `docker` commands. The image runs:
 cogentlm-gateway serve --config /etc/cogentlm/gateway.toml
 ```
 
+The Dockerfile invokes the workspace `xtask` package directly with
+`cargo run --package xtask -- ...`; it does not rely on the local
+`cargo xtask` alias from `.cargo/config.toml`.
+
 ## Files
 
 - `apps/gateway-server/Dockerfile` builds the staged gateway distribution.
 - `apps/gateway-server/development.yml.example` is the local Compose template.
-- `apps/gateway-server/production.yml` runs a prebuilt local or registry image.
+- `apps/gateway-server/production.yml.example` is the production Compose
+  template for a prebuilt local or registry image.
 - `apps/gateway-server/.env.example` is a copyable Compose env starting point.
-- `apps/gateway-server/config/*.toml` configures listeners, routes, targets,
-  bearer-token env names, and the literal Admin Dashboard password.
+- `apps/gateway-server/config/local.toml.example` is for source/local host
+  runs.
+- `apps/gateway-server/config/development.toml.example` is for local Docker
+  and development-server runs.
+- `apps/gateway-server/config/production.toml.example` is for production
+  Docker runs.
 
 ## Local Docker Testing
 
@@ -27,24 +36,28 @@ workstation.
 ```bash
 cp apps/gateway-server/.env.example apps/gateway-server/.env
 cp apps/gateway-server/development.yml.example apps/gateway-server/development.yml
-cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.toml
+cp apps/gateway-server/config/development.toml.example apps/gateway-server/config/development.toml
 ```
 
-Edit `apps/gateway-server/config/local.toml`:
+Edit `apps/gateway-server/config/development.toml`:
 
 - Set `admin_password` to the local Admin Dashboard password.
 - Set `model` to the path the container will see. The development Compose
-  mount exposes the host model directory as `/workspace/.build/models`.
-- Use `public_bind = "0.0.0.0:8080"` and
-  `management_bind = "0.0.0.0:9090"` so the process listens on the
-  container network interface.
+  mount exposes the host model directory as `/models`.
+- Keep `public_bind = "0.0.0.0:8080"` and
+  `management_bind = "0.0.0.0:9090"` so the process listens on the container
+  network interface.
 
 Edit `apps/gateway-server/.env`:
 
-- Set `COGENTLM_GATEWAY_CONFIG=./config/local.toml`.
+- Set `COGENTLM_GATEWAY_CONFIG=./config/development.toml`.
+- Keep `COGENTLM_GATEWAY_RUNTIME_ENV_FILE=./.env` so the copied env file is
+  also injected into the gateway container.
 - Set `COGENTLM_MODEL_DIR` to the host directory containing the configured
   `.gguf` file.
 - Set `COGENTLM_GATEWAY_TOKEN` to the bearer token used by test clients.
+- Add any provider secret env vars named by TOML targets, for example
+  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a compatible provider token.
 
 Build and run:
 
@@ -57,9 +70,7 @@ docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/develo
 docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up
 ```
 
-For a CUDA-only image, set `COGENTLM_GATEWAY_IMAGE=cogentlm-gateway:cuda` and
-`COGENTLM_GATEWAY_BACKEND=cuda` in `apps/gateway-server/.env`, then build with
-`--build-arg COGENTLM_GATEWAY_BACKEND=cuda -t cogentlm-gateway:cuda`.
+For a other backends, set the `COGENTLM_GATEWAY_BACKEND` to the backend name you want to build (i.e., cpu, cuda, metal, etc.).
 
 The development Compose file maps both host ports to `127.0.0.1`, so the
 gateway stays local to the workstation even though the process binds
@@ -74,17 +85,25 @@ Use production Docker deployment when running a prebuilt local image or a
 private-registry image. The production Compose file does not build from
 source.
 
-Prepare a private production TOML file from
-`apps/gateway-server/config/production.toml`, set a real `admin_password`, and
-store it outside the repo, for example
-`/opt/cogentlm/gateway/production.toml`.
+Prepare private production files from the examples:
+
+```bash
+cp apps/gateway-server/production.yml.example /opt/cogentlm/gateway/production.yml
+cp apps/gateway-server/config/production.toml.example /opt/cogentlm/gateway/production.toml
+```
+
+Set a real `admin_password` in `/opt/cogentlm/gateway/production.toml` and
+keep that file outside the repo.
 
 Prepare a private env file from `apps/gateway-server/.env.example`, then set:
 
 - `COGENTLM_GATEWAY_IMAGE`: the prebuilt local or registry image.
 - `COGENTLM_GATEWAY_CONFIG`: host path to the private production TOML file.
+- `COGENTLM_GATEWAY_RUNTIME_ENV_FILE`: absolute path to this private env file,
+  so Compose passes bearer and provider secrets into the container.
 - `COGENTLM_MODEL_DIR`: host directory mounted at `/models`.
 - `COGENTLM_GATEWAY_TOKEN`: production bearer token value.
+- Provider secret variables referenced by production TOML targets.
 - `COGENTLM_GATEWAY_PUBLIC_PORT` and `COGENTLM_GATEWAY_MANAGEMENT_PORT` as
   needed.
 
@@ -103,8 +122,8 @@ For other backends, change the `COGENTLM_GATEWAY_BACKEND` build argument and
 Deploy:
 
 ```bash
-docker compose --env-file /opt/cogentlm/gateway/gateway.env -f apps/gateway-server/production.yml config
-docker compose --env-file /opt/cogentlm/gateway/gateway.env -f apps/gateway-server/production.yml up -d
+docker compose --env-file /opt/cogentlm/gateway/gateway.env -f /opt/cogentlm/gateway/production.yml config
+docker compose --env-file /opt/cogentlm/gateway/gateway.env -f /opt/cogentlm/gateway/production.yml up -d
 ```
 
 The production template publishes public traffic on the configured host port
@@ -118,7 +137,7 @@ changes by runtime mode.
 | Runtime | TOML bind values | Host exposure | Local target `model` path |
 | --- | --- | --- | --- |
 | Source/exe | Host addresses, usually `127.0.0.1:*` for development | The process binds directly on the host | Path seen from the process working directory |
-| Local Compose | Container addresses, usually `0.0.0.0:8080` and `0.0.0.0:9090` | `development.yml` maps host ports to `127.0.0.1` | `/workspace/.build/models/<file>.gguf` |
+| Local Compose | Container addresses, usually `0.0.0.0:8080` and `0.0.0.0:9090` | `development.yml` maps host ports to `127.0.0.1` | `/models/<file>.gguf` |
 | Production Compose | Container addresses, usually `0.0.0.0:8080` and `0.0.0.0:9090` | `production.yml` exposes public and keeps management host-local by default | `/models/<file>.gguf` |
 
 Compose mount variables:
@@ -126,8 +145,18 @@ Compose mount variables:
 | Variable | Host value | Container path |
 | --- | --- | --- |
 | `COGENTLM_GATEWAY_CONFIG` | TOML file path | `/etc/cogentlm/gateway.toml` |
-| `COGENTLM_MODEL_DIR` in development | Directory containing local GGUF files | `/workspace/.build/models` |
-| `COGENTLM_MODEL_DIR` in production | Directory containing local GGUF files | `/models` |
+| `COGENTLM_MODEL_DIR` | Directory containing local GGUF files | `/models` |
+
+Compose env behavior:
+
+- `docker compose --env-file <path>` supplies variables used to render the
+  Compose file, such as image names, ports, and mount paths.
+- `COGENTLM_GATEWAY_RUNTIME_ENV_FILE` points at the env file that is injected
+  into the container. Put bearer tokens and provider secrets there.
+- Explicit `environment` values in the Compose file keep
+  `COGENTLM_GATEWAY_TOKEN` and `RUST_LOG` visible in rendered
+  `docker compose config` output; provider secrets are passed through the
+  runtime env file.
 
 Keep management private in production. Put public ingress, TLS, and external
 auth controls in front of the public listener when needed.

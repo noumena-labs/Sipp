@@ -11,13 +11,16 @@ services:
         COGENTLM_GATEWAY_BUILDER_IMAGE: ${COGENTLM_GATEWAY_BUILDER_IMAGE:-rust:bookworm}
         COGENTLM_GATEWAY_RUNTIME_IMAGE: ${COGENTLM_GATEWAY_RUNTIME_IMAGE:-debian:bookworm-slim}
         COGENTLM_GATEWAY_INSTALL_RUSTUP: ${COGENTLM_GATEWAY_INSTALL_RUSTUP:-0}
+    env_file:
+      - path: ${COGENTLM_GATEWAY_RUNTIME_ENV_FILE:-./.env}
+        required: false
     environment:
       COGENTLM_GATEWAY_TOKEN: ${COGENTLM_GATEWAY_TOKEN:?required}
       RUST_LOG: ${RUST_LOG:-info}
     working_dir: /workspace
     volumes:
       - ${COGENTLM_GATEWAY_CONFIG:-./config/development.toml}:/etc/cogentlm/gateway.toml:ro
-      - ${COGENTLM_MODEL_DIR:-../../.build/models}:/workspace/.build/models:ro
+      - ${COGENTLM_MODEL_DIR:-../../.build/models}:/models:ro
     ports:
       - "127.0.0.1:${COGENTLM_GATEWAY_PUBLIC_PORT:-8080}:8080"
       - "127.0.0.1:${COGENTLM_GATEWAY_MANAGEMENT_PORT:-9090}:9090"
