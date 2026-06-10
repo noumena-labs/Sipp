@@ -38,6 +38,7 @@
   - [Vision](guides/vision.md)
 - [Reference](reference/README.md)
   - [Runtime Options](reference/runtime-options.md)
+  - [Device Support](reference/device-support.md)
   - [CLI](reference/cli.md)
   - [Configuration](reference/configuration.md)
 - [Examples And Demos](examples-demos.md)
