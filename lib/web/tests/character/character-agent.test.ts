@@ -498,7 +498,11 @@ test('choose() threads literal-choice grammar into queuePrompt options', async (
   const agent = new CharacterRuntime(client, buildConfig());
 
   const result = await agent.choose('What should you do?', {
-    choices: ['wait', 'wander', 'approach:aria'],
+    choices: [
+      { id: 'wait', label: 'wait' },
+      { id: 'wander', label: 'wander' },
+      { id: 'approach:aria', label: 'approach Aria' },
+    ],
   });
 
   assert.equal(result.selection, 'wait');
@@ -507,10 +511,31 @@ test('choose() threads literal-choice grammar into queuePrompt options', async (
   const call = client.queryCalls[0];
   assert.ok(typeof call.options === 'object' && call.options != null);
   const opts = call.options as QueryOptions;
-  assert.equal(opts.maxTokens, 24);
+  assert.equal(opts.maxTokens, 'approach:aria'.length + 4);
   assert.ok(typeof opts.grammar === 'string' && opts.grammar.includes('approach:aria'));
+  assert.ok(!opts.grammar.includes('approach Aria'));
   const promptText = queryPrompt(call.input);
-  assert.ok(promptText.includes('Choose exactly one of the following options and output only that option text:'));
+  assert.ok(promptText.includes('Select exactly one choice id. Output only the id.'));
+  assert.ok(promptText.includes('- approach:aria: approach Aria'));
+});
+
+test('choose() sizes the default token budget for long choice ids', async () => {
+  const longId = 'object_action:ice-power-up-12:pick_up';
+  const client = createFakeClient();
+  client.enqueue({ tokens: [longId] });
+  const agent = new CharacterRuntime(client, buildConfig());
+
+  const result = await agent.choose('Pick one.', {
+    choices: [
+      { id: longId, label: 'grab ice cube' },
+      { id: 'wait', label: 'wait' },
+    ],
+  });
+
+  assert.equal(result.selection, longId);
+  const call = client.queryCalls[0];
+  assert.ok(typeof call.options === 'object' && call.options != null);
+  assert.equal((call.options as QueryOptions).maxTokens, longId.length + 4);
 });
 
 test('choose() is stateless and does not write memory', async () => {
@@ -523,7 +548,10 @@ test('choose() is stateless and does not write memory', async () => {
   assert.equal(agent.getMemory().length, 2);
 
   const result = await agent.choose('Pick one.', {
-    choices: ['wait', 'wander'],
+    choices: [
+      { id: 'wait', label: 'wait' },
+      { id: 'wander', label: 'wander' },
+    ],
   });
 
   assert.equal(result.selection, 'wander');
@@ -539,7 +567,10 @@ test('choose() returns null on invalid model output', async () => {
   const agent = new CharacterRuntime(client, buildConfig());
 
   const result = await agent.choose('Pick one.', {
-    choices: ['yes', 'no'],
+    choices: [
+      { id: 'yes', label: 'yes' },
+      { id: 'no', label: 'no' },
+    ],
   });
 
   assert.equal(result.selection, null);
@@ -552,7 +583,10 @@ test('choose() surfaces client failure', async () => {
   const agent = new CharacterRuntime(client, buildConfig());
 
   const result = await agent.choose('Pick one.', {
-    choices: ['yes', 'no'],
+    choices: [
+      { id: 'yes', label: 'yes' },
+      { id: 'no', label: 'no' },
+    ],
   });
 
   assert.equal(result.selection, null);
@@ -568,7 +602,10 @@ test('choose() returns aborted when aborted', async () => {
   const agent = new CharacterRuntime(client, buildConfig());
 
   const result = await agent.choose('Pick one.', {
-    choices: ['yes', 'no'],
+    choices: [
+      { id: 'yes', label: 'yes' },
+      { id: 'no', label: 'no' },
+    ],
     signal: controller.signal,
   });
 
@@ -586,7 +623,10 @@ test('choose() returns timed_out on timeout and cancels the queued request', asy
   const agent = new CharacterRuntime(client, buildConfig());
 
   const result = await agent.choose('Pick one.', {
-    choices: ['yes', 'no'],
+    choices: [
+      { id: 'yes', label: 'yes' },
+      { id: 'no', label: 'no' },
+    ],
     timeoutMs: 1,
   });
   release();

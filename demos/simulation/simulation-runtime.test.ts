@@ -7,8 +7,12 @@ import {
   type DirectorRuntimeClient,
   type JsonValue,
 } from '../../lib/web/src/orchestrator/index.js';
+import { CharacterRuntime, type CharacterRuntimeClient } from '../../lib/web/src/character/character-agent.js';
+import { parseCharacterConfig } from '../../lib/web/src/character/character-config.js';
 import type {
   BrowserTextRun,
+  ChatInput,
+  ChatOptions,
   GenerationResult,
   RequestStats,
   TokenBatch,
@@ -23,6 +27,7 @@ import {
 } from './src/runtime/reducer.ts';
 import { buildRefereeChoices, buildRefereePayload, SimulationRuntime } from './src/runtime/simulation-runtime.ts';
 import { buildDecisionContext } from './src/runtime/decision-context.ts';
+import { SimulationAgentChooser } from './src/runtime/agent-chooser.ts';
 import type {
   AgentPerception,
   DirectorResolution,
@@ -150,6 +155,17 @@ function createOutputClient(outputText: string): DirectorRuntimeClient & { gramm
       return createTextRun(Promise.resolve(createGenerationResult(outputText)));
     },
   };
+}
+
+function createFailingCharacterClient(): CharacterRuntimeClient & { chatCalls: number } {
+  const client: CharacterRuntimeClient & { chatCalls: number } = {
+    chatCalls: 0,
+    chat(_input: ChatInput, _options?: ChatOptions): BrowserTextRun {
+      client.chatCalls += 1;
+      throw new Error('single-option agent decisions must not query the model');
+    },
+  };
+  return client;
 }
 
 function createAgent(
@@ -1184,6 +1200,150 @@ test('agent decision context allows tactical sabotage only against the immediate
   assert.equal(coolingDecision.options.some((option) => option.label === 'throw the ice cube at Threat'), false);
   assert.equal(coolingDecision.options.some((option) => option.label === 'push Threat'), false);
   assert.match(coolingDecision.prompt, /banana is loose, so keep racing it/);
+});
+
+test('SimulationAgentChooser maps decision labels through numeric choice ids', async () => {
+  const state = createWorldState();
+  const seeker = createAgent('mira', 'Mira', { x: 0, z: 0 }, {
+    archetype: 'mira',
+    powerUp: { kind: 'ice_cube', objectId: 'ice-power-up' },
+  });
+  const threat = createAgent('threat', 'Threat', { x: 0.8, z: 0 }, {
+    status: 'rushing banana',
+  });
+  const perception: AgentPerception = {
+    self: seeker,
+    nearbyAgents: [
+      {
+        id: threat.id,
+        name: threat.name,
+        distance: 0.8,
+        direction: { x: 1, z: 0 },
+        emotion: threat.emotion,
+        status: threat.status,
+        holding: threat.holding,
+        powerUp: threat.powerUp?.kind ?? null,
+        frozenUntilTick: threat.frozenUntilTick,
+      },
+    ],
+    nearbyObjects: [
+      {
+        id: 'banana',
+        kind: 'banana',
+        label: 'banana',
+        description: 'banana',
+        distance: 1.1,
+        direction: { x: 1, z: 0 },
+        active: true,
+        heldBy: null,
+        contested: true,
+        affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+        tags: ['food'],
+        blocksMovement: false,
+        collisionRadius: 0.2,
+      },
+      {
+        id: 'home',
+        kind: 'goal',
+        label: 'home base',
+        description: 'home base',
+        distance: 6,
+        direction: { x: 0, z: -1 },
+        active: true,
+        heldBy: null,
+        contested: false,
+        affordances: [],
+        tags: ['goal'],
+        blocksMovement: false,
+        collisionRadius: 1.2,
+      },
+    ],
+    tick: 10,
+    bounds: state.bounds,
+    directorNote: null,
+    lastDecision: null,
+    game: state.game,
+  };
+  const config = parseCharacterConfig({
+    id: 'mira',
+    persona: { name: 'Mira', summary: 'A tactical Banana Dash agent.' },
+    actions: [],
+  });
+  const client = createOutputClient('2');
+  const chooser = new SimulationAgentChooser('mira', new CharacterRuntime(client, config), config);
+
+  const result = await chooser.query(perception);
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.goal?.kind, 'sabotage_agent');
+  assert.equal(result.goal?.label, 'throw the ice cube at Threat');
+  assert.match(client.grammar ?? '', /"2"/);
+  assert.doesNotMatch(client.grammar ?? '', /sabotage_agent:ice_cube:threat/);
+  assert.doesNotMatch(client.grammar ?? '', /throw the ice cube at Threat/);
+  assert.match(client.promptText ?? '', /- 2: throw the ice cube at Threat/);
+});
+
+test('SimulationAgentChooser resolves single-option decisions without querying the model', async () => {
+  const state = createWorldState();
+  const sol = createAgent('sol', 'Sol', { x: 5, z: 4 }, { archetype: 'sol' });
+  const perception: AgentPerception = {
+    self: sol,
+    nearbyAgents: [],
+    nearbyObjects: [
+      {
+        id: 'banana',
+        kind: 'banana',
+        label: 'banana',
+        description: 'banana',
+        distance: 6.4,
+        direction: { x: -0.8, z: -0.6 },
+        active: true,
+        heldBy: null,
+        contested: true,
+        affordances: [{ kind: 'pick_up', label: 'grab banana' }],
+        tags: ['food'],
+        blocksMovement: false,
+        collisionRadius: 0.2,
+      },
+      {
+        id: 'home',
+        kind: 'goal',
+        label: 'home base',
+        description: 'home base',
+        distance: 6,
+        direction: { x: 0, z: -1 },
+        active: true,
+        heldBy: null,
+        contested: false,
+        affordances: [],
+        tags: ['goal'],
+        blocksMovement: false,
+        collisionRadius: 1.2,
+      },
+    ],
+    tick: 10,
+    bounds: state.bounds,
+    directorNote: null,
+    lastDecision: null,
+    game: state.game,
+  };
+  const decision = buildDecisionContext(perception);
+  assert.deepEqual(decision.options.map((option) => option.label), ['rush banana']);
+
+  const config = parseCharacterConfig({
+    id: 'sol',
+    persona: { name: 'Sol', summary: 'A streaky Banana Dash agent.' },
+    actions: [],
+  });
+  const client = createFailingCharacterClient();
+  const chooser = new SimulationAgentChooser('sol', new CharacterRuntime(client, config), config);
+
+  const result = await chooser.query(perception);
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.goal, { kind: 'go_to_object', objectId: 'banana', label: 'rush banana' });
+  assert.equal(result.rawText, '');
+  assert.equal(client.chatCalls, 0);
 });
 
 test('push relocates a nearby carrier without dropping the banana', () => {

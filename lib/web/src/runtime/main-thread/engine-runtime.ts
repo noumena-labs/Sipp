@@ -1,8 +1,4 @@
-import type {
-  BrowserRuntimeSmokeResult,
-  CogentClientOptions,
-  EngineModuleOptions,
-} from '../../engine/browser-client.js';
+import type { CogentClientOptions, EngineModuleOptions } from '../../engine/browser-client.js';
 import type {
   BackendObservability,
   ChatMessage,
@@ -71,12 +67,7 @@ function resolveRuntimeSiblingUrl(moduleUrl: string, extension: string): string 
   return new URL(`${stem}${extension}`, parsedModuleUrl).toString();
 }
 
-const BROWSER_SMOKE_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
-const BROWSER_SMOKE_SHARD_MAX_BYTES = 128;
 const EXPECTED_RUST_BROWSER_ENGINE_ABI_VERSION = 6;
-const GGUF_MAGIC = 0x4655_4747;
-const GGUF_VALUE_STRING = 8;
-const GGUF_ALIGNMENT = 32;
 const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
   executionMode: 'main-thread',
   workerBacked: false,
@@ -89,198 +80,6 @@ const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
 
 function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function alignTo(value: number, alignment: number): number {
-  return Math.ceil(value / alignment) * alignment;
-}
-
-function appendU32(bytes: number[], value: number): void {
-  bytes.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
-}
-
-function appendU64(bytes: number[], value: number): void {
-  let remaining = BigInt(value);
-  for (let index = 0; index < 8; index += 1) {
-    bytes.push(Number(remaining & 0xffn));
-    remaining >>= 8n;
-  }
-}
-
-function appendString(bytes: number[], value: string): void {
-  const encoded = new TextEncoder().encode(value);
-  appendU64(bytes, encoded.byteLength);
-  bytes.push(...encoded);
-}
-
-function buildBrowserSmokeGguf(): Uint8Array {
-  const tensors = [
-    { name: 'blk.0.weight', fill: 1 },
-    { name: 'blk.1.weight', fill: 2 },
-    { name: 'output.weight', fill: 3 },
-  ];
-  const metadata: number[] = [];
-  const tensorData: number[] = [];
-  const tensorOffsets: number[] = [];
-
-  appendU32(metadata, GGUF_MAGIC);
-  appendU32(metadata, 3);
-  appendU64(metadata, tensors.length);
-  appendU64(metadata, 1);
-  appendString(metadata, 'general.architecture');
-  appendU32(metadata, GGUF_VALUE_STRING);
-  appendString(metadata, 'llama');
-
-  for (const tensor of tensors) {
-    const nextOffset = alignTo(tensorData.length, GGUF_ALIGNMENT);
-    while (tensorData.length < nextOffset) {
-      tensorData.push(0);
-    }
-    tensorOffsets.push(nextOffset);
-    tensorData.push(...new Array<number>(64).fill(tensor.fill));
-  }
-
-  for (let index = 0; index < tensors.length; index += 1) {
-    appendString(metadata, tensors[index].name);
-    appendU32(metadata, 1);
-    appendU64(metadata, 16);
-    appendU32(metadata, 0);
-    appendU64(metadata, tensorOffsets[index]);
-  }
-
-  const dataOffset = alignTo(metadata.length, GGUF_ALIGNMENT);
-  while (metadata.length < dataOffset) {
-    metadata.push(0);
-  }
-  metadata.push(...tensorData);
-  return new Uint8Array(metadata);
-}
-
-function runBrowserGgufIngestSmoke(bridge: WasmBridge): BrowserRuntimeSmokeResult['ggufIngest'] {
-  try {
-    const layoutForLargeFile = bridge.browserCacheLayout(
-      BROWSER_SMOKE_DIRECT_LOAD_MAX_BYTES + 1,
-      true,
-      BROWSER_SMOKE_DIRECT_LOAD_MAX_BYTES,
-      512 * 1024 * 1024
-    );
-    const source = buildBrowserSmokeGguf();
-    const readAt = (offset: number, target: Uint8Array): number => {
-      const start = Math.trunc(offset);
-      const end = start + target.byteLength;
-      if (start < 0 || end > source.byteLength) {
-        return -1;
-      }
-      target.set(source.subarray(start, end));
-      return 0;
-    };
-    const plannedShardCount = bridge.planGgufSplitCount(
-      source.byteLength,
-      BROWSER_SMOKE_SHARD_MAX_BYTES,
-      { readAt }
-    );
-    let activeShard = false;
-    let streamedShardCount = 0;
-    let streamedBytes = 0;
-
-    bridge.splitGgufStream(
-      source.byteLength,
-      'browser-smoke-model',
-      BROWSER_SMOKE_SHARD_MAX_BYTES,
-      {
-        readAt,
-        openShard: (_path, _index, count) => {
-          if (count !== plannedShardCount || activeShard) {
-            return -1;
-          }
-          activeShard = true;
-          return 0;
-        },
-        writeShard: (bytes) => {
-          if (!activeShard) {
-            return -1;
-          }
-          streamedBytes += bytes.byteLength;
-          return 0;
-        },
-        closeShard: () => {
-          if (!activeShard) {
-            return -1;
-          }
-          activeShard = false;
-          streamedShardCount += 1;
-          return 0;
-        },
-      }
-    );
-
-    if (layoutForLargeFile !== 'split-gguf') {
-      throw new Error(`unexpected browser cache layout: ${layoutForLargeFile}`);
-    }
-    if (plannedShardCount !== 2 || streamedShardCount !== plannedShardCount || streamedBytes <= 0) {
-      throw new Error(
-        `unexpected GGUF ingest result: planned=${plannedShardCount} streamed=${streamedShardCount} bytes=${streamedBytes}`
-      );
-    }
-
-    return {
-      available: true,
-      layoutForLargeFile,
-      plannedShardCount,
-      streamedShardCount,
-      streamedBytes,
-      error: null,
-    };
-  } catch (error) {
-    return {
-      available: false,
-      layoutForLargeFile: null,
-      plannedShardCount: null,
-      streamedShardCount: 0,
-      streamedBytes: 0,
-      error: asErrorMessage(error),
-    };
-  }
-}
-
-function runBrowserRustEngineSmoke(bridge: WasmBridge): BrowserRuntimeSmokeResult['rustEngine'] {
-  let engine = 0;
-  try {
-    const abiVersion = verifyRustBrowserEngineAbi(bridge);
-    engine = bridge.rustBrowserEngineCreate();
-    if (engine === 0) {
-      throw new Error('Rust browser engine create returned a null handle.');
-    }
-    const engineId = bridge.rustBrowserEngineId(engine);
-    if (engineId <= 0) {
-      throw new Error(`Rust browser engine returned invalid id ${engineId}.`);
-    }
-    const closeStatus = bridge.rustBrowserEngineClose(engine);
-    engine = 0;
-    if (closeStatus !== 0) {
-      throw new Error(`Rust browser engine close failed with status ${closeStatus}.`);
-    }
-    return {
-      available: true,
-      abiVersion,
-      engineId,
-      error: null,
-    };
-  } catch (error) {
-    if (engine !== 0) {
-      try {
-        bridge.rustBrowserEngineClose(engine);
-      } catch {
-        /* ignore cleanup failure in smoke error path */
-      }
-    }
-    return {
-      available: false,
-      abiVersion: 0,
-      engineId: null,
-      error: asErrorMessage(error),
-    };
-  }
 }
 
 function verifyRustBrowserEngineAbi(bridge: WasmBridge): number {
@@ -1115,28 +914,5 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     } catch (error) {
       throw new Error(`Failed to parse backend observability: ${asErrorMessage(error)}`);
     }
-  }
-
-  public async runBrowserRuntimeSmoke(): Promise<BrowserRuntimeSmokeResult> {
-    await this.initModule();
-    const bridge = this.getLoadedWasmBridge();
-    const rustEngine = runBrowserRustEngineSmoke(bridge);
-    const ggufIngest = runBrowserGgufIngestSmoke(bridge);
-    const rawBackend = await bridge.getBackendObservabilityJson();
-    const backend =
-      rawBackend == null ? null : parseBackendObservabilityJson(rawBackend);
-    const webgpuReady = Boolean(
-      backend?.webgpuCompiled &&
-      backend.webgpuRegistered &&
-      backend.webgpuDeviceCount > 0 &&
-      backend.gpuOffloadSupported
-    );
-
-    return {
-      rustEngine,
-      ggufIngest,
-      backend,
-      webgpuReady,
-    };
   }
 }

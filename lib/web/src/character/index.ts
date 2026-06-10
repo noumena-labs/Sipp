@@ -43,6 +43,7 @@ export {
 
 /** Character runtime client, run-state, choice, and chat-turn types. */
 export type {
+  CharacterChoice,
   CharacterRuntimeClient,
   CharacterChooseResult,
   CharacterChooseOptions,

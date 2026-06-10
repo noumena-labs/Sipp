@@ -283,6 +283,20 @@ export interface BackendProfileObservation {
     type: BackendDeviceType;
     backendName: string;
   }>;
+  webgpuAdapter?: WebGpuAdapterInfo | null;
+}
+
+/**
+ * Identity of the WebGPU adapter observed in the execution context that runs
+ * the engine. On hybrid-GPU machines this is the ground truth for which
+ * physical GPU inference actually uses; backend name alone cannot tell an
+ * integrated adapter from a discrete one.
+ */
+export interface WebGpuAdapterInfo {
+  vendor: string;
+  architecture: string;
+  device: string;
+  description: string;
 }
 
 export type EngineStatus = 'idle' | 'loading' | 'ready' | 'running' | 'error' | 'closed';
@@ -293,6 +307,7 @@ export type FinishReason = 'stop' | 'length' | 'cancelled' | 'error';
 export interface BackendInfo {
   selected: EngineBackendName;
   available: string[];
+  adapter: WebGpuAdapterInfo | null;
   devices: Array<{
     id: string | null;
     name: string;

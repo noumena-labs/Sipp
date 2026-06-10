@@ -49,6 +49,7 @@ import {
   type InternalTextRequestOptions,
   type TokenBatch,
   type RegistryManifest,
+  type WebGpuAdapterInfo,
 } from './types.js';
 import {
   embeddingResultFromGenerateResponse,
@@ -100,7 +101,14 @@ type NavigatorGpuAdapter = {
   readonly features?: {
     has(feature: string): boolean;
   };
+  readonly info?: Partial<WebGpuAdapterInfo> | null;
+  requestAdapterInfo?: () => Promise<Partial<WebGpuAdapterInfo> | null>;
 };
+
+interface ResolvedBrowserBackend {
+  backend: Exclude<BrowserBackendPreference, 'auto'>;
+  webgpuAdapter: WebGpuAdapterInfo | null;
+}
 
 function isFile(value: unknown): value is File {
   return typeof File !== 'undefined' && value instanceof File;
@@ -120,13 +128,43 @@ function isSourceObject(source: ModelSource): source is Extract<ModelSource, { m
 
 async function resolveBrowserBackend(
   backend: BrowserBackendPreference | undefined
-): Promise<Exclude<BrowserBackendPreference, 'auto'>> {
-  if (backend === 'cpu' || backend === 'webgpu') {
-    return backend;
+): Promise<ResolvedBrowserBackend> {
+  if (backend === 'cpu') {
+    return { backend, webgpuAdapter: null };
   }
   const gpu = (globalThis.navigator as NavigatorWithGpu | undefined)?.gpu;
   const adapter = gpu == null ? null : await gpu.requestAdapter();
-  return adapter?.features?.has('shader-f16') === true ? 'webgpu' : 'cpu';
+  if (backend === 'webgpu') {
+    return { backend, webgpuAdapter: await readWebGpuAdapterInfo(adapter) };
+  }
+  if (adapter?.features?.has('shader-f16') !== true) {
+    return { backend: 'cpu', webgpuAdapter: null };
+  }
+  return { backend: 'webgpu', webgpuAdapter: await readWebGpuAdapterInfo(adapter) };
+}
+
+/**
+ * Read the adapter identity in the scope that runs the engine. The wasm
+ * backend requests its adapter from this same scope, so this mirrors the GPU
+ * inference actually executes on (decisive on hybrid-GPU machines, where the
+ * browser, not the app, picks the physical GPU).
+ */
+async function readWebGpuAdapterInfo(
+  adapter: NavigatorGpuAdapter | null
+): Promise<WebGpuAdapterInfo | null> {
+  if (adapter == null) {
+    return null;
+  }
+  const info = adapter.info ?? (await adapter.requestAdapterInfo?.()) ?? null;
+  if (info == null) {
+    return null;
+  }
+  return {
+    vendor: info.vendor ?? '',
+    architecture: info.architecture ?? '',
+    device: info.device ?? '',
+    description: info.description ?? '',
+  };
 }
 
 function nowMs(): number {
@@ -637,14 +675,14 @@ export class ModelService implements ModelLifecycleService {
     let rust: RustLifecycleBridge | null = null;
     try {
       const rustSource = await this.buildRustLoadSource(source, manifest, loadOptions);
-      const [resolvedRust, backend] = await Promise.all([rustPromise, backendPromise]);
+      const [resolvedRust, resolvedBackend] = await Promise.all([rustPromise, backendPromise]);
       rust = resolvedRust;
       const runtimeConfig = applyBrowserRuntimeDefaults(
         options.runtime,
         this.runtime.getWasmThreadingMode()
       );
       prepared = rust.prepareLoad(rustSource, {
-        backend,
+        backend: resolvedBackend.backend,
         runtime: runtimeConfig,
         observability: observabilityMode,
       });
@@ -681,10 +719,13 @@ export class ModelService implements ModelLifecycleService {
         this.runtime.getRuntimeObservability(),
         this.runtime.getTransportObservability()
       );
-      const profile =
-        observabilityMode === 'profile'
-          ? toBackendProfileObservation(await this.runtime.getBackendObservability())
-          : undefined;
+      // Backend identity (registry, devices, adapter) is cheap read-only data
+      // and stays available in every observability mode; only the native
+      // profiling instrumentation remains gated on 'profile'.
+      const profile = toBackendProfileObservation(
+        await this.runtime.getBackendObservability(),
+        resolvedBackend.webgpuAdapter
+      );
       const committed = rust.commitLoad({
         loadId: prepared.loadId,
         modelId: prepared.model.id,

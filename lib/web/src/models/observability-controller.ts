@@ -22,6 +22,7 @@ import type {
   RequestState,
   RequestStats,
   RuntimeObservation,
+  WebGpuAdapterInfo,
 } from './types.js';
 
 const emptyStats: EngineStats = {
@@ -49,6 +50,7 @@ const emptyStats: EngineStats = {
 const emptyBackend: BackendInfo = {
   selected: 'unknown',
   available: [],
+  adapter: null,
   devices: [],
 };
 
@@ -78,6 +80,10 @@ function cloneSnapshot(snapshot: ObservabilitySnapshot): ObservabilitySnapshot {
             ...snapshot.profile,
             availableBackends: snapshot.profile.availableBackends.map((backend) => ({ ...backend })),
             devices: snapshot.profile.devices.map((device) => ({ ...device })),
+            webgpuAdapter:
+              snapshot.profile.webgpuAdapter == null
+                ? snapshot.profile.webgpuAdapter
+                : { ...snapshot.profile.webgpuAdapter },
           },
   };
 }
@@ -147,7 +153,8 @@ export function toRuntimeObservation(
 }
 
 export function toBackendProfileObservation(
-  backend: BackendObservability | null
+  backend: BackendObservability | null,
+  webgpuAdapter: WebGpuAdapterInfo | null = null
 ): BackendProfileObservation | undefined {
   if (backend == null) {
     return undefined;
@@ -165,6 +172,7 @@ export function toBackendProfileObservation(
       type: device.type,
       backendName: device.backendName,
     })),
+    webgpuAdapter: webgpuAdapter == null ? null : { ...webgpuAdapter },
   };
 }
 
@@ -311,6 +319,7 @@ function toBackendInfo(profile: BackendProfileObservation | undefined): BackendI
   return {
     selected: selectBackend(profile),
     available: profile.availableBackends.map((backend) => backend.name),
+    adapter: profile.webgpuAdapter == null ? null : { ...profile.webgpuAdapter },
     devices: profile.devices.map((device) => ({
       id: null,
       name: device.name,

@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { CogentClient } from '@noumena-labs/cogentlm';
+import { createCharacterFromConfigUrl } from '@noumena-labs/cogentlm/character';
 import { createDirectorFromConfigUrl } from '@noumena-labs/cogentlm/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
@@ -37,9 +38,7 @@ import {
   BrainActivityStore,
   type BrainDefinition,
 } from './runtime/brain-activity-store.js';
-import {
-  createSimulationAgentChooserFromConfigUrl,
-} from './runtime/agent-chooser.js';
+import { SimulationAgentChooser } from './runtime/agent-chooser.js';
 import { createTracedBrainClient } from './runtime/traced-engine.js';
 import { SimulationRuntime } from './runtime/simulation-runtime.js';
 import type {
@@ -642,11 +641,12 @@ export default function App() {
           if (!brain) {
             throw new Error(`brain definition missing for ${assignment.agentId}`);
           }
-          const { agent } = await createSimulationAgentChooserFromConfigUrl({
-            agentId: assignment.agentId,
+          const brainClient = createTracedBrainClient(nextClient, brainStore, bus, brain);
+          const { character, config } = await createCharacterFromConfigUrl({
             configUrl: assignment.characterUrl,
-            client: createTracedBrainClient(nextClient, brainStore, bus, brain),
+            client: brainClient,
           });
+          const agent = new SimulationAgentChooser(assignment.agentId, character, config);
           const seed = scenario.agents.find((a) => a.id === assignment.agentId);
           if (!seed) {
             throw new Error(`no scenario seed for ${assignment.agentId}`);

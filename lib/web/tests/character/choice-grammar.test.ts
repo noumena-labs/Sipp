@@ -12,8 +12,10 @@ test('compileChoiceGrammar emits a literal alternation root rule', () => {
   assert.equal(grammar, 'root ::= "yes" | "no" | "approach:aria"\n');
 });
 
-test('parseChoiceOutput accepts only exact trimmed matches', () => {
+test('parseChoiceOutput accepts only explicit choice ids', () => {
   assert.equal(parseChoiceOutput(' yes ', ['yes', 'no']), 'yes');
+  assert.equal(parseChoiceOutput(' yes. ', ['yes', 'no']), null);
+  assert.equal(parseChoiceOutput('option yes', ['yes', 'no']), null);
   assert.equal(parseChoiceOutput('maybe', ['yes', 'no']), null);
   assert.equal(parseChoiceOutput('', ['yes', 'no']), null);
 });
