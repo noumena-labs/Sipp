@@ -23,16 +23,20 @@ jobs:
             runtime: debian:bookworm-slim
             rustup: "0"
             tag_suffix: cpu
+            cuda_architectures: ""
           - backend: vulkan
             builder: rust:bookworm
             runtime: ubuntu:22.04
             rustup: "0"
             tag_suffix: vulkan
+            cuda_architectures: ""
           - backend: cuda
-            builder: nvidia/cuda:12.2.2-devel-ubuntu22.04
-            runtime: nvidia/cuda:12.2.2-runtime-ubuntu22.04
+            builder: nvidia/cuda:13.3.0-devel-ubuntu24.04
+            runtime: nvidia/cuda:13.3.0-runtime-ubuntu24.04
             rustup: "1"
             tag_suffix: cuda
+            # Portable cloud GPU architectures for CUDA 13 release images.
+            cuda_architectures: "75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real"
 
     steps:
       - name: Check out repository
@@ -89,6 +93,7 @@ jobs:
             COGENTLM_GATEWAY_BUILDER_IMAGE=${{ matrix.builder }}
             COGENTLM_GATEWAY_RUNTIME_IMAGE=${{ matrix.runtime }}
             COGENTLM_GATEWAY_INSTALL_RUSTUP=${{ matrix.rustup }}
+            COGENTLM_CUDA_ARCHITECTURES=${{ matrix.cuda_architectures }}
           tags: |
             ${{ steps.image.outputs.name }}:latest-${{ matrix.tag_suffix }}
             ${{ steps.image.outputs.name }}:${{ steps.image.outputs.ref_tag }}-${{ matrix.tag_suffix }}

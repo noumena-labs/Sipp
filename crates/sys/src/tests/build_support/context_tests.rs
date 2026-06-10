@@ -24,6 +24,7 @@ const CONTEXT_ENV_VARS: &[(&str, Option<&str>)] = &[
     ("CARGO_FEATURE_PTHREAD", None),
     ("CUDA_PATH", None),
     ("CUDA_HOME", None),
+    ("COGENTLM_CUDA_ARCHITECTURES", None),
     ("VULKAN_SDK", None),
     ("COGENTLM_SYS_CMAKE_OUT_DIR", None),
 ];
@@ -49,6 +50,7 @@ fn context_for(manifest_dir: PathBuf, target: &str, features: FeatureFlags) -> B
         features,
         env_vars: BuildEnv {
             cuda_path: None,
+            cuda_architectures: None,
             vulkan_sdk: None,
             cmake_out_dir: None,
         },
@@ -116,12 +118,14 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
     let _env = EnvGuard::new(&[
         ("CUDA_PATH", Some("cuda-path")),
         ("CUDA_HOME", Some("cuda-home")),
+        ("COGENTLM_CUDA_ARCHITECTURES", Some(" 80;90 ")),
         ("VULKAN_SDK", Some("vulkan-sdk")),
         ("COGENTLM_SYS_CMAKE_OUT_DIR", Some(r"\\?\cmake-out")),
     ]);
 
     let env = BuildEnv::from_env();
     assert_eq!(env.cuda_path, Some(PathBuf::from("cuda-path")));
+    assert_eq!(env.cuda_architectures, Some("80;90".to_owned()));
     assert_eq!(env.vulkan_sdk, Some(PathBuf::from("vulkan-sdk")));
     assert_eq!(env.cmake_out_dir, Some(PathBuf::from("cmake-out")));
 }
@@ -131,14 +135,30 @@ fn build_env_falls_back_to_cuda_home() {
     let _env = EnvGuard::new(&[
         ("CUDA_PATH", None),
         ("CUDA_HOME", Some("cuda-home")),
+        ("COGENTLM_CUDA_ARCHITECTURES", None),
         ("VULKAN_SDK", None),
         ("COGENTLM_SYS_CMAKE_OUT_DIR", None),
     ]);
 
     let env = BuildEnv::from_env();
     assert_eq!(env.cuda_path, Some(PathBuf::from("cuda-home")));
+    assert_eq!(env.cuda_architectures, None);
     assert_eq!(env.vulkan_sdk, None);
     assert_eq!(env.cmake_out_dir, None);
+}
+
+#[test]
+fn build_env_treats_blank_cuda_architectures_as_unset() {
+    let _env = EnvGuard::new(&[
+        ("CUDA_PATH", None),
+        ("CUDA_HOME", None),
+        ("COGENTLM_CUDA_ARCHITECTURES", Some("   ")),
+        ("VULKAN_SDK", None),
+        ("COGENTLM_SYS_CMAKE_OUT_DIR", None),
+    ]);
+
+    let env = BuildEnv::from_env();
+    assert_eq!(env.cuda_architectures, None);
 }
 
 #[test]

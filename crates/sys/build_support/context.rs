@@ -66,6 +66,7 @@ impl BuildContext {
         println!("cargo:rerun-if-env-changed=VULKAN_SDK");
         println!("cargo:rerun-if-env-changed=EMSDK");
         println!("cargo:rerun-if-env-changed=COGENTLM_SYS_CMAKE_OUT_DIR");
+        println!("cargo:rerun-if-env-changed=COGENTLM_CUDA_ARCHITECTURES");
     }
 
     pub(crate) fn workspace_build_dir(&self) -> PathBuf {
@@ -125,6 +126,7 @@ impl FeatureFlags {
 
 pub(crate) struct BuildEnv {
     pub(crate) cuda_path: Option<PathBuf>,
+    pub(crate) cuda_architectures: Option<String>,
     pub(crate) vulkan_sdk: Option<PathBuf>,
     pub(crate) cmake_out_dir: Option<PathBuf>,
 }
@@ -135,6 +137,10 @@ impl BuildEnv {
             cuda_path: env::var_os("CUDA_PATH")
                 .or_else(|| env::var_os("CUDA_HOME"))
                 .map(PathBuf::from),
+            cuda_architectures: env::var("COGENTLM_CUDA_ARCHITECTURES")
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
             vulkan_sdk: env::var_os("VULKAN_SDK").map(PathBuf::from),
             cmake_out_dir: env::var("COGENTLM_SYS_CMAKE_OUT_DIR")
                 .ok()

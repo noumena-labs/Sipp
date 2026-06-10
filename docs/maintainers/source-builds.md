@@ -36,6 +36,12 @@ clm build all
 Use `--backend vulkan`, `--backend cuda`, `--backend metal`, or
 `--backend all` where a native package target supports those backends.
 
+CUDA builds compile a portable cloud GPU architecture list by default. Set
+`COGENTLM_CUDA_ARCHITECTURES` (semicolon-separated CMake entries, for example
+`80` for A100 only) before building to narrow the list for faster local
+builds. See [docs/gateway/docker.md](../gateway/docker.md) for the full list
+and rationale.
+
 ## Examples And Demos
 
 Run browser examples and demos through `clm`. These commands start Vite dev

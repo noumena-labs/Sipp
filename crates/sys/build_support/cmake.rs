@@ -32,8 +32,10 @@ pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
 
     define_bool_feature(&mut config, "GGML_CUDA", context.features.cuda);
     if context.features.cuda {
-        // Pascal through current NVIDIA architectures supported by llama.cpp.
-        config.define("CMAKE_CUDA_ARCHITECTURES", "61;70;75;80;86;89;90;100;120");
+        // When unset, vendored llama.cpp selects CUDA-version-aware defaults.
+        if let Some(cuda_architectures) = &context.env_vars.cuda_architectures {
+            config.define("CMAKE_CUDA_ARCHITECTURES", cuda_architectures);
+        }
         targets::apply_cuda_cmake_overrides(context, &mut config);
     }
 

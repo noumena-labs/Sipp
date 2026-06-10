@@ -2,7 +2,7 @@
 
 use crate::cli::Backend;
 use crate::output;
-use crate::toolchains::cuda::setup_cuda;
+use crate::toolchains::cuda::{cuda_architectures, setup_cuda};
 use crate::toolchains::ninja::setup_ninja;
 use crate::toolchains::vulkan::{setup_vulkan, VULKAN_VERSION};
 use crate::utils::BuildContext;
@@ -94,6 +94,7 @@ pub(crate) fn apply_toolchains<'a>(
             };
             command = command.env("CUDACXX", nvcc_exe.display().to_string());
             command = command.env("CUDA_TOOLKIT_ROOT_DIR", cuda_path.display().to_string());
+            command = command.env("COGENTLM_CUDA_ARCHITECTURES", cuda_architectures());
         }
         Some(Backend::Metal) => output::detail("Toolchain", "Metal"),
         Some(Backend::Cpu) | Some(Backend::All) | None => {

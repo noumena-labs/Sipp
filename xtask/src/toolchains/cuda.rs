@@ -17,6 +17,27 @@ mod cuda_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
+/// Portable cloud GPU architectures for CUDA 13 builds.
+///
+/// Covers T4 (75), A100 (80), A10/A40-class Ampere (86), L4/L40S Ada (89),
+/// H100/H200 Hopper (90), and the Blackwell architecture-specific targets
+/// used by vendored llama.cpp (120a, 121a).
+pub(crate) const DEFAULT_CUDA_ARCHITECTURES: &str =
+    "75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real";
+
+/// Resolves the CUDA architecture list for xtask-driven CUDA builds.
+///
+/// Honors a non-blank `COGENTLM_CUDA_ARCHITECTURES` environment override and
+/// otherwise falls back to the portable cloud GPU default so packaged
+/// artifacts stay deterministic across build hosts.
+pub(crate) fn cuda_architectures() -> String {
+    env::var("COGENTLM_CUDA_ARCHITECTURES")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_CUDA_ARCHITECTURES.to_owned())
+}
+
 /// Finds a CUDA toolkit installation suitable for CMake/NVCC builds.
 pub(crate) fn setup_cuda() -> Result<PathBuf> {
     output::phase("CUDA Toolkit");
