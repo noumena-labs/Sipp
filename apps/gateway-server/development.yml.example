@@ -53,8 +53,8 @@ services:
       dockerfile: apps/gateway-server/Dockerfile
       args:
         COGENTLM_GATEWAY_BACKEND: cuda
-        COGENTLM_GATEWAY_BUILDER_IMAGE: nvidia/cuda:12.2.2-devel-ubuntu22.04
-        COGENTLM_GATEWAY_RUNTIME_IMAGE: nvidia/cuda:12.2.2-runtime-ubuntu22.04
+        COGENTLM_GATEWAY_BUILDER_IMAGE: nvidia/cuda:12.8.1-devel-ubuntu24.04
+        COGENTLM_GATEWAY_RUNTIME_IMAGE: nvidia/cuda:12.8.1-runtime-ubuntu24.04
         COGENTLM_GATEWAY_INSTALL_RUSTUP: "1"
     deploy:
       resources:
