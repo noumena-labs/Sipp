@@ -4,6 +4,9 @@ The Rust package target is `cogentlm`. It is the public facade crate for Rust
 applications and re-exports the high-level client API plus selected runtime,
 backend, lifecycle, shard, provider, and gateway types.
 
+See the [Library API Overview](../api) for the shared `add`, `query`,
+`chat`, and `embed` contracts.
+
 ## Install
 
 ```bash

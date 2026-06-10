@@ -1,9 +1,9 @@
-# Using Published Packages
+# Using the Core Library
 
-CogentLM exposes one endpoint-oriented client model across public package
-surfaces. Register a local, gateway, or provider endpoint with
-`CogentClient.add`, keep the returned endpoint reference, and pass that
-reference to `query`, `chat`, or `embed`.
+CogentLM exposes one endpoint-oriented client model across all public package
+surfaces. See the [Library API Overview](../api) for the shared
+`CogentClient.add`, `query`, `chat`, and `embed` contracts, endpoint descriptor
+reference, and gateway-client symmetry patterns.
 
 Most developers should start here instead of building from source.
 
@@ -11,6 +11,7 @@ Most developers should start here instead of building from source.
 
 | Surface | Install | Primary use |
 | --- | --- | --- |
+| [Library API Overview](../api) | — | Shared `add`, `query`, `chat`, and `embed` contracts across all surfaces. |
 | [Browser](browser.md) | `npm install cogentlm` | Browser-local GGUF inference, WebGPU/WASM runtime, and browser gateway clients. |
 | [Node.js](node.md) | `npm install cogentlm-server` | Node server processes, route handlers, and backend services. |
 | [Python](python.md) | `pip install cogentlm` | Python services, scripts, and gateway clients. |
@@ -24,20 +25,18 @@ and Rust source artifacts. The gateway server is documented in the
 [Gateway](../gateway/) section as a user-facing deployment surface, but it does
 not yet have a published binary or public image.
 
-## Common Workflows
+## Framework Guides
 
-- Use a local endpoint when the current browser, server process, Python script,
-  or Rust application owns the GGUF model lifecycle.
-- Use a gateway endpoint when a separate gateway owns model paths, provider
-  credentials, access policy, concurrency, and metrics.
-- Use a direct provider endpoint only in trusted server-side code that owns
-  credential handling and application policy.
-- Use framework guides when integrating the JavaScript packages with
-  [Next.js](frameworks/nextjs.md), [TanStack](frameworks/tanstack.md), or
-  [React and Vite](frameworks/vite-react.md).
-- Use [Providers](../guides/providers.md) and
-  [Runtime Options](../reference/runtime-options.md) for cross-package provider
-  and local runtime option details.
-- Use [Source Builds](../maintainers/source-builds.md) when developing the
-  repo, staging packages, running demos, or deploying the gateway server from
-  this checkout.
+When integrating JavaScript packages with a framework, see:
+
+- [Next.js](frameworks/nextjs.md)
+- [TanStack](frameworks/tanstack.md)
+- [React and Vite](frameworks/vite-react.md)
+
+## Supporting Reference
+
+- [Providers](../guides/providers.md) — provider and gateway provider split
+- [Runtime Options](../reference/runtime-options.md) — option layer map and
+  field reference
+- [Source Builds](../maintainers/source-builds.md) — developing from this
+  checkout

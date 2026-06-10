@@ -7,8 +7,11 @@ title = "CogentLM Documentation"
 [build]
 build-dir = "book"
 
+[preprocessor.mermaid]
+
 [output.html]
 additional-css = ["theme/cogentlm.css"]
+additional-js = ["theme/mermaid.min.js", "theme/mermaid-init.js"]
 edit-url-template = "https://github.com/noumena-labs/CogentLM/edit/master/{path}"
 git-repository-url = "https://github.com/noumena-labs/CogentLM"
 site-url = "/CogentLM/"
