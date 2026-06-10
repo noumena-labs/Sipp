@@ -13,7 +13,22 @@ directory:
 
 ---
 
-## 2. Workspace Build & Run Commands
+## 2. Configuration & Build Files
+
+Configuration and deployment files must stay explicit and human-managed.
+Do not generate, render, or synthesize Docker Compose YAML, TOML, env files,
+CI YAML, or other build/deployment configuration from code or `xtask`.
+
+- `.env` / `.env.example` files are for secrets only.
+- `*.toml` / `*.toml.example` files are application/runtime configuration.
+- Docker `*.yml` / `*.yml.example` files own Docker build, image, port, mount,
+  healthcheck, and container orchestration settings.
+- Tooling may validate or execute an explicitly selected configuration file,
+  but must not obscure configuration behind generated artifacts.
+
+---
+
+## 3. Workspace Build & Run Commands
 
 Always use the **`build-orchestrator`** skill when compiling. The repository uses `xtask` to manage C++ dependencies and environment variables.
 
@@ -27,7 +42,7 @@ Always use the **`build-orchestrator`** skill when compiling. The repository use
 
 ---
 
-## 3. Test & Lint Commands
+## 4. Test & Lint Commands
 
 Always use the **`test-runner`** skill when verifying changes.
 - **List Tests:** `cargo xtask test list` (see [docs/testing.md](file:///docs/testing.md) for suite contents)
@@ -43,7 +58,7 @@ Always use the **`test-runner`** skill when verifying changes.
 
 ---
 
-## 4. Pre-Task Check (Style Checker)
+## 5. Pre-Task Check (Style Checker)
 
 Before completing any task, you **MUST** run the **`style-checker`** skill:
 - Check git status (`git status --short`) and diffs (`git diff`).

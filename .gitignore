@@ -37,7 +37,10 @@ build/
 /apps/*/.next/
 /apps/*/.svelte-kit/
 /apps/gateway-server/development.yml
+/apps/gateway-server/production.yml
 /apps/gateway-server/config/local.toml
+/apps/gateway-server/config/development.toml
+/apps/gateway-server/config/production.toml
 /apps/gateway-server/config/production.local.toml
 /lib/node/dist/
 /lib/node/build/

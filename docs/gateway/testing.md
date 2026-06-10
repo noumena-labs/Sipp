@@ -40,7 +40,7 @@ The Admin Dashboard is available at:
 http://127.0.0.1:9090/admin
 ```
 
-Log in with the literal `admin_password` configured in TOML.
+Log in with the value of the env var named by `admin_password_env` in TOML.
 
 ## Query
 
@@ -216,4 +216,3 @@ Non-streaming errors use JSON:
   }
 }
 ```
-

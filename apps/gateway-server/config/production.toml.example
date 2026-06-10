@@ -1,0 +1,37 @@
+public_bind = "0.0.0.0:8080"
+management_bind = "0.0.0.0:9090"
+max_request_bytes = 1048576
+max_concurrent_requests = 4
+allowed_origins = []
+admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
+
+[security.client_ip]
+source = "peer"
+trusted_proxy_cidrs = []
+
+[security.rate_limit]
+enabled = true
+requests_per_minute = 120
+burst = 240
+
+[routes]
+query = "/v1/query"
+chat = "/v1/chat"
+embed = "/v1/embed"
+index = "/"
+health = "/healthz"
+readiness = "/readyz"
+metrics = "/metrics"
+admin = "/admin"
+
+[[tokens]]
+env = "COGENTLM_GATEWAY_TOKEN"
+caller = "production-client"
+targets = ["local"]
+
+[[targets]]
+name = "local"
+type = "local"
+model = "/models/model.gguf"
+backend = "auto"
+stats = "basic"

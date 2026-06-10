@@ -5,8 +5,8 @@ want one inference boundary for local GGUF targets and provider-backed targets.
 It lives in `apps/gateway-server`.
 
 This page covers source checkout and generated executable operation. Use
-[Docker](docker.md) for container workflows and
-[Configuration](configuration.md) for the TOML schema.
+[Docker](docker.md) for container workflows and [Configuration](configuration.md)
+for the TOML schema.
 
 The current release workflow does not publish a standalone binary, public
 container image, or `cargo install` target. Build it from the source checkout.
@@ -14,24 +14,22 @@ container image, or `cargo install` target. Build it from the source checkout.
 ## Source Workflow
 
 Use `clm` for source checkout workflows. `clm` is the setup-installed launcher
-for `cargo xtask`, see `setup` scripts; when the launcher is unavailable, use `cargo xtask` with
+for `cargo xtask`; when the launcher is unavailable, use `cargo xtask` with
 the same arguments.
 
 ```bash
-export COGENTLM_GATEWAY_TOKEN="replace-me"
-clm build gateway-server --backend cpu
-clm run gateway-server check --config apps/gateway-server/config/development.toml
-clm run gateway-server serve --config apps/gateway-server/config/development.toml --backend cpu
+cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
+cp apps/gateway-server/.env.example apps/gateway-server/.env
+set -a
+. apps/gateway-server/.env
+set +a
+clm run gateway-server check --config apps/gateway-server/config/local.toml --backend vulkan
+clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend vulkan
 ```
 
-Before running real local tests, copy the development TOML to an ignored local
-file and set the literal `admin_password`, token env names, and model path:
-
-```bash
-cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.toml
-clm run gateway-server check --config apps/gateway-server/config/local.toml
-clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
-```
+Before running real on-board inference tests, update the ignored local TOML
+with the token env names, admin password env name, and model path. Update only
+secret values in the secrets env file.
 
 `clm run gateway-server check` builds the staged gateway distribution for the
 selected backend, then runs `cogentlm-gateway check`. The binary `check`
@@ -40,8 +38,29 @@ environment variables, load model files, contact providers, or bind ports.
 
 `clm run gateway-server serve` builds the staged gateway distribution, then
 runs the generated `cogentlm-gateway` executable from the workspace root. It
-reads token environment variables, loads targets, uses `admin_password` from
-TOML, binds both listeners, and exits cleanly on Ctrl-C.
+reads secret environment variables named by TOML, loads targets, binds both
+listeners, and exits cleanly on Ctrl-C.
+
+Use `--backend cpu|vulkan|cuda|metal|all` to select the backend compiled into
+the staged gateway distribution.
+
+## Provider-Only Source Workflow
+
+Provider-only gateways route to upstream APIs and do not load a local GGUF
+model. Use a CPU gateway build because inference happens at the provider:
+
+```bash
+cp apps/gateway-server/config/provider-only.toml.example apps/gateway-server/config/provider-only.toml
+cp apps/gateway-server/.env.example apps/gateway-server/.env
+set -a
+. apps/gateway-server/.env
+set +a
+clm run gateway-server check --config apps/gateway-server/config/provider-only.toml --backend cpu
+clm run gateway-server serve --config apps/gateway-server/config/provider-only.toml --backend cpu
+```
+
+Use [Configuration](configuration.md) for Anthropic and OpenAI-compatible
+target snippets.
 
 ## Generated Executable
 
@@ -60,7 +79,9 @@ The executable reads dashboard assets from `admin-ui` beside the binary unless
 Linux:
 
 ```bash
-export COGENTLM_GATEWAY_TOKEN="replace-me"
+set -a
+. apps/gateway-server/.env
+set +a
 export LD_LIBRARY_PATH="$(pwd)/.build/artifacts/gateway-server${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 .build/artifacts/gateway-server/cogentlm-gateway check --config apps/gateway-server/config/local.toml
 .build/artifacts/gateway-server/cogentlm-gateway serve --config apps/gateway-server/config/local.toml
@@ -69,7 +90,9 @@ export LD_LIBRARY_PATH="$(pwd)/.build/artifacts/gateway-server${LD_LIBRARY_PATH:
 macOS:
 
 ```bash
-export COGENTLM_GATEWAY_TOKEN="replace-me"
+set -a
+. apps/gateway-server/.env
+set +a
 export DYLD_LIBRARY_PATH="$(pwd)/.build/artifacts/gateway-server${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 .build/artifacts/gateway-server/cogentlm-gateway check --config apps/gateway-server/config/local.toml
 .build/artifacts/gateway-server/cogentlm-gateway serve --config apps/gateway-server/config/local.toml
@@ -78,7 +101,12 @@ export DYLD_LIBRARY_PATH="$(pwd)/.build/artifacts/gateway-server${DYLD_LIBRARY_P
 Windows PowerShell:
 
 ```powershell
-$env:COGENTLM_GATEWAY_TOKEN = "replace-me"
+Get-Content apps\gateway-server\.env | ForEach-Object {
+    if ($_ -and -not $_.StartsWith("#")) {
+        $name, $value = $_.Split("=", 2)
+        Set-Item -Path "Env:$name" -Value $value
+    }
+}
 $dist = Join-Path (Get-Location) ".build\artifacts\gateway-server"
 $env:PATH = "$dist;$env:PATH"
 .\.build\artifacts\gateway-server\cogentlm-gateway.exe check --config apps\gateway-server\config\local.toml
@@ -95,48 +123,27 @@ paths or start the process from the workspace root.
 The gateway server supports the same native backend names as other native
 targets:
 
-- `cpu`: portable default backend.
+- `cpu`: provider-only router build or local-inference diagnostic backend.
 - `cuda`: NVIDIA CUDA backend.
 - `metal`: Apple Metal backend on macOS.
 - `vulkan`: Vulkan backend.
 - `all`: host-supported backend set for build commands.
 
-For local target TOML, `backend = "auto"` selects the best compiled and
-available backend in this order: CUDA, Metal, Vulkan, then CPU. Explicit
-`cpu` disables GPU offload. Explicit GPU backends fail if that backend was not
-compiled or is unavailable.
+For on-board local target TOML, `backend = "auto"` selects the best compiled
+and available backend in this order: CUDA, Metal, Vulkan, then CPU. Production
+model-serving configs should use `auto` or an explicit GPU backend. Explicit
+`cpu` disables GPU offload and is intended only for diagnostics. Explicit GPU
+backends fail if that backend was not compiled or is unavailable.
 
-## Binds And Routes
+## Admin Dashboard
 
-In source and direct executable mode, `public_bind` and `management_bind` bind
-directly on the host machine:
-
-- The public listener serves `query`, `chat`, and `embed`.
-- The management listener serves optional `index`, `health`, `readiness`,
-  `metrics`, and password-protected `admin` routes.
-
-For local development, bind both listeners to `127.0.0.1`. In production, keep
-the management listener private or behind trusted access control.
-
-## Admin Dashboard State
-
-The Admin Dashboard is an in-process observability and control surface. It
-stores sessions, CSRF tokens, rolling charts, rate-limit buckets, manual
-blocklists, and runtime control overrides only in memory. These values reset
-when the gateway process restarts. The dashboard never rewrites TOML and does
-not require Redis, SQLite, or a state file.
-
-## Admin Password
-
-The Admin Dashboard password is configured directly in the TOML file:
+The Admin Dashboard password is read from the env var named by TOML:
 
 ```toml
-admin_password = "replace-me"
+admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
 ```
 
-`check` fails when the field is missing or blank. The dashboard uses the value
-for login but never renders it. Because production TOML contains a secret,
-keep real production config files private and out of source control.
+Keep the real value in a secrets env file or production secret manager.
 
 ## Related Docs
 

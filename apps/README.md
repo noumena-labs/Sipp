@@ -20,6 +20,7 @@ cargo xtask build cli --backend cpu
 cargo xtask build core
 ```
 
-See [../docs/reference/cli.md](../docs/reference/cli.md) and
-[../docs/gateway/server.md](../docs/gateway/server.md) for application
+See [../docs/reference/cli.md](../docs/reference/cli.md),
+[../docs/gateway/server.md](../docs/gateway/server.md), and
+[../docs/gateway/docker.md](../docs/gateway/docker.md) for application
 reference docs.

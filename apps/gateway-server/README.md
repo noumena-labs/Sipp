@@ -11,14 +11,18 @@ toolkit crates.
   [Gateway Server](../../docs/gateway/server.md)
 
   ```bash
-  clm run gateway-server check --config apps/gateway-server/config/development.toml
+  cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
+  clm run gateway-server check --config apps/gateway-server/config/local.toml
   ```
 
 - Docker workflows:
   [Gateway Docker](../../docs/gateway/docker.md)
 
   ```bash
-  docker compose --env-file apps/gateway-server/.env.example -f apps/gateway-server/development.yml.example config
+  cp apps/gateway-server/.env.example apps/gateway-server/.env
+  cp apps/gateway-server/development.yml.example apps/gateway-server/development.yml
+  cp apps/gateway-server/config/development.toml.example apps/gateway-server/config/development.toml
+  docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml config
   ```
 
 - TOML schema and route behavior:
@@ -29,15 +33,26 @@ toolkit crates.
 
 ## Local Files
 
-- `config/development.toml`: source development example; copy it before local
-  Docker use and adjust container bind/model paths.
-- `config/production.toml`: production-oriented example; copy it before adding
-  real secrets.
+- `config/local.toml.example`: source/local host-run template.
+- `config/development.toml.example`: local Docker/development-server template.
+- `config/production.toml.example`: production Docker template.
+- `config/provider-only.toml.example`: provider-router template with no local
+  model target.
+- `config/hybrid.toml.example`: local GPU model plus provider target template.
+- `.env.example`: copyable secrets-only env template.
 - `admin-ui/`: React Admin Dashboard built by `clm build gateway-server` and
   copied beside the generated gateway binary.
 - `development.yml.example`: copyable local Compose template.
-- `production.yml`: production Compose template for a prebuilt image.
-- `Dockerfile`: image build for CPU, Vulkan, and CUDA gateway variants.
+- `development-provider-only.yml.example`: local Compose template without a
+  model mount.
+- `production.yml.example`: production Compose template for a prebuilt image.
+- `production-provider-only.yml.example`: production Compose template without a
+  model mount.
+- `Dockerfile`: image build for provider-router CPU images and GPU
+  model-serving variants.
+
+Private TOML, `.env`, and copied Compose files should stay out of source
+control.
 
 Dashboard observability history, rate-limit buckets, manual blocklists,
 sessions, CSRF tokens, and runtime control overrides are in-memory only and

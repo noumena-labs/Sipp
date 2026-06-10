@@ -1,0 +1,56 @@
+name: cogentlm-gateway-production
+
+x-gateway-common: &gateway-common
+  env_file:
+    - path: ./.env
+      required: true
+  volumes:
+    - type: bind
+      source: ./production.toml
+      target: /etc/cogentlm/gateway.toml
+      read_only: true
+    - type: bind
+      source: /opt/cogentlm/models
+      target: /models
+      read_only: true
+  ports:
+    - "8080:8080"
+    - "127.0.0.1:9090:9090"
+  restart: unless-stopped
+  stop_grace_period: 30s
+  healthcheck:
+    test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9090/readyz"]
+    interval: 10s
+    timeout: 3s
+    retries: 6
+    start_period: 30s
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  gateway-cpu:
+    <<: *gateway-common
+    image: registry.example.com/cogentlm-gateway:latest-cpu
+    profiles: ["cpu"]
+
+  gateway-cuda:
+    <<: *gateway-common
+    image: registry.example.com/cogentlm-gateway:latest-cuda
+    profiles: ["cuda"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  gateway-vulkan-linux:
+    <<: *gateway-common
+    image: registry.example.com/cogentlm-gateway:latest-vulkan
+    profiles: ["vulkan-linux"]
+    devices:
+      - /dev/dri:/dev/dri

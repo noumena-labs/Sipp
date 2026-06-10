@@ -1,0 +1,29 @@
+name: cogentlm-gateway-provider-production
+
+services:
+  gateway:
+    image: registry.example.com/cogentlm-gateway:provider-cpu
+    env_file:
+      - path: ./.env
+        required: true
+    volumes:
+      - type: bind
+        source: ./provider-only.toml
+        target: /etc/cogentlm/gateway.toml
+        read_only: true
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9090/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
