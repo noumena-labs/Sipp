@@ -210,6 +210,53 @@ Supported first-party Docker profiles:
 - Exposed using Docker Compose GPU device reservation capabilities.
 - Supported on Linux and Windows Docker Desktop WSL2 hosts with NVIDIA GPU support.
 
+### CUDA Architecture Selection
+
+Set `COGENTLM_CUDA_ARCHITECTURES` to control the compiled GPU architecture
+list. The value is passed verbatim to CMake, so use semicolon-separated
+entries. In Docker builds, pass it as the `COGENTLM_CUDA_ARCHITECTURES` build
+arg; the Compose CUDA service forwards it to the builder stage.
+
+Defaults are layered:
+
+- `cargo xtask build` CUDA targets (node, python, cli, gateway-server) default
+  to the portable cloud GPU list below so packaged artifacts stay
+  deterministic across build hosts. Docker gateway builds run xtask, so they
+  inherit the same default when the build arg is empty.
+- Raw `cargo build` of `cogentlm-sys` outside xtask does not set
+  `CMAKE_CUDA_ARCHITECTURES`, which lets vendored llama.cpp choose
+  CUDA-version-aware defaults for the local toolkit.
+
+Portable cloud GPU release images use:
+
+```text
+75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real
+```
+
+| Entry | Target GPUs |
+| --- | --- |
+| `75-virtual` | T4 and other Turing cloud GPUs |
+| `80-virtual` | A100 and other Ampere data-center GPUs |
+| `86-real` | A10, A40, RTX A6000-class Ampere |
+| `89-real` | L4, L40S, Ada |
+| `90-virtual` | H100, H200 Hopper |
+| `120a-real` | Blackwell architecture-specific target |
+| `121a-real` | Newer Blackwell architecture-specific target |
+
+For faster builds targeting a known GPU, narrow the list. For example, `80`
+for A100 only, `90` for H100/H200 only, or `89` for L4/L40S only.
+
+CUDA 13 removes offline compilation support for GPU architectures before
+compute capability 7.5, so `61` (Pascal) and `70` (Volta) are excluded from
+CUDA 13 builds. Supporting those GPUs requires a separate legacy build using a
+CUDA 12.x toolkit image with an explicit `COGENTLM_CUDA_ARCHITECTURES` list.
+
+The `a`-suffix Blackwell entries are architecture-specific and not
+forward-compatible; keep them aligned with the targets vendored llama.cpp
+uses. Plain TensorRT-free CUDA images are the default because the gateway
+links against CUDA runtime libraries only; use TensorRT images only if a
+TensorRT dependency is introduced.
+
 ### Vulkan Backend (`latest-vulkan` image)
 - Supported first-party Docker profile is Linux-only: `vulkan-linux`.
 - Linux runs expose host rendering devices with `/dev/dri:/dev/dri`.

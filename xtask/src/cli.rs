@@ -330,18 +330,20 @@ remove workspace node_modules directories.")]
         command: TestCommands,
     },
 
-    /// Inspect or bootstrap xtask-managed toolchains.
+    /// Inspect, bootstrap, or configure toolchains.
     #[command(arg_required_else_help = true)]
     #[command(long_about = "\
-Inspect or install xtask-managed toolchains.
+Inspect, bootstrap, or configure developer toolchains.
 
 Examples:
   cargo xtask toolchain status
   cargo xtask toolchain install uv
   cargo xtask toolchain install all
+  cargo xtask toolchain setup cuda
 
 CUDA is externally installed and is reported by status/doctor, but xtask never
-installs or deletes it.")]
+installs or deletes it. Use `toolchain setup cuda` to configure which CUDA
+architectures the build pipeline compiles for.")]
     Toolchain {
         /// Toolchain operation to run.
         #[command(subcommand)]
@@ -1618,6 +1620,13 @@ pub enum ToolchainCommands {
         #[arg(value_enum)]
         component: ToolchainComponent,
     },
+
+    /// Configure an external toolchain component interactively.
+    Setup {
+        /// Component to configure.
+        #[arg(value_enum)]
+        component: ToolchainSetupComponent,
+    },
 }
 
 /// Toolchain components that xtask can bootstrap.
@@ -1633,6 +1642,16 @@ pub enum ToolchainComponent {
     Emsdk,
     /// Install the hermetic Vulkan SDK.
     Vulkan,
+}
+
+/// Toolchain components that xtask can configure interactively.
+///
+/// These are external components (not downloaded by xtask) that benefit from
+/// guided setup — architecture selection, SDK registration, etc.
+#[derive(Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ToolchainSetupComponent {
+    /// Select CUDA architectures to compile for.
+    Cuda,
 }
 
 /// Readiness-check options for `doctor`.
