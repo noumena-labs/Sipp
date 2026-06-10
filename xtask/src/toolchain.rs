@@ -151,6 +151,7 @@ pub(crate) fn external_statuses(ctx: &BuildContext) -> Vec<ToolStatus> {
         ),
         cuda_status(ctx),
         node_workspace_status(ctx),
+        docker_status(),
     ]
 }
 
@@ -308,6 +309,22 @@ pub(crate) fn node_workspace_status(ctx: &BuildContext) -> ToolStatus {
             name: "Node workspaces",
             detail: format!("missing dependency installs: {detail}"),
             fix: "Run `cargo xtask setup --profile full --yes`",
+        }
+    }
+}
+
+pub(crate) fn docker_status() -> ToolStatus {
+    if has_command("docker") {
+        ToolStatus::Ready {
+            name: "Docker",
+            detail: "Docker is available".to_owned(),
+            path: None,
+        }
+    } else {
+        ToolStatus::Warn {
+            name: "Docker",
+            detail: "Docker is not available on PATH".to_owned(),
+            fix: "Install Docker from https://docker.com/",
         }
     }
 }

@@ -9,6 +9,13 @@ Use a gateway when you want a separate process to own model paths, provider
 credentials, target access policy, concurrency limits, metrics, and operational
 routes.
 
+## Notices
+
+> [!WARNING]
+> The gateway server is in active development. Changes will be made frequently, and things will break. 
+> If you use it for production, be cautious and watch for release updates. You can join [our Discord](https://discord.gg/abzgfghhrq) server and follow up on development.
+
+
 ## What To Use
 
 | Need | Start here |

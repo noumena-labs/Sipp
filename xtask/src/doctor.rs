@@ -74,6 +74,9 @@ fn print_core_statuses() -> usize {
         }
         status.print();
     }
+
+    toolchain::docker_status().print();
+
     failures
 }
 
