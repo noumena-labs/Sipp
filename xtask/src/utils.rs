@@ -180,6 +180,10 @@ impl BuildContext {
         self.build_root().join("toolchain")
     }
 
+    pub(crate) fn config_dir(&self) -> PathBuf {
+        self.build_root().join("config")
+    }
+
     pub(crate) fn tmp_dir(&self) -> PathBuf {
         self.build_root().join("tmp")
     }

@@ -82,14 +82,17 @@ fn emsdk_and_vulkan_statuses_detect_fake_cache_markers() {
 #[test]
 fn cuda_status_uses_environment_roots_without_running_nvcc() {
     {
+        let temp = TempDir::new("toolchain-cuda-warn");
+        let ctx = BuildContext::from_workspace_root_for_test(temp.path());
         let _env = EnvGuard::new(&[("CUDA_PATH", None), ("CUDA_HOME", None)]);
         assert!(matches!(
-            cuda_status(),
+            cuda_status(&ctx),
             ToolStatus::Warn { name: "CUDA", .. }
         ));
     }
 
     let temp = TempDir::new("toolchain-cuda");
+    let ctx = BuildContext::from_workspace_root_for_test(temp.path());
     let nvcc = if cfg!(windows) {
         "bin/nvcc.exe"
     } else {
@@ -100,7 +103,7 @@ fn cuda_status_uses_environment_roots_without_running_nvcc() {
     let _env = EnvGuard::new(&[("CUDA_PATH", Some(&root)), ("CUDA_HOME", None)]);
 
     assert!(matches!(
-        cuda_status(),
+        cuda_status(&ctx),
         ToolStatus::Ready { name: "CUDA", .. }
     ));
 }

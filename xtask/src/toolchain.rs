@@ -1,8 +1,8 @@
 //! Toolchain status and bootstrap commands.
 
-use crate::cli::{ToolchainCommands, ToolchainComponent};
+use crate::cli::{ToolchainCommands, ToolchainComponent, ToolchainSetupComponent};
 use crate::output;
-use crate::toolchains::{emsdk, ninja, python, vulkan};
+use crate::toolchains::{cuda, emsdk, ninja, python, vulkan};
 use crate::utils::BuildContext;
 use anyhow::Result;
 use std::env;
@@ -73,6 +73,7 @@ pub fn run(sh: &Shell, ctx: &BuildContext, command: ToolchainCommands) -> Result
     match command {
         ToolchainCommands::Status => print_status(ctx),
         ToolchainCommands::Install { component } => install(sh, ctx, component),
+        ToolchainCommands::Setup { component } => setup_component(ctx, component),
     }
 }
 
@@ -148,7 +149,7 @@ pub(crate) fn external_statuses(ctx: &BuildContext) -> Vec<ToolStatus> {
             ["--version"],
             "Install Bun from https://bun.sh/",
         ),
-        cuda_status(),
+        cuda_status(ctx),
         node_workspace_status(ctx),
     ]
 }
@@ -240,7 +241,7 @@ pub(crate) fn vulkan_status(ctx: &BuildContext) -> ToolStatus {
     }
 }
 
-pub(crate) fn cuda_status() -> ToolStatus {
+pub(crate) fn cuda_status(ctx: &BuildContext) -> ToolStatus {
     let cuda_path = env::var_os("CUDA_PATH").or_else(|| env::var_os("CUDA_HOME"));
     let Some(path) = cuda_path else {
         return ToolStatus::Warn {
@@ -254,18 +255,32 @@ pub(crate) fn cuda_status() -> ToolStatus {
     let nvcc = root
         .join("bin")
         .join(if cfg!(windows) { "nvcc.exe" } else { "nvcc" });
-    if nvcc.exists() {
-        ToolStatus::Ready {
-            name: "CUDA",
-            detail: "CUDA Toolkit found".to_owned(),
-            path: Some(root),
-        }
-    } else {
-        ToolStatus::Warn {
+    if !nvcc.exists() {
+        return ToolStatus::Warn {
             name: "CUDA",
             detail: format!("nvcc was not found under {}", root.display()),
             fix: "Install NVIDIA CUDA Toolkit and set CUDA_PATH/CUDA_HOME",
-        }
+        };
+    }
+
+    let (arches, source) = cuda::cuda_architectures_with_source(ctx);
+    let detail = match source.config_path() {
+        Some(cfg_path) => format!(
+            "Toolkit at {}, arch list [{}: {}] ({arches})",
+            root.display(),
+            source.label(),
+            cfg_path.display(),
+        ),
+        None => format!(
+            "Toolkit at {}, arch list [{}] ({arches})",
+            root.display(),
+            source.label(),
+        ),
+    };
+    ToolStatus::Ready {
+        name: "CUDA",
+        detail,
+        path: Some(root),
     }
 }
 
@@ -408,6 +423,12 @@ fn vulkan_glslc_path(ctx: &BuildContext) -> PathBuf {
             .join("x86_64")
             .join("bin")
             .join("glslc")
+    }
+}
+
+fn setup_component(ctx: &BuildContext, component: ToolchainSetupComponent) -> Result<()> {
+    match component {
+        ToolchainSetupComponent::Cuda => cuda::setup_cuda_architectures(ctx),
     }
 }
 
