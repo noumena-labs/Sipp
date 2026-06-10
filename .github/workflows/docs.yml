@@ -39,16 +39,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin/mdbook
-          key: mdbook-${{ runner.os }}-${{ env.MDBOOK_VERSION }}
-
-      - name: Install mdBook
-        run: |
-          if ! command -v mdbook >/dev/null 2>&1 || [ "$(mdbook --version | awk '{print $2}')" != "$MDBOOK_VERSION" ]; then
-            cargo install mdbook --version "$MDBOOK_VERSION" --locked --force
-          fi
+            ~/.cargo/bin/mdbook-mermaid
+          key: docs-${{ runner.os }}-${{ env.MDBOOK_VERSION }}
 
       - name: Build documentation
-        run: mdbook build
+        run: cargo xtask docs build
 
       - name: Upload Pages artifact
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}

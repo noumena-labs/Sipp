@@ -5,6 +5,9 @@ CogentLM client API to Node server processes, route handlers, and framework
 server functions. Applications own framework routes, request validation, auth,
 and deployment policy.
 
+See the [Library API Overview](../api) for the shared `add`, `query`,
+`chat`, and `embed` contracts.
+
 ## Install
 
 ```bash
@@ -66,10 +69,6 @@ console.log(streamed || response.text);
 Set `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 See [Runtime Options](../reference/runtime-options.md) for local runtime config
 groups and request option boundaries.
-
-Use local `query` only with an already-rendered prompt template, a
-completion-style/base model, or an encoder-decoder text model. Use `chat` for
-role messages and runtime chat template handling.
 
 ## Gateway Chat
 

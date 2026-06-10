@@ -380,6 +380,24 @@ Interactive setup shows a short COGENTLM splash, checks local readiness, asks
 before downloading toolchains or sample files, and can install the shorter
 `clm` launcher under .build/bin.")]
     Setup(SetupArgs),
+
+    /// Build and serve the documentation book.
+    #[command(long_about = "\
+Build or serve the mdBook documentation with mermaid diagram support.
+
+Examples:
+  cargo xtask docs build
+  cargo xtask docs serve
+
+The command installs mdbook and mdbook-mermaid when missing, extracts the
+bundled mermaid JavaScript assets into theme/, then builds or serves the
+book with hot-reload.")]
+    #[command(arg_required_else_help = true)]
+    Docs {
+        /// Docs workflow to run.
+        #[command(subcommand)]
+        command: DocsCommands,
+    },
 }
 
 /// Supported build targets.
@@ -1652,6 +1670,25 @@ pub enum ToolchainComponent {
 pub enum ToolchainSetupComponent {
     /// Select CUDA architectures to compile for.
     Cuda,
+}
+
+/// Docs workflow commands.
+#[derive(Subcommand)]
+pub enum DocsCommands {
+    /// Build the documentation book.
+    #[command(long_about = "\
+Build the mdBook documentation with mermaid diagram support.
+
+Installs mdbook and mdbook-mermaid when missing, extracts the bundled mermaid
+JavaScript assets into theme/, and runs `mdbook build`.")]
+    Build,
+    /// Build and serve the documentation book with live reload.
+    #[command(long_about = "\
+Build the mdBook documentation and serve it with hot-reload.
+
+Same setup as `build`, then runs `mdbook serve --open` to open the book in
+the default browser.")]
+    Serve,
 }
 
 /// Readiness-check options for `doctor`.

@@ -116,7 +116,7 @@ Start with:
 
 - [Installation](docs/getting-started/installation.md)
 - [Quickstarts](docs/getting-started/quickstarts.md)
-- [Using Published Packages](docs/packages/README.md)
+- [Using the Core Library](docs/packages/README.md)
 - [Gateway Server](docs/gateway/server.md)
 - [Frameworks](docs/packages/frameworks/README.md)
 

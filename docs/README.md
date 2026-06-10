@@ -20,7 +20,7 @@ workflow live in the maintainer section.
   install commands.
 - [Quickstarts](getting-started/quickstarts.md) shows short Browser, Node.js,
   Python, Rust, and gateway paths.
-- [Using Published Packages](packages/) describes the public package
+- [Using the Core Library](packages/) describes the public package
   surfaces in depth.
 - [Gateway](gateway/) explains the first-party server, Docker workflows,
   configuration, testing, operations, toolkit, and architecture.
@@ -33,14 +33,14 @@ workflow live in the maintainer section.
 
 ## Build The Book Locally
 
-The documentation uses mdBook pinned to version `0.5.3`.
+The documentation uses mdBook with mermaid diagram support.
 
 ```bash
-cargo install mdbook
-mdbook build
-mdbook serve --open
+cargo xtask docs build
+cargo xtask docs serve
 ```
 
-`mdbook build` writes generated output to `book/`. GitHub Pages builds the same
-book from `.github/workflows/docs.yml`.
+`cargo xtask docs build` installs `mdbook` and `mdbook-mermaid` when missing,
+extracts the bundled mermaid JavaScript assets, and writes the generated book
+to `book/`. GitHub Pages builds the same book from `.github/workflows/docs.yml`.
 
