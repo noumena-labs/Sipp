@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use cogentlm_engine::backend::set_llama_log_quiet;
 use cogentlm_gateway_server::{
     config::GatewayServerConfig, http::GatewayHttpService, metrics::GatewayMetrics,
 };
@@ -35,6 +36,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
+    set_llama_log_quiet(true);
     match Cli::parse().command {
         Command::Serve { config } => serve(config).await,
         Command::Check { config } => check(config),
