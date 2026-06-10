@@ -64,12 +64,37 @@ Edit `apps/gateway-server/development.yml` for Docker concerns such as image
 tag, build backend, build images, model mount, port publishing, and
 healthcheck.
 
-Build and run:
+Build and run with one backend profile. CPU works on Windows, macOS, and
+Linux. GPU containers require host-specific device support.
+
+> [!WARNING]
+> Windows Docker Desktop does not support the first-party Vulkan gateway path.
+> NVIDIA Windows hosts should use the `cuda` profile. Do not use old
+> `vulkan-windows` configs; `ggml_vulkan: No devices found` means the
+> container cannot enumerate a usable Vulkan physical device.
 
 ```bash
-docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml config
-docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml build
-docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up
+# CPU, portable across Windows, macOS, and Linux
+docker compose --profile cpu --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml config
+docker compose --profile cpu --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml build gateway-cpu
+docker compose --profile cpu --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up gateway-cpu
+
+# CUDA, Linux or Windows Docker Desktop with NVIDIA GPU support
+docker compose --profile cuda --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml config
+docker compose --profile cuda --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml build gateway-cuda
+docker compose --profile cuda --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up gateway-cuda
+
+# Vulkan on native Linux, uses /dev/dri
+docker compose --profile vulkan-linux --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml config
+docker compose --profile vulkan-linux --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml build gateway-vulkan-linux
+docker compose --profile vulkan-linux --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up gateway-vulkan-linux
+```
+
+If Compose reports orphan containers after switching service names, remove the
+old containers once:
+
+```bash
+docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml down --remove-orphans
 ```
 
 ## Provider-Only Docker
@@ -110,11 +135,20 @@ Edit `/opt/cogentlm/gateway/.env` for secret values only. Edit
 Edit `/opt/cogentlm/gateway/production.yml` for image names, host model
 mounts, ports, restart policy, and healthcheck.
 
-Deploy:
+Deploy with one backend profile:
 
 ```bash
-docker compose --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml config
-docker compose --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml up -d
+# CPU
+docker compose --profile cpu --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml config
+docker compose --profile cpu --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml up -d gateway-cpu
+
+# CUDA, requires NVIDIA Container Toolkit on the host
+docker compose --profile cuda --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml config
+docker compose --profile cuda --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml up -d gateway-cuda
+
+# Vulkan on Linux hosts, requires /dev/dri rendering devices
+docker compose --profile vulkan-linux --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml config
+docker compose --profile vulkan-linux --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml up -d gateway-vulkan-linux
 ```
 
 For provider-only production, copy `production-provider-only.yml.example` and
@@ -144,15 +178,56 @@ explicitly:
 docker build \
   --build-arg COGENTLM_GATEWAY_BACKEND=vulkan \
   --build-arg COGENTLM_GATEWAY_BUILDER_IMAGE=rust:bookworm \
-  --build-arg COGENTLM_GATEWAY_RUNTIME_IMAGE=debian:bookworm-slim \
+  --build-arg COGENTLM_GATEWAY_RUNTIME_IMAGE=ubuntu:22.04 \
   --build-arg COGENTLM_GATEWAY_INSTALL_RUSTUP=0 \
   -f apps/gateway-server/Dockerfile \
   -t cogentlm-gateway:vulkan .
 ```
 
-CUDA requires NVIDIA host drivers and container runtime support. Vulkan
-requires host GPU device access plus Vulkan loader and driver support. Metal is
-a macOS bare-metal backend and is not available from Linux Docker.
+## Backend Hardware & Docker Constraints
+
+Published gateway images use backend-specific tags: `latest-cpu`,
+`latest-cuda`, and `latest-vulkan`.
+
+Supported first-party Docker profiles:
+
+| Host runtime | GPU vendor | Supported profile | Backend | Notes |
+| --- | --- | --- | --- | --- |
+| Linux Docker | NVIDIA | `cuda` | CUDA | Recommended NVIDIA GPU path. Requires NVIDIA drivers and container runtime support. |
+| Linux Docker | AMD or Intel | `vulkan-linux` | Vulkan | Requires host `/dev/dri` rendering devices and a usable Vulkan driver stack. |
+| Linux Docker | No supported GPU | `cpu` | CPU | Portable diagnostic and fallback path. |
+| Windows Docker Desktop | NVIDIA | `cuda` | CUDA | Requires Docker Desktop WSL2 GPU support and NVIDIA container GPU passthrough. |
+| Windows Docker Desktop | AMD or Intel | `cpu` | CPU | First-party Docker does not support Windows Vulkan GPU inference. |
+| macOS Docker | Any | `cpu` | CPU | Metal is available only through native macOS execution, not Linux Docker. |
+
+### CPU Backend (`latest-cpu` / `cpu` profile)
+- Standard portable execution. Works on any host without special driver dependencies.
+- This is the Docker path for macOS local development.
+
+### CUDA Backend (`latest-cuda` / `cuda` profile)
+- Requires the **NVIDIA Container Toolkit** to be installed and configured on the host.
+- Requires NVIDIA host GPU drivers.
+- Exposed using Docker Compose GPU device reservation capabilities.
+- Supported on Linux and Windows Docker Desktop WSL2 hosts with NVIDIA GPU support.
+
+### Vulkan Backend (`latest-vulkan` image)
+- Supported first-party Docker profile is Linux-only: `vulkan-linux`.
+- Linux runs expose host rendering devices with `/dev/dri:/dev/dri`.
+- Windows Docker Desktop Vulkan is unsupported for gateway inference. NVIDIA Windows hosts should use `cuda` instead.
+- The runtime container packages `libvulkan1` and `mesa-vulkan-drivers` for the supported Linux Vulkan profile.
+
+### Apple Metal Backend (macOS hypervisor constraints)
+> [!WARNING]
+> **Metal cannot run inside a standard Linux Docker container.**
+> Docker on macOS runs within a virtualized Linux hypervisor VM. Apple does not support direct forwarding of the Metal GPU API from macOS into Linux VMs.
+>
+> Due to this hard architectural boundary:
+> 1. **Docker Limitation:** Running the gateway container on macOS will result in a CPU-only fallback or Vulkan device discovery failure (no Metal GPU acceleration).
+> 2. **Native Execution:** To utilize Apple Silicon GPU acceleration (Metal), macOS users must compile and run the gateway server natively:
+>    ```bash
+>    cargo xtask build gateway-server --backend metal
+>    ./.build/artifacts/gateway-server/cogentlm-gateway serve --config apps/gateway-server/config/development.toml
+>    ```
 
 ## Health Check
 

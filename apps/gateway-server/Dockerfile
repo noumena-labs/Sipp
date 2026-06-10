@@ -8,6 +8,8 @@ ARG COGENTLM_GATEWAY_INSTALL_RUSTUP=0
 
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
+ENV CUDA_HOME=/usr/local/cuda
+ENV CUDA_PATH=/usr/local/cuda
 ENV PATH=/usr/local/cargo/bin:${PATH}
 
 RUN apt-get update \
@@ -42,16 +44,17 @@ RUN test -n "${COGENTLM_GATEWAY_BACKEND}" \
 
 FROM ${COGENTLM_GATEWAY_RUNTIME_IMAGE}
 
-ENV LD_LIBRARY_PATH=/usr/local/bin
-
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl libgomp1 libvulkan1 \
+    && apt-get install -y --no-install-recommends ca-certificates curl libgomp1 libvulkan1 mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin cogentlm \
     && mkdir -p /workspace /models \
     && chown -R cogentlm:cogentlm /workspace /models
 
 COPY --from=builder /src/.build/artifacts/gateway-server/ /usr/local/bin/
+
+RUN echo "/usr/local/bin" > /etc/ld.so.conf.d/cogentlm-gateway.conf \
+    && ldconfig
 
 WORKDIR /workspace
 USER 10001:10001

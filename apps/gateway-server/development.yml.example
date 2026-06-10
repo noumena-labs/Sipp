@@ -1,41 +1,80 @@
 name: cogentlm-gateway-development
 
+x-gateway-common: &gateway-common
+  env_file:
+    - path: ./.env
+      required: true
+  working_dir: /workspace
+  volumes:
+    - type: bind
+      source: ./config/development.toml
+      target: /etc/cogentlm/gateway.toml
+      read_only: true
+    - type: bind
+      source: ../../.build/models
+      target: /models
+      read_only: true
+  ports:
+    - "127.0.0.1:8080:8080"
+    - "127.0.0.1:9090:9090"
+  stop_grace_period: 30s
+  healthcheck:
+    test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9090/readyz"]
+    interval: 10s
+    timeout: 3s
+    retries: 6
+    start_period: 30s
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+
 services:
-  gateway:
+  gateway-cpu:
+    <<: *gateway-common
+    image: cogentlm-gateway:cpu
+    profiles: ["cpu"]
+    build:
+      context: ../..
+      dockerfile: apps/gateway-server/Dockerfile
+      args:
+        COGENTLM_GATEWAY_BACKEND: cpu
+        COGENTLM_GATEWAY_BUILDER_IMAGE: rust:bookworm
+        COGENTLM_GATEWAY_RUNTIME_IMAGE: debian:bookworm-slim
+        COGENTLM_GATEWAY_INSTALL_RUSTUP: "0"
+
+  gateway-cuda:
+    <<: *gateway-common
+    image: cogentlm-gateway:cuda
+    profiles: ["cuda"]
+    build:
+      context: ../..
+      dockerfile: apps/gateway-server/Dockerfile
+      args:
+        COGENTLM_GATEWAY_BACKEND: cuda
+        COGENTLM_GATEWAY_BUILDER_IMAGE: nvidia/cuda:12.2.2-devel-ubuntu22.04
+        COGENTLM_GATEWAY_RUNTIME_IMAGE: nvidia/cuda:12.2.2-runtime-ubuntu22.04
+        COGENTLM_GATEWAY_INSTALL_RUSTUP: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  gateway-vulkan-linux:
+    <<: *gateway-common
     image: cogentlm-gateway:vulkan
+    profiles: ["vulkan-linux"]
     build:
       context: ../..
       dockerfile: apps/gateway-server/Dockerfile
       args:
         COGENTLM_GATEWAY_BACKEND: vulkan
         COGENTLM_GATEWAY_BUILDER_IMAGE: rust:bookworm
-        COGENTLM_GATEWAY_RUNTIME_IMAGE: debian:bookworm-slim
+        COGENTLM_GATEWAY_RUNTIME_IMAGE: ubuntu:22.04
         COGENTLM_GATEWAY_INSTALL_RUSTUP: "0"
-    env_file:
-      - path: ./.env
-        required: true
-    working_dir: /workspace
-    volumes:
-      - type: bind
-        source: ./config/development.toml
-        target: /etc/cogentlm/gateway.toml
-        read_only: true
-      - type: bind
-        source: ../../.build/models
-        target: /models
-        read_only: true
-    ports:
-      - "127.0.0.1:8080:8080"
-      - "127.0.0.1:9090:9090"
-    stop_grace_period: 30s
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9090/readyz"]
-      interval: 10s
-      timeout: 3s
-      retries: 6
-      start_period: 30s
-    read_only: true
-    tmpfs:
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
+    devices:
+      - /dev/dri:/dev/dri

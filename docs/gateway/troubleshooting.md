@@ -98,6 +98,10 @@ Docker GPU builds also require host runtime support:
 - Vulkan requires GPU device access, Vulkan loader, and driver support.
 - Metal is macOS-only and not available from Linux Docker.
 
+If Docker logs show `ggml_vulkan: No devices found`, the container has loaded
+the Vulkan backend but cannot enumerate a usable Vulkan physical device. On
+Windows Docker Desktop with NVIDIA GPUs, use the `cuda` profile instead. 
+
 ## Admin Dashboard Login Fails
 
 The dashboard password is read from the env var named by `admin_password_env`
