@@ -130,7 +130,7 @@ export class DrawingDirector {
     const perceptionResult = await this.client.chat(
       { messages: perceptionMessages, media: [args.capture.bytes] },
       {
-        session: `proactive-ui:${this.config.id}:perception-v1`,
+        contextKey: `proactive-ui:${this.config.id}:perception-v1`,
         maxTokens: args.capture.preset === 'turbo' ? 96 : 128,
         signal: args.signal,
       }
@@ -141,13 +141,13 @@ export class DrawingDirector {
 
     const heckleExemplars = pickExemplars(args.state, 3);
     const heckleMessages = buildHeckleMessages(this.config, perception, args.state, heckleExemplars);
-    const heckleSession = `proactive-ui:${this.config.id}:heckle:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const heckleContextKey = `proactive-ui:${this.config.id}:heckle:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const heckleStarted = performance.now();
     const heckleResult = await this.client.chat(
       { messages: heckleMessages },
       {
-        session: heckleSession,
+        contextKey: heckleContextKey,
         maxTokens: 48,
         signal: args.signal,
       }
@@ -163,12 +163,12 @@ export class DrawingDirector {
         1
       );
       const retryMessages = buildHeckleMessages(this.config, perception, args.state, retryExemplars);
-      const retrySession = `proactive-ui:${this.config.id}:heckle-retry:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const retryContextKey = `proactive-ui:${this.config.id}:heckle-retry:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const retryStarted = performance.now();
       const retryResult = await this.client.chat(
         { messages: retryMessages },
         {
-          session: retrySession,
+          contextKey: retryContextKey,
           maxTokens: 48,
           signal: args.signal,
         }
