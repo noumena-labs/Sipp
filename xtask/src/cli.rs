@@ -101,8 +101,8 @@ Examples:
 targets or reading secrets. `serve` builds the staged binary, loads the
 selected config, and runs it from .build/artifacts/gateway-server.
 
-Use raw Docker commands for container workflows; start from
-apps/gateway-server/development.yml.example or apps/gateway-server/production.yml.";
+Use raw Docker Compose commands for container workflows; start from the
+checked-in apps/gateway-server/*.yml.example templates.";
 
 const RUN_DEMOS_HELP: &str = "\
 Build or serve individual browser demos.
@@ -330,18 +330,20 @@ remove workspace node_modules directories.")]
         command: TestCommands,
     },
 
-    /// Inspect or bootstrap xtask-managed toolchains.
+    /// Inspect, bootstrap, or configure toolchains.
     #[command(arg_required_else_help = true)]
     #[command(long_about = "\
-Inspect or install xtask-managed toolchains.
+Inspect, bootstrap, or configure developer toolchains.
 
 Examples:
   cargo xtask toolchain status
   cargo xtask toolchain install uv
   cargo xtask toolchain install all
+  cargo xtask toolchain setup cuda
 
 CUDA is externally installed and is reported by status/doctor, but xtask never
-installs or deletes it.")]
+installs or deletes it. Use `toolchain setup cuda` to configure which CUDA
+architectures the build pipeline compiles for.")]
     Toolchain {
         /// Toolchain operation to run.
         #[command(subcommand)]
@@ -378,6 +380,24 @@ Interactive setup shows a short COGENTLM splash, checks local readiness, asks
 before downloading toolchains or sample files, and can install the shorter
 `clm` launcher under .build/bin.")]
     Setup(SetupArgs),
+
+    /// Build and serve the documentation book.
+    #[command(long_about = "\
+Build or serve the mdBook documentation with mermaid diagram support.
+
+Examples:
+  cargo xtask docs build
+  cargo xtask docs serve
+
+The command installs mdbook and mdbook-mermaid when missing, extracts the
+bundled mermaid JavaScript assets into theme/, then builds or serves the
+book with hot-reload.")]
+    #[command(arg_required_else_help = true)]
+    Docs {
+        /// Docs workflow to run.
+        #[command(subcommand)]
+        command: DocsCommands,
+    },
 }
 
 /// Supported build targets.
@@ -1610,6 +1630,13 @@ pub enum ToolchainCommands {
         #[arg(value_enum)]
         component: ToolchainComponent,
     },
+
+    /// Configure an external toolchain component interactively.
+    Setup {
+        /// Component to configure.
+        #[arg(value_enum)]
+        component: ToolchainSetupComponent,
+    },
 }
 
 /// Toolchain components that xtask can bootstrap.
@@ -1625,6 +1652,35 @@ pub enum ToolchainComponent {
     Emsdk,
     /// Install the hermetic Vulkan SDK.
     Vulkan,
+}
+
+/// Toolchain components that xtask can configure interactively.
+///
+/// These are external components (not downloaded by xtask) that benefit from
+/// guided setup — architecture selection, SDK registration, etc.
+#[derive(Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ToolchainSetupComponent {
+    /// Select CUDA architectures to compile for.
+    Cuda,
+}
+
+/// Docs workflow commands.
+#[derive(Subcommand)]
+pub enum DocsCommands {
+    /// Build the documentation book.
+    #[command(long_about = "\
+Build the mdBook documentation with mermaid diagram support.
+
+Installs mdbook and mdbook-mermaid when missing, extracts the bundled mermaid
+JavaScript assets into theme/, and runs `mdbook build`.")]
+    Build,
+    /// Build and serve the documentation book with live reload.
+    #[command(long_about = "\
+Build the mdBook documentation and serve it with hot-reload.
+
+Same setup as `build`, then runs `mdbook serve --open` to open the book in
+the default browser.")]
+    Serve,
 }
 
 /// Readiness-check options for `doctor`.

@@ -5,6 +5,9 @@ browser-local GGUF inference, gateway calls, provider descriptors where
 supported, token streaming, OPFS-backed model caching, and browser runtime
 lifecycle management.
 
+See the [Library API Overview](../api/) for the shared `add`, `query`,
+`chat`, and `embed` contracts.
+
 ## Install
 
 ```bash
@@ -44,12 +47,10 @@ const messages: readonly ChatMessage[] = [
   { role: 'user', content: 'Explain CogentLM in one sentence.' },
 ];
 
-// chat: role messages; local runtime uses tokenizer.chat_template.
 const run = client.chat(messages, {
   endpoint,
   emitTokens: true,
   maxTokens: 64,
-  // contextKey: browser-local text context/cache key.
   contextKey: 'browser-local',
 });
 
@@ -62,10 +63,9 @@ console.log(streamed || response.text);
 await client.close();
 ```
 
-Use `query` only when the prompt is already rendered for the target model, or
-when calling a completion-style/base model. `query` does not apply a chat
-template. Browser local text and embedding calls use `contextKey`; text calls
-use the same key name as embedding calls.
+Use `query` when the prompt is already rendered for the target model. See the
+[API overview](../api#query---raw-prompt-text-generation) for the
+`query`/`chat`/`embed` contracts.
 
 ## Gateway Chat
 
@@ -87,15 +87,11 @@ const messages = [
   { role: 'user', content: 'Explain gateway inference.' },
 ];
 
-// chat: gateway maps role messages for the selected target.
 const run = client.chat(messages, {
   endpoint,
   maxTokens: 64,
 });
 ```
-
-Gateway `query` preserves the raw prompt. Use it only with an already-rendered
-template, a completion-style/base model, or an encoder-decoder text target.
 
 Browser apps should use short-lived gateway tokens or proxy through an
 application server route. Do not ship provider credentials or long-lived

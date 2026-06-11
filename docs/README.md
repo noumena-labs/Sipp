@@ -1,17 +1,18 @@
 # CogentLM Documentation
 
 CogentLM packages local and gateway-backed inference runtimes for browser,
-Node.js, Python, and Rust applications. The project is currently organized around one
-client model: register local and remote endpoints with `CogentClient.add`, keep the returned
-endpoint reference, and choose that reference for `query`, `chat`, or `embed`.
+Node.js, Python, and Rust applications. The project is organized around one
+client model: register local and remote endpoints with `CogentClient.add`, keep
+the returned endpoint reference, and choose that reference for `query`, `chat`,
+or `embed`.
 
 This book starts with the published packages that application developers use.
 Source checkout, build orchestration, repository architecture, and contribution
 workflow live in the maintainer section.
 
 > [!WARNING]
-> CogentLM is under active development. Changes will be made frequently on this book.
-> If you find any issues, and bugs or need any features, please raise them in the github.
+> CogentLM is under active development. Changes will be made frequently.
+> If you find any issues, bugs, or need any features, please raise them in the github or Discord server ([Discord](https://discord.gg/abzgfghhrq)).
 
 ## Start Here
 
@@ -19,7 +20,7 @@ workflow live in the maintainer section.
   install commands.
 - [Quickstarts](getting-started/quickstarts.md) shows short Browser, Node.js,
   Python, Rust, and gateway paths.
-- [Using Published Packages](packages/) describes the public package
+- [Using the Core Library](packages/) describes the public package
   surfaces in depth.
 - [Gateway](gateway/) explains the first-party server, Docker workflows,
   configuration, testing, operations, toolkit, and architecture.
@@ -32,18 +33,14 @@ workflow live in the maintainer section.
 
 ## Build The Book Locally
 
-The documentation uses mdBook pinned to version `0.5.3`.
+The documentation uses mdBook with mermaid diagram support.
 
 ```bash
-cargo install mdbook
-mdbook build
-mdbook serve --open
+cargo xtask docs build
+cargo xtask docs serve
 ```
 
-`mdbook build` writes generated output to `book/`. GitHub Page builds the same
-book from `.github/workflows/docs.yml`.
+`cargo xtask docs build` installs `mdbook` and `mdbook-mermaid` when missing,
+extracts the bundled mermaid JavaScript assets, and writes the generated book
+to `book/`. GitHub Pages builds the same book from `.github/workflows/docs.yml`.
 
-## Documentation Ownership
-
-First-party README files stay short and point into this book for deeper guides.
-Vendored README files under `third_party/` are upstream-owned.

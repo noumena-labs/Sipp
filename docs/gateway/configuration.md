@@ -13,7 +13,7 @@ management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 4
 allowed_origins = []
-admin_password = "replace-me"
+admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
 
 [security.client_ip]
 source = "peer"
@@ -47,6 +47,86 @@ backend = "auto"
 stats = "basic"
 ```
 
+## Gateway Deployment Shapes
+
+The same TOML schema supports three deployment shapes. Choose the shape by the
+configured targets.
+
+### On-Board GPU Inference
+
+Use a local GGUF target when the gateway server owns model loading and GPU
+inference:
+
+```toml
+[[tokens]]
+env = "COGENTLM_GATEWAY_TOKEN"
+caller = "gpu-client"
+targets = ["local-gpu"]
+
+[[targets]]
+name = "local-gpu"
+type = "local"
+model = "/models/model.gguf"
+backend = "auto"
+stats = "basic"
+```
+
+Use `backend = "auto"` or an explicit GPU backend such as `cuda`, `metal`, or
+`vulkan`. The process must be able to read the GGUF path. Docker runs usually
+mount the host model directory at `/models`.
+
+### Provider-Only Router
+
+Use provider targets only when the gateway should hold provider credentials
+and route client prompts to upstream APIs without loading a local model:
+
+```toml
+[[tokens]]
+env = "COGENTLM_GATEWAY_TOKEN"
+caller = "provider-client"
+targets = ["openai-chat"]
+
+[[targets]]
+name = "openai-chat"
+type = "openai"
+model = "gpt-5-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 60
+```
+
+Provider-only configs have no `type = "local"` target, no `model` filesystem
+path, and no `backend` field. CPU gateway builds are appropriate here because
+the gateway is not performing on-board inference.
+
+### Hybrid
+
+Use both target families when clients should be able to choose between a
+server-hosted local model and provider endpoints:
+
+```toml
+[[tokens]]
+env = "COGENTLM_GATEWAY_TOKEN"
+caller = "hybrid-client"
+targets = ["local-gpu", "openai-chat"]
+
+[[targets]]
+name = "local-gpu"
+type = "local"
+model = "/models/model.gguf"
+backend = "auto"
+stats = "basic"
+
+[[targets]]
+name = "openai-chat"
+type = "openai"
+model = "gpt-5-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 60
+```
+
+Requests select the public target name through the request `model` field, for
+example `local-gpu` or `openai-chat`.
+
 ## Top-Level Fields
 
 | Field | Meaning |
@@ -56,11 +136,26 @@ stats = "basic"
 | `max_request_bytes` | Maximum HTTP request body size. Must be greater than zero. |
 | `max_concurrent_requests` | Optional application-wide request admission limit. Omit for unbounded. |
 | `allowed_origins` | CORS allowlist for browser requests to the public listener. Empty disables the CORS layer. |
-| `admin_password` | Literal Admin Dashboard password. Required and non-blank. Keep production TOML private. |
+| `admin_password_env` | Environment variable containing the Admin Dashboard password. Required and non-blank. |
 | `security` | Required in-memory client identification and rate limiting settings. |
 
-`check` validates these fields without reading token env vars, loading models,
-contacting providers, or binding ports.
+`check` validates these fields without reading secret env vars, loading
+models, contacting providers, or binding ports.
+
+## Secrets
+
+TOML names secret environment variables. Secret values belong in a private
+`.env` file or production secret manager, not in TOML.
+
+```bash
+COGENTLM_GATEWAY_ADMIN_PASSWORD=replace-me
+COGENTLM_GATEWAY_TOKEN=replace-me
+OPENAI_API_KEY=replace-me
+ANTHROPIC_API_KEY=replace-me
+```
+
+`serve` rejects missing or blank secret env values at startup. Bearer token
+values must also contain no whitespace.
 
 ## Routes
 
@@ -155,9 +250,11 @@ stats = "basic"
 - `runtime` can contain advanced native runtime settings from the shared
   runtime options schema.
 
+For on-board inference, prefer `backend = "auto"` or an explicit GPU backend.
 `backend = "auto"` selects the best compiled and available backend in this
-order: CUDA, Metal, Vulkan, then CPU. Explicit `cpu` disables GPU offload.
-Explicit GPU backends fail if that backend was not compiled or is unavailable.
+order: CUDA, Metal, Vulkan, then CPU. Explicit `cpu` disables GPU offload and
+is intended only for diagnostics. Explicit GPU backends fail if that backend
+was not compiled or is unavailable.
 
 `stats = "off"` disables runtime metrics and backend profiling.
 `stats = "basic"` enables runtime metrics. `stats = "profile"` enables runtime
@@ -223,15 +320,16 @@ For Docker:
   bindings.
 - Production exposes public traffic through the configured host port and keeps
   management on `127.0.0.1` by default.
-- Local model paths should match the container mount point:
-  `/workspace/.build/models` for development Compose and `/models` for
-  production Compose.
+- Local model paths should match the container mount point in the Compose
+  volume configuration.
+- Provider-only Docker configs do not need a model mount because no local GGUF
+  target is loaded.
 
 ## Admin Dashboard
 
 The dashboard is served only on the management listener. It uses
-`admin_password` for login, stores short-lived HTTP-only sessions, and does not
-render the password, bearer tokens, or provider secrets.
+the value of `admin_password_env` for login, stores short-lived HTTP-only
+sessions, and does not render the password, bearer tokens, or provider secrets.
 
 The dashboard serves a React single-page application from the gateway
 distribution's `admin-ui` asset directory and exposes session-protected JSON

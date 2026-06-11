@@ -12,6 +12,14 @@ Agents and developers must follow these rules when generating code, reviewing ch
 * Use the language's established community style as the default when this guide
   does not state a stricter CogentLM rule.
 * Treat public APIs, exported types, CLI flags, config formats, and serialized data as compatibility surfaces.
+* Keep configuration and build/deployment files explicit and human-managed.
+  Do not generate or synthesize Docker Compose YAML, TOML, env files, CI YAML,
+  or similar configuration from code or `xtask`; tooling may only validate or
+  execute explicitly selected configuration files.
+* Preserve the gateway configuration boundary: `.env` files contain secrets
+  only, TOML files contain gateway application/runtime configuration, and
+  Docker Compose YAML owns Docker build, image, port, mount, healthcheck, and
+  orchestration settings.
 * Add tests for behavior changes and bug fixes.
 * Avoid unrelated formatting, refactors, or dependency changes.
 * Document non-obvious decisions in code, docs, or pull request notes.

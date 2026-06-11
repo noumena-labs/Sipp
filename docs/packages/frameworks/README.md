@@ -1,7 +1,8 @@
 # Frameworks
 
 These guides show how to use the JavaScript-facing CogentLM packages in common
-application frameworks.
+application frameworks. See the [Library API Overview](../../api) for
+the shared `add`, `query`, `chat`, and `embed` contracts.
 
 Use the browser package, `cogentlm`, when inference runs in the browser or when
 browser code calls a gateway. Use the Node package, `cogentlm-server`, only in

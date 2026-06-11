@@ -35,9 +35,9 @@ pub struct GatewayServerConfig {
     /// Browser origins accepted by the public listener.
     #[serde(default)]
     pub allowed_origins: Vec<String>,
-    /// Admin Dashboard password.
+    /// Environment variable containing the Admin Dashboard password.
     #[serde(default)]
-    pub admin_password: String,
+    pub admin_password_env: String,
     /// Application-owned route selection.
     #[serde(default = "default_routes")]
     pub routes: RouteConfig,
@@ -93,9 +93,10 @@ impl GatewayServerConfig {
             bail!("max_concurrent_requests must be greater than zero");
         }
         self.security.validate()?;
-        if self.admin_password.trim().is_empty() {
-            bail!("admin_password must not be empty");
+        if self.admin_password_env.trim().is_empty() {
+            bail!("admin_password_env must not be empty");
         }
+        validate_env_name(&self.admin_password_env)?;
         self.routes.validate()?;
         if self.tokens.is_empty() {
             bail!("at least one bearer token is required");
@@ -165,6 +166,11 @@ impl GatewayServerConfig {
                 })
             })
             .collect()
+    }
+
+    /// Load the Admin Dashboard password from its configured environment variable.
+    pub fn load_admin_password(&self) -> anyhow::Result<String> {
+        required_env(&self.admin_password_env)
     }
 
     /// Convert application route configuration to toolkit routes.
@@ -684,11 +690,15 @@ fn validate_env_name(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_name(value: &str, field: &str) -> anyhow::Result<()> {
+fn validate_trimmed(value: &str, field: &str) -> anyhow::Result<()> {
     if value.is_empty() || value.trim() != value {
         bail!("{field} must be a non-empty trimmed value");
     }
     Ok(())
+}
+
+fn validate_name(value: &str, field: &str) -> anyhow::Result<()> {
+    validate_trimmed(value, field)
 }
 
 fn validate_timeout(value: Option<u64>) -> anyhow::Result<()> {

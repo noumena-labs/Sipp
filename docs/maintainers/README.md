@@ -5,7 +5,7 @@ covers repository structure, build orchestration, tests, coverage, and
 contribution workflow.
 
 Application developers who only need the published packages should start with
-[Using Published Packages](../packages/).
+[Using the Core Library](../packages/).
 
 ## Start Here
 

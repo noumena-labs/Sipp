@@ -48,8 +48,8 @@ clm run examples serve gateway-local --model .build/models/model.gguf --bind 127
 clm run examples gateway rust --case query
 clm run demos serve chat
 clm run tools serve playground
-clm run gateway-server check --config apps/gateway-server/config/development.toml
-clm run gateway-server serve --config apps/gateway-server/config/development.toml --backend cpu
+clm run gateway-server check --config apps/gateway-server/config/local.toml
+clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
 ```
 
 `run` commands are for long-lived demos, gateway processes, example servers,
@@ -95,4 +95,3 @@ Most command groups accept the shared output flags:
 - `--verbose`: stream subprocess output directly.
 - `--no-banner`: disable decorative banners.
 - `--plain`: disable bounded inline rendering.
-

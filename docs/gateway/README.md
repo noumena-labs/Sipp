@@ -9,6 +9,13 @@ Use a gateway when you want a separate process to own model paths, provider
 credentials, target access policy, concurrency limits, metrics, and operational
 routes.
 
+## Notices
+
+> [!WARNING]
+> The gateway server is in active development. Changes will be made frequently, and things will break. 
+> If you use it for production, be cautious and watch for release updates. You can join [our Discord](https://discord.gg/abzgfghhrq) server and follow up on development.
+
+
 ## What To Use
 
 | Need | Start here |
@@ -42,6 +49,18 @@ first-party server from the source checkout or with the provided Dockerfile.
   gateway endpoints through the same `.add` path used for local and provider
   endpoints.
 
+## Deployment Shapes
+
+- **On-board GPU inference**: configure a local GGUF target, build or run the
+  gateway with `vulkan`, `cuda`, or `metal`, and mount or point at the model
+  path the process can read.
+- **Provider-only router**: configure only provider targets such as `openai`,
+  `openai_compatible`, or `anthropic`. No local model path or `/models` mount
+  is required, and a CPU gateway image is sufficient because inference runs at
+  the provider.
+- **Hybrid**: configure both a local GPU target and provider targets. Clients
+  still send the public gateway target name in the request `model` field.
+
 ## Default Routes
 
 The first-party server examples use:
@@ -51,4 +70,3 @@ The first-party server examples use:
 
 Those paths are application configuration, not core library behavior. Custom
 gateway applications can choose their own routes.
-

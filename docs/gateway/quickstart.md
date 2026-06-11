@@ -1,91 +1,81 @@
 # Gateway Quickstart
 
-This page gives the shortest path to a local first-party gateway and a raw
-HTTP request. Read [Server](server.md) and [Docker](docker.md) before
-production deployment.
+Use the on-board local path when the gateway should load a GGUF model, or the
+provider-only path when it should route requests upstream. Read
+[Server](server.md) and [Docker](docker.md) before production deployment.
 
-## Running from Source
-
-From the repository root, copy the development config to an ignored local file:
+## On-Board Local From Source
 
 ```bash
-cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.toml
+cp apps/gateway-server/.env.example apps/gateway-server/.env
+cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
 ```
 
 Edit `apps/gateway-server/config/local.toml`:
 
-- Set `admin_password` to a local Admin Dashboard password.
-- Set the local target `model` to a GGUF file that exists from the workspace
-  root, for example `.build/models/model.gguf`.
-- Keep `public_bind = "127.0.0.1:8080"` and
-  `management_bind = "127.0.0.1:9090"` for local source runs.
+- Set the local target `model` to a GGUF file visible from the workspace root.
+- Keep local source binds on `127.0.0.1`.
+- Keep `admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"` unless you
+  also change the `.env` secret name.
 
-Start the gateway:
+Load secrets and start:
 
 ```bash
-export COGENTLM_GATEWAY_TOKEN="replace-me"
-clm run gateway-server check --config apps/gateway-server/config/local.toml
-clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
+set -a
+. apps/gateway-server/.env
+set +a
+clm run gateway-server check --config apps/gateway-server/config/local.toml --backend vulkan
+clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend vulkan
 ```
 
-`clm` is the setup-installed launcher for `cargo xtask`. If it is unavailable,
-use `cargo xtask` with the same arguments.
+Use `cuda` for NVIDIA hosts or `metal` for macOS hosts when those are the
+intended on-board inference backends.
 
-## Running in Docker
+## Provider-Only From Source
 
-Copy the Docker inputs:
+```bash
+cp apps/gateway-server/.env.example apps/gateway-server/.env
+cp apps/gateway-server/config/provider-only.toml.example apps/gateway-server/config/provider-only.toml
+```
+
+Set provider secrets in `apps/gateway-server/.env`, then run:
+
+```bash
+set -a
+. apps/gateway-server/.env
+set +a
+clm run gateway-server check --config apps/gateway-server/config/provider-only.toml --backend cpu
+clm run gateway-server serve --config apps/gateway-server/config/provider-only.toml --backend cpu
+```
+
+Use the request target `openai-chat` with the checked-in provider-only example.
+
+## Docker
+
+Docker uses one secrets-only `.env`, one gateway TOML, and one explicit Compose
+file:
 
 ```bash
 cp apps/gateway-server/.env.example apps/gateway-server/.env
 cp apps/gateway-server/development.yml.example apps/gateway-server/development.yml
-cp apps/gateway-server/config/development.toml apps/gateway-server/config/local.toml
-```
-
-Edit `apps/gateway-server/config/local.toml` for the container:
-
-```toml
-public_bind = "0.0.0.0:8080"
-management_bind = "0.0.0.0:9090"
-admin_password = "replace-me"
-```
-
-Set the local target `model` to the path inside the container. The development
-Compose file mounts `COGENTLM_MODEL_DIR` at `/workspace/.build/models`, so a
-typical value is:
-
-```toml
-model = "/workspace/.build/models/model.gguf"
-```
-
-Edit `apps/gateway-server/.env`:
-
-```bash
-COGENTLM_GATEWAY_CONFIG=./config/local.toml
-COGENTLM_MODEL_DIR=../../.build/models
-COGENTLM_GATEWAY_TOKEN=replace-me
-```
-
-Build and run:
-
-```bash
-docker build \
-  --build-arg COGENTLM_GATEWAY_BACKEND=cpu \
-  -f apps/gateway-server/Dockerfile \
-  -t cogentlm-gateway:cpu .
+cp apps/gateway-server/config/development.toml.example apps/gateway-server/config/development.toml
+docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml build
 docker compose --env-file apps/gateway-server/.env -f apps/gateway-server/development.yml up
 ```
 
-Compose publishes both ports on `127.0.0.1` on the host. The TOML bind values
-above bind inside the container.
+Use `development-provider-only.yml.example` and
+`config/provider-only.toml.example` for provider-only Docker.
 
 ## First HTTP Request
 
 In a second terminal:
 
 ```bash
+set -a
+. apps/gateway-server/.env
+set +a
 export GATEWAY_URL="http://127.0.0.1:8080"
 export GATEWAY_MANAGEMENT_URL="http://127.0.0.1:9090"
-export COGENTLM_GATEWAY_TOKEN="replace-me"
 
 curl --fail --silent "$GATEWAY_MANAGEMENT_URL/readyz"
 curl -sS "$GATEWAY_URL/v1/query" \
@@ -94,29 +84,7 @@ curl -sS "$GATEWAY_URL/v1/query" \
   -d '{"model":"local","prompt":"Explain gateway inference.","max_tokens":64}'
 ```
 
-Open `http://127.0.0.1:9090/admin` and log in with the TOML
-`admin_password`.
+Use `"model":"openai-chat"` for the provider-only example.
 
-## Client Endpoint
-
-Gateway clients need only the base URL, public target name, and gateway
-authentication value:
-
-```ts
-import { CogentClient } from 'cogentlm';
-
-const client = new CogentClient();
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
-  target: 'local',
-  baseUrl: 'http://127.0.0.1:8080',
-  authentication: { kind: 'bearer', value: await getGatewayToken() },
-});
-const run = client.query('Explain gateway inference.', {
-  endpoint,
-  maxTokens: 64,
-});
-console.log((await run.response).text);
-await client.close();
-```
-
+Open `http://127.0.0.1:9090/admin` and log in with the value of
+`COGENTLM_GATEWAY_ADMIN_PASSWORD`.

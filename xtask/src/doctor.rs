@@ -74,6 +74,9 @@ fn print_core_statuses() -> usize {
         }
         status.print();
     }
+
+    toolchain::docker_status().print();
+
     failures
 }
 
@@ -113,7 +116,7 @@ fn print_backend_statuses(ctx: &BuildContext, backend: &Backend) {
     output::phase("Backend readiness");
     match backend {
         Backend::Cpu => output::success("CPU backend is always available"),
-        Backend::Cuda => toolchain::cuda_status().print(),
+        Backend::Cuda => toolchain::cuda_status(ctx).print(),
         Backend::Metal => metal_status().print(),
         Backend::Vulkan => toolchain::vulkan_status(ctx).print(),
         Backend::All => {
@@ -122,7 +125,7 @@ fn print_backend_statuses(ctx: &BuildContext, backend: &Backend) {
                 metal_status().print();
             } else {
                 toolchain::vulkan_status(ctx).print();
-                toolchain::cuda_status().print();
+                toolchain::cuda_status(ctx).print();
             }
         }
     }
