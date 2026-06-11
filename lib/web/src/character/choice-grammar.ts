@@ -19,7 +19,11 @@ export class ChoiceGrammarError extends Error {
 
 export function compileChoiceGrammar(choices: readonly string[]): string {
   const normalized = normalizeChoices(choices);
-  const grammar = `root ::= ${literalAlternation(normalized)}\n`;
+  const grammar = [
+    'root ::= ws? choice ws?',
+    `choice ::= ${literalAlternation(normalized)}`,
+    'ws ::= (" " | "\\t" | "\\r" | "\\n")+',
+  ].join('\n') + '\n';
   assertGrammarByteSize(grammar, { label: 'choice grammar' });
   return grammar;
 }

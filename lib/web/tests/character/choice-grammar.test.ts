@@ -9,7 +9,15 @@ import {
 
 test('compileChoiceGrammar emits a literal alternation root rule', () => {
   const grammar = compileChoiceGrammar(['yes', 'no', 'approach:aria']);
-  assert.equal(grammar, 'root ::= "yes" | "no" | "approach:aria"\n');
+  assert.equal(
+    grammar,
+    [
+      'root ::= ws? choice ws?',
+      'choice ::= "yes" | "no" | "approach:aria"',
+      'ws ::= (" " | "\\t" | "\\r" | "\\n")+',
+      '',
+    ].join('\n')
+  );
 });
 
 test('parseChoiceOutput accepts only explicit choice ids', () => {

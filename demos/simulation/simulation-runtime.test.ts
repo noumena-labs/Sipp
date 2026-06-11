@@ -1269,7 +1269,7 @@ test('SimulationAgentChooser maps decision labels through numeric choice ids', a
     persona: { name: 'Mira', summary: 'A tactical Banana Dash agent.' },
     actions: [],
   });
-  const client = createOutputClient('2');
+  const client = createOutputClient('1');
   const chooser = new SimulationAgentChooser('mira', new CharacterRuntime(client, config), config);
 
   const result = await chooser.query(perception);
@@ -1277,10 +1277,10 @@ test('SimulationAgentChooser maps decision labels through numeric choice ids', a
   assert.equal(result.status, 'ok');
   assert.equal(result.goal?.kind, 'sabotage_agent');
   assert.equal(result.goal?.label, 'throw the ice cube at Threat');
-  assert.match(client.grammar ?? '', /"2"/);
+  assert.match(client.grammar ?? '', /"1"/);
   assert.doesNotMatch(client.grammar ?? '', /sabotage_agent:ice_cube:threat/);
   assert.doesNotMatch(client.grammar ?? '', /throw the ice cube at Threat/);
-  assert.match(client.promptText ?? '', /- 2: throw the ice cube at Threat/);
+  assert.match(client.promptText ?? '', /- 1: throw the ice cube at Threat/);
 });
 
 test('SimulationAgentChooser resolves single-option decisions without querying the model', async () => {
