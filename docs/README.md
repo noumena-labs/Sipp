@@ -33,14 +33,15 @@ workflow live in the maintainer section.
 
 ## Build The Book Locally
 
-The documentation uses mdBook with mermaid diagram support.
+Use `clm docs` from a source checkout:
 
 ```bash
-cargo xtask docs build
-cargo xtask docs serve
+clm docs build
+clm docs serve
 ```
 
-`cargo xtask docs build` installs `mdbook` and `mdbook-mermaid` when missing,
-extracts the bundled mermaid JavaScript assets, and writes the generated book
-to `book/`. GitHub Pages builds the same book from `.github/workflows/docs.yml`.
-
+`clm docs build` installs `mdbook` and `mdbook-mermaid` when missing, extracts
+the bundled Mermaid JavaScript assets, and writes the generated book to
+`book/`. `clm docs serve` runs the same setup, then serves the book with live
+reload. If the `clm` launcher is not active, use `cargo xtask docs ...` with
+the same arguments.

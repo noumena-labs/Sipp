@@ -34,28 +34,6 @@ pub extern "C" fn CE_RustBrowserEngineAbiVersion() -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn CE_RustBrowserEngineCreate() -> usize {
-    Box::into_raw(Box::new(BrowserEngine::create())) as usize
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn CE_RustBrowserEngineId(engine: usize) -> i32 {
-    if engine == 0 {
-        return 0;
-    }
-    (*(engine as *const BrowserEngine)).id() as i32
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn CE_RustBrowserEngineClose(engine: usize) -> i32 {
-    if engine == 0 {
-        return STATUS_INVALID_ARGUMENTS;
-    }
-    drop(Box::from_raw(engine as *mut BrowserEngine));
-    STATUS_OK
-}
-
-#[no_mangle]
 pub extern "C" fn CE_BrowserCacheLayout(
     source_bytes: f64,
     source_bytes_known: i32,

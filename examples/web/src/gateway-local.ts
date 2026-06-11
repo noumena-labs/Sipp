@@ -69,7 +69,7 @@ elements.runForm.addEventListener('submit', async (event) => {
       const localRun = localClient.query(prompt, {
         emitTokens: true,
         maxTokens,
-        session: 'web-gateway-local-browser',
+        contextKey: 'web-gateway-local-browser',
         temperature: DEFAULT_TEMPERATURE,
         topP: DEFAULT_TOP_P,
       });

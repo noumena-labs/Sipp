@@ -664,18 +664,6 @@ export class WasmBridge {
     return this.callNumber('CE_RustBrowserEngineAbiVersion');
   }
 
-  public rustBrowserEngineCreate(): number {
-    return this.callNumber('CE_RustBrowserEngineCreate');
-  }
-
-  public rustBrowserEngineId(engine: number): number {
-    return this.callNumber('CE_RustBrowserEngineId', ['number'], [engine]);
-  }
-
-  public rustBrowserEngineClose(engine: number): number {
-    return this.callNumber('CE_RustBrowserEngineClose', ['number'], [engine]);
-  }
-
   public modelServiceCreate(config: {
     manifest?: RegistryManifest | null;
   } = {}): RustLifecycleResponse<RustLifecycleCreateValue> {

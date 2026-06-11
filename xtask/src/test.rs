@@ -420,16 +420,12 @@ fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()>
         host: selection.browser_host.as_deref(),
         port: selection.browser_port,
         timeout_ms: selection.example_browser_timeout_ms,
-        require_rust_engine: false,
-        require_gguf_ingest: false,
         require_webgpu: false,
     };
     let playground_browser = BrowserSmokeRunOptions {
         host: selection.browser_host.as_deref(),
         port: selection.browser_port,
         timeout_ms: selection.playground_browser_timeout_ms,
-        require_rust_engine: selection.require_rust_engine,
-        require_gguf_ingest: selection.require_gguf_ingest,
         require_webgpu: selection.require_webgpu,
     };
     let llama = LlamaBackendOpsRunOptions {
@@ -1158,12 +1154,6 @@ fn run_playground_browser_runtime_smoke(
     }
     if let Some(port) = options.port {
         smoke_cmd = smoke_cmd.arg("--port").arg(port.to_string());
-    }
-    if options.require_rust_engine {
-        smoke_cmd = smoke_cmd.arg("--require-rust-engine");
-    }
-    if options.require_gguf_ingest {
-        smoke_cmd = smoke_cmd.arg("--require-gguf-ingest");
     }
     if options.require_webgpu {
         smoke_cmd = smoke_cmd.arg("--require-webgpu");
@@ -2994,8 +2984,6 @@ fn playground_browser_filters(
         "host": args.host.as_deref(),
         "port": args.port,
         "timeoutMs": args.timeout_ms,
-        "requireRustEngine": args.require_rust_engine,
-        "requireGgufIngest": args.require_gguf_ingest,
         "requireWebgpu": args.require_webgpu,
     })
 }
@@ -4186,8 +4174,6 @@ struct SmokeSelection {
     browser_port: Option<u16>,
     example_browser_timeout_ms: u64,
     playground_browser_timeout_ms: u64,
-    require_rust_engine: bool,
-    require_gguf_ingest: bool,
     require_webgpu: bool,
     llama_mode: LlamaBackendOpsMode,
     llama_op: Option<String>,
@@ -4211,8 +4197,6 @@ impl Default for SmokeSelection {
             browser_port: None,
             example_browser_timeout_ms: 30_000,
             playground_browser_timeout_ms: 30_000,
-            require_rust_engine: false,
-            require_gguf_ingest: false,
             require_webgpu: false,
             llama_mode: LlamaBackendOpsMode::Test,
             llama_op: None,
@@ -4253,8 +4237,6 @@ impl SmokeSelection {
         self.browser_host = args.host.clone();
         self.browser_port = args.port;
         self.playground_browser_timeout_ms = args.timeout_ms;
-        self.require_rust_engine = args.require_rust_engine;
-        self.require_gguf_ingest = args.require_gguf_ingest;
         self.require_webgpu = args.require_webgpu;
     }
 
@@ -4286,8 +4268,6 @@ struct BrowserSmokeRunOptions<'a> {
     host: Option<&'a str>,
     port: Option<u16>,
     timeout_ms: u64,
-    require_rust_engine: bool,
-    require_gguf_ingest: bool,
     require_webgpu: bool,
 }
 

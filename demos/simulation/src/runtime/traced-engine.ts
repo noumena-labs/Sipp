@@ -39,13 +39,14 @@ class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient
   public chat(input: ChatInput, options: ChatOptions = {}): BrowserTextRun {
     const messages = getChatMessages(input);
     const prompts = extractPromptSections(messages);
-    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(options.session ?? '') : null;
+    const requestContextKey = options.contextKey ?? 'default';
+    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(requestContextKey) : null;
     const queryType = classifyQueryType(this.brain.kind, directorTaskName);
     const queryId = this.store.beginQuery({
       brainId: this.brain.id,
       queryType,
       ...(directorTaskName ? { queryName: directorTaskName } : {}),
-      contextKey: options.session ?? 'default',
+      contextKey: requestContextKey,
       systemPrompt: prompts.systemPrompt,
       userPrompt: prompts.userPrompt,
       renderedPrompt: renderMessagesForTrace(messages),
@@ -62,13 +63,14 @@ class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
     const promptText = typeof input === 'string' ? input : input.prompt;
 
-    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(options.session ?? '') : null;
+    const requestContextKey = options.contextKey ?? 'default';
+    const directorTaskName = this.brain.kind === 'director' ? parseDirectorTaskName(requestContextKey) : null;
     const queryType = classifyQueryType(this.brain.kind, directorTaskName);
     const queryId = this.store.beginQuery({
       brainId: this.brain.id,
       queryType,
       ...(directorTaskName ? { queryName: directorTaskName } : {}),
-      contextKey: options.session ?? 'default',
+      contextKey: requestContextKey,
       systemPrompt: null,
       userPrompt: null,
       renderedPrompt: promptText,

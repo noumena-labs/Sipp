@@ -945,15 +945,7 @@ pub struct TestSmokePlaygroundBrowserArgs {
     #[arg(long, default_value = "30000")]
     pub timeout_ms: u64,
 
-    /// Require the Rust browser engine smoke to pass.
-    #[arg(long)]
-    pub require_rust_engine: bool,
-
-    /// Require browser GGUF ingest smoke to pass.
-    #[arg(long)]
-    pub require_gguf_ingest: bool,
-
-    /// Require WebGPU backend readiness.
+    /// Require browser WebGPU adapter availability.
     #[arg(long)]
     pub require_webgpu: bool,
 }

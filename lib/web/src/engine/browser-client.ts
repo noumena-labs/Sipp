@@ -22,7 +22,6 @@ import {
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
-import type { BackendObservability } from './inference-types.js';
 import {
   GatewayEndpointRegistry,
   runGatewayChat,
@@ -54,29 +53,6 @@ export interface CogentClientOptions {
   trustedOrigins?: string[];
   executionMode?: 'auto' | 'worker' | 'main-thread';
   workerUrl?: string;
-}
-
-export interface BrowserGgufIngestSmokeResult {
-  available: boolean;
-  layoutForLargeFile: 'single-file' | 'split-gguf' | null;
-  plannedShardCount: number | null;
-  streamedShardCount: number;
-  streamedBytes: number;
-  error: string | null;
-}
-
-export interface BrowserRustEngineSmokeResult {
-  available: boolean;
-  abiVersion: number;
-  engineId: number | null;
-  error: string | null;
-}
-
-export interface BrowserRuntimeSmokeResult {
-  rustEngine: BrowserRustEngineSmokeResult;
-  ggufIngest: BrowserGgufIngestSmokeResult;
-  backend: BackendObservability | null;
-  webgpuReady: boolean;
 }
 
 function shouldUseWorker(config: CogentClientOptions): boolean {
@@ -123,20 +99,6 @@ export class CogentClient implements CogentClientShape {
         return this.#service.subscribeObservability(listener);
       },
     };
-  }
-
-  public static async browserRuntimeSmoke(
-    options: CogentClientOptions = {}
-  ): Promise<BrowserRuntimeSmokeResult> {
-    const runtime = new MainThreadEngineRuntime({
-      ...options,
-      executionMode: 'main-thread',
-    });
-    try {
-      return await runtime.runBrowserRuntimeSmoke();
-    } finally {
-      runtime.close();
-    }
   }
 
   /**

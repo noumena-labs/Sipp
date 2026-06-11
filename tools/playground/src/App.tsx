@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   CogentClient,
-  type BrowserRuntimeSmokeResult,
   type ModelInfo,
   type ModelSource,
   type ObservabilitySnapshot,
@@ -27,6 +26,7 @@ import {
   buildBenchmarkBackendProfile,
   buildMixedLoadDefinition,
   DEFAULT_BENCHMARK_PROMPTS,
+  describeEngineAdapter,
   describeRuntimeBackend,
   ENCODER_DECODER_BENCHMARK_PROMPTS,
   runtimeOptionsForMixedLoad,
@@ -79,11 +79,6 @@ declare global {
       getEnvironment(): Promise<Record<string, unknown>>;
       getRuntimeObservability(): ObservabilitySnapshot | null;
       getBackendObservability(): unknown;
-      getRuntimeSmoke(): {
-        result: BrowserRuntimeSmokeResult | null;
-        error: string | null;
-      };
-      runRuntimeSmoke(): Promise<BrowserRuntimeSmokeResult>;
       getLastReport(): BenchmarkReport | null;
     };
   }
@@ -121,7 +116,7 @@ interface ImageSelectionMeta {
   readonly type: string;
 }
 
-const AUTO_SPLIT_SMOKE_BYTES = 256 * 1024 * 1024;
+const FORCE_SPLIT_BYTES = 256 * 1024 * 1024;
 
 function getDefaultRuntimeOptions() {
   return {
@@ -144,8 +139,8 @@ function getClientOptions() {
   }
   return {
     browserCache: {
-      directLoadMaxBytes: AUTO_SPLIT_SMOKE_BYTES,
-      shardMaxBytes: AUTO_SPLIT_SMOKE_BYTES,
+      directLoadMaxBytes: FORCE_SPLIT_BYTES,
+      shardMaxBytes: FORCE_SPLIT_BYTES,
     },
   };
 }
@@ -547,8 +542,6 @@ export default function App() {
   const [mixedLoadResult, setMixedLoadResult] = useState<MixedLoadResult | null>(null);
   const [memorySnapshots, setMemorySnapshots] = useState<MemorySnapshot[]>([]);
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
-  const [browserSmoke, setBrowserSmoke] = useState<BrowserRuntimeSmokeResult | null>(null);
-  const [browserSmokeError, setBrowserSmokeError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectorFileInputRef = useRef<HTMLInputElement>(null);
   const loadedSourceKeyRef = useRef<string | null>(null);
@@ -620,13 +613,6 @@ export default function App() {
     };
   };
 
-  const runBrowserRuntimeSmoke = async (): Promise<BrowserRuntimeSmokeResult> => {
-    setBrowserSmokeError(null);
-    const result = await CogentClient.browserRuntimeSmoke();
-    setBrowserSmoke(result);
-    return result;
-  };
-
   useEffect(() => {
     let disposed = false;
     let created: CogentClient | null = null;
@@ -664,19 +650,6 @@ export default function App() {
         setObservability(nextClient.observability.current());
         setInstalledModels(await nextClient.listLocal());
         setStatus('idle');
-        void CogentClient.browserRuntimeSmoke()
-          .then((result) => {
-            if (!disposed) {
-              setBrowserSmoke(result);
-              setBrowserSmokeError(null);
-            }
-          })
-          .catch((error) => {
-            if (!disposed) {
-              setBrowserSmoke(null);
-              setBrowserSmokeError(error instanceof Error ? error.message : String(error));
-            }
-          });
       } catch (error) {
         if (disposed) {
           return;
@@ -695,24 +668,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    window.__cogentPlayground = {
+    const api = {
       getEnvironment: inspectBrowserEnvironment,
       getRuntimeObservability: () => observability,
-      getBackendObservability: () => browserSmoke?.backend ?? observability?.profile ?? null,
-      getRuntimeSmoke: () => ({
-        result: browserSmoke,
-        error: browserSmokeError,
-      }),
-      runRuntimeSmoke: runBrowserRuntimeSmoke,
+      getBackendObservability: () => observability?.profile ?? null,
       getLastReport: () => benchmarkReport,
     };
+    window.__cogentPlayground = api;
 
     return () => {
-      if (window.__cogentPlayground?.runRuntimeSmoke === runBrowserRuntimeSmoke) {
+      if (window.__cogentPlayground === api) {
         delete window.__cogentPlayground;
       }
     };
-  }, [benchmarkReport, observability, browserSmoke, browserSmokeError]);
+  }, [benchmarkReport, observability]);
 
   const projectorOverride = (): string | File | undefined => {
     const file = projectorFileInputRef.current?.files?.[0];
@@ -729,7 +698,8 @@ export default function App() {
     }
     const files = Array.from(fileInputRef.current?.files ?? []);
     if (files.length === 0) return null;
-    return files.length === 1 ? files[0] : files;
+    const projector = projectorOverride();
+    return withProjector(files.length === 1 ? files[0] : files, projector);
   };
 
   const applyEmbeddingUseCase = (value: EmbeddingUseCase): void => {
@@ -910,7 +880,7 @@ export default function App() {
         const run = await runObservedRequest(client, requestPrompt, {
           operation: requestOperation,
           maxTokens: requestTokenCount,
-          session: `query-${Date.now()}`,
+          contextKey: `query-${Date.now()}`,
           media: image,
           emitTokens: requestEmitTokens,
           onTokenBatch,
@@ -1059,7 +1029,7 @@ export default function App() {
       const observabilitySnapshot = client.observability.current();
       const backend = buildBenchmarkBackendProfile(
         environment,
-        browserSmoke?.backend ?? observabilitySnapshot.profile ?? null,
+        observabilitySnapshot.profile ?? null,
         defaultRuntime.placement.gpu_layers
       );
 
@@ -1230,7 +1200,7 @@ export default function App() {
           !currentModel.capabilities.supportsEmbeddings
         ? `${currentModel.name} does not support embeddings. Load an Embed model to generate vectors.`
         : null;
-  const urlProjectorConfigured =
+  const projectorConfigured =
     projectorUrl.trim().length > 0 ||
     (projectorFileInputRef.current?.files?.length ?? 0) > 0;
   const projectorDetail =
@@ -1238,11 +1208,9 @@ export default function App() {
       ? isVisionModel(selectedModel)
         ? 'registry/default'
         : 'n/a'
-      : modelType === 'url'
-        ? urlProjectorConfigured
-          ? 'url/file override'
-          : 'not provided'
-        : 'local source files';
+      : projectorConfigured
+        ? 'url/file override'
+        : 'not provided';
   const sourceDetailRows =
     modelType === 'registry'
       ? [
@@ -1442,29 +1410,6 @@ export default function App() {
   );
 
   const runtimeStatusTone = isBusy ? 'info' : status === 'idle' ? 'ok' : status === 'booting' ? 'warn' : 'neutral';
-  const engineStatus = browserSmokeError ?? (
-    browserSmoke == null
-      ? 'pending'
-      : browserSmoke.rustEngine.available
-        ? `abi ${browserSmoke.rustEngine.abiVersion}`
-        : browserSmoke.rustEngine.error ?? 'unavailable'
-  );
-  const ingestStatus = browserSmokeError ?? (
-    browserSmoke == null
-      ? 'pending'
-      : browserSmoke.ggufIngest.available
-        ? `ready (${browserSmoke.ggufIngest.plannedShardCount} shards)`
-        : browserSmoke.ggufIngest.error ?? 'unavailable'
-  );
-  const webgpuStatus = browserSmokeError ?? (
-    browserSmoke == null
-      ? 'pending'
-      : browserSmoke.webgpuReady
-        ? `ready (${browserSmoke.backend?.webgpuDeviceCount ?? 0})`
-        : browserSmoke.backend?.webgpuCompiled
-          ? 'compiled, unavailable'
-          : 'not compiled'
-  );
 
   return (
     <div className="app-shell">
@@ -1528,9 +1473,9 @@ export default function App() {
                 )}
               </div>
               {renderDetailTable(sourceDetailRows)}
-              {modelType === 'url' ? (
+              {modelType !== 'registry' ? (
                 <div className="field">
-                  <label>Projector URL (optional)</label>
+                  <label>Projector (optional)</label>
                   <input
                     value={projectorUrl}
                     onChange={(event) => setProjectorUrl(event.target.value)}
@@ -2082,19 +2027,18 @@ export default function App() {
               <Panel title="Engine Health">
                 <div className="metric-grid">
                   <MetricCard
-                    label="Rust Engine"
-                    value={engineStatus}
-                    tone={browserSmoke?.rustEngine.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
+                    label="Runtime"
+                    value={observability?.runtime?.execution.mode ?? 'not initialized'}
+                    tone={observability?.runtime == null ? undefined : 'ok'}
                   />
                   <MetricCard
-                    label="Rust GGUF Ingest"
-                    value={ingestStatus}
-                    tone={browserSmoke?.ggufIngest.available ? 'ok' : browserSmokeError ? 'warn' : undefined}
+                    label="Token Path"
+                    value={observability?.runtime?.execution.tokenPath ?? 'n/a'}
                   />
                   <MetricCard
-                    label="WebGPU Smoke"
-                    value={webgpuStatus}
-                    tone={browserSmoke?.webgpuReady ? 'ok' : browserSmokeError ? 'warn' : undefined}
+                    label="Backend Profile"
+                    value={describeRuntimeBackend(observability?.profile)}
+                    tone={observability?.profile?.webgpuRegistered ? 'ok' : undefined}
                   />
                 </div>
                 {renderDetailTable([
@@ -2158,6 +2102,10 @@ export default function App() {
                 </div>
                 {renderDetailTable([
                   {
+                    label: 'Engine Adapter',
+                    value: describeEngineAdapter(observability?.profile) ?? 'n/a',
+                  },
+                  {
                     label: 'Available Backends',
                     value:
                       observability?.profile?.availableBackends
@@ -2188,7 +2136,6 @@ export default function App() {
                   {JSON.stringify(
                     {
                       observability,
-                      runtimeSmoke: browserSmoke,
                       lastRun: lastRun?.observability ?? null,
                     },
                     null,

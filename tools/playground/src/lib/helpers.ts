@@ -1,8 +1,4 @@
-import type {
-  CogentClient,
-  ModelLoadOptions,
-  ObservabilitySnapshot,
-} from '@noumena-labs/cogentlm';
+import type { ModelLoadOptions, ObservabilitySnapshot } from '@noumena-labs/cogentlm';
 import type { BenchmarkOperation, MixedLoadDefinition, ScenarioDefinition } from './types';
 import { countWords } from './utils';
 
@@ -85,35 +81,36 @@ export function buildBenchmarkScenarios(
   }));
 }
 
-export function describeExecutionMode(targetClient: unknown): string {
-  return targetClient == null ? 'unknown' : 'managed';
-}
-
-export function describeRuntimeObservability(targetClient: CogentClient | null): string {
-  if (targetClient == null) return 'unknown';
-  const snapshot = targetClient.observability.current();
-  return `${snapshot.mode}:${snapshot.state}`;
-}
-
-export function describeBackendProfiling(info: ObservabilitySnapshot['profile'] | null | undefined): string {
-  if (!info) return 'inactive';
-  return info.profilingEnabled ? 'enabled' : 'disabled';
-}
-
 export function describeRuntimeBackend(info: ObservabilitySnapshot['profile'] | null | undefined): string {
   if (!info) return 'runtime not initialized';
   if (!info.webgpuCompiled) return 'CPU-only build';
   if (!info.webgpuRegistered) return 'WebGPU backend unavailable at runtime';
-  return `WebGPU backend ready (${info.webgpuDeviceCount} device${info.webgpuDeviceCount === 1 ? '' : 's'})`;
+  const adapter = describeEngineAdapter(info);
+  return `WebGPU backend ready (${info.webgpuDeviceCount} device${info.webgpuDeviceCount === 1 ? '' : 's'})${
+    adapter == null ? '' : ` — ${adapter}`
+  }`;
 }
 
-export function describeRuntimeDevices(info: ObservabilitySnapshot['profile'] | null | undefined): string {
-  if (!info || !Array.isArray(info.devices) || info.devices.length === 0) {
-    return 'none';
+/**
+ * GPU identity seen by the engine's execution scope, e.g. "nvidia ampere".
+ * On hybrid-GPU machines this is the only signal that tells whether
+ * inference landed on the integrated or the discrete GPU.
+ */
+export function describeEngineAdapter(
+  info: ObservabilitySnapshot['profile'] | null | undefined
+): string | null {
+  const adapter = info?.webgpuAdapter;
+  if (adapter == null) {
+    return null;
   }
-  return info.devices
-    .map((device) => `${device.backendName || device.type}:${device.description || device.name || device.type}`)
-    .join(' | ');
+  const device = adapter.device?.trim() ?? '';
+  const label = device !== ''
+    ? device
+    : [adapter.vendor, adapter.architecture]
+        .map((part) => part?.trim() ?? '')
+        .filter((part) => part !== '')
+        .join(' ');
+  return label === '' ? null : label;
 }
 
 export function buildMixedLoadDefinition(
@@ -213,6 +210,12 @@ type RuntimeBackendInfo = {
     readonly type?: string;
     readonly backendName?: string;
   }[];
+  readonly webgpuAdapter?: {
+    readonly vendor?: string;
+    readonly architecture?: string;
+    readonly device?: string;
+    readonly description?: string;
+  } | null;
 };
 
 export type BenchmarkBackendProfile = {
@@ -227,6 +230,12 @@ export type BenchmarkBackendProfile = {
   readonly runtimeAcceleratorDeviceCount: number;
   readonly runtimeDeviceLabels: readonly string[];
   readonly runtimeDevices: NonNullable<RuntimeBackendInfo['devices']>;
+  readonly engineAdapter: {
+    readonly vendor: string | null;
+    readonly architecture: string | null;
+    readonly device: string | null;
+    readonly description: string | null;
+  } | null;
   readonly hostAdapter: {
     readonly apiAvailable: boolean;
     readonly adapterAvailable: boolean;
@@ -246,12 +255,35 @@ export function buildBenchmarkBackendProfile(
   const runtimeDevices = Array.isArray(runtimeBackend?.devices) ? runtimeBackend.devices : [];
   const acceleratorDevices = runtimeDevices.filter((device) => device.type !== 'cpu');
   const adapterInfo = environment?.adapterInfo;
+  const engineAdapterInfo = runtimeBackend?.webgpuAdapter;
+  const engineAdapter = engineAdapterInfo == null
+    ? null
+    : {
+        vendor: engineAdapterInfo.vendor ?? null,
+        architecture: engineAdapterInfo.architecture ?? null,
+        device: engineAdapterInfo.device ?? null,
+        description: engineAdapterInfo.description ?? null,
+      };
   const notes: string[] = [];
 
   if (!environment.hasNavigatorGpu) {
     notes.push('navigator.gpu is unavailable in this browser session.');
   } else if (!environment.adapterAvailable) {
     notes.push('navigator.gpu is present, but requestAdapter() did not produce a usable adapter.');
+  }
+
+  const hostVendor = environment?.adapterVendor ?? adapterInfo?.vendor ?? null;
+  if (
+    engineAdapter?.vendor != null &&
+    engineAdapter.vendor !== '' &&
+    hostVendor != null &&
+    hostVendor !== '' &&
+    engineAdapter.vendor !== hostVendor
+  ) {
+    notes.push(
+      `Engine adapter vendor (${engineAdapter.vendor}) differs from the main-thread adapter (${hostVendor}); ` +
+        'the GPU process likely restarted onto a different physical GPU mid-session.'
+    );
   }
 
   if (!runtimeBackend?.webgpuCompiled) {
@@ -301,6 +333,7 @@ export function buildBenchmarkBackendProfile(
       `${device.backendName || device.type}:${device.description || device.name || device.type}`
     ),
     runtimeDevices,
+    engineAdapter,
     hostAdapter: {
       apiAvailable: Boolean(environment?.hasNavigatorGpu),
       adapterAvailable: Boolean(environment?.adapterAvailable),

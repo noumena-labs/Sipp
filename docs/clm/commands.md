@@ -55,6 +55,18 @@ clm run gateway-server serve --config apps/gateway-server/config/local.toml --ba
 `run` commands are for long-lived demos, gateway processes, example servers,
 and non-test diagnostics. Test execution lives under `clm test`.
 
+## Docs
+
+```bash
+clm docs build
+clm docs serve
+```
+
+`docs build` installs `mdbook` and `mdbook-mermaid` when missing, extracts the
+bundled Mermaid JavaScript assets into `theme/`, and writes the generated book
+to `book/`. `docs serve` runs the same setup, then starts `mdbook serve --open`
+with live reload.
+
 ## Test
 
 ```bash

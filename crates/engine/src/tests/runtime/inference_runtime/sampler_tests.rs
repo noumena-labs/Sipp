@@ -108,6 +108,49 @@ fn settle_terminal_samplers_pools_non_backend_terminal_slots_only() {
 }
 
 #[test]
+fn settle_terminal_samplers_drops_constrained_samplers_instead_of_pooling() {
+    let grammar_key = SamplerCacheKey {
+        grammar: r#"root ::= "a""#.to_string(),
+        ..key("grammar")
+    };
+    let schema_key = SamplerCacheKey {
+        json_schema: r#"{"type":"string"}"#.to_string(),
+        ..key("schema")
+    };
+    let mut scheduler = SlotScheduler::default();
+    let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
+
+    let mut grammar_slot = SlotState::new(0);
+    grammar_slot.phase = SlotPhase::Completed;
+    grammar_slot.set_sampler(SamplerHandle::empty_for_tests());
+    grammar_slot.sampler_key = Some(grammar_key);
+
+    let mut schema_slot = SlotState::new(1);
+    schema_slot.phase = SlotPhase::Completed;
+    schema_slot.set_sampler(SamplerHandle::empty_for_tests());
+    schema_slot.sampler_key = Some(schema_key);
+
+    scheduler.slots.push(grammar_slot);
+    scheduler.slots.push(schema_slot);
+
+    let mut pool = HashMap::new();
+    let mut resident = HashMap::new();
+    settle_terminal_samplers(
+        &mut scheduler,
+        &mut native_runtime,
+        &mut pool,
+        &mut resident,
+    );
+
+    assert!(pool.is_empty());
+    assert!(resident.is_empty());
+    assert!(scheduler.slots[0].sampler.is_none());
+    assert!(scheduler.slots[0].sampler_key.is_none());
+    assert!(scheduler.slots[1].sampler.is_none());
+    assert!(scheduler.slots[1].sampler_key.is_none());
+}
+
+#[test]
 fn settle_terminal_samplers_drops_non_backend_sampler_without_cache_key() {
     let mut scheduler = SlotScheduler::default();
     let mut native_runtime = NativeRuntimeHandle::empty_for_tests();

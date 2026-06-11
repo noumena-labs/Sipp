@@ -1,12 +1,6 @@
-/**
- * Browser runtime client and smoke-test result types for local CogentLM
- * inference.
- */
+/** Browser runtime client for local and remote CogentLM inference. */
 export {
   CogentClient,
-  type BrowserGgufIngestSmokeResult,
-  type BrowserRustEngineSmokeResult,
-  type BrowserRuntimeSmokeResult,
   type CogentClientOptions,
   type EngineModuleOptions,
 } from './engine/browser-client.js';
@@ -66,6 +60,7 @@ export {
   type RuntimeObservation,
   type TokenEmissionStats,
   type TokenBatch,
+  type WebGpuAdapterInfo,
 } from './models/types.js';
 /** Native runtime configuration and low-level request telemetry types. */
 export type {

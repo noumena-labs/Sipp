@@ -68,8 +68,19 @@ export interface CharacterChooseResult {
   readonly rawText: string;
 }
 
+/** A grammar-constrained choice that separates the model output id from UI text. */
+export interface CharacterChoice {
+  /** Stable id emitted by the model and returned as `CharacterChooseResult.selection`. */
+  readonly id: string;
+  /** Human-readable text shown in the decision prompt. */
+  readonly label: string;
+  /** Optional short detail shown after the label in the decision prompt. */
+  readonly description?: string;
+}
+
 export interface CharacterChooseOptions {
-  readonly choices: readonly string[];
+  /** Candidate choices; the model must emit one `id` exactly. */
+  readonly choices: readonly CharacterChoice[];
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly maxOutputTokens?: number;
@@ -141,8 +152,12 @@ export class CharacterRuntime {
     options: CharacterChooseOptions
   ): Promise<CharacterChooseResult> {
     let grammar: string;
+    let choices: readonly CharacterChoice[];
+    let choiceIds: readonly string[];
     try {
-      grammar = compileChoiceGrammar(options.choices);
+      choices = normalizeCharacterChoices(options.choices);
+      choiceIds = choices.map((choice) => choice.id);
+      grammar = compileChoiceGrammar(choiceIds);
     } catch (error) {
       return {
         selection: null,
@@ -151,7 +166,7 @@ export class CharacterRuntime {
         rawText: '',
       };
     }
-    const choicePrompt = renderChoicePrompt(userMessage, options.choices);
+    const choicePrompt = renderChoicePrompt(userMessage, choices);
     const messages: ChatMessage[] = [
       { role: 'system', content: this.systemPrompt },
       { role: 'user', content: choicePrompt },
@@ -170,7 +185,7 @@ export class CharacterRuntime {
     }
     const chatOptions: ChatOptions = {
       contextKey: `${this.contextKey}:choose`,
-      maxTokens: options.maxOutputTokens ?? 24,
+      maxTokens: options.maxOutputTokens ?? defaultChoiceMaxOutputTokens(choiceIds),
       signal: abort.signal,
     };
     const contextKey = `${this.contextKey}:choose`;
@@ -181,15 +196,15 @@ export class CharacterRuntime {
       systemPrompt: this.systemPrompt,
       userPrompt: choicePrompt,
       grammar,
-      choices: options.choices,
+      choices,
     });
 
     try {
       const result = await this.client.chat(messages, {
         ...chatOptions,
         grammar,
-      }).response;
-      const rawText = result.text;
+      }).response;  
+      let rawText = result.text;
       if (abort.signal.aborted) {
         const status = abort.timedOut() ? 'timed_out' : 'aborted';
         return {
@@ -199,7 +214,7 @@ export class CharacterRuntime {
           rawText: '',
         };
       }
-      const selection = parseChoiceOutput(rawText, options.choices);
+      const selection = parseChoiceOutput(rawText, choiceIds);
       if (selection == null) {
         logChoiceQuery({
           phase: 'response',
@@ -569,14 +584,50 @@ function forwardAbortSignal(
   };
 }
 
-function renderChoicePrompt(userMessage: string, choices: readonly string[]): string {
-  const normalizedChoices = choices.map((choice) => choice.trim());
+function normalizeCharacterChoices(choices: readonly CharacterChoice[]): readonly CharacterChoice[] {
+  if (choices.length === 0) {
+    throw new Error('choices must contain at least one option.');
+  }
+  const seen = new Set<string>();
+  return choices.map((choice, index) => {
+    
+    const id = choice.id.trim();
+    const label = choice.label.trim();
+    const description = choice.description?.trim();
+    if (!/^[A-Za-z0-9_.:-]+$/.test(id)) {
+      throw new Error(`choice at index ${index} has an invalid id.`);
+    }
+    if (label.length === 0) {
+      throw new Error(`choice at index ${index} must have a non-empty label.`);
+    }
+    if (seen.has(id)) {
+      throw new Error(`duplicate choice id: ${id}`);
+    }
+    seen.add(id);
+    return {
+      id,
+      label,
+      ...(description && description.length > 0 ? { description } : {}),
+    };
+  });
+}
+
+function defaultChoiceMaxOutputTokens(choiceIds: readonly string[]): number {
+  return Math.max(...choiceIds.map((choice) => choice.length + 4));
+}
+
+function renderChoicePrompt(userMessage: string, choices: readonly CharacterChoice[]): string {
   return [
     userMessage.trim(),
     '',
-    'Choose exactly one of the following options and output only that option text:',
-    ...normalizedChoices.map((choice) => `- ${choice}`),
+    'Select exactly one choice id. Output only the id.',
+    ...choices.map(renderChoiceLine),
   ].join('\n');
+}
+
+function renderChoiceLine(choice: CharacterChoice): string {
+  const base = `- ${choice.id}: ${choice.label}`;
+  return choice.description ? `${base} - ${choice.description}` : base;
 }
 
 function logChoiceQuery(args: {
@@ -585,7 +636,7 @@ function logChoiceQuery(args: {
   systemPrompt?: string;
   userPrompt?: string;
   grammar?: string;
-  choices?: readonly string[];
+  choices?: readonly CharacterChoice[];
   rawText?: string;
   selection?: string | null;
   status?: CharacterChooseResult['status'];

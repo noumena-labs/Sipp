@@ -57,7 +57,7 @@ elements.runForm.addEventListener('submit', async (event) => {
     const run = client.query(prompt, {
       emitTokens: true,
       maxTokens: readMaxTokens(elements.maxTokensInput),
-      session: 'web-query-example',
+      contextKey: 'web-query-example',
       temperature: DEFAULT_TEMPERATURE,
       topP: DEFAULT_TOP_P,
     });

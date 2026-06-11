@@ -1,16 +1,10 @@
-import {
-  createCharacterFromConfigUrl,
-  type CharacterRuntime,
-  type CharacterRuntimeClient,
-  type CharacterConfig,
-  type CharacterChooseResult,
+import type {
+  CharacterRuntime,
+  CharacterConfig,
+  CharacterChooseResult,
 } from '@noumena-labs/cogentlm/character';
 import { buildDecisionContext } from './decision-context.js';
 import type { AgentGoal, AgentPerception, DecisionContext } from './types.js';
-
-export interface SimulationAgentChooserOptions {
-  readonly maxDecisionOutputTokens?: number;
-}
 
 export interface SimulationAgentDecisionResult {
   readonly goal: AgentGoal | null;
@@ -22,15 +16,13 @@ export interface SimulationAgentDecisionResult {
 export class SimulationAgentChooser {
   private readonly character: CharacterRuntime;
   private readonly config: CharacterConfig;
-  private readonly maxDecisionOutputTokens: number;
 
   public readonly agentId: string;
 
   public constructor(
     agentId: string,
     character: CharacterRuntime,
-    config: CharacterConfig,
-    options: SimulationAgentChooserOptions = {}
+    config: CharacterConfig
   ) {
     this.agentId = agentId;
     if (config.id !== agentId) {
@@ -38,7 +30,6 @@ export class SimulationAgentChooser {
     }
     this.character = character;
     this.config = config;
-    this.maxDecisionOutputTokens = options.maxDecisionOutputTokens ?? 24;
   }
 
   public get characterConfig(): CharacterConfig {
@@ -50,11 +41,21 @@ export class SimulationAgentChooser {
     options: { signal?: AbortSignal; timeoutMs?: number } = {}
   ): Promise<SimulationAgentDecisionResult> {
     const decision = buildDecisionContext(perception);
+    if (decision.options.length === 1) {
+      return {
+        goal: decision.options[0]!.goal,
+        status: 'ok',
+        rawText: '',
+      };
+    }
+
     const chooseResult = await this.character.choose(decision.prompt, {
-      choices: decision.options.map((option) => option.label),
+      choices: decision.options.map((option, index) => ({
+        id: String(index),
+        label: option.label,
+      })),
       signal: options.signal,
       timeoutMs: options.timeoutMs,
-      maxOutputTokens: this.maxDecisionOutputTokens,
     });
 
     if (chooseResult.status !== 'ok') {
@@ -66,7 +67,7 @@ export class SimulationAgentChooser {
       };
     }
 
-    const chosen = findOptionByLabel(decision, chooseResult.selection);
+    const chosen = findOptionById(decision, chooseResult.selection);
     if (!chosen) {
       return {
         goal: null,
@@ -84,35 +85,10 @@ export class SimulationAgentChooser {
   }
 }
 
-export interface CreateSimulationAgentChooserFromConfigUrlOptions {
-  readonly agentId: string;
-  readonly configUrl: string;
-  /** Chat client used by the constructed character chooser. */
-  readonly client: CharacterRuntimeClient;
-  readonly chooserOptions?: SimulationAgentChooserOptions;
-  readonly fetch?: typeof globalThis.fetch;
-  readonly signal?: AbortSignal;
-}
-
-export async function createSimulationAgentChooserFromConfigUrl(
-  options: CreateSimulationAgentChooserFromConfigUrlOptions
-): Promise<{ agent: SimulationAgentChooser; config: CharacterConfig }> {
-  const { character, config } = await createCharacterFromConfigUrl({
-    configUrl: options.configUrl,
-    client: options.client,
-    fetch: options.fetch,
-    signal: options.signal,
-  });
-  return {
-    agent: new SimulationAgentChooser(options.agentId, character, config, options.chooserOptions),
-    config,
-  };
-}
-
-function findOptionByLabel(
+function findOptionById(
   context: DecisionContext,
-  label: string | null
+  id: string | null
 ): { label: string; goal: AgentGoal } | undefined {
-  if (!label) return undefined;
-  return context.options.find((option) => option.label === label);
+  if (!id) return undefined;
+  return Number(id) >= 0 ? context.options[Number(id)] : undefined;
 }

@@ -27,6 +27,15 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
+  // The chat demo forces wasmThreading: 'pthread', which requires
+  // cross-origin isolation; without preview headers `vite preview` serves a
+  // page where client construction fails outright.
+  preview: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
   optimizeDeps: {
     exclude: ['@noumena-labs/cogentlm'],
   },

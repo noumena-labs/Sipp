@@ -4,6 +4,7 @@ import {
   type BrowserTextRun,
   type ChatInput,
   type NativeRuntimeConfig,
+  type WebGpuAdapterInfo,
 } from '@noumena-labs/cogentlm';
 
 import {
@@ -45,6 +46,7 @@ const DEFAULT_RUNTIME: NativeRuntimeConfig = {
 interface LoadedModel {
   readonly selection: ResolvedModelSelection;
   readonly backend: string;
+  readonly adapter: WebGpuAdapterInfo | null;
 }
 
 interface PendingImage {
@@ -67,7 +69,7 @@ let pickerMode: PickerMode = 'curated';
 let customSourceMode: CustomSourceMode = 'url';
 let customFile: File | null = null;
 let settings: GenerationSettings = { ...DEFAULT_GENERATION_SETTINGS };
-let sessionId = createSessionId();
+let contextKey = createContextKey();
 
 const modelDialog = element<HTMLDialogElement>('model-dialog');
 const settingsDialog = element<HTMLDialogElement>('settings-dialog');
@@ -294,7 +296,7 @@ async function loadSelectedModel(): Promise<void> {
   loadStatus.textContent = `Preparing ${resolved.name}...`;
   setModelStatus('loading', 'Loading model');
 
-  const nextClient = new CogentClient();
+  const nextClient = new CogentClient({ wasmThreading: 'pthread' });
   try {
     await nextClient.add('chat-model', {
       kind: 'local',
@@ -333,10 +335,11 @@ async function loadSelectedModel(): Promise<void> {
 
     const previousClient = client;
     client = nextClient;
-    const selectedBackend = nextClient.state().backend.selected;
+    const backendState = nextClient.state().backend;
     loadedModel = {
       selection: resolved,
-      backend: selectedBackend === 'unknown' ? 'webgpu' : selectedBackend,
+      backend: backendState.selected === 'unknown' ? 'webgpu' : backendState.selected,
+      adapter: backendState.adapter,
     };
     if (previousClient != null) {
       await previousClient.close().catch(() => undefined);
@@ -384,11 +387,30 @@ function updateLoadedModelUi(): void {
   modelCapability.textContent = capability === 'vision' ? 'Text + Vision' : 'Text';
   modelCapability.className = `capability-badge ${capability}`;
   modelCapability.hidden = false;
-  backendValue.textContent = loadedModel.backend.toUpperCase();
+  const adapterLabel = formatAdapterLabel(loadedModel.adapter);
+  backendValue.textContent = adapterLabel == null
+    ? loadedModel.backend.toUpperCase()
+    : `${loadedModel.backend.toUpperCase()} · ${adapterLabel}`;
   throughputValue.textContent = '--';
   imageButton.hidden = capability !== 'vision';
   setModelStatus('ready', loadedModel.selection.name);
 }
+
+/**
+ * Compact GPU identity for the metrics bar, e.g. "NVIDIA AMPERE" or
+ * "INTEL GEN-12LP". On hybrid-GPU laptops this is what distinguishes the
+ * integrated from the discrete GPU; the backend name alone cannot.
+ */
+function formatAdapterLabel(adapter: WebGpuAdapterInfo | null): string | null {
+  if (adapter == null) {
+    return null;
+  }
+  const label = adapter.device.trim() !== ''
+    ? adapter.device
+    : [adapter.vendor, adapter.architecture].filter((part) => part.trim() !== '').join(' ');
+  return label === '' ? null : label.toUpperCase();
+}
+
 
 async function sendMessage(): Promise<void> {
   const currentClient = client;
@@ -440,7 +462,7 @@ async function sendMessage(): Promise<void> {
       };
   const run = currentClient.chat(input, {
     emitTokens: true,
-    session: sessionId,
+    contextKey,
     maxTokens: settings.maxTokens,
     temperature: settings.temperature,
     topP: settings.topP,
@@ -505,7 +527,7 @@ function resetConversation(): void {
     }
   }
   messages = [];
-  sessionId = createSessionId();
+  contextKey = createContextKey();
   clearPendingImage();
   throughputValue.textContent = '--';
   renderConversation();
@@ -728,7 +750,7 @@ function scrollConversation(): void {
   });
 }
 
-function createSessionId(): string {
+function createContextKey(): string {
   return typeof crypto.randomUUID === 'function'
     ? `demos:chat:${crypto.randomUUID()}`
     : `demos:chat:${Date.now()}`;

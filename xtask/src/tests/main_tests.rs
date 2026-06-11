@@ -62,8 +62,6 @@ fn test_summary_labels_test_subcommands() {
                     host: None,
                     port: None,
                     timeout_ms: 30_000,
-                    require_rust_engine: false,
-                    require_gguf_ingest: false,
                     require_webgpu: false,
                 }),
             }),

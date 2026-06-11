@@ -181,7 +181,6 @@ button {
 .status-dot.loading,
 .status-dot.running {
   background: var(--blue);
-  animation: pulse 1.2s ease-in-out infinite;
 }
 
 .status-dot.ready {
@@ -190,12 +189,6 @@ button {
 
 .status-dot.error {
   background: var(--danger);
-}
-
-@keyframes pulse {
-  50% {
-    opacity: 0.35;
-  }
 }
 
 .button {
@@ -385,7 +378,6 @@ button {
   margin-left: 4px;
   background: var(--accent);
   vertical-align: -2px;
-  animation: pulse 0.8s ease-in-out infinite;
 }
 
 .message.error .message-content {

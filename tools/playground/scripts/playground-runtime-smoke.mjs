@@ -14,8 +14,6 @@ function parseArgs(argv) {
     host: DEFAULT_HOST,
     port: DEFAULT_PORT,
     timeoutMs: DEFAULT_TIMEOUT_MS,
-    requireRustEngine: false,
-    requireGgufIngest: false,
     requireWebgpu: false,
   };
 
@@ -30,10 +28,6 @@ function parseArgs(argv) {
     } else if (arg === '--timeout-ms') {
       options.timeoutMs = parsePositiveInt(readValue(argv, index, arg), arg);
       index += 1;
-    } else if (arg === '--require-rust-engine' || arg === '--require-rust-browser-engine') {
-      options.requireRustEngine = true;
-    } else if (arg === '--require-gguf-ingest') {
-      options.requireGgufIngest = true;
     } else if (arg === '--require-webgpu') {
       options.requireWebgpu = true;
     } else {
@@ -202,23 +196,21 @@ async function ensureServer(options) {
   }
 }
 
-function validateSmoke(result, options) {
+function validateProbe(result, options) {
   const failures = [];
-  if (options.requireRustEngine && !result?.rustEngine?.available) {
-    failures.push(`Rust browser engine unavailable: ${result?.rustEngine?.error ?? 'unknown error'}`);
-  }
-  if (options.requireGgufIngest && !result?.ggufIngest?.available) {
-    failures.push(`GGUF ingest unavailable: ${result?.ggufIngest?.error ?? 'unknown error'}`);
-  }
-  if (options.requireWebgpu && !result?.webgpuReady) {
-    failures.push('WebGPU backend is not ready');
+  if (options.requireWebgpu) {
+    if (!result.environment?.hasNavigatorGpu) {
+      failures.push('navigator.gpu is unavailable');
+    } else if (!result.environment?.adapterAvailable) {
+      failures.push('WebGPU adapter is unavailable');
+    }
   }
   if (failures.length > 0) {
     throw new Error(failures.join('; '));
   }
 }
 
-async function runBrowserSmoke(options) {
+async function runBrowserProbe(options) {
   const { url, child } = await ensureServer(options);
   let browser = null;
   try {
@@ -234,11 +226,18 @@ async function runBrowserSmoke(options) {
       timeout: options.timeoutMs,
     });
     const result = await withTimeout(
-      page.evaluate(() => window.__cogentPlayground.runRuntimeSmoke()),
+      page.evaluate(async () => {
+        const api = window.__cogentPlayground;
+        return {
+          environment: await api.getEnvironment(),
+          observability: api.getRuntimeObservability(),
+          backend: api.getBackendObservability(),
+        };
+      }),
       options.timeoutMs,
-      'Playground runtime smoke'
+      'Playground browser probe'
     );
-    validateSmoke(result, options);
+    validateProbe(result, options);
     return {
       url,
       result,
@@ -251,7 +250,7 @@ async function runBrowserSmoke(options) {
 
 try {
   const options = parseArgs(process.argv.slice(2));
-  const report = await runBrowserSmoke(options);
+  const report = await runBrowserProbe(options);
   console.log(JSON.stringify(report, null, 2));
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

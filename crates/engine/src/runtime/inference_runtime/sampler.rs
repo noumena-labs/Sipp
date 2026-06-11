@@ -142,7 +142,11 @@ fn settle_terminal_samplers(
         let Some(sampler) = slot.take_sampler() else {
             continue;
         };
-        if let Some(key) = cached_key {
+        // The native reset rewinds the sampling chain but not grammar state,
+        // so grammar/schema-constrained samplers are dropped instead of pooled.
+        let reusable_key =
+            cached_key.filter(|key| key.grammar.is_empty() && key.json_schema.is_empty());
+        if let Some(key) = reusable_key {
             let mut sampler = sampler;
             reset_sampler(&mut sampler);
             sampler_pool.entry(key).or_default().push(sampler);
