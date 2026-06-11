@@ -50,3 +50,4 @@
   - [Testing](testing.md)
   - [Coverage](coverage.md)
   - [Contributing](contributing.md)
+- [Known Issues](known-issues.md)

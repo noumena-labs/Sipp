@@ -121,6 +121,7 @@ Start with:
 - [Using the Core Library](docs/packages/README.md)
 - [Gateway Server](docs/gateway/server.md)
 - [Frameworks](docs/packages/frameworks/README.md)
+- [Known Issues](docs/known-issues.md)
 
 ## Maintainers
 
