@@ -25,7 +25,7 @@ added.
 - Local inference needs a compatible GGUF model file or browser-served GGUF
   asset.
 - Browser-local inference needs a modern browser with WebAssembly support;
-  WebGPU acceleration depends on the browser and device.
+  WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
 - Node and Python native packages select a backend from packaged native
   artifacts. Use `COGENTLM_NODE_BACKEND` or `COGENTLM_PYTHON_BACKEND` when you
   need to force `cpu`, `vulkan`, `cuda`, or `metal`.

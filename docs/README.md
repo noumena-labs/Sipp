@@ -42,6 +42,5 @@ clm docs serve
 
 `clm docs build` installs `mdbook` and `mdbook-mermaid` when missing, extracts
 the bundled Mermaid JavaScript assets, and writes the generated book to
-`book/`. `clm docs serve` runs the same setup, then serves the book with live
-reload. If the `clm` launcher is not active, use `cargo xtask docs ...` with
-the same arguments.
+`book/`; If the `clm` launcher is not active, use `cargo xtask docs ...`
+with the same arguments.

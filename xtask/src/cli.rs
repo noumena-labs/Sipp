@@ -391,12 +391,16 @@ Examples:
 
 The command installs mdbook and mdbook-mermaid when missing, extracts the
 bundled mermaid JavaScript assets into theme/, then builds or serves the
-book with hot-reload.")]
+generated book.")]
     #[command(arg_required_else_help = true)]
     Docs {
         /// Docs workflow to run.
         #[command(subcommand)]
         command: DocsCommands,
+
+        /// Language of the documentation to build or open first.
+        #[arg(long, value_enum, default_value = "en", global = true)]
+        lang: DocsLanguage,
     },
 }
 
@@ -1672,15 +1676,35 @@ pub enum DocsCommands {
 Build the mdBook documentation with mermaid diagram support.
 
 Installs mdbook and mdbook-mermaid when missing, extracts the bundled mermaid
-JavaScript assets into theme/, and runs `mdbook build`.")]
+JavaScript assets into theme/, builds English into book/, and builds Chinese
+into book/zh unless --lang zh is selected.")]
     Build,
-    /// Build and serve the documentation book with live reload.
+    /// Build and serve the documentation book.
     #[command(long_about = "\
-Build the mdBook documentation and serve it with hot-reload.
+Build the mdBook documentation and serve the generated static tree.
 
-Same setup as `build`, then runs `mdbook serve --open` to open the book in
-the default browser.")]
+Same setup as `build`, then serves book/ on http://localhost:3000. The page
+language switch uses the same /zh/ path layout as GitHub Pages.")]
     Serve,
+}
+
+/// Documentation language.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum DocsLanguage {
+    /// English documentation.
+    En,
+    /// Chinese documentation.
+    Zh,
+}
+
+impl DocsLanguage {
+    /// Stable documentation language label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DocsLanguage::En => "en",
+            DocsLanguage::Zh => "zh",
+        }
+    }
 }
 
 /// Readiness-check options for `doctor`.

@@ -29,9 +29,9 @@ not yet have a published binary or public image.
 
 When integrating JavaScript packages with a framework, see:
 
+- [React and Vite](frameworks/vite-react.md)
 - [Next.js](frameworks/nextjs.md)
 - [TanStack](frameworks/tanstack.md)
-- [React and Vite](frameworks/vite-react.md)
 
 ## Supporting Reference
 

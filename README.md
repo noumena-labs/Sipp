@@ -111,8 +111,7 @@ clm docs build
 clm docs serve
 ```
 
-`clm docs` installs the required mdBook tooling when missing and prepares the
-Mermaid assets used by the book.
+`clm docs` installs the required mdBook tooling when missing and prepares the Mermaid assets used by the book.
 
 Start with:
 

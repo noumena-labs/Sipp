@@ -195,7 +195,7 @@ when `serve` starts.
 
 ## In-Memory Security Controls
 
-Gateway security controls are process-local in v1. Admin Dashboard sessions,
+Gateway security controls are process-local in the current version. Admin Dashboard sessions,
 CSRF tokens, rolling dashboard history, per-client rate-limit buckets, manual
 blocklist entries, and runtime control overrides disappear when the server
 restarts. The gateway does not write TOML, create a state file, or use an
