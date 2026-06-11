@@ -103,14 +103,16 @@ await client.close();
 
 ## Documentation
 
-The full documentation lives in [docs](docs/README.md) and is built with
-mdBook:
+The full documentation lives in [docs](docs/README.md). From a source checkout,
+use `clm docs` to build or serve the book:
 
 ```bash
-cargo install mdbook --version 0.5.3 --locked
-mdbook build
-mdbook serve --open
+clm docs build
+clm docs serve
 ```
+
+`clm docs` installs the required mdBook tooling when missing and prepares the
+Mermaid assets used by the book.
 
 Start with:
 

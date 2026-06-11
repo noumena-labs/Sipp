@@ -6,8 +6,8 @@ forwards to `cargo xtask` after setup has installed wrapper scripts under
 
 Use `clm` when you are working from the repository and need to build native
 artifacts, run demos, start the gateway server, manage xtask toolchains, or run
-cataloged tests. Published packages such as `cogentlm`, `cogentlm-server`, and
-the Python wheel do not require `clm`.
+cataloged tests, or build the documentation book. Published packages such as
+`cogentlm`, `cogentlm-server`, and the Python wheel do not require `clm`.
 
 ## Command Shape
 
@@ -18,6 +18,7 @@ clm doctor
 clm build node --backend cpu
 clm run examples serve browser
 clm test list
+clm docs build
 ```
 
 If the launcher is not active in the current shell, use the same command after
@@ -33,4 +34,3 @@ cargo xtask build node --backend cpu
 - [Setup](setup.md)
 - [Commands](commands.md)
 - [Troubleshooting](troubleshooting.md)
-

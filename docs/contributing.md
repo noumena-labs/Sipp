@@ -53,7 +53,7 @@ For each issue or PR:
 For documentation-only changes:
 
 ```bash
-mdbook build
+clm docs build
 cargo xtask test list
 cargo xtask test verify --target public-docs
 ```
