@@ -31,8 +31,6 @@ The page exposes a stable automation API:
 - `window.__cogentPlayground.getEnvironment()`
 - `window.__cogentPlayground.getRuntimeObservability()`
 - `window.__cogentPlayground.getBackendObservability()`
-- `window.__cogentPlayground.getRuntimeSmoke()`
-- `window.__cogentPlayground.runRuntimeSmoke()`
 - `window.__cogentPlayground.getLastReport()`
 
 This API is used by the automated browser playground smoke runner.
