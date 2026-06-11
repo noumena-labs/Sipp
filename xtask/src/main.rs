@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use xshell::Shell;
-use xtask::cli::{Backend, BuildCommands, Cli, Commands, DocsCommands, TestCommands};
+use xtask::cli::{Backend, BuildCommands, Cli, Commands, DocsCommands, DocsLanguage, TestCommands};
 use xtask::targets;
 use xtask::utils::BuildContext;
 use xtask::{clean, configure_output, docs, doctor, finish_output, run, setup, test, toolchain};
@@ -34,7 +34,7 @@ fn main() -> Result<()> {
         Commands::Toolchain { command } => toolchain::run(&sh, &ctx, command),
         Commands::Doctor(args) => doctor::run(&ctx, &args),
         Commands::Setup(args) => setup::run(&sh, &ctx, &args),
-        Commands::Docs { command } => run_docs(command, &sh, &ctx),
+        Commands::Docs { command, lang } => run_docs(command, &sh, &ctx, lang),
     };
     if output.final_status {
         finish_output(result.is_ok(), &summary);
@@ -82,7 +82,7 @@ fn command_summary(command: &Commands) -> String {
         Commands::Toolchain { .. } => "Toolchain command".to_owned(),
         Commands::Doctor(_) => "Developer environment doctor".to_owned(),
         Commands::Setup(_) => "CogentLM setup".to_owned(),
-        Commands::Docs { command } => docs_summary(command),
+        Commands::Docs { command, .. } => docs_summary(command),
     }
 }
 
@@ -129,10 +129,15 @@ fn backend_summary(backend: Option<Backend>) -> &'static str {
     backend.as_ref().map(Backend::as_str).unwrap_or("cpu")
 }
 
-fn run_docs(command: DocsCommands, sh: &Shell, ctx: &BuildContext) -> Result<()> {
+fn run_docs(
+    command: DocsCommands,
+    sh: &Shell,
+    ctx: &BuildContext,
+    lang: DocsLanguage,
+) -> Result<()> {
     match command {
-        DocsCommands::Build => docs::run_build(sh, ctx),
-        DocsCommands::Serve => docs::run_serve(sh, ctx),
+        DocsCommands::Build => docs::run_build(sh, ctx, lang),
+        DocsCommands::Serve => docs::run_serve(sh, ctx, lang),
     }
 }
 

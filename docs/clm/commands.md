@@ -60,12 +60,12 @@ and non-test diagnostics. Test execution lives under `clm test`.
 ```bash
 clm docs build
 clm docs serve
+clm docs build --lang zh
 ```
 
 `docs build` installs `mdbook` and `mdbook-mermaid` when missing, extracts the
 bundled Mermaid JavaScript assets into `theme/`, and writes the generated book
-to `book/`. `docs serve` runs the same setup, then starts `mdbook serve --open`
-with live reload.
+to `book/`.
 
 ## Test
 
