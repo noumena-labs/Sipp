@@ -698,7 +698,8 @@ export default function App() {
     }
     const files = Array.from(fileInputRef.current?.files ?? []);
     if (files.length === 0) return null;
-    return files.length === 1 ? files[0] : files;
+    const projector = projectorOverride();
+    return withProjector(files.length === 1 ? files[0] : files, projector);
   };
 
   const applyEmbeddingUseCase = (value: EmbeddingUseCase): void => {
@@ -1199,7 +1200,7 @@ export default function App() {
           !currentModel.capabilities.supportsEmbeddings
         ? `${currentModel.name} does not support embeddings. Load an Embed model to generate vectors.`
         : null;
-  const urlProjectorConfigured =
+  const projectorConfigured =
     projectorUrl.trim().length > 0 ||
     (projectorFileInputRef.current?.files?.length ?? 0) > 0;
   const projectorDetail =
@@ -1207,11 +1208,9 @@ export default function App() {
       ? isVisionModel(selectedModel)
         ? 'registry/default'
         : 'n/a'
-      : modelType === 'url'
-        ? urlProjectorConfigured
-          ? 'url/file override'
-          : 'not provided'
-        : 'local source files';
+      : projectorConfigured
+        ? 'url/file override'
+        : 'not provided';
   const sourceDetailRows =
     modelType === 'registry'
       ? [
@@ -1474,9 +1473,9 @@ export default function App() {
                 )}
               </div>
               {renderDetailTable(sourceDetailRows)}
-              {modelType === 'url' ? (
+              {modelType !== 'registry' ? (
                 <div className="field">
-                  <label>Projector URL (optional)</label>
+                  <label>Projector (optional)</label>
                   <input
                     value={projectorUrl}
                     onChange={(event) => setProjectorUrl(event.target.value)}
