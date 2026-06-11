@@ -62,7 +62,7 @@ elements.runForm.addEventListener('submit', async (event) => {
     const run = client.chat(chatMessages(prompt), {
       emitTokens: true,
       maxTokens: readMaxTokens(elements.maxTokensInput),
-      session: 'web-chat-example',
+      contextKey: 'web-chat-example',
       temperature: DEFAULT_TEMPERATURE,
       topP: DEFAULT_TOP_P,
     });
