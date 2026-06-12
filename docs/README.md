@@ -1,8 +1,8 @@
-# CogentLM Documentation
+# Sipp Documentation
 
-CogentLM packages local and gateway-backed inference runtimes for browser,
+Sipp packages local and gateway-backed inference runtimes for browser,
 Node.js, Python, and Rust applications. The project is organized around one
-client model: register local and remote endpoints with `CogentClient.add`, keep
+client model: register local and remote endpoints with `SippClient.add`, keep
 the returned endpoint reference, and choose that reference for `query`, `chat`,
 or `embed`.
 
@@ -11,7 +11,7 @@ Source checkout, build orchestration, repository architecture, and contribution
 workflow live in the maintainer section.
 
 > [!WARNING]
-> CogentLM is under active development. Changes will be made frequently.
+> Sipp is under active development. Changes will be made frequently.
 > If you find any issues, bugs, or need any features, please raise them in the github or Discord server ([Discord](https://discord.gg/abzgfghhrq)).
 
 ## Start Here
@@ -33,14 +33,14 @@ workflow live in the maintainer section.
 
 ## Build The Book Locally
 
-Use `clm docs` from a source checkout:
+Use `sipp docs` from a source checkout:
 
 ```bash
-clm docs build
-clm docs serve
+sipp docs build
+sipp docs serve
 ```
 
-`clm docs build` installs `mdbook` and `mdbook-mermaid` when missing, extracts
+`sipp docs build` installs `mdbook` and `mdbook-mermaid` when missing, extracts
 the bundled Mermaid JavaScript assets, and writes the generated book to
-`book/`; If the `clm` launcher is not active, use `cargo xtask docs ...`
+`book/`; If the `sipp` launcher is not active, use `cargo xtask docs ...`
 with the same arguments.

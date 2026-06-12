@@ -1,6 +1,6 @@
 # Applications
 
-`apps/` contains first-party applications built from the public CogentLM crates
+`apps/` contains first-party applications built from the public Sipp crates
 and packages. Applications own command-line behavior, configuration files,
 HTTP routes, listeners, deployment policy, and user-facing defaults.
 

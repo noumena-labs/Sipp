@@ -1,8 +1,8 @@
 # Providers
 
-CogentLM can call external providers directly from trusted server-side
-processes or indirectly through a CogentLM gateway. Both paths use the same
-endpoint model: register a descriptor with `CogentClient.add`, keep the
+Sipp can call external providers directly from trusted server-side
+processes or indirectly through a Sipp gateway. Both paths use the same
+endpoint model: register a descriptor with `SippClient.add`, keep the
 endpoint reference, and pass it to `query`, `chat`, or `embed`.
 
 Provider credentials must stay in trusted code. Do not ship long-lived provider
@@ -15,7 +15,7 @@ credential lifecycle and application policy. This is the recommended framework
 route pattern for Next.js and TanStack server code.
 
 ```ts
-import { CogentClient } from 'cogentlm-server';
+import { SippClient } from 'sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -25,7 +25,7 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const client = new CogentClient();
+const client = new SippClient();
 const endpoint = await client.add('provider', {
   kind: 'provider',
   provider: 'openai',
@@ -46,7 +46,7 @@ examples. Real keys belong in environment variables or a secret manager.
 
 ## Provider Options
 
-Typed request fields should use CogentLM's request options. Provider-only
+Typed request fields should use Sipp's request options. Provider-only
 fields belong in `providerOptions`:
 
 ```ts

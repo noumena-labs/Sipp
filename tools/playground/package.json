@@ -1,5 +1,5 @@
 {
-  "name": "cogentlm-browser-playground",
+  "name": "sipp-browser-playground",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -10,7 +10,7 @@
     "browser:smoke": "node ./scripts/playground-runtime-smoke.mjs"
   },
   "dependencies": {
-    "@noumena-labs/cogentlm": "workspace:*",
+    "@noumena-labs/sipp": "workspace:*",
     "lucide-react": "^1.17.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

@@ -1,6 +1,6 @@
 # Demos
 
-`demos/` contains browser experiences built on CogentLM package surfaces. Use
+`demos/` contains browser experiences built on Sipp package surfaces. Use
 them to inspect richer workflows, runtime behavior, and user-facing patterns.
 Use `examples/` for smaller copyable integrations.
 

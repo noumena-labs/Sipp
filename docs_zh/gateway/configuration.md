@@ -10,7 +10,7 @@ management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 4
 allowed_origins = []
-admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
+admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"
 
 [security.client_ip]
 source = "peer"
@@ -32,7 +32,7 @@ metrics = "/metrics"
 admin = "/admin"
 
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "production-client"
 targets = ["local"]
 
@@ -54,7 +54,7 @@ stats = "basic"
 
 ```toml
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "gpu-client"
 targets = ["local-gpu"]
 
@@ -74,7 +74,7 @@ stats = "basic"
 
 ```toml
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "provider-client"
 targets = ["openai-chat"]
 
@@ -94,7 +94,7 @@ timeout_seconds = 60
 
 ```toml
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "hybrid-client"
 targets = ["local-gpu", "openai-chat"]
 
@@ -134,8 +134,8 @@ timeout_seconds = 60
 TOML 文件只保存密钥的环境变量名。将实际机密存放在独立 `.env` 文件或生产环境的机密管理器中，切勿硬编码在 TOML 文件里。
 
 ```bash
-COGENTLM_GATEWAY_ADMIN_PASSWORD=replace-me
-COGENTLM_GATEWAY_TOKEN=replace-me
+SIPP_GATEWAY_ADMIN_PASSWORD=replace-me
+SIPP_GATEWAY_TOKEN=replace-me
 OPENAI_API_KEY=replace-me
 ANTHROPIC_API_KEY=replace-me
 ```
@@ -160,7 +160,7 @@ ANTHROPIC_API_KEY=replace-me
 
 ```toml
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "browser-client"
 targets = ["local", "openai-chat"]
 ```
@@ -280,4 +280,4 @@ Docker 部署中：
 
 管理面板只在管理端口上运行。使用 `admin_password_env` 指定的环境变量值作为凭证，依赖极短有效期的 HTTP-only 会话 Cookie 鉴权，不在页面渲染任何密码、Bearer Token 或服务商密钥。
 
-管理面板使用网关发布版中 `admin-ui` 目录下的 React 单页面应用，通过 `<admin>/api/*` 提供受会话保护的 JSON 端点。用 `POST <admin>/api/session` 登录，`DELETE <admin>/api/session` 登出。所有有副作用的 API 请求必须在 `x-cogentlm-admin-csrf` 请求头中附带 CSRF Token。面板中修改的运行时设置仅作用于当前进程，重启后恢复默认状态。
+管理面板使用网关发布版中 `admin-ui` 目录下的 React 单页面应用，通过 `<admin>/api/*` 提供受会话保护的 JSON 端点。用 `POST <admin>/api/session` 登录，`DELETE <admin>/api/session` 登出。所有有副作用的 API 请求必须在 `x-sipp-admin-csrf` 请求头中附带 CSRF Token。面板中修改的运行时设置仅作用于当前进程，重启后恢复默认状态。

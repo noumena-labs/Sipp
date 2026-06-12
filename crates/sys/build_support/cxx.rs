@@ -3,7 +3,7 @@ use crate::build_support::context::BuildContext;
 pub(crate) fn compile_bridge(context: &BuildContext) {
     let mut build = cxx_build::bridge("src/bridge.rs");
     build
-        .file("native/cxx_bridge/cogent_cxx.cpp")
+        .file("native/cxx_bridge/sipp_cxx.cpp")
         .include(context.manifest_dir.join("native/cxx_bridge"))
         .include(context.manifest_dir.join("native/llama_shim"))
         .include(context.llama_dir.join("include"))
@@ -20,5 +20,5 @@ pub(crate) fn compile_bridge(context: &BuildContext) {
         build.flag_if_supported("-std=c++17");
     }
 
-    build.compile("cogentlm_sys_cxxbridge");
+    build.compile("sipp_sys_cxxbridge");
 }

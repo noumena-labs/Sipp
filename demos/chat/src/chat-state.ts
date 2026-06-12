@@ -1,4 +1,4 @@
-import type { ChatMessage, RequestStats } from '@noumena-labs/cogentlm';
+import type { ChatMessage, RequestStats } from '@noumena-labs/sipp';
 
 export type ConversationMessageStatus = 'complete' | 'streaming' | 'error';
 

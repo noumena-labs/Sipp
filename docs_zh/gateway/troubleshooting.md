@@ -23,11 +23,11 @@
 - Linux：将目录路径追加到 `LD_LIBRARY_PATH` 环境变量前端。
 - macOS：将目录路径追加到 `DYLD_LIBRARY_PATH` 环境变量前端。
 
-使用 `clm run gateway-server ...` 工作流启动时，工具会自动处理这些路径。
+使用 `sipp run gateway-server ...` 工作流启动时，工具会自动处理这些路径。
 
 ## 相对模型路径解析错误
 
-本地目标 TOML 配置中的相对 `model` 路径基于进程当前工作目录解析。`clm run gateway-server ...` 默认将工作区根目录设为工作目录；在终端中直接运行可执行文件时，工作目录为当前 shell 所在目录。
+本地目标 TOML 配置中的相对 `model` 路径基于进程当前工作目录解析。`sipp run gateway-server ...` 默认将工作区根目录设为工作目录；在终端中直接运行可执行文件时，工作目录为当前 shell 所在目录。
 
 跨目录运行可执行文件时改用绝对路径。Docker 环境下路径必须是容器内的绝对路径，而非主机的本地路径。
 

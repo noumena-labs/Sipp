@@ -9,10 +9,10 @@ or `embed`.
 
 | Surface | Install | Use for |
 | --- | --- | --- |
-| Browser | `npm install cogentlm` | Browser-local GGUF inference and browser gateway clients. |
-| Node.js | `npm install cogentlm-server` | Server-side local inference and framework route handlers. |
-| Python | `pip install cogentlm` | Python scripts, services, and gateway clients. |
-| Rust | `cargo add cogentlm` | Rust applications and services. |
+| Browser | `npm install sipp` | Browser-local GGUF inference and browser gateway clients. |
+| Node.js | `npm install sipp-server` | Server-side local inference and framework route handlers. |
+| Python | `pip install sipp` | Python scripts, services, and gateway clients. |
+| Rust | `cargo add sipp` | Rust applications and services. |
 
 The current release workflow publishes browser npm, Node npm, Python wheel,
 and Rust source artifacts. It does not yet publish a standalone gateway-server
@@ -27,14 +27,14 @@ added.
 - Browser-local inference needs a modern browser with WebAssembly support;
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
 - Node and Python native packages select a backend from packaged native
-  artifacts. Use `COGENTLM_NODE_BACKEND` or `COGENTLM_PYTHON_BACKEND` when you
+  artifacts. Use `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you
   need to force `cpu`, `vulkan`, `cuda`, or `metal`.
 - Gateway clients need only the gateway base URL, public target name, and
   application-owned authentication value.
 
 ## Next Steps
 
-- [clm CLI for source checkouts](../clm/README.md)
+- [sipp CLI for source checkouts](../sipp/README.md)
 - [Browser package](../packages/browser.md)
 - [Node.js package](../packages/node.md)
 - [Python package](../packages/python.md)

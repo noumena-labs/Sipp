@@ -1,6 +1,6 @@
 # CLI
 
-`apps/cli` builds the `cogentlm` command-line application for local GGUF text
+`apps/cli` builds the `sipp` command-line application for local GGUF text
 generation. It is useful for runtime smoke testing, manual model checks, and
 quick local prompts.
 
@@ -14,7 +14,7 @@ cargo xtask build cli --backend all
 ## Run
 
 ```bash
-cargo run -p cogentlm-cli -- <model.gguf> "Explain CogentLM."
+cargo run -p sipp-cli -- <model.gguf> "Explain Sipp."
 ```
 
 Useful flags include:
@@ -26,4 +26,4 @@ Useful flags include:
 - `--stats off|basic|profile`
 - `--chat`
 
-Use `cargo run -p cogentlm-cli -- --help` for the full generated help.
+Use `cargo run -p sipp-cli -- --help` for the full generated help.

@@ -1,4 +1,4 @@
-import type { ModelLoadOptions, ObservabilitySnapshot } from '@noumena-labs/cogentlm';
+import type { ModelLoadOptions, ObservabilitySnapshot } from '@noumena-labs/sipp';
 import type { BenchmarkOperation, MixedLoadDefinition, ScenarioDefinition } from './types';
 import { countWords } from './utils';
 

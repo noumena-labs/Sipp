@@ -1,4 +1,4 @@
-//! PyO3 bindings for the public CogentLM Python package.
+//! PyO3 bindings for the public Sipp Python package.
 //!
 //! This crate translates Python configuration objects and requests into the
 //! shared Rust client facade while preserving Python-specific validation and
@@ -11,28 +11,28 @@ use std::{
     time::Duration,
 };
 
-use cogentlm::backend::{
+use sipp::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
-use cogentlm::core::TokenUsage;
-use cogentlm::engine::protocol::{CacheSource, RequestStats};
-use cogentlm::engine::{
+use sipp::core::TokenUsage;
+use sipp::engine::protocol::{CacheSource, RequestStats};
+use sipp::engine::{
     ChatMessage, ChatRole, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
     ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
     ResidencyRuntimeConfig, RopeScaling, SamplerStage, SamplingRuntimeConfig,
     SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
-use cogentlm::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
-use cogentlm::{
-    AnthropicProviderConfig as CoreAnthropicProviderConfig, CogentChatRequest as ClientChatRequest,
-    CogentClient as CoreCogentClient, CogentEmbedRequest as ClientEmbedRequest,
-    CogentEmbeddingResponse as ClientEmbeddingResponse,
-    CogentEmbeddingResponseFuture as ClientEmbeddingResponseFuture,
-    CogentEmbeddingRun as CoreClientEmbeddingRun, CogentError as ClientError,
-    CogentQueryRequest as ClientQueryRequest, CogentTextOptions as ClientTextOptions,
-    CogentTextResponse as ClientTextResponse, CogentTextResponseFuture as ClientTextResponseFuture,
-    CogentTextRun as CoreClientTextRun, CogentTokenBatches as ClientTokenBatches,
+use sipp::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
+use sipp::{
+    AnthropicProviderConfig as CoreAnthropicProviderConfig, SippChatRequest as ClientChatRequest,
+    SippClient as CoreSippClient, SippEmbedRequest as ClientEmbedRequest,
+    SippEmbeddingResponse as ClientEmbeddingResponse,
+    SippEmbeddingResponseFuture as ClientEmbeddingResponseFuture,
+    SippEmbeddingRun as CoreClientEmbeddingRun, SippError as ClientError,
+    SippQueryRequest as ClientQueryRequest, SippTextOptions as ClientTextOptions,
+    SippTextResponse as ClientTextResponse, SippTextResponseFuture as ClientTextResponseFuture,
+    SippTextRun as CoreClientTextRun, SippTokenBatches as ClientTokenBatches,
     EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
     GatewayAuthentication as CoreGatewayAuthentication,
     GatewayEndpointConfig as CoreGatewayEndpointConfig, GatewayRoutes as CoreGatewayRoutes,
@@ -291,7 +291,7 @@ impl PyModelPlacementConfig {
 #[pyclass(name = "ContextRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyContextRuntimeConfig {
-    core: cogentlm::engine::ContextRuntimeConfig,
+    core: sipp::engine::ContextRuntimeConfig,
 }
 
 #[pymethods]
@@ -351,7 +351,7 @@ impl PyContextRuntimeConfig {
         embeddings: Option<bool>,
         pooling: Option<String>,
     ) -> PyResult<Self> {
-        let mut core = cogentlm::engine::ContextRuntimeConfig {
+        let mut core = sipp::engine::ContextRuntimeConfig {
             n_ctx,
             n_batch,
             n_ubatch,
@@ -392,8 +392,8 @@ impl PyContextRuntimeConfig {
     }
 }
 
-fn parse_pooling_type(value: &str) -> PyResult<cogentlm::engine::PoolingType> {
-    cogentlm::engine::PoolingType::from_name(value)
+fn parse_pooling_type(value: &str) -> PyResult<sipp::engine::PoolingType> {
+    sipp::engine::PoolingType::from_name(value)
         .ok_or_else(|| PyValueError::new_err(format!("unknown pooling type: {value}")))
 }
 
@@ -473,7 +473,7 @@ impl PySchedulerRuntimeConfig {
 #[pyclass(name = "CacheRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyCacheRuntimeConfig {
-    core: cogentlm::engine::CacheRuntimeConfig,
+    core: sipp::engine::CacheRuntimeConfig,
 }
 
 #[pymethods]
@@ -495,7 +495,7 @@ impl PyCacheRuntimeConfig {
         max_snapshot_entries: Option<i32>,
         max_snapshot_bytes: Option<usize>,
     ) -> PyResult<Self> {
-        let mut core = cogentlm::engine::CacheRuntimeConfig::default();
+        let mut core = sipp::engine::CacheRuntimeConfig::default();
         if let Some(value) = mode {
             core.mode = parse_kv_reuse_mode(&value)?;
         }
@@ -726,14 +726,14 @@ impl PyEndpointRef {
 }
 
 /// Shared generation options for text-producing requests.
-#[pyclass(name = "CogentTextOptions")]
+#[pyclass(name = "SippTextOptions")]
 #[derive(Clone)]
-struct PyCogentTextOptions {
+struct PySippTextOptions {
     core: ClientTextOptions,
 }
 
 #[pymethods]
-impl PyCogentTextOptions {
+impl PySippTextOptions {
     #[new]
     #[pyo3(signature = (*, max_tokens = None, temperature = None, top_p = None, stop = None))]
     fn new(
@@ -753,7 +753,7 @@ impl PyCogentTextOptions {
     }
 }
 
-impl PyCogentTextOptions {
+impl PySippTextOptions {
     fn to_core(&self) -> ClientTextOptions {
         self.core.clone()
     }
@@ -823,7 +823,7 @@ impl PyLocalEmbedOptions {
     }
 }
 
-/// Gateway endpoint descriptor accepted by CogentClient.add.
+/// Gateway endpoint descriptor accepted by SippClient.add.
 #[pyclass(name = "GatewayDescriptor")]
 #[derive(Clone)]
 struct PyGatewayDescriptor {
@@ -908,7 +908,7 @@ impl PyGatewayDescriptor {
     }
 }
 
-/// Local model descriptor accepted by CogentClient.add.
+/// Local model descriptor accepted by SippClient.add.
 #[pyclass(name = "LocalModelDescriptor")]
 #[derive(Clone)]
 struct PyLocalModelDescriptor {
@@ -934,7 +934,7 @@ impl PyLocalModelDescriptor {
     }
 }
 
-/// Direct provider descriptor accepted by CogentClient.add.
+/// Direct provider descriptor accepted by SippClient.add.
 #[pyclass(name = "ProviderDescriptor")]
 #[derive(Clone)]
 struct PyProviderDescriptor {
@@ -1039,17 +1039,17 @@ impl PyProviderDescriptor {
 }
 
 /// Client facade for registered inference endpoints.
-#[pyclass(name = "CogentClient")]
-struct PyCogentClient {
-    inner: Arc<Mutex<CoreCogentClient>>,
+#[pyclass(name = "SippClient")]
+struct PySippClient {
+    inner: Arc<Mutex<CoreSippClient>>,
 }
 
 #[pymethods]
-impl PyCogentClient {
+impl PySippClient {
     #[new]
     fn new() -> PyResult<Self> {
         Ok(Self {
-            inner: Arc::new(Mutex::new(CoreCogentClient::new())),
+            inner: Arc::new(Mutex::new(CoreSippClient::new())),
         })
     }
 
@@ -1075,18 +1075,18 @@ impl PyCogentClient {
         py: Python<'_>,
         prompt: String,
         endpoint: Option<Py<PyEndpointRef>>,
-        options: Option<Py<PyCogentTextOptions>>,
+        options: Option<Py<PySippTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
         endpoint_options: Option<PyObject>,
         provider_options: Option<PyObject>,
         emit_tokens: bool,
-    ) -> PyResult<PyCogentTextRun> {
+    ) -> PyResult<PySippTextRun> {
         let request = ClientQueryRequest {
             endpoint: endpoint
                 .as_ref()
                 .map(|endpoint| endpoint.borrow(py).to_core()),
             prompt,
-            options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
+            options: py_core_or_default(py, options, PySippTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
             endpoint_options: py_endpoint_options_or_empty(py, endpoint_options)?,
             provider_options: py_provider_options_or_empty(py, provider_options)?,
@@ -1097,7 +1097,7 @@ impl PyCogentClient {
             .lock()
             .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
             .query(request);
-        Ok(PyCogentTextRun::from_core(run))
+        Ok(PySippTextRun::from_core(run))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1107,18 +1107,18 @@ impl PyCogentClient {
         py: Python<'_>,
         messages: Vec<Py<PyChatMessage>>,
         endpoint: Option<Py<PyEndpointRef>>,
-        options: Option<Py<PyCogentTextOptions>>,
+        options: Option<Py<PySippTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
         endpoint_options: Option<PyObject>,
         provider_options: Option<PyObject>,
         emit_tokens: bool,
-    ) -> PyResult<PyCogentTextRun> {
+    ) -> PyResult<PySippTextRun> {
         let request = ClientChatRequest {
             endpoint: endpoint
                 .as_ref()
                 .map(|endpoint| endpoint.borrow(py).to_core()),
             messages: chat_messages_to_core(py, messages)?,
-            options: py_core_or_default(py, options, PyCogentTextOptions::to_core),
+            options: py_core_or_default(py, options, PySippTextOptions::to_core),
             local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
             endpoint_options: py_endpoint_options_or_empty(py, endpoint_options)?,
             provider_options: py_provider_options_or_empty(py, provider_options)?,
@@ -1129,7 +1129,7 @@ impl PyCogentClient {
             .lock()
             .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
             .chat(request);
-        Ok(PyCogentTextRun::from_core(run))
+        Ok(PySippTextRun::from_core(run))
     }
 
     #[pyo3(signature = (input, *, endpoint = None, local = None, endpoint_options = None, provider_options = None))]
@@ -1141,7 +1141,7 @@ impl PyCogentClient {
         local: Option<Py<PyLocalEmbedOptions>>,
         endpoint_options: Option<PyObject>,
         provider_options: Option<PyObject>,
-    ) -> PyResult<PyCogentEmbeddingRun> {
+    ) -> PyResult<PySippEmbeddingRun> {
         let request = ClientEmbedRequest {
             endpoint: endpoint
                 .as_ref()
@@ -1156,18 +1156,18 @@ impl PyCogentClient {
             .lock()
             .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
             .embed(request);
-        Ok(PyCogentEmbeddingRun::from_core(run))
+        Ok(PySippEmbeddingRun::from_core(run))
     }
 }
 
 /// Text generation handle with a final response and optional token stream.
-#[pyclass(name = "CogentTextRun")]
-struct PyCogentTextRun {
+#[pyclass(name = "SippTextRun")]
+struct PySippTextRun {
     response: PySharedClientTextResponse,
     tokens: PySharedClientTokenBatches,
 }
 
-impl PyCogentTextRun {
+impl PySippTextRun {
     fn from_core(run: CoreClientTextRun) -> Self {
         let (tokens, response) = run.into_parts();
         Self {
@@ -1178,7 +1178,7 @@ impl PyCogentTextRun {
 }
 
 #[pymethods]
-impl PyCogentTextRun {
+impl PySippTextRun {
     fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let response = self
             .response
@@ -1189,24 +1189,24 @@ impl PyCogentTextRun {
         let response = py
             .allow_threads(|| block_on(response))
             .map_err(to_py_client_error)?;
-        cogent_text_response_to_dict(py, response)
+        sipp_text_response_to_dict(py, response)
     }
 
-    fn tokens(&self) -> PyCogentTokenIterator {
-        PyCogentTokenIterator {
+    fn tokens(&self) -> PySippTokenIterator {
+        PySippTokenIterator {
             tokens: self.tokens.clone(),
         }
     }
 }
 
 /// Iterator over token batches emitted by a text generation run.
-#[pyclass(name = "CogentTokenIterator")]
-struct PyCogentTokenIterator {
+#[pyclass(name = "SippTokenIterator")]
+struct PySippTokenIterator {
     tokens: PySharedClientTokenBatches,
 }
 
 #[pymethods]
-impl PyCogentTokenIterator {
+impl PySippTokenIterator {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
@@ -1231,12 +1231,12 @@ impl PyCogentTokenIterator {
 }
 
 /// Embedding request handle with a final embedding response.
-#[pyclass(name = "CogentEmbeddingRun")]
-struct PyCogentEmbeddingRun {
+#[pyclass(name = "SippEmbeddingRun")]
+struct PySippEmbeddingRun {
     response: PySharedClientEmbeddingResponse,
 }
 
-impl PyCogentEmbeddingRun {
+impl PySippEmbeddingRun {
     fn from_core(run: CoreClientEmbeddingRun) -> Self {
         Self {
             response: Arc::new(Mutex::new(Some(run.into_response()))),
@@ -1245,7 +1245,7 @@ impl PyCogentEmbeddingRun {
 }
 
 #[pymethods]
-impl PyCogentEmbeddingRun {
+impl PySippEmbeddingRun {
     fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let response = self
             .response
@@ -1256,7 +1256,7 @@ impl PyCogentEmbeddingRun {
         let response = py
             .allow_threads(|| block_on(response))
             .map_err(to_py_client_error)?;
-        cogent_embedding_response_to_dict(py, response)
+        sipp_embedding_response_to_dict(py, response)
     }
 }
 
@@ -1300,13 +1300,13 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyNativeRuntimeConfig>()?;
     module.add_class::<PyChatMessage>()?;
     module.add_class::<PyEndpointRef>()?;
-    module.add_class::<PyCogentTextOptions>()?;
+    module.add_class::<PySippTextOptions>()?;
     module.add_class::<PyLocalTextOptions>()?;
     module.add_class::<PyLocalEmbedOptions>()?;
-    module.add_class::<PyCogentClient>()?;
-    module.add_class::<PyCogentTextRun>()?;
-    module.add_class::<PyCogentTokenIterator>()?;
-    module.add_class::<PyCogentEmbeddingRun>()?;
+    module.add_class::<PySippClient>()?;
+    module.add_class::<PySippTextRun>()?;
+    module.add_class::<PySippTokenIterator>()?;
+    module.add_class::<PySippEmbeddingRun>()?;
     module.add_class::<PyGatewayDescriptor>()?;
     module.add_class::<PyLocalModelDescriptor>()?;
     module.add_class::<PyProviderDescriptor>()?;
@@ -1546,7 +1546,7 @@ fn endpoint_ref_to_dict(py: Python<'_>, endpoint: CoreEndpointRef) -> PyResult<P
     Ok(dict.into_py(py))
 }
 
-fn cogent_text_response_to_dict(
+fn sipp_text_response_to_dict(
     py: Python<'_>,
     response: ClientTextResponse,
 ) -> PyResult<Py<PyAny>> {
@@ -1565,7 +1565,7 @@ fn cogent_text_response_to_dict(
     Ok(dict.into_py(py))
 }
 
-fn cogent_embedding_response_to_dict(
+fn sipp_embedding_response_to_dict(
     py: Python<'_>,
     response: ClientEmbeddingResponse,
 ) -> PyResult<Py<PyAny>> {
@@ -1815,11 +1815,11 @@ fn to_py_client_error(error: ClientError) -> PyErr {
     }
 }
 
-fn to_py_error(error: cogentlm::error::Error) -> PyErr {
+fn to_py_error(error: sipp::error::Error) -> PyErr {
     match error {
-        cogentlm::error::Error::InvalidRequest(message)
-        | cogentlm::error::Error::InvalidConfig(message) => PyValueError::new_err(message),
-        cogentlm::error::Error::UnsupportedOperation { operation, reason } => {
+        sipp::error::Error::InvalidRequest(message)
+        | sipp::error::Error::InvalidConfig(message) => PyValueError::new_err(message),
+        sipp::error::Error::UnsupportedOperation { operation, reason } => {
             UnsupportedOperationError::new_err(format!(
                 "unsupported operation {operation}: {reason}"
             ))

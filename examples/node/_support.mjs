@@ -1,7 +1,7 @@
 export const DEFAULT_MAX_TOKENS = 2048;
 export const DEFAULT_TEMPERATURE = 0.7;
 export const DEFAULT_TOP_P = 0.8;
-export const DEFAULT_CONTEXT = 2048;
+export const DEFAULT_CONTEXT = 4096;
 export const DEFAULT_SEED = 42;
 
 export function readLocalArgs(command, defaultInput) {
@@ -67,7 +67,7 @@ export function numberEnv(name, fallback = undefined) {
 }
 
 export function gpuLayers() {
-  const value = process.env.COGENTLM_GPU_LAYERS;
+  const value = process.env.SIPP_GPU_LAYERS;
   if (value === 'all' || value === 'auto') return value;
   return value == null ? undefined : { count: Number(value) };
 }

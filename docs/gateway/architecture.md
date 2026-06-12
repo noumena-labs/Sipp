@@ -5,7 +5,7 @@ layer for deleted gateway route-autowiring or remote endpoint APIs.
 
 ## Core Execution
 
-`cogentlm::gateway_core` (the `gateway_core` module of the `cogentlm` crate,
+`sipp::gateway_core` (the `gateway_core` module of the `sipp` crate,
 behind the `gateway` feature) exposes only typed query, chat, and embed
 execution:
 
@@ -18,8 +18,8 @@ execution:
 It does not depend on HTTP, Axum routes, JSON, SSE, bearer tokens, status
 codes, aliases, TOML, or fixed limits.
 
-The `cogentlm` client API owns local, provider, and gateway endpoint
-registration through `CogentClient.add(...)`. Gateway endpoints call an HTTP
+The `sipp` client API owns local, provider, and gateway endpoint
+registration through `SippClient.add(...)`. Gateway endpoints call an HTTP
 gateway as a client transport and are never selected implicitly.
 
 ## Developer Toolkit
@@ -30,7 +30,7 @@ expose a gateway:
 - `ProtocolCodec` for request, response, stream, and error wire formats.
 - `Authenticator` for arbitrary authentication.
 - `ErrorTranslator` for application HTTP error mapping.
-- `GatewayCodec` for the first-party Cogent JSON/SSE profile.
+- `GatewayCodec` for the first-party Sipp JSON/SSE profile.
 - `GatewayHttpError` and SSE/error response encoders.
 
 It does not register routes, expose a router, or own handler paths.
@@ -63,7 +63,7 @@ metrics, and TOML format are application-owned.
 
 `examples/gateway` demonstrates the canonical developer pattern:
 
-- Create a `CogentClient`.
+- Create a `SippClient`.
 - Add local, provider, or gateway endpoints with `.add`.
 - Define Axum routes in the example application.
 - Decode each route body, select an endpoint, call `client.*`, and encode the

@@ -4,7 +4,7 @@
   "workspaces": {
     "": {},
     "apps/gateway-server/admin-ui": {
-      "name": "cogentlm-gateway-admin-ui",
+      "name": "sipp-gateway-admin-ui",
       "version": "0.0.1",
       "dependencies": {
         "@tanstack/react-query": "^5.90.12",
@@ -22,10 +22,10 @@
       },
     },
     "demos/avatar": {
-      "name": "cogentlm-avatar-demo",
+      "name": "sipp-avatar-demo",
       "version": "0.0.1",
       "dependencies": {
-        "@noumena-labs/cogentlm": "workspace:*",
+        "@noumena-labs/sipp": "workspace:*",
         "@pixiv/three-vrm": "^3.3.0",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
@@ -42,10 +42,10 @@
       },
     },
     "demos/chat": {
-      "name": "cogentlm-chat-demo",
+      "name": "sipp-chat-demo",
       "version": "0.0.1",
       "dependencies": {
-        "@noumena-labs/cogentlm": "workspace:*",
+        "@noumena-labs/sipp": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^5.3.3",
@@ -53,10 +53,10 @@
       },
     },
     "demos/proactive-ui": {
-      "name": "cogentlm-proactive-ui-demo",
+      "name": "sipp-proactive-ui-demo",
       "version": "0.0.1",
       "dependencies": {
-        "@noumena-labs/cogentlm": "workspace:*",
+        "@noumena-labs/sipp": "workspace:*",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "scheduler": "^0.27.0",
@@ -70,10 +70,10 @@
       },
     },
     "demos/simulation": {
-      "name": "cogentlm-simulation-demo",
+      "name": "sipp-simulation-demo",
       "version": "0.0.1",
       "dependencies": {
-        "@noumena-labs/cogentlm": "workspace:*",
+        "@noumena-labs/sipp": "workspace:*",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "scheduler": "^0.27.0",
@@ -89,10 +89,10 @@
       },
     },
     "examples/web": {
-      "name": "cogentlm-web-example",
+      "name": "sipp-web-example",
       "version": "0.0.1",
       "dependencies": {
-        "@noumena-labs/cogentlm": "workspace:*",
+        "@noumena-labs/sipp": "workspace:*",
       },
       "devDependencies": {
         "playwright-core": "^1.54.2",
@@ -101,7 +101,7 @@
       },
     },
     "lib/node": {
-      "name": "@noumena-labs/cogentlm-server",
+      "name": "@noumena-labs/sipp-server",
       "version": "0.1.0",
       "devDependencies": {
         "@napi-rs/cli": "^3.3.0",
@@ -109,7 +109,7 @@
       },
     },
     "lib/web": {
-      "name": "@noumena-labs/cogentlm",
+      "name": "@noumena-labs/sipp",
       "version": "0.1.0",
       "devDependencies": {
         "@types/node": "^20.10.0",
@@ -118,10 +118,10 @@
       },
     },
     "tools/playground": {
-      "name": "cogentlm-browser-playground",
+      "name": "sipp-browser-playground",
       "version": "0.0.1",
       "dependencies": {
-        "@noumena-labs/cogentlm": "workspace:*",
+        "@noumena-labs/sipp": "workspace:*",
         "lucide-react": "^1.17.0",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
@@ -380,9 +380,9 @@
 
     "@napi-rs/wasm-tools-win32-x64-msvc": ["@napi-rs/wasm-tools-win32-x64-msvc@1.0.1", "", { "os": "win32", "cpu": "x64" }, "sha512-rEAf05nol3e3eei2sRButmgXP+6ATgm0/38MKhz9Isne82T4rPIMYsCIFj0kOisaGeVwoi2fnm7O9oWp5YVnYQ=="],
 
-    "@noumena-labs/cogentlm": ["@noumena-labs/cogentlm@workspace:lib/web"],
+    "@noumena-labs/sipp": ["@noumena-labs/sipp@workspace:lib/web"],
 
-    "@noumena-labs/cogentlm-server": ["@noumena-labs/cogentlm-server@workspace:lib/node"],
+    "@noumena-labs/sipp-server": ["@noumena-labs/sipp-server@workspace:lib/node"],
 
     "@octokit/auth-token": ["@octokit/auth-token@6.0.0", "", {}, "sha512-P4YJBPdPSpWTQ1NU4XYdvHvXJJDxM6YwpS0FZHRgP7YFkdVxsWcpWGy/NVqlAA7PcPCnMacXlRm1y2PFZRWL/w=="],
 
@@ -582,19 +582,19 @@
 
     "clsx": ["clsx@2.1.1", "", {}, "sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA=="],
 
-    "cogentlm-avatar-demo": ["cogentlm-avatar-demo@workspace:demos/avatar"],
+    "sipp-avatar-demo": ["sipp-avatar-demo@workspace:demos/avatar"],
 
-    "cogentlm-browser-playground": ["cogentlm-browser-playground@workspace:tools/playground"],
+    "sipp-browser-playground": ["sipp-browser-playground@workspace:tools/playground"],
 
-    "cogentlm-chat-demo": ["cogentlm-chat-demo@workspace:demos/chat"],
+    "sipp-chat-demo": ["sipp-chat-demo@workspace:demos/chat"],
 
-    "cogentlm-gateway-admin-ui": ["cogentlm-gateway-admin-ui@workspace:apps/gateway-server/admin-ui"],
+    "sipp-gateway-admin-ui": ["sipp-gateway-admin-ui@workspace:apps/gateway-server/admin-ui"],
 
-    "cogentlm-proactive-ui-demo": ["cogentlm-proactive-ui-demo@workspace:demos/proactive-ui"],
+    "sipp-proactive-ui-demo": ["sipp-proactive-ui-demo@workspace:demos/proactive-ui"],
 
-    "cogentlm-simulation-demo": ["cogentlm-simulation-demo@workspace:demos/simulation"],
+    "sipp-simulation-demo": ["sipp-simulation-demo@workspace:demos/simulation"],
 
-    "cogentlm-web-example": ["cogentlm-web-example@workspace:examples/web"],
+    "sipp-web-example": ["sipp-web-example@workspace:examples/web"],
 
     "color-convert": ["color-convert@2.0.1", "", { "dependencies": { "color-name": "~1.1.4" } }, "sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ=="],
 
@@ -762,7 +762,7 @@
 
     "redux": ["redux@5.0.1", "", {}, "sha512-M9/ELqF6fy8FwmkpnF0S3YKOqMyoWJ4+CS5Efg2ct3oY9daQvd/Pc71FpGZsVsbl3Cpb+IIcjBDUnnyBdQbq4w=="],
 
-    "redux-thunk": ["redux-thunk@3.1.0", "", { "peerDependencies": { "redux": "^5.0.0" } }, "sha512-NW2r5T6ksUKXCabzhL9z+h206HQw/NJkcLm1GPImRQ8IzfXwRGqjVhKJGauHirT0DAuyy6hjdnMZaRoAcy0Klw=="],
+    "redux-thunk": ["redux-thunk@3.1.0", "", { "peerDependencies": { "redux": "^5.0.0" } }, "sha512-NW2r5T6ksUKXCabzhL9z+h206HQw/NJksipp1GPImRQ8IzfXwRGqjVhKJGauHirT0DAuyy6hjdnMZaRoAcy0Klw=="],
 
     "require-directory": ["require-directory@2.1.1", "", {}, "sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q=="],
 
@@ -848,15 +848,15 @@
 
     "@reduxjs/toolkit/immer": ["immer@11.1.8", "", {}, "sha512-/tbkHMW7y10Lx6i1crLjD4/OhNkRG+Fo7byZHtah0547nIeXYcpIXaUh0IAQY6gO5459qpGGYapcEOHtFXkIuA=="],
 
-    "cogentlm-avatar-demo/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+    "sipp-avatar-demo/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
-    "cogentlm-browser-playground/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+    "sipp-browser-playground/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
-    "cogentlm-gateway-admin-ui/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+    "sipp-gateway-admin-ui/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
-    "cogentlm-proactive-ui-demo/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+    "sipp-proactive-ui-demo/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
-    "cogentlm-simulation-demo/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+    "sipp-simulation-demo/typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
     "glob/minimatch": ["minimatch@9.0.9", "", { "dependencies": { "brace-expansion": "^2.0.2" } }, "sha512-OBwBN9AL4dqmETlpS2zasx+vTeWclWzkblfZk7KTA5j3jeOONz/tRCnZomUyvNg83wL5Zv9Ss6HMJXAgL8R2Yg=="],
 

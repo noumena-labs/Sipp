@@ -1,8 +1,8 @@
 # 框架指南
 
-本指南介绍如何在主流应用框架中集成 CogentLM 的 JavaScript 包。
+本指南介绍如何在主流应用框架中集成 Sipp 的 JavaScript 包。
 
-浏览器推理或浏览器代码中发起网关调用时，使用浏览器包 `cogentlm`。Node.js 运行时的纯服务端代码（路由处理器、服务端函数、API 路由、后台工作进程等）只使用 Node 包 `cogentlm-server`。
+浏览器推理或浏览器代码中发起网关调用时，使用浏览器包 `sipp`。Node.js 运行时的纯服务端代码（路由处理器、服务端函数、API 路由、后台工作进程等）只使用 Node 包 `sipp-server`。
 
 ## 指南列表
 
@@ -14,9 +14,9 @@
 
 | 环境 | 推荐包 | 适用场景 |
 | --- | --- | --- |
-| 浏览器组件 | `cogentlm` | 浏览器本地 GGUF 推理，或直接向网关发起请求。 |
-| Node 服务端路由 | `cogentlm-server` | 调用直接提供商端点、服务器本地推理、作为网关客户端。 |
-| 网关 Profile 路由 | `cogentlm-server` | 为浏览器 `kind: 'gateway'` 端点提供兼容代理路由。 |
+| 浏览器组件 | `sipp` | 浏览器本地 GGUF 推理，或直接向网关发起请求。 |
+| Node 服务端路由 | `sipp-server` | 调用直接提供商端点、服务器本地推理、作为网关客户端。 |
+| 网关 Profile 路由 | `sipp-server` | 为浏览器 `kind: 'gateway'` 端点提供兼容代理路由。 |
 | 网关客户端 | 两者皆可 | 浏览器应用用短期 Token 访问独立网关；服务端应用用安全密钥访问网关。 |
 
 ## 服务端路由
@@ -36,8 +36,8 @@ const endpoint = await client.add('provider', {
 
 ## 网关路由与字段名
 
-浏览器端配置网关描述符时需提供 `http` 或 `https` 格式的 `baseUrl`，通过 `routes: { query, chat, embed }` 覆盖具体路由路径。服务端代码用 `cogentlm-server` 调用网关时，Node 端网关描述符对应使用 `queryRoute`、`chatRoute`、`embedRoute`。
+浏览器端配置网关描述符时需提供 `http` 或 `https` 格式的 `baseUrl`，通过 `routes: { query, chat, embed }` 覆盖具体路由路径。服务端代码用 `sipp-server` 调用网关时，Node 端网关描述符对应使用 `queryRoute`、`chatRoute`、`embedRoute`。
 
 不要在浏览器打包资源中包含提供商凭证或长期网关 Token。浏览器应用访问网关时，下发短期访问 Token 或通过应用服务器路由进行安全代理。
 
-将框架路由封装成兼容浏览器 `kind: 'gateway'` 调用的端点时，使用 `cogentlm-server` 提供的 `decodeGatewayQueryBody()`、`decodeGatewayChatBody()`、`decodeGatewayEmbedBody()` 等解析函数及响应助手函数。这些助手帮助路由专注于鉴权策略、目标转发、提供商映射和客户端生命周期，无需关注底层网关 Profile JSON 编码细节。
+将框架路由封装成兼容浏览器 `kind: 'gateway'` 调用的端点时，使用 `sipp-server` 提供的 `decodeGatewayQueryBody()`、`decodeGatewayChatBody()`、`decodeGatewayEmbedBody()` 等解析函数及响应助手函数。这些助手帮助路由专注于鉴权策略、目标转发、提供商映射和客户端生命周期，无需关注底层网关 Profile JSON 编码细节。

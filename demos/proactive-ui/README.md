@@ -1,6 +1,6 @@
 # Proactive UI Demo
 
-`demos/proactive-ui` is a speed-first proactive drawing demo for CogentLM's
+`demos/proactive-ui` is a speed-first proactive drawing demo for Sipp's
 vision pipeline. The app captures a sketch, asks a vision model to describe it,
 then asks a text pass to produce a short commentary response from the parsed
 visual facts.

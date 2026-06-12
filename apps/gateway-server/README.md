@@ -1,6 +1,6 @@
-# CogentLM Gateway Server
+# Sipp Gateway Server
 
-`apps/gateway-server` is the first-party CogentLM HTTP gateway application. It
+`apps/gateway-server` is the first-party Sipp HTTP gateway application. It
 adds TOML configuration, bearer-token policy, local/provider targets,
 management routes, metrics, and the Admin Dashboard on top of the gateway
 toolkit crates.
@@ -12,7 +12,7 @@ toolkit crates.
 
   ```bash
   cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
-  clm run gateway-server check --config apps/gateway-server/config/local.toml
+  sipp run gateway-server check --config apps/gateway-server/config/local.toml
   ```
 
 - Docker workflows:
@@ -40,7 +40,7 @@ toolkit crates.
   model target.
 - `config/hybrid.toml.example`: local GPU model plus provider target template.
 - `.env.example`: copyable secrets-only env template.
-- `admin-ui/`: React Admin Dashboard built by `clm build gateway-server` and
+- `admin-ui/`: React Admin Dashboard built by `sipp build gateway-server` and
   copied beside the generated gateway binary.
 - `development.yml.example`: copyable local Compose template.
 - `development-provider-only.yml.example`: local Compose template without a

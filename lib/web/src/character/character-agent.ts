@@ -98,7 +98,7 @@ interface InFlightTurn {
 }
 
 /**
- * A character-driven conversation runtime. Pair one with a CogentClient and a
+ * A character-driven conversation runtime. Pair one with a SippClient and a
  * CharacterConfig to get a grammar-constrained, memory-aware chat loop.
  */
 export class CharacterRuntime {
@@ -663,5 +663,5 @@ function logChoiceQuery(args: {
 }
 
 function isPromptTraceEnabled(): boolean {
-  return (globalThis as { COGENT_TRACE_PROMPTS?: boolean }).COGENT_TRACE_PROMPTS === true;
+  return (globalThis as { SIPP_TRACE_PROMPTS?: boolean }).SIPP_TRACE_PROMPTS === true;
 }

@@ -2,9 +2,9 @@ mod support;
 
 use std::time::Duration;
 
-use cogentlm::core::{ChatMessage, ChatRole};
-use cogentlm::{
-    CogentChatRequest, CogentClient, CogentTextOptions, EndpointDescriptor, ProviderAuthConfig,
+use sipp::core::{ChatMessage, ChatRole};
+use sipp::{
+    SippChatRequest, SippClient, SippTextOptions, EndpointDescriptor, ProviderAuthConfig,
     ProviderEndpointConfig, ProviderSecret,
 };
 use futures::executor::block_on;
@@ -25,12 +25,12 @@ fn main() -> support::ExampleResult<()> {
         // Direct providers belong in trusted Rust processes. Browser code
         // should call a gateway or application route instead of holding
         // provider credentials.
-        let mut client = CogentClient::new();
+        let mut client = SippClient::new();
         let endpoint = client
             .add("provider", EndpointDescriptor::provider(provider_config()?))
             .await?;
         let response = client
-            .chat(CogentChatRequest {
+            .chat(SippChatRequest {
                 endpoint: Some(endpoint),
                 messages: vec![ChatMessage::new(ChatRole::User, prompt)],
                 options: text_options(),
@@ -46,41 +46,41 @@ fn provider_config() -> support::ExampleResult<ProviderEndpointConfig> {
     let config = match provider_name().as_str() {
         "gemini" => ProviderEndpointConfig::openai_compatible(
             env_any(
-                &["COGENTLM_PROVIDER_MODEL", "GEMINI_MODEL"],
+                &["SIPP_PROVIDER_MODEL", "GEMINI_MODEL"],
                 Some(GEMINI_DEFAULT_MODEL),
             )?,
-            support::optional_env("COGENTLM_PROVIDER_BASE_URL")
+            support::optional_env("SIPP_PROVIDER_BASE_URL")
                 .unwrap_or_else(|| GEMINI_BASE_URL.to_string()),
             ProviderAuthConfig::Bearer(ProviderSecret::new(required_env_any(&[
-                "COGENTLM_PROVIDER_API_KEY",
+                "SIPP_PROVIDER_API_KEY",
                 "GEMINI_API_KEY",
             ])?)),
         ),
         "openai" => ProviderEndpointConfig::openai(
             env_any(
-                &["COGENTLM_PROVIDER_MODEL", "OPENAI_MODEL"],
+                &["SIPP_PROVIDER_MODEL", "OPENAI_MODEL"],
                 Some(OPENAI_DEFAULT_MODEL),
             )?,
             ProviderSecret::new(required_env_any(&[
-                "COGENTLM_PROVIDER_API_KEY",
+                "SIPP_PROVIDER_API_KEY",
                 "OPENAI_API_KEY",
             ])?),
         ),
         "anthropic" => ProviderEndpointConfig::anthropic(
-            required_env_any(&["COGENTLM_PROVIDER_MODEL", "ANTHROPIC_MODEL"])?,
+            required_env_any(&["SIPP_PROVIDER_MODEL", "ANTHROPIC_MODEL"])?,
             ProviderSecret::new(required_env_any(&[
-                "COGENTLM_PROVIDER_API_KEY",
+                "SIPP_PROVIDER_API_KEY",
                 "ANTHROPIC_API_KEY",
             ])?),
         ),
         "openai_compatible" => ProviderEndpointConfig::openai_compatible(
-            required_env_any(&["COGENTLM_PROVIDER_MODEL"])?,
-            required_env_any(&["COGENTLM_PROVIDER_BASE_URL"])?,
+            required_env_any(&["SIPP_PROVIDER_MODEL"])?,
+            required_env_any(&["SIPP_PROVIDER_BASE_URL"])?,
             openai_compatible_auth()?,
         ),
         _ => {
             return Err(config_error(
-                "COGENTLM_PROVIDER must be gemini, openai, anthropic, or openai_compatible",
+                "SIPP_PROVIDER must be gemini, openai, anthropic, or openai_compatible",
             ));
         }
     };
@@ -89,16 +89,16 @@ fn provider_config() -> support::ExampleResult<ProviderEndpointConfig> {
 
 fn with_optional_provider_config(mut config: ProviderEndpointConfig) -> ProviderEndpointConfig {
     let timeout = Some(Duration::from_millis(
-        support::env_parse("COGENTLM_PROVIDER_TIMEOUT_MS").unwrap_or(30_000),
+        support::env_parse("SIPP_PROVIDER_TIMEOUT_MS").unwrap_or(30_000),
     ));
     match &mut config {
         ProviderEndpointConfig::OpenAi(config) => {
-            config.base_url = support::optional_env("COGENTLM_PROVIDER_BASE_URL")
+            config.base_url = support::optional_env("SIPP_PROVIDER_BASE_URL")
                 .or_else(|| support::optional_env("OPENAI_BASE_URL"));
             config.timeout = timeout;
         }
         ProviderEndpointConfig::Anthropic(config) => {
-            config.base_url = support::optional_env("COGENTLM_PROVIDER_BASE_URL")
+            config.base_url = support::optional_env("SIPP_PROVIDER_BASE_URL")
                 .or_else(|| support::optional_env("ANTHROPIC_BASE_URL"));
             config.version = support::optional_env("ANTHROPIC_VERSION");
             config.timeout = timeout;
@@ -112,35 +112,35 @@ fn with_optional_provider_config(mut config: ProviderEndpointConfig) -> Provider
 
 fn openai_compatible_auth() -> support::ExampleResult<ProviderAuthConfig> {
     match (
-        support::optional_env("COGENTLM_PROVIDER_AUTH_HEADER_NAME"),
-        support::optional_env("COGENTLM_PROVIDER_AUTH_HEADER_VALUE"),
+        support::optional_env("SIPP_PROVIDER_AUTH_HEADER_NAME"),
+        support::optional_env("SIPP_PROVIDER_AUTH_HEADER_VALUE"),
     ) {
         (Some(name), Some(value)) => Ok(ProviderAuthConfig::Header {
             name,
             value: ProviderSecret::new(value),
         }),
         (None, None) => Ok(ProviderAuthConfig::Bearer(ProviderSecret::new(
-            required_env_any(&["COGENTLM_PROVIDER_API_KEY"])?,
+            required_env_any(&["SIPP_PROVIDER_API_KEY"])?,
         ))),
         _ => Err(config_error(
-            "COGENTLM_PROVIDER_AUTH_HEADER_NAME and \
-             COGENTLM_PROVIDER_AUTH_HEADER_VALUE must be set together",
+            "SIPP_PROVIDER_AUTH_HEADER_NAME and \
+             SIPP_PROVIDER_AUTH_HEADER_VALUE must be set together",
         )),
     }
 }
 
-fn text_options() -> CogentTextOptions {
-    CogentTextOptions {
-        max_tokens: support::env_parse("COGENTLM_MAX_TOKENS").or(Some(support::DEFAULT_MAX_TOKENS)),
-        temperature: support::env_parse("COGENTLM_TEMPERATURE")
+fn text_options() -> SippTextOptions {
+    SippTextOptions {
+        max_tokens: support::env_parse("SIPP_MAX_TOKENS").or(Some(support::DEFAULT_MAX_TOKENS)),
+        temperature: support::env_parse("SIPP_TEMPERATURE")
             .or(Some(support::DEFAULT_TEMPERATURE)),
-        top_p: support::env_parse("COGENTLM_TOP_P").or(Some(support::DEFAULT_TOP_P)),
+        top_p: support::env_parse("SIPP_TOP_P").or(Some(support::DEFAULT_TOP_P)),
         stop: Vec::new(),
     }
 }
 
 fn provider_name() -> String {
-    support::optional_env("COGENTLM_PROVIDER")
+    support::optional_env("SIPP_PROVIDER")
         .unwrap_or_else(|| "gemini".to_string())
         .to_lowercase()
         .replace('-', "_")

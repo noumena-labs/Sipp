@@ -1,4 +1,4 @@
-//! Animated setup splash for the interactive CogentLM setup flow.
+//! Animated setup splash for the interactive Sipp setup flow.
 //!
 //! This version uses a small character canvas instead of hand-built padding.
 //! That keeps the front logo, scan effect, 3D extrusion, and footer aligned
@@ -400,7 +400,7 @@ fn draw_footer(canvas: &mut Canvas, frame: u16, logo_width: usize) {
     canvas.draw_text(boot_x, boot_y, &boot_text, Style::Rgb(0, 255, 170), 200);
 
     let tagline = TAGLINES[((frame as usize) / 16) % TAGLINES.len()];
-    let prefix = "◢◤ COGENT // ";
+    let prefix = "◢◤ SIPP // ";
     let suffix = " ◥◣";
     let total = char_len(prefix) + char_len(tagline) + char_len(suffix);
     let x = logo_center.saturating_sub(total / 2);

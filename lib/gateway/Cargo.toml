@@ -1,5 +1,5 @@
 [package]
-name = "cogentlm-gateway"
+name = "sipp-gateway"
 description = "Route-free gateway helpers and first-party JSON/SSE profile"
 version.workspace = true
 edition.workspace = true
@@ -10,17 +10,17 @@ publish = false
 
 [features]
 default = ["native", "providers"]
-native = ["cogentlm/native"]
-backend-dl = ["cogentlm/backend-dl"]
-cuda = ["cogentlm/cuda"]
-metal = ["cogentlm/metal"]
-vulkan = ["cogentlm/vulkan"]
-openmp = ["cogentlm/openmp"]
-providers = ["cogentlm/providers"]
+native = ["sipp/native"]
+backend-dl = ["sipp/backend-dl"]
+cuda = ["sipp/cuda"]
+metal = ["sipp/metal"]
+vulkan = ["sipp/vulkan"]
+openmp = ["sipp/openmp"]
+providers = ["sipp/providers"]
 
 [dependencies]
 bytes = "1"
-cogentlm = { workspace = true, features = ["gateway"] }
+sipp = { workspace = true, features = ["gateway"] }
 http = "1"
 serde.workspace = true
 serde_json.workspace = true

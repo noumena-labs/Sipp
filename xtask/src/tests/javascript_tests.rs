@@ -13,12 +13,12 @@ fn package_name_reads_manifest_name() {
     let package_dir = temp.create_dir("lib/web");
     temp.write(
         "lib/web/package.json",
-        r#"{"name":"@noumena-labs/cogentlm","version":"0.1.0"}"#,
+        r#"{"name":"@noumena-labs/sipp","version":"0.1.0"}"#,
     );
 
     assert_eq!(
         package_name(&package_dir).unwrap(),
-        "@noumena-labs/cogentlm"
+        "@noumena-labs/sipp"
     );
 }
 
@@ -39,11 +39,11 @@ fn root_workspace_package_filters_preserve_order_and_remove_duplicates() {
     let demo_dir = temp.create_dir("demos/chat");
     temp.write(
         "lib/web/package.json",
-        r#"{"name":"@noumena-labs/cogentlm"}"#,
+        r#"{"name":"@noumena-labs/sipp"}"#,
     );
     temp.write(
         "demos/chat/package.json",
-        r#"{"name":"cogentlm-chat-demo"}"#,
+        r#"{"name":"sipp-chat-demo"}"#,
     );
 
     let filters = root_workspace_package_filters(&[demo_dir.clone(), web_dir, demo_dir]).unwrap();
@@ -51,8 +51,8 @@ fn root_workspace_package_filters_preserve_order_and_remove_duplicates() {
     assert_eq!(
         filters,
         vec![
-            "cogentlm-chat-demo".to_owned(),
-            "@noumena-labs/cogentlm".to_owned()
+            "sipp-chat-demo".to_owned(),
+            "@noumena-labs/sipp".to_owned()
         ]
     );
 }

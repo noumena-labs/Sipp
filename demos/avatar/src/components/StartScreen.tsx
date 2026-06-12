@@ -47,10 +47,10 @@ export function StartScreen({
     <div className="start-screen">
       <section className="start-card glass-panel" aria-labelledby="start-title">
         <div className="start-hero">
-          <span className="panel-eyebrow">Cogent Avatar Demo</span>
+          <span className="panel-eyebrow">Sipp Avatar Demo</span>
           <h1 id="start-title">Enter the Starfall Gate</h1>
           <p className="start-lede">
-            Meet {characterName}, a real-time interactive character powered by CogentLM, a high-performance inference engine for local LLMs.
+            Meet {characterName}, a real-time interactive character powered by Sipp, a high-performance inference engine for local LLMs.
             This tech demo shows how a local model can drive lifelike character interactions, call actions in response to user input, and operate seamlessly in a dynamic real-time environment.
           </p>
         </div>

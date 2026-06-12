@@ -1,9 +1,9 @@
 import {
-  CogentClient,
+  SippClient,
   type BrowserTextRun,
   type ChatMessage,
   type EndpointRef,
-} from '@noumena-labs/cogentlm';
+} from '@noumena-labs/sipp';
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
@@ -32,7 +32,7 @@ elements.runForm.addEventListener('submit', async (event) => {
     return;
   }
 
-  const client = new CogentClient();
+  const client = new SippClient();
   try {
     const endpoint = await client.add('gateway', { kind: 'gateway', ...config });
     // Gateway chat uses the same message and streaming shape as local chat.

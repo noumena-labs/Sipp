@@ -6,7 +6,7 @@
 
 | 层级 | 浏览器包 | Node.js 包 | 用途 |
 | --- | --- | --- | --- |
-| 客户端选项 | `new CogentClient(options)` | 环境和进程设置 | 管理浏览器资源、Worker、缓存、后端选择 |
+| 客户端选项 | `new SippClient(options)` | 环境和进程设置 | 管理浏览器资源、Worker、缓存、后端选择 |
 | 端点加载选项 | `client.add(..., { kind: 'local', options })` | `client.add(..., { kind: 'local', config })` | 模型来源、后端偏好、加载进度、原生运行时 |
 | 文本请求选项 | `client.query(prompt, options)` | `client.query({ options })` | 输出长度、采样控制、流式、取消、停止词 |
 | 本地请求选项 | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | 仅限本地的 Prompt 状态、文法、图片、嵌入归一化 |
@@ -17,7 +17,7 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 ## 浏览器客户端选项
 
-浏览器的 `CogentClientOptions` 影响 WebAssembly 运行时、Worker 传输和浏览器存储，但不负责选模型。
+浏览器的 `SippClientOptions` 影响 WebAssembly 运行时、Worker 传输和浏览器存储，但不负责选模型。
 
 | 选项 | 说明 |
 | --- | --- |
@@ -74,7 +74,7 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 ### 文本请求选项
 
-`Options` 或 `CogentTextOptions` 可同时用于 `query` 和 `chat`。
+`Options` 或 `SippTextOptions` 可同时用于 `query` 和 `chat`。
 
 | 选项 | 类型 | 说明 |
 | --- | --- | --- |
@@ -114,7 +114,7 @@ client.query({
 });
 ```
 
-`endpointOptions` 会原样传给网关端点的实现代码。CogentLM 官方网关不会消费这些字段，但自定义网关应用可以自行处理。
+`endpointOptions` 会原样传给网关端点的实现代码。Sipp 官方网关不会消费这些字段，但自定义网关应用可以自行处理。
 
 ### 服务商扩展
 
@@ -132,7 +132,7 @@ client.chat({
 });
 ```
 
-服务商选项不能覆盖 CogentLM 已有的强类型字段（如 `model`、`messages`、`prompt`、`temperature`、`topP`/`top_p`）。这些应该在请求选项中设。
+服务商选项不能覆盖 Sipp 已有的强类型字段（如 `model`、`messages`、`prompt`、`temperature`、`topP`/`top_p`）。这些应该在请求选项中设。
 
 ## 相关文档
 

@@ -22,7 +22,7 @@ mod node_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const NODE_BINARY_NAME: &str = "cogentlm_node";
+const NODE_BINARY_NAME: &str = "sipp_node";
 
 /// Builds Node.js bindings for the selected backend or backend set.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {

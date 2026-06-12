@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@noumena-labs/cogentlm-server",
+      "name": "@noumena-labs/sipp-server",
       "devDependencies": {
         "@napi-rs/cli": "^3.3.0",
       },

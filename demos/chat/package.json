@@ -1,5 +1,5 @@
 {
-  "name": "cogentlm-chat-demo",
+  "name": "sipp-chat-demo",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -10,7 +10,7 @@
     "test": "bun test chat-state.test.ts"
   },
   "dependencies": {
-    "@noumena-labs/cogentlm": "workspace:*"
+    "@noumena-labs/sipp": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.3.3",

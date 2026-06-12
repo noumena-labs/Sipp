@@ -55,26 +55,26 @@ const SKIPPED_DEMO_TEST_DIRS: &[&str] =
     &["node_modules", "dist", "build", "out", ".vite", "coverage"];
 
 const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
-    RustTestTarget::lib("cogentlm"),
-    RustTestTarget::lib("cogentlm-sys"),
-    RustTestTarget::lib("cogentlm-gateway"),
-    RustTestTarget::package("cogentlm-gateway-server"),
-    RustTestTarget::bin("cogentlm-cli", "cogentlm"),
+    RustTestTarget::lib("sipp"),
+    RustTestTarget::lib("sipp-sys"),
+    RustTestTarget::lib("sipp-gateway"),
+    RustTestTarget::package("sipp-gateway-server"),
+    RustTestTarget::bin("sipp-cli", "sipp"),
 ];
 const XTASK_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::package("xtask")];
 const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[
-    RustTestTarget::package("cogentlm-napi"),
-    RustTestTarget::package("cogentlm-py"),
-    RustTestTarget::package("cogentlm-wasm"),
+    RustTestTarget::package("sipp-napi"),
+    RustTestTarget::package("sipp-py"),
+    RustTestTarget::package("sipp-wasm"),
 ];
 const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] =
-    &[RustTestTarget::test("cogentlm", "public_api")];
+    &[RustTestTarget::test("sipp", "public_api")];
 const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
-    &[RustTestTarget::test("cogentlm-cli", "cli_black_box")];
+    &[RustTestTarget::test("sipp-cli", "cli_black_box")];
 
 const XTASK_SOURCE_ROOTS: &[&str] = &["xtask/src"];
 const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
-    "crates/cogentlm/src",
+    "crates/sipp/src",
     "crates/sys/src",
     "lib/gateway/src",
     "apps/gateway-server/src",
@@ -88,7 +88,7 @@ const RUST_BINDING_SOURCE_ROOTS: &[&str] = &[
 ];
 const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["lib/web/src"];
 const DEMO_TS_SOURCE_ROOTS: &[&str] = &["demos"];
-const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &["crates/cogentlm/src"];
+const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &["crates/sipp/src"];
 const CLI_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
     "bindings/node/src",
@@ -96,7 +96,7 @@ const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
     "lib/node/router.js",
     "lib/node/router.d.ts",
 ];
-const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["lib/python/python/cogentlm"];
+const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["lib/python/python/sipp"];
 const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/rust/src"];
 const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "lib/node"];
@@ -106,15 +106,15 @@ const GATEWAY_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &[
     "examples/rust/src",
     "examples/node",
     "examples/python",
-    "crates/cogentlm/src/gateway_core",
+    "crates/sipp/src/gateway_core",
     "lib/gateway/src",
     "apps/gateway-server/src",
-    "crates/cogentlm/src/providers",
+    "crates/sipp/src/providers",
 ];
 const BROWSER_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/web", "lib/web/src"];
 const BROWSER_PLAYGROUND_SMOKE_SOURCE_ROOTS: &[&str] = &["tools/playground"];
 const PUBLIC_DOC_RUST_FILES: &[&str] = &[
-    "crates/cogentlm/src/lib.rs",
+    "crates/sipp/src/lib.rs",
     "bindings/node/src/lib.rs",
     "bindings/python/src/lib.rs",
 ];
@@ -125,7 +125,7 @@ const PUBLIC_DOC_TYPESCRIPT_FILES: &[&str] = &[
     "lib/node/index.d.ts",
     "lib/node/router.d.ts",
 ];
-const PUBLIC_DOC_PYTHON_FILES: &[&str] = &["lib/python/python/cogentlm/__init__.py"];
+const PUBLIC_DOC_PYTHON_FILES: &[&str] = &["lib/python/python/sipp/__init__.py"];
 
 const TEST_SUITES: &[TestSuite] = &[
     TestSuite {
@@ -971,8 +971,8 @@ fn run_node_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> 
                 sh,
                 "bunx c8 --reporter=lcov --reports-dir {coverage_dir} node --test --test-reporter=tap --test-reporter-destination {report_path} tests/router.test.mjs"
             )
-                .env("COGENTLM_NODE_BACKEND", backend.as_str())
-                .env("COGENTLM_NODE_TEST_BACKEND", backend.as_str()),
+                .env("SIPP_NODE_BACKEND", backend.as_str())
+                .env("SIPP_NODE_TEST_BACKEND", backend.as_str()),
         )?;
     }
     Ok(())
@@ -1020,7 +1020,7 @@ fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -
         "Running Python package pytest suite",
         cmd!(
             sh,
-            "{python_exe} -m pytest {python_tests} --junitxml={junit_path} --cov=cogentlm --cov-report=lcov:{python_lcov} --cov-report=xml:{python_cobertura} --cov-report=html:{python_html}"
+            "{python_exe} -m pytest {python_tests} --junitxml={junit_path} --cov=sipp --cov-report=lcov:{python_lcov} --cov-report=xml:{python_cobertura} --cov-report=html:{python_html}"
         ),
     )
 }
@@ -1212,13 +1212,13 @@ fn run_rust_generation_smoke(
     model: &Path,
     options: &SuiteRunOptions<'_>,
 ) -> Result<()> {
-    output::phase("Rust CogentClient generation smoke");
+    output::phase("Rust SippClient generation smoke");
     output::path("Model", model);
     output::detail("Backend", options.backend.as_str());
 
     let _dir = sh.push_dir(ctx.workspace_root());
     for example in selected_rust_smoke_examples(options.cases) {
-        let mut smoke_cmd = cmd!(sh, "cargo run -p cogentlm-rust-examples");
+        let mut smoke_cmd = cmd!(sh, "cargo run -p sipp-rust-examples");
         if options.backend != Backend::Cpu {
             smoke_cmd = smoke_cmd.arg("--features").arg(options.backend.as_str());
         }
@@ -1228,9 +1228,9 @@ fn run_rust_generation_smoke(
             .arg("--")
             .arg(model)
             .arg(options.prompt)
-            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
             .env(
-                "COGENTLM_TEMPERATURE",
+                "SIPP_TEMPERATURE",
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
@@ -1262,10 +1262,10 @@ fn run_node_generation_smoke(
             .arg(smoke_script)
             .arg(model)
             .arg(options.prompt)
-            .env("COGENTLM_NODE_BACKEND", options.backend.as_str())
-            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env("SIPP_NODE_BACKEND", options.backend.as_str())
+            .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
             .env(
-                "COGENTLM_TEMPERATURE",
+                "SIPP_TEMPERATURE",
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
@@ -1328,10 +1328,10 @@ fn run_python_generation_smoke(
             .arg(smoke_script)
             .arg(model)
             .arg(options.prompt)
-            .env("COGENTLM_PYTHON_BACKEND", options.backend.as_str())
-            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env("SIPP_PYTHON_BACKEND", options.backend.as_str())
+            .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
             .env(
-                "COGENTLM_TEMPERATURE",
+                "SIPP_TEMPERATURE",
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
@@ -1389,7 +1389,7 @@ fn run_rust_gateway_smoke(
         if options.backend != Backend::Cpu {
             features.push(options.backend.as_str());
         }
-        let mut smoke_cmd = cmd!(sh, "cargo run -p cogentlm-rust-examples")
+        let mut smoke_cmd = cmd!(sh, "cargo run -p sipp-rust-examples")
             .arg("--features")
             .arg(features.join(","))
             .arg("--bin")
@@ -1398,11 +1398,11 @@ fn run_rust_gateway_smoke(
             .arg(model)
             .arg(gateway_smoke_target(example))
             .arg(options.prompt)
-            .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
-            .env("COGENTLM_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
-            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env("SIPP_GATEWAY_URL", gateway_smoke_url())
+            .env("SIPP_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
+            .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
             .env(
-                "COGENTLM_TEMPERATURE",
+                "SIPP_TEMPERATURE",
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, None)?;
@@ -1432,12 +1432,12 @@ fn run_node_gateway_smoke(
             .arg(model)
             .arg(gateway_smoke_target(script))
             .arg(options.prompt)
-            .env("COGENTLM_NODE_BACKEND", "cpu")
-            .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
-            .env("COGENTLM_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
-            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env("SIPP_NODE_BACKEND", "cpu")
+            .env("SIPP_GATEWAY_URL", gateway_smoke_url())
+            .env("SIPP_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
+            .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
             .env(
-                "COGENTLM_TEMPERATURE",
+                "SIPP_TEMPERATURE",
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&Backend::Cpu))?;
@@ -1487,12 +1487,12 @@ fn run_python_gateway_smoke(
             .arg(model)
             .arg(gateway_smoke_target(script))
             .arg(options.prompt)
-            .env("COGENTLM_PYTHON_BACKEND", "cpu")
-            .env("COGENTLM_GATEWAY_URL", gateway_smoke_url())
-            .env("COGENTLM_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
-            .env("COGENTLM_MAX_TOKENS", options.max_tokens.to_string())
+            .env("SIPP_PYTHON_BACKEND", "cpu")
+            .env("SIPP_GATEWAY_URL", gateway_smoke_url())
+            .env("SIPP_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
+            .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
             .env(
-                "COGENTLM_TEMPERATURE",
+                "SIPP_TEMPERATURE",
                 format_temperature(options.temperature),
             );
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&Backend::Cpu))?;
@@ -1551,7 +1551,7 @@ impl GatewaySmokeProcess {
         output::path("Gateway log", &log_path);
 
         let _dir = sh.push_dir(ctx.workspace_root());
-        let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway-example");
+        let mut gateway_cmd = cmd!(sh, "cargo run -p sipp-gateway-example");
         if *backend != Backend::Cpu {
             gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
         }
@@ -1862,7 +1862,7 @@ fn collect_rust_public_doc_violations(
         violations.push(format!("{display}:1: missing crate or module rustdoc"));
     }
 
-    let check_facade_items = display == "crates/cogentlm/src/lib.rs";
+    let check_facade_items = display == "crates/sipp/src/lib.rs";
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         let check_top_level_facade_item = check_facade_items && line.starts_with("pub ");
@@ -3384,7 +3384,7 @@ fn node_test_backends(ctx: &BuildContext, backend: &Backend) -> Result<Vec<Backe
 
 fn node_backend_artifact(ctx: &BuildContext, backend: &Backend, triplet: &str) -> PathBuf {
     ctx.node_artifacts_dir().join(format!(
-        "cogentlm_node_{}.{}.node",
+        "sipp_node_{}.{}.node",
         backend.as_str(),
         triplet
     ))
@@ -3567,15 +3567,15 @@ fn rust_target_case_files(ctx: &BuildContext, targets: &[RustTestTarget]) -> Res
 
 fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
     let relative: &[&str] = match package {
-        "cogentlm" => &["crates", "cogentlm"],
-        "cogentlm-sys" => &["crates", "sys"],
-        "cogentlm-gateway" => &["lib", "gateway"],
-        "cogentlm-gateway-server" => &["apps", "gateway-server"],
-        "cogentlm-cli" => &["apps", "cli"],
+        "sipp" => &["crates", "sipp"],
+        "sipp-sys" => &["crates", "sys"],
+        "sipp-gateway" => &["lib", "gateway"],
+        "sipp-gateway-server" => &["apps", "gateway-server"],
+        "sipp-cli" => &["apps", "cli"],
         "xtask" => &["xtask"],
-        "cogentlm-napi" => &["bindings", "node"],
-        "cogentlm-py" => &["bindings", "python"],
-        "cogentlm-wasm" => &["bindings", "wasm"],
+        "sipp-napi" => &["bindings", "node"],
+        "sipp-py" => &["bindings", "python"],
+        "sipp-wasm" => &["bindings", "wasm"],
         _ => anyhow::bail!("unknown Rust test package: {package}"),
     };
     Ok(relative
@@ -3637,9 +3637,9 @@ fn python_venv_exe(venv_dir: &Path) -> PathBuf {
 
 fn cli_binary_file_name() -> &'static str {
     if cfg!(windows) {
-        "cogentlm.exe"
+        "sipp.exe"
     } else {
-        "cogentlm"
+        "sipp"
     }
 }
 

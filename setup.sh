@@ -9,9 +9,9 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
   *) TARGET="$ROOT/.build/xtask/debug/xtask" ;;
 esac
 
-STAMP="$ROOT/.build/xtask/clm.stamp"
+STAMP="$ROOT/.build/xtask/sipp.stamp"
 BIN_DIR="$ROOT/.build/bin"
-ENV_SCRIPT="$BIN_DIR/cogentlm-env.sh"
+ENV_SCRIPT="$BIN_DIR/sipp-env.sh"
 
 is_sourced=0
 if (return 0 2>/dev/null); then
@@ -57,8 +57,8 @@ if [ -f "$ENV_SCRIPT" ]; then
     # shellcheck disable=SC1090
     . "$ENV_SCRIPT"
     hash -r 2>/dev/null || true
-    printf '\nclm is active in this shell session.\n'
+    printf '\nsipp is active in this shell session.\n'
   else
-    printf '\nTo use clm in this shell, run:\n  source "%s"\n' "$ENV_SCRIPT"
+    printf '\nTo use sipp in this shell, run:\n  source "%s"\n' "$ENV_SCRIPT"
   fi
 fi

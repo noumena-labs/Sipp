@@ -2,21 +2,21 @@
 //
 // App.tsx
 //
-// - Wires a CogentClient + CharacterRuntime together with the avatar stage
+// - Wires a SippClient + CharacterRuntime together with the avatar stage
 //   and chat UI. `character.json` remains semantic-only; the avatar app owns
 //   render assets and resolves them by character-folder convention.
 //
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CogentClient } from '@noumena-labs/cogentlm';
+import { SippClient } from '@noumena-labs/sipp';
 import {
   CharacterEventBus,
   createCharacterFromConfigUrl,
   parseCharacterConfig,
   type CharacterConfig,
   type CharacterRuntime,
-} from '@noumena-labs/cogentlm/character';
+} from '@noumena-labs/sipp/character';
 import { AvatarCanvas } from './components/AvatarCanvas';
 import { ChatComposer } from './components/ChatComposer';
 import {
@@ -46,7 +46,7 @@ const SUGGESTED_PROMPTS = [
 ] as const;
 
 interface LoadedHarness {
-  readonly client: CogentClient;
+  readonly client: SippClient;
   readonly character: CharacterRuntime;
   readonly config: CharacterConfig;
 }
@@ -142,7 +142,7 @@ export default function App() {
       const config = preview.config;
       previewUpdated = true;
 
-      const client = new CogentClient();
+      const client = new SippClient();
 
       setStatus('Downloading and loading model?');
       await client.add('local', {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { CogentClient, QueryError } from '../../src/index.js';
+import { SippClient, QueryError } from '../../src/index.js';
 import type {
   EndpointDescriptor,
   GatewayEndpointDescriptor,
@@ -54,8 +54,8 @@ function endpointConfig(
   };
 }
 
-test('CogentClient exposes typed inference and endpoint registration', async () => {
-  const client = new CogentClient({ executionMode: 'main-thread' });
+test('SippClient exposes typed inference and endpoint registration', async () => {
+  const client = new SippClient({ executionMode: 'main-thread' });
 
   assert.equal(typeof client.add, 'function');
   assert.equal(typeof client.query, 'function');
@@ -76,7 +76,7 @@ test('gateway query uses custom routes, authentication, headers, and endpoint op
       return textResponse('custom route response');
     },
     async () => {
-      const client = new CogentClient({ executionMode: 'main-thread' });
+      const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add(
         'custom-http',
         endpointConfig({
@@ -135,7 +135,7 @@ test('gateway chat and embed preserve typed capabilities', async () => {
       return textResponse('chat response');
     },
     async () => {
-      const client = new CogentClient({ executionMode: 'main-thread' });
+      const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add(
         'typed-http',
         endpointConfig({
@@ -205,7 +205,7 @@ test('gateway streaming exposes token batches and terminal response', async () =
         },
       }),
     async () => {
-      const client = new CogentClient({ executionMode: 'main-thread' });
+      const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add(
         'stream-http',
         endpointConfig({ authentication: { kind: 'none' } })
@@ -238,7 +238,7 @@ test('gateway supports custom authentication headers from async providers', asyn
       return textResponse('authenticated');
     },
     async () => {
-      const client = new CogentClient({ executionMode: 'main-thread' });
+      const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add(
         'header-http',
         endpointConfig({
@@ -277,7 +277,7 @@ test('gateway errors expose protocol metadata without leaking secrets', async ()
         }
       ),
     async () => {
-      const client = new CogentClient({ executionMode: 'main-thread' });
+      const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add('error-http', endpointConfig());
 
       await assert.rejects(
@@ -297,7 +297,7 @@ test('gateway errors expose protocol metadata without leaking secrets', async ()
 });
 
 test('gateway configuration rejects invalid and unknown fields', async () => {
-  const client = new CogentClient({ executionMode: 'main-thread' });
+  const client = new SippClient({ executionMode: 'main-thread' });
 
   await assert.rejects(
     client.add(
@@ -326,7 +326,7 @@ test('gateway configuration rejects invalid and unknown fields', async () => {
 });
 
 test('gateway endpoints reject local-only inference options', async () => {
-  const client = new CogentClient({ executionMode: 'main-thread' });
+  const client = new SippClient({ executionMode: 'main-thread' });
   const endpoint = await client.add(
     'gateway-options',
     endpointConfig({ authentication: { kind: 'none' } })

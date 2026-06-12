@@ -56,7 +56,7 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
     assert_eq!(ctx.cli_artifacts_dir(), temp.join(".build/artifacts/cli"));
     assert_eq!(
         ctx.npm_browser_wasm_dir(),
-        temp.join(".build/artifacts/npm/cogentlm/dist/wasm")
+        temp.join(".build/artifacts/npm/sipp/dist/wasm")
     );
     assert_eq!(
         ctx.demo_artifacts_dir("examples"),

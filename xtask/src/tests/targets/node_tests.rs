@@ -35,7 +35,7 @@ fn backend_expansion_uses_default_specific_and_host_all_modes() {
 fn artifact_discovery_returns_first_node_file_only() {
     let temp = TempDir::new("target-node-artifact");
     temp.write("staging/readme.txt", "");
-    let artifact = temp.write("staging/cogentlm_node.win32-x64-msvc.node", "");
+    let artifact = temp.write("staging/sipp_node.win32-x64-msvc.node", "");
 
     assert_eq!(
         find_artifact(&temp.join("staging")).unwrap(),
@@ -48,16 +48,16 @@ fn dist_preparation_removes_stale_backend_artifacts_and_staging_dir() {
     let temp = TempDir::new("target-node-prepare");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
     let dist = temp.create_dir("dist");
-    temp.write("dist/cogentlm_node_cpu.win32-x64-msvc.node", "");
+    temp.write("dist/sipp_node_cpu.win32-x64-msvc.node", "");
     temp.write("dist/keep.node", "");
-    temp.write("dist/cogentlm_node_cpu.txt", "");
+    temp.write("dist/sipp_node_cpu.txt", "");
     temp.write(".build/tmp/node/stale/file.txt", "");
     let sh = xshell::Shell::new().unwrap();
 
     prepare_dist_dir(&sh, &ctx, &dist).unwrap();
 
-    assert!(!dist.join("cogentlm_node_cpu.win32-x64-msvc.node").exists());
+    assert!(!dist.join("sipp_node_cpu.win32-x64-msvc.node").exists());
     assert!(dist.join("keep.node").exists());
-    assert!(dist.join("cogentlm_node_cpu.txt").exists());
+    assert!(dist.join("sipp_node_cpu.txt").exists());
     assert!(!ctx.tmp_dir().join("node").exists());
 }

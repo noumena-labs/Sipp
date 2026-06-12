@@ -1,4 +1,4 @@
-import { CogentClient, type BrowserEmbeddingRun, type EndpointRef } from '@noumena-labs/cogentlm';
+import { SippClient, type BrowserEmbeddingRun, type EndpointRef } from '@noumena-labs/sipp';
 import {
   formatEmbeddingResult,
   readPrompt,
@@ -10,7 +10,7 @@ import {
 
 const elements = renderGatewayPage(
   'Gateway Embed',
-  'CogentClient gateway embedding example input.',
+  'SippClient gateway embedding example input.',
   false
 );
 
@@ -24,7 +24,7 @@ elements.runForm.addEventListener('submit', async (event) => {
     return;
   }
 
-  const client = new CogentClient();
+  const client = new SippClient();
   try {
     const endpoint = await client.add('gateway', { kind: 'gateway', ...config });
     const run = client.embed(input, { endpoint });

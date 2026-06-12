@@ -1,23 +1,23 @@
 # Native Interfaces Architecture
 
-This guide explains how CogentLM crosses the Rust, C++, C, WebAssembly, Node.js,
+This guide explains how Sipp crosses the Rust, C++, C, WebAssembly, Node.js,
 and Python boundaries. It is intentionally high-level: use it to understand
 where code belongs and how data moves before changing the lower level bridge
 files.
 
 ## Mental Model
 
-CogentLM keeps model execution in one Rust engine and uses narrow boundary
+Sipp keeps model execution in one Rust engine and uses narrow boundary
 layers for each host environment.
 
 ```text
 Node / Python / CLI
         |
         v
-crates/cogentlm
+crates/sipp
         |
         v
-crates/cogentlm/src/native_bridge.rs
+crates/sipp/src/native_bridge.rs
         |
         v
 crates/sys/src/bridge.rs            (cxx declarations)
@@ -44,7 +44,7 @@ bindings/wasm/src/exports.rs                      (CE_* exports)
 bindings/wasm/src/engine/mod.rs                   (BrowserEngine)
         |
         v
-crates/cogentlm -> crates/sys -> llama.cpp
+crates/sipp -> crates/sys -> llama.cpp
 ```
 
 ## Native Core Boundary
@@ -56,16 +56,16 @@ The important files are:
 
 - `crates/sys/src/bridge.rs`: the `#[cxx::bridge]` declaration. This is the
   single Rust declaration of the C++ interface exposed to the engine.
-- `crates/sys/native/cxx_bridge/cogent_cxx.h`: C++ declarations that match the
+- `crates/sys/native/cxx_bridge/sipp_cxx.h`: C++ declarations that match the
   CXX bridge.
-- `crates/sys/native/cxx_bridge/cogent_cxx.cpp`: C++ implementation of the
+- `crates/sys/native/cxx_bridge/sipp_cxx.cpp`: C++ implementation of the
   bridge facade.
-- `crates/sys/native/llama_shim/cogent_shim.h`: a C ABI wrapper around selected
+- `crates/sys/native/llama_shim/sipp_shim.h`: a C ABI wrapper around selected
   llama.cpp/common/mtmd behavior.
-- `crates/sys/native/llama_shim/cogent_shim.cpp`: the shim implementation that
+- `crates/sys/native/llama_shim/sipp_shim.cpp`: the shim implementation that
   calls llama.cpp C and C++ APIs.
-- `crates/cogentlm/src/native_bridge.rs`: the safe, crate-private engine facade
-  over `cogentlm_sys::bridge`.
+- `crates/sipp/src/native_bridge.rs`: the safe, crate-private engine facade
+  over `sipp_sys::bridge`.
 
 The repo does not currently use Rust `bindgen` to generate raw bindings from
 `llama.h`. Instead, it uses a hand-curated CXX bridge and a small set of Rust
@@ -77,12 +77,12 @@ workspace.
 
 The CXX facade and the C shim solve different problems.
 
-`cogent_cxx.*` is shaped for Rust. It uses CXX-compatible types such as
+`sipp_cxx.*` is shaped for Rust. It uses CXX-compatible types such as
 `rust::Str`, `rust::Vec`, `rust::String`, `std::unique_ptr`, and opaque C++
 classes. It also converts native failures into `std::runtime_error`, which CXX
 maps back to Rust `Result` for fallible bridge functions.
 
-`cogent_shim.*` is shaped for llama.cpp. It isolates direct use of
+`sipp_shim.*` is shaped for llama.cpp. It isolates direct use of
 `common_params`, `common_sampler`, chat templates, backend registration, mtmd,
 and raw `llama_context` operations. It presents plain C functions, fixed-width
 integers, opaque pointers, and explicit free functions.
@@ -109,8 +109,8 @@ through it, accept generated tokens, reset it, or attach/detach backend sampling
 to a runtime sequence.
 
 Rust engine code should use `NativeRuntimeHandle`, `NativeBatchHandle`, and
-`SamplerHandle` from `crates/cogentlm/src/native_bridge.rs`, not raw
-`cogentlm_sys::bridge` types. That facade centralizes null checks, pinning,
+`SamplerHandle` from `crates/sipp/src/native_bridge.rs`, not raw
+`sipp_sys::bridge` types. That facade centralizes null checks, pinning,
 error mapping, and test-only empty handles.
 
 ## Build Flow
@@ -120,16 +120,16 @@ script.
 
 1. `crates/sys/build.rs` delegates to `crates/sys/build_support`.
 2. For native targets, `build_support/cmake.rs` builds llama.cpp, ggml, mtmd,
-   and `cogent_shim` through CMake.
+   and `sipp_shim` through CMake.
 3. `build_support/cxx.rs` runs `cxx_build::bridge("src/bridge.rs")`, compiling
-   generated CXX glue plus `native/cxx_bridge/cogent_cxx.cpp`.
+   generated CXX glue plus `native/cxx_bridge/sipp_cxx.cpp`.
 4. `build_support/link.rs` links the CMake outputs and target-specific system
    libraries.
-5. The engine modules of `crates/cogentlm` link against `cogentlm-sys` and expose safe runtime APIs.
+5. The engine modules of `crates/sipp` link against `sipp-sys` and expose safe runtime APIs.
 
 For Emscripten targets, `crates/sys` only compiles the CXX bridge during Cargo's
 Rust staticlib build. The final browser CMake step later links that Rust
-staticlib with llama.cpp, mtmd, WebGPU support, `cogent_shim`, and the
+staticlib with llama.cpp, mtmd, WebGPU support, `sipp_shim`, and the
 Emscripten host shim.
 
 Use the repository build commands rather than invoking CMake directly. The
@@ -173,22 +173,22 @@ bytes into the shared-memory streaming ring.
 
 The browser build has two linked pieces:
 
-1. Cargo builds `cogentlm-wasm` as a Rust staticlib containing the `CE_*`
+1. Cargo builds `sipp-wasm` as a Rust staticlib containing the `CE_*`
    exports and Rust browser runtime code.
 2. Emscripten/CMake links that staticlib with llama.cpp, ggml WebGPU, mtmd,
-   `cogent_shim`, and `ce_host.js`, then preserves the `CE_*` symbols used by
+   `sipp_shim`, and `ce_host.js`, then preserves the `CE_*` symbols used by
    the TypeScript package.
 
 ## Node And Python Bindings
 
-Node and Python bindings are high-level host bindings over the `cogentlm` engine modules.
+Node and Python bindings are high-level host bindings over the `sipp` engine modules.
 They do not call llama.cpp or the CXX bridge directly.
 
 `bindings/node/src/lib.rs` uses napi-rs. The `#[napi]` macros and
 `napi::bindgen_prelude` generate the JavaScript-facing native module surface:
-configuration objects, `CogentEngine`, `ModelService`, explicit gateway
+configuration objects, `SippEngine`, `ModelService`, explicit gateway
 descriptors, async tasks, event draining, and small backend helpers. Native model
-execution still flows through the `cogentlm` engine modules and then `native_bridge.rs`.
+execution still flows through the `sipp` engine modules and then `native_bridge.rs`.
 
 `bindings/python/src/lib.rs` uses PyO3 and Maturin. The `#[pyclass]`,
 `#[pymethods]`, `#[pyfunction]`, and `#[pymodule]` surfaces mirror the same
@@ -225,13 +225,13 @@ Keep these rules in mind when changing boundary code:
 
 Most native changes follow this path:
 
-1. Decide whether the feature belongs in the `crates/cogentlm` engine modules or really needs a new
+1. Decide whether the feature belongs in the `crates/sipp` engine modules or really needs a new
    llama.cpp bridge call. Prefer engine-level composition when possible.
 2. If the feature needs llama.cpp/common/mtmd internals, add or adjust a focused
-   function in `cogent_shim.h` and `cogent_shim.cpp`.
-3. Add the Rust-shaped method in `cogent_cxx.h` and `cogent_cxx.cpp`.
+   function in `sipp_shim.h` and `sipp_shim.cpp`.
+3. Add the Rust-shaped method in `sipp_cxx.h` and `sipp_cxx.cpp`.
 4. Add the matching declaration to `crates/sys/src/bridge.rs`.
-5. Add a safe wrapper in `crates/cogentlm/src/native_bridge.rs`.
+5. Add a safe wrapper in `crates/sipp/src/native_bridge.rs`.
 6. Use that wrapper from the runtime, scheduler, lifecycle, or model-service
    module that owns the behavior.
 7. Expose the behavior through Node, Python, or Wasm only if it is part of those
@@ -254,10 +254,10 @@ engine APIs. Avoid duplicating engine behavior in the binding layer.
 Use this file map to narrow investigation quickly:
 
 - Load, backend selection, decode/encode failures: start in
-  `crates/cogentlm/src/runtime/inference_runtime`, then follow
-  `native_bridge.rs` into `cogent_cxx.cpp`.
+  `crates/sipp/src/runtime/inference_runtime`, then follow
+  `native_bridge.rs` into `sipp_cxx.cpp`.
 - Llama.cpp parameter parsing, sampler JSON, chat templates, mtmd, backend
-  observability: inspect `cogent_shim.cpp`.
+  observability: inspect `sipp_shim.cpp`.
 - Linker or backend build failures: inspect `crates/sys/build_support` and
   `crates/sys/CMakeLists.txt`.
 - Browser `CE_*` export issues: inspect `bindings/wasm/src/exports.rs` and

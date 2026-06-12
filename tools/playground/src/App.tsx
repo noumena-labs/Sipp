@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
-  CogentClient,
+  SippClient,
   type ModelInfo,
   type ModelSource,
   type ObservabilitySnapshot,
   type TokenBatch,
-} from '@noumena-labs/cogentlm';
+} from '@noumena-labs/sipp';
 import {
   Activity,
   Cpu,
@@ -75,7 +75,7 @@ import type {
 
 declare global {
   interface Window {
-    __cogentPlayground?: {
+    __sippPlayground?: {
       getEnvironment(): Promise<Record<string, unknown>>;
       getRuntimeObservability(): ObservabilitySnapshot | null;
       getBackendObservability(): unknown;
@@ -85,7 +85,7 @@ declare global {
 }
 
 interface BenchmarkReport {
-  schema: 'cogent.playground.browser.v1';
+  schema: 'sipp.playground.browser.v1';
   generatedAt: string;
   model: ModelInfo | null;
   source: { label: string; bytes: number | null };
@@ -264,7 +264,7 @@ function downloadJson(filename: string, value: unknown): void {
 }
 
 function logBenchmarkReport(report: BenchmarkReport): void {
-  console.groupCollapsed('[CogentLM playground] benchmark suite complete');
+  console.groupCollapsed('[Sipp playground] benchmark suite complete');
   console.log('backend profile', report.backend);
   console.log('runtime config', report.settings.runtime);
   console.log('summary', report.trace.analysis);
@@ -315,7 +315,7 @@ const EMBEDDING_USE_CASES: readonly {
     label: 'RAG Document',
     prefix: 'search_document:',
     prompt:
-      'search_document: The CogentLM playground runs local models and captures latency, cache, memory, and backend metrics.',
+      'search_document: The Sipp playground runs local models and captures latency, cache, memory, and backend metrics.',
     value: 'ragDocument',
   },
   {
@@ -496,7 +496,7 @@ function effectiveTokenCountForModel(model: ModelInfo | null, currentTokenCount:
 }
 
 export default function App() {
-  const [client, setClient] = useState<CogentClient | null>(null);
+  const [client, setClient] = useState<SippClient | null>(null);
   const [status, setStatus] = useState('booting');
   const [isBusy, setIsBusy] = useState(false);
   const [activeView, setActiveView] = useState<PlaygroundView>('requests');
@@ -615,12 +615,12 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
-    let created: CogentClient | null = null;
+    let created: SippClient | null = null;
     let unsubscribe: (() => void) | null = null;
 
     void (async () => {
       try {
-        const nextClient = new CogentClient(getClientOptions());
+        const nextClient = new SippClient(getClientOptions());
         if (disposed) {
           await nextClient.close();
           return;
@@ -674,11 +674,11 @@ export default function App() {
       getBackendObservability: () => observability?.profile ?? null,
       getLastReport: () => benchmarkReport,
     };
-    window.__cogentPlayground = api;
+    window.__sippPlayground = api;
 
     return () => {
-      if (window.__cogentPlayground === api) {
-        delete window.__cogentPlayground;
+      if (window.__sippPlayground === api) {
+        delete window.__sippPlayground;
       }
     };
   }, [benchmarkReport, observability]);
@@ -741,14 +741,14 @@ export default function App() {
     setTokenCount(defaultTokenCountForRegistryEntry(entry));
   };
 
-  const refreshModels = async (targetClient: CogentClient) => {
+  const refreshModels = async (targetClient: SippClient) => {
     setCurrentModel(targetClient.currentLocal());
     setObservability(targetClient.observability.current());
     setInstalledModels(await targetClient.listLocal());
   };
 
   const loadLocalSelection = async (
-    targetClient: CogentClient,
+    targetClient: SippClient,
     source: ModelSource
   ): Promise<ModelInfo> => {
     const start = performance.now();
@@ -1034,7 +1034,7 @@ export default function App() {
       );
 
       const report: BenchmarkReport = {
-        schema: 'cogent.playground.browser.v1',
+        schema: 'sipp.playground.browser.v1',
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
@@ -1419,7 +1419,7 @@ export default function App() {
             <Cpu size={20} aria-hidden="true" />
           </div>
           <div>
-            <h1>CogentLM Playground</h1>
+            <h1>Sipp Playground</h1>
             <p>Local inference console</p>
           </div>
         </div>
@@ -1525,7 +1525,7 @@ export default function App() {
                   onClick={() =>
                     benchmarkReport == null
                       ? undefined
-                      : downloadJson('cogent-playground-report.json', benchmarkReport)
+                      : downloadJson('sipp-playground-report.json', benchmarkReport)
                   }
                   type="button"
                 >
@@ -2157,7 +2157,7 @@ export default function App() {
                     onClick={() =>
                       benchmarkReport == null
                         ? undefined
-                        : downloadJson('cogent-playground-report.json', benchmarkReport)
+                        : downloadJson('sipp-playground-report.json', benchmarkReport)
                     }
                     type="button"
                   >

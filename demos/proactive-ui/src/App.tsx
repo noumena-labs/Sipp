@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { CogentClient, type RuntimeObservation } from '@noumena-labs/cogentlm';
+import { SippClient, type RuntimeObservation } from '@noumena-labs/sipp';
 import {
   DEFAULT_DRAWING_DIRECTOR_CONFIG,
   DRAWING_COLORS,
@@ -203,7 +203,7 @@ export default function App() {
   const [directorConfig, setDirectorConfig] = useState<DrawingDirectorConfig>(DEFAULT_DRAWING_DIRECTOR_CONFIG);
 
   const userCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const clientRef = useRef<CogentClient | null>(null);
+  const clientRef = useRef<SippClient | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const unsubscribeObservabilityRef = useRef<(() => void) | null>(null);
   const captureUrlRef = useRef<string | null>(null);
@@ -279,11 +279,11 @@ export default function App() {
     setLoadState('loading');
     const progressAgg = createProgressAggregator();
     setLoadProgress({ phase: 'create', percent: null, overallPercent: 1 });
-    setStatus('Creating CogentClient instance...');
+    setStatus('Creating SippClient instance...');
 
-    let nextClient: CogentClient | null = null;
+    let nextClient: SippClient | null = null;
     try {
-      nextClient = new CogentClient();
+      nextClient = new SippClient();
       unsubscribeObservabilityRef.current = nextClient.observability.subscribe((event) => {
         setRuntimeObservation(event.snapshot.runtime ?? null);
         runtimeObservationRef.current = event.snapshot.runtime ?? null;
@@ -826,7 +826,7 @@ function StartScreen(props: {
     <div className="start-screen">
       <section className="start-hero glass-card">
         <div className="start-copy">
-          <p className="eyebrow">CogentClient Vision Pipeline</p>
+          <p className="eyebrow">SippClient Vision Pipeline</p>
           <h1>Vision Pipline Demo</h1>
           <p>
             This demo loads a local vision model, captures a tiny image of the drawing canvas, then asks the model to guess and heckle the sketch.

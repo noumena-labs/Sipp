@@ -37,8 +37,8 @@
 指标路由以 Prometheus 格式暴露指标，目前包含各操作维度的请求数和错误数。
 
 ```text
-cogentlm_gateway_requests_total{operation="query"} 3
-cogentlm_gateway_errors_total{operation="chat"} 1
+sipp_gateway_requests_total{operation="query"} 3
+sipp_gateway_errors_total{operation="chat"} 1
 ```
 
 本地运行时指标由 `stats` 配置决定：
@@ -53,7 +53,7 @@ cogentlm_gateway_errors_total{operation="chat"} 1
 
 ```bash
 RUST_LOG=info
-RUST_LOG=debug,cogentlm_gateway_server=trace
+RUST_LOG=debug,sipp_gateway_server=trace
 ```
 
 切勿在日志中输出 Bearer Token 值、服务商凭证或生产环境 TOML 配置内容。

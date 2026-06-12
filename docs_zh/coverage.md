@@ -1,6 +1,6 @@
 # 测试覆盖率
 
-CogentLM 的测试覆盖率由测试目录（test catalog）驱动，该目录也为 `cargo xtask test list` 提供支持。通用测试命令说明见 [testing.md](testing.md)。
+Sipp 的测试覆盖率由测试目录（test catalog）驱动，该目录也为 `cargo xtask test list` 提供支持。通用测试命令说明见 [testing.md](testing.md)。
 
 ## 命令
 

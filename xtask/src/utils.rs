@@ -20,7 +20,7 @@ mod utils_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const BROWSER_PACKAGE_ARTIFACT_DIR: &str = "cogentlm";
+const BROWSER_PACKAGE_ARTIFACT_DIR: &str = "sipp";
 
 /// Shared immutable context for xtask build paths.
 #[derive(Clone, Debug)]

@@ -13,10 +13,10 @@ use axum::http::{
     header::{COOKIE, SET_COOKIE},
     Request, StatusCode,
 };
-use cogentlm::engine::{GpuLayerConfig, NativeRuntimeConfig};
-use cogentlm::lifecycle::{BackendCapabilities, StatsMode};
-use cogentlm::{
-    CogentClient, EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes,
+use sipp::engine::{GpuLayerConfig, NativeRuntimeConfig};
+use sipp::lifecycle::{BackendCapabilities, StatsMode};
+use sipp::{
+    SippClient, EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes,
     GatewayTimeoutPolicy,
 };
 use tower::ServiceExt;
@@ -46,7 +46,7 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
         metrics: Some("/telemetry".to_string()),
         admin: Some("/admin".to_string()),
     };
-    let mut client = CogentClient::new();
+    let mut client = SippClient::new();
     let endpoint = client
         .add(
             "gateway-upstream",
@@ -418,7 +418,7 @@ fn config_rejects_missing_admin_password_env() {
 #[test]
 fn config_rejects_invalid_admin_password_env_name() {
     let mut config = test_gateway_config();
-    config.admin_password_env = "COGENTLM GATEWAY ADMIN PASSWORD".to_string();
+    config.admin_password_env = "SIPP GATEWAY ADMIN PASSWORD".to_string();
 
     let error = config
         .validate()
@@ -607,7 +607,7 @@ async fn security_controls_are_in_memory_and_reset_with_service_state() {
         .oneshot(
             Request::post("/admin/api/security/blocklist/127.0.0.9")
                 .header(COOKIE, cookie)
-                .header("x-cogentlm-admin-csrf", csrf)
+                .header("x-sipp-admin-csrf", csrf)
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -695,7 +695,7 @@ async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
         .expect("response");
     assert_eq!(spa.status(), StatusCode::OK);
     let spa_body = response_text(spa).await;
-    assert!(spa_body.contains("CogentLM Gateway Admin"));
+    assert!(spa_body.contains("Sipp Gateway Admin"));
     assert!(!spa_body.contains("admin-password"));
     assert!(!spa_body.contains("test-secret"));
 
@@ -753,7 +753,7 @@ async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
         .expect("response");
     assert_eq!(dashboard.status(), StatusCode::OK);
     let dashboard_body = response_text(dashboard).await;
-    assert!(dashboard_body.contains("CogentLM Gateway Admin"));
+    assert!(dashboard_body.contains("Sipp Gateway Admin"));
     assert!(!dashboard_body.contains("<base"));
     assert!(!dashboard_body.contains("admin-password"));
     assert!(!dashboard_body.contains("test-secret"));
@@ -808,7 +808,7 @@ async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
         .oneshot(
             Request::post("/admin/api/security/blocklist/127.0.0.9")
                 .header(COOKIE, cookie.as_str())
-                .header("x-cogentlm-admin-csrf", csrf.as_str())
+                .header("x-sipp-admin-csrf", csrf.as_str())
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -822,7 +822,7 @@ async fn admin_dashboard_requires_password_sessions_and_hides_secrets() {
         .oneshot(
             Request::put("/admin/api/controls/concurrency")
                 .header(COOKIE, cookie.as_str())
-                .header("x-cogentlm-admin-csrf", csrf.as_str())
+                .header("x-sipp-admin-csrf", csrf.as_str())
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"limit":1}"#))
                 .expect("request"),
@@ -863,12 +863,12 @@ fn admin_asset_dir() -> std::path::PathBuf {
         .expect("system clock")
         .as_nanos();
     let dir = std::env::temp_dir()
-        .join("cogentlm-gateway-admin-test")
+        .join("sipp-gateway-admin-test")
         .join(format!("{}-{now}", std::process::id()));
     std::fs::create_dir_all(dir.join("assets")).expect("asset dir");
     std::fs::write(
         dir.join("index.html"),
-        r#"<!doctype html><title>CogentLM Gateway Admin</title><div id="root"></div>"#,
+        r#"<!doctype html><title>Sipp Gateway Admin</title><div id="root"></div>"#,
     )
     .expect("index");
     std::fs::write(dir.join("assets").join("app.js"), "export {};").expect("asset");

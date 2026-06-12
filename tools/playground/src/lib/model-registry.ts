@@ -1,11 +1,11 @@
 /**
- * Curated model registry for the CogentLM browser playground.
+ * Curated model registry for the Sipp browser playground.
  *
  * Each entry is app-facing catalog data. Its client-facing portion is a
- * minimal `CogentClient` ModelSource.
+ * minimal `SippClient` ModelSource.
  */
 
-import type { ModelSource } from '@noumena-labs/cogentlm';
+import type { ModelSource } from '@noumena-labs/sipp';
 
 export type ModelCapability = 'text' | 'vision' | 'embedding';
 

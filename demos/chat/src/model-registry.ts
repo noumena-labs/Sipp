@@ -1,4 +1,4 @@
-import type { ModelSource } from '@noumena-labs/cogentlm';
+import type { ModelSource } from '@noumena-labs/sipp';
 
 export type ModelCapability = 'text' | 'vision';
 

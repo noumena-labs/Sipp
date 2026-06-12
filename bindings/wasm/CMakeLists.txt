@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(CogentLM CXX)
+project(Sipp CXX)
 
 set(CMAKE_CXX_FLAGS_DEBUG "" CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_DEBUG "" CACHE STRING "" FORCE)
@@ -36,11 +36,11 @@ set(CE_WASM_RUST_STATICLIB "" CACHE FILEPATH "Rust wasm32 Emscripten staticlib f
 
 # Calculate paths relative to the bindings/wasm directory
 set(CE_RUST_SYS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../crates/sys")
-set(COGENTLM_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../crates/sys/llama.cpp")
+set(SIPP_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../crates/sys/llama.cpp")
 
 # llama.cpp Wasm subproject
-set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for cogentlm" FORCE)
-set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for CogentLM browser builds" FORCE)
+set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for sipp" FORCE)
+set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for Sipp browser builds" FORCE)
 set(GGML_WEBGPU_JSPI ${CE_WASM_USE_JSPI} CACHE BOOL "Use JSPI for ggml WebGPU waits" FORCE)
 
 if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
@@ -64,23 +64,23 @@ endforeach()
 
 # Wasm Exports Setup
 set(PLUGIN_SOURCES
-    ${CE_RUST_SYS_DIR}/native/llama_shim/cogent_shim.cpp
+    ${CE_RUST_SYS_DIR}/native/llama_shim/sipp_shim.cpp
 )
 
 set(CE_HOST_JS_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/native/emscripten/ce_host.js")
 
-add_executable(CogentLM ${PLUGIN_SOURCES})
+add_executable(Sipp ${PLUGIN_SOURCES})
 
-target_include_directories(CogentLM PRIVATE
+target_include_directories(Sipp PRIVATE
     ${CE_RUST_SYS_DIR}/native/llama_shim
-    ${COGENTLM_MTMD_DIR}
-    ${COGENTLM_LLAMA_CPP_DIR}/common
-    ${COGENTLM_LLAMA_CPP_DIR}/vendor
+    ${SIPP_MTMD_DIR}
+    ${SIPP_LLAMA_CPP_DIR}/common
+    ${SIPP_LLAMA_CPP_DIR}/vendor
 )
 
-foreach(_cogent_backend CUDA METAL VULKAN OPENMP WEBGPU)
-    if(GGML_${_cogent_backend})
-        target_compile_definitions(CogentLM PRIVATE GGML_USE_${_cogent_backend})
+foreach(_sipp_backend CUDA METAL VULKAN OPENMP WEBGPU)
+    if(GGML_${_sipp_backend})
+        target_compile_definitions(Sipp PRIVATE GGML_USE_${_sipp_backend})
     endif()
 endforeach()
 
@@ -92,22 +92,22 @@ if(NOT EXISTS "${CE_WASM_RUST_STATICLIB}")
     message(FATAL_ERROR "CE_WASM_RUST_STATICLIB does not exist: ${CE_WASM_RUST_STATICLIB}")
 endif()
 
-add_library(cogentlm_wasm_rust STATIC IMPORTED GLOBAL)
-set_target_properties(cogentlm_wasm_rust PROPERTIES IMPORTED_LOCATION "${CE_WASM_RUST_STATICLIB}")
+add_library(sipp_wasm_rust STATIC IMPORTED GLOBAL)
+set_target_properties(sipp_wasm_rust PROPERTIES IMPORTED_LOCATION "${CE_WASM_RUST_STATICLIB}")
 
 # Link mtmd directly as a library now instead of manual sources
-target_link_libraries(CogentLM PRIVATE cogentlm_wasm_rust mtmd llama)
+target_link_libraries(Sipp PRIVATE sipp_wasm_rust mtmd llama)
 
 if(TARGET llama-common)
-    target_link_libraries(CogentLM PRIVATE llama-common)
+    target_link_libraries(Sipp PRIVATE llama-common)
 endif()
 if(TARGET common)
-    target_link_libraries(CogentLM PRIVATE common)
+    target_link_libraries(Sipp PRIVATE common)
 endif()
 
 foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
     if(TARGET ${_ggml_target})
-        target_link_libraries(CogentLM PRIVATE ${_ggml_target})
+        target_link_libraries(Sipp PRIVATE ${_ggml_target})
     endif()
 endforeach()
 
@@ -183,7 +183,7 @@ set(CE_WASM_TARGET_LINK_OPTIONS
     -sALLOW_TABLE_GROWTH=1
     -sMODULARIZE=1
     -sEXPORT_ES6=1
-    -sEXPORT_NAME='CogentLMModule'
+    -sEXPORT_NAME='SippModule'
     -sSINGLE_FILE=0
 )
 
@@ -203,9 +203,9 @@ if(CE_WASM_PTHREADS)
     )
 endif()
 
-target_link_options(CogentLM PRIVATE ${CE_WASM_TARGET_LINK_OPTIONS})
-set_target_properties(CogentLM PROPERTIES
-    OUTPUT_NAME "CogentLM"
+target_link_options(Sipp PRIVATE ${CE_WASM_TARGET_LINK_OPTIONS})
+set_target_properties(Sipp PROPERTIES
+    OUTPUT_NAME "Sipp"
     SUFFIX ".js"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/dist"
 )

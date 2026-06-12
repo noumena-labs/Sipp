@@ -1,10 +1,10 @@
 # 推理操作
 
-CogentLM 将操作与端点分离。根据输入格式和期望输出选择 `query`、`chat` 或 `embed`，然后传入决定请求执行位置的端点引用。
+Sipp 将操作与端点分离。根据输入格式和期望输出选择 `query`、`chat` 或 `embed`，然后传入决定请求执行位置的端点引用。
 
 ## 通用流程
 
-1. 调用 `CogentClient.add` 注册本地、网关或提供商端点。
+1. 调用 `SippClient.add` 注册本地、网关或提供商端点。
 2. 保存返回的端点引用。
 3. 将引用传入 `query`、`chat` 或 `embed`。
 
@@ -20,10 +20,10 @@ CogentLM 将操作与端点分离。根据输入格式和期望输出选择 `que
 
 本地端点在当前浏览器、Node、Python、Rust 或 CLI 进程中直接运行 GGUF 模型。
 
-| 操作 | CogentLM 传给运行时的内容 | 模板行为 | 仅限本地的选项 |
+| 操作 | Sipp 传给运行时的内容 | 模板行为 | 仅限本地的选项 |
 | --- | --- | --- | --- |
 | `query` | 完整的提示词字符串。仅解码器模型直接解码；编码器-解码器模型先编码再解码。 | 不应用聊天模板。适合自行处理提示词格式的场景。 | 上下文键、文法约束、JSON Schema、采样覆盖、媒体输入 |
-| `chat` | 使用 llama.cpp 的聊天模板和 `add_assistant = true` 将消息列表渲染为提示词。 | GGUF 必须在元数据中声明 `tokenizer.chat_template`。CogentLM 会先检查模型元数据，不依赖 llama.cpp 的 fallback。 | 与 `query` 相同的文本选项，包括上下文键和媒体输入 |
+| `chat` | 使用 llama.cpp 的聊天模板和 `add_assistant = true` 将消息列表渲染为提示词。 | GGUF 必须在元数据中声明 `tokenizer.chat_template`。Sipp 会先检查模型元数据，不依赖 llama.cpp 的 fallback。 | 与 `query` 相同的文本选项，包括上下文键和媒体输入 |
 | `embed` | 输入文本交给本地嵌入运行时编码。 | 不应用模板，不生成文本。 | 上下文键、嵌入归一化 |
 
 本地 `chat` 只负责渲染提示词和生成文本，不保存对话历史。若需模型访问对话历史，在 `messages` 中显式传入即可。上下文键仅在需要复用本地 KV 缓存时有用。
@@ -44,7 +44,7 @@ const run = client.query({
 
 ### 本地 chat（对话消息）
 
-仅当 GGUF 模型声明了聊天模板时才能使用 `chat`。CogentLM 将角色消息交由 llama.cpp 渲染模板，然后基于渲染后的提示词生成文本。
+仅当 GGUF 模型声明了聊天模板时才能使用 `chat`。Sipp 将角色消息交由 llama.cpp 渲染模板，然后基于渲染后的提示词生成文本。
 
 ```ts
 const run = client.chat({
@@ -121,10 +121,10 @@ const embedding = (await run.response).values;
 const endpoint = await client.add('gateway-openai', {
   kind: 'gateway',
   target: 'openai-chat',
-  baseUrl: process.env.COGENTLM_GATEWAY_URL!,
+  baseUrl: process.env.SIPP_GATEWAY_URL!,
   authentication: {
     kind: 'bearer',
-    value: process.env.COGENTLM_GATEWAY_TOKEN!,
+    value: process.env.SIPP_GATEWAY_TOKEN!,
   },
 });
 
@@ -143,8 +143,8 @@ const run = client.chat({
 Query: 
 
 ```bash
-curl -X POST "$COGENTLM_GATEWAY_URL/v1/query" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+curl -X POST "$SIPP_GATEWAY_URL/v1/query" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "model": "compatible-completion",
@@ -156,8 +156,8 @@ curl -X POST "$COGENTLM_GATEWAY_URL/v1/query" \
 Chat: 
 
 ```bash
-curl -X POST "$COGENTLM_GATEWAY_URL/v1/chat" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+curl -X POST "$SIPP_GATEWAY_URL/v1/chat" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "model": "anthropic-chat",
@@ -172,8 +172,8 @@ curl -X POST "$COGENTLM_GATEWAY_URL/v1/chat" \
 Embed: 
 
 ```bash
-curl -X POST "$COGENTLM_GATEWAY_URL/v1/embed" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+curl -X POST "$SIPP_GATEWAY_URL/v1/embed" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "model": "openai-embed",

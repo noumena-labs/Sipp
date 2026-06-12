@@ -2,34 +2,34 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { cogentClientDistWatch } from '../cogentlm-dist-watch';
+import { sippClientDistWatch } from '../sipp-dist-watch';
 
 const simAppDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentClientDistDir = path.resolve(
+const sippClientDistDir = path.resolve(
   simAppDir,
-  '../../.build/artifacts/npm/cogentlm/dist/esm'
+  '../../.build/artifacts/npm/sipp/dist/esm'
 );
-const cogentClientEntry = path.join(cogentClientDistDir, 'index.js');
-const cogentClientCharacterEntry = path.join(cogentClientDistDir, 'character/index.js');
-const cogentClientDirectorEntry = path.join(cogentClientDistDir, 'orchestrator/index.js');
+const sippClientEntry = path.join(sippClientDistDir, 'index.js');
+const sippClientCharacterEntry = path.join(sippClientDistDir, 'character/index.js');
+const sippClientDirectorEntry = path.join(sippClientDistDir, 'orchestrator/index.js');
 const appOutDir = path.resolve(simAppDir, '../../.build/artifacts/demos/simulation');
 
 export default defineConfig({
-  plugins: [react(), cogentClientDistWatch()],
+  plugins: [react(), sippClientDistWatch()],
   build: {
     outDir: appOutDir,
     emptyOutDir: true,
   },
   resolve: {
     alias: {
-      '@noumena-labs/cogentlm/director': cogentClientDirectorEntry,
-      '@noumena-labs/cogentlm/character': cogentClientCharacterEntry,
-      '@noumena-labs/cogentlm': cogentClientEntry,
+      '@noumena-labs/sipp/director': sippClientDirectorEntry,
+      '@noumena-labs/sipp/character': sippClientCharacterEntry,
+      '@noumena-labs/sipp': sippClientEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm'],
+    exclude: ['@noumena-labs/sipp'],
   },
   server: {
     headers: {

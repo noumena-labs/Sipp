@@ -1,4 +1,4 @@
-//! Tests the `crate root` module in `cogentlm-cli`.
+//! Tests the `crate root` module in `sipp-cli`.
 //!
 //! Covers CLI parsing, configuration mapping, stats rendering, and command behavior without running model-backed inference unless marked as an external smoke test.
 

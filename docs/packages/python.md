@@ -1,6 +1,6 @@
 # Python Package
 
-The Python package target is `cogentlm`. It exposes native descriptor classes,
+The Python package target is `sipp`. It exposes native descriptor classes,
 run handles, token streaming, and the same endpoint model as the Rust client.
 
 See the [Library API Overview](../api) for the shared `add`, `query`,
@@ -9,7 +9,7 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 ## Install
 
 ```bash
-pip install cogentlm
+pip install sipp
 ```
 
 ## Use It For
@@ -24,10 +24,10 @@ pip install cogentlm
 ```python
 import sys
 
-from cogentlm import (
+from sipp import (
     CacheRuntimeConfig,
-    CogentClient,
-    CogentTextOptions,
+    SippClient,
+    SippTextOptions,
     ContextRuntimeConfig,
     LocalModelDescriptor,
     LocalTextOptions,
@@ -37,7 +37,7 @@ from cogentlm import (
 )
 
 
-client = CogentClient()
+client = SippClient()
 endpoint = client.add(
     "default",
     LocalModelDescriptor(
@@ -58,7 +58,7 @@ query_prompt = "\n".join(
         "<|system|>",
         "Answer concisely.",
         "<|user|>",
-        "Explain CogentLM in one sentence.",
+        "Explain Sipp in one sentence.",
         "<|assistant|>",
     ]
 )
@@ -66,13 +66,13 @@ run = client.query(
     # query: raw prompt; replace markers with the target model's template.
     query_prompt,
     endpoint=endpoint,
-    options=CogentTextOptions(max_tokens=64),
+    options=SippTextOptions(max_tokens=64),
     local=LocalTextOptions(context_key="python-local"),
 )
 print(run.result()["text"])
 ```
 
-Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native
+Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native
 backend. See [Runtime Options](../reference/runtime-options.md) for local
 runtime config groups and request option boundaries.
 
@@ -81,17 +81,17 @@ runtime config groups and request option boundaries.
 ```python
 import os
 
-from cogentlm import ChatMessage, CogentClient, CogentTextOptions, GatewayDescriptor
+from sipp import ChatMessage, SippClient, SippTextOptions, GatewayDescriptor
 
 
-client = CogentClient()
+client = SippClient()
 endpoint = client.add(
     "gateway",
     GatewayDescriptor(
-        os.environ["COGENTLM_GATEWAY_TARGET"],
-        os.environ["COGENTLM_GATEWAY_URL"],
+        os.environ["SIPP_GATEWAY_TARGET"],
+        os.environ["SIPP_GATEWAY_URL"],
         authentication_kind="bearer",
-        authentication_value=os.environ["COGENTLM_GATEWAY_TOKEN"],
+        authentication_value=os.environ["SIPP_GATEWAY_TOKEN"],
     ),
 )
 messages = [
@@ -101,7 +101,7 @@ messages = [
 run = client.chat(
     messages,
     endpoint=endpoint,
-    options=CogentTextOptions(max_tokens=64),
+    options=SippTextOptions(max_tokens=64),
 )
 print(run.result()["text"])
 ```

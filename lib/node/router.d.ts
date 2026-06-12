@@ -1,10 +1,10 @@
 import type {
-  CogentChatRequest,
-  CogentEmbedRequest,
-  CogentEmbeddingResponse,
-  CogentQueryRequest,
-  CogentTextResponse,
-  CogentTextRun,
+  SippChatRequest,
+  SippEmbedRequest,
+  SippEmbeddingResponse,
+  SippQueryRequest,
+  SippTextResponse,
+  SippTextRun,
 } from './index'
 export * from './index'
 
@@ -29,21 +29,21 @@ export declare class GatewayProfileError extends Error {
 export interface GatewayDecodedQuery {
   readonly target: string
   readonly stream: boolean
-  readonly request: CogentQueryRequest
+  readonly request: SippQueryRequest
 }
 
 /** Chat request decoded from the first-party gateway JSON profile. */
 export interface GatewayDecodedChat {
   readonly target: string
   readonly stream: boolean
-  readonly request: CogentChatRequest
+  readonly request: SippChatRequest
 }
 
 /** Embedding request decoded from the first-party gateway JSON profile. */
 export interface GatewayDecodedEmbed {
   readonly target: string
   readonly stream: false
-  readonly request: CogentEmbedRequest
+  readonly request: SippEmbedRequest
 }
 
 /** Token usage encoded with first-party gateway snake_case field names. */
@@ -98,17 +98,17 @@ export declare function decodeGatewayEmbedBody(body: unknown): GatewayDecodedEmb
 /** Format a text response for first-party gateway clients. */
 export declare function gatewayTextResponseBody(
   target: string,
-  response: CogentTextResponse
+  response: SippTextResponse
 ): GatewayTextResponseBody
 
 /** Format an embedding response for first-party gateway clients. */
 export declare function gatewayEmbeddingResponseBody(
   target: string,
-  response: CogentEmbeddingResponse
+  response: SippEmbeddingResponse
 ): GatewayEmbeddingResponseBody
 
 /** Format a streaming text run as first-party gateway SSE events. */
-export declare function gatewayTextStreamResponse(run: CogentTextRun): Response
+export declare function gatewayTextStreamResponse(run: SippTextRun): Response
 
 /** Format an error as the first-party gateway JSON error envelope. */
 export declare function gatewayErrorResponse(error: unknown): GatewayErrorResponse

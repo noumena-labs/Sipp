@@ -1,6 +1,6 @@
 # Browser Playground
 
-`tools/playground` is the browser runtime playground for the CogentLM browser
+`tools/playground` is the browser runtime playground for the Sipp browser
 package. It exposes runtime diagnostics, browser environment details, backend
 observability, report export, and repeatable measurement runs.
 
@@ -28,10 +28,10 @@ cargo xtask test smoke suite playground-browser
 
 The page exposes a stable automation API:
 
-- `window.__cogentPlayground.getEnvironment()`
-- `window.__cogentPlayground.getRuntimeObservability()`
-- `window.__cogentPlayground.getBackendObservability()`
-- `window.__cogentPlayground.getLastReport()`
+- `window.__sippPlayground.getEnvironment()`
+- `window.__sippPlayground.getRuntimeObservability()`
+- `window.__sippPlayground.getBackendObservability()`
+- `window.__sippPlayground.getLastReport()`
 
 This API is used by the automated browser playground smoke runner.
 

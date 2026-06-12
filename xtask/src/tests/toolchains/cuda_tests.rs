@@ -49,7 +49,7 @@ fn setup_cuda_returns_fake_root_when_nvcc_exists() {
 fn cuda_architectures_prefers_trimmed_environment_override() {
     let temp = TempDir::new("cuda-arch-env");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
-    let _env = EnvGuard::new(&[("COGENTLM_CUDA_ARCHITECTURES", Some(" 80;90 "))]);
+    let _env = EnvGuard::new(&[("SIPP_CUDA_ARCHITECTURES", Some(" 80;90 "))]);
 
     let (arches, source) = cuda_architectures_with_source(&ctx);
     assert_eq!(arches, "80;90");
@@ -60,7 +60,7 @@ fn cuda_architectures_prefers_trimmed_environment_override() {
 fn cuda_architectures_defaults_when_unset() {
     let temp = TempDir::new("cuda-arch-default");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
-    let _env = EnvGuard::new(&[("COGENTLM_CUDA_ARCHITECTURES", None)]);
+    let _env = EnvGuard::new(&[("SIPP_CUDA_ARCHITECTURES", None)]);
 
     assert_eq!(cuda_architectures(&ctx), DEFAULT_CUDA_ARCHITECTURES);
 }
@@ -69,7 +69,7 @@ fn cuda_architectures_defaults_when_unset() {
 fn cuda_architectures_defaults_when_blank() {
     let temp = TempDir::new("cuda-arch-blank");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
-    let _env = EnvGuard::new(&[("COGENTLM_CUDA_ARCHITECTURES", Some("   "))]);
+    let _env = EnvGuard::new(&[("SIPP_CUDA_ARCHITECTURES", Some("   "))]);
 
     assert_eq!(cuda_architectures(&ctx), DEFAULT_CUDA_ARCHITECTURES);
 }
@@ -99,7 +99,7 @@ fn cuda_architectures_env_var_beats_config_file() {
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
 
     write_persisted_architectures(&ctx, "50-real").unwrap();
-    let _env = EnvGuard::new(&[("COGENTLM_CUDA_ARCHITECTURES", Some("99-real"))]);
+    let _env = EnvGuard::new(&[("SIPP_CUDA_ARCHITECTURES", Some("99-real"))]);
 
     let (arches, source) = cuda_architectures_with_source(&ctx);
     assert_eq!(arches, "99-real");

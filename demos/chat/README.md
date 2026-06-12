@@ -1,7 +1,7 @@
-# CogentLM Chat Demo
+# Sipp Chat Demo
 
 `demos/chat` is a focused browser chat interface for testing local GGUF models
-with CogentLM and WebGPU.
+with Sipp and WebGPU.
 
 ## Run
 

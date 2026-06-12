@@ -12,7 +12,7 @@ import {
   readLocalArgs,
 } from './_support.mjs';
 
-const { CogentClient, backendObservabilityJson, setLlamaLogQuiet } = native;
+const { SippClient, backendObservabilityJson, setLlamaLogQuiet } = native;
 const { model, input } = readLocalArgs('query', 'Write one sentence about local inference.');
 
 // Keep backend logs quiet so the example output focuses on the response.
@@ -20,7 +20,7 @@ setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 
 // The app owns a client and loads one local GGUF endpoint.
-const client = new CogentClient();
+const client = new SippClient();
 await client.add('default', {
   kind: 'local',
   modelPath: model,
@@ -43,14 +43,14 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
   return {
     placement: { gpu_layers: gpuLayers() },
     context: {
-      n_ctx: intEnv('COGENTLM_CONTEXT', DEFAULT_CONTEXT),
-      n_threads: intEnv('COGENTLM_THREADS'),
-      n_threads_batch: intEnv('COGENTLM_THREADS'),
+      n_ctx: intEnv('SIPP_CONTEXT', DEFAULT_CONTEXT),
+      n_threads: intEnv('SIPP_THREADS'),
+      n_threads_batch: intEnv('SIPP_THREADS'),
       embeddings,
     },
     sampling: {
-      temperature: numberEnv('COGENTLM_TEMPERATURE', DEFAULT_TEMPERATURE),
-      seed: intEnv('COGENTLM_SEED', DEFAULT_SEED),
+      temperature: numberEnv('SIPP_TEMPERATURE', DEFAULT_TEMPERATURE),
+      seed: intEnv('SIPP_SEED', DEFAULT_SEED),
     },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },
@@ -62,8 +62,8 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
 
 function textOptions() {
   return {
-    maxTokens: intEnv('COGENTLM_MAX_TOKENS', DEFAULT_MAX_TOKENS),
-    temperature: numberEnv('COGENTLM_TEMPERATURE', DEFAULT_TEMPERATURE),
-    topP: numberEnv('COGENTLM_TOP_P', DEFAULT_TOP_P),
+    maxTokens: intEnv('SIPP_MAX_TOKENS', DEFAULT_MAX_TOKENS),
+    temperature: numberEnv('SIPP_TEMPERATURE', DEFAULT_TEMPERATURE),
+    topP: numberEnv('SIPP_TOP_P', DEFAULT_TOP_P),
   };
 }

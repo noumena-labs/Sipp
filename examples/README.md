@@ -1,6 +1,6 @@
-# CogentLM Examples
+# Sipp Examples
 
-The examples are real integrations, not mocks. Each file keeps the CogentLM
+The examples are real integrations, not mocks. Each file keeps the Sipp
 client construction, endpoint registration, request construction, streaming,
 and cleanup visible in the example itself.
 
@@ -24,7 +24,7 @@ request uses a specific destination.
 Local examples take a GGUF model path followed by optional input:
 
 ```bash
-cargo run -p cogentlm-rust-examples --bin query -- <model.gguf> [input]
+cargo run -p sipp-rust-examples --bin query -- <model.gguf> [input]
 node examples/node/query.mjs <model.gguf> [input]
 python examples/python/query.py <model.gguf> [input]
 ```
@@ -52,16 +52,16 @@ running while Vite serves the browser pages.
 Manual two-terminal gateway flows are still available:
 
 ```bash
-export COGENTLM_GATEWAY_TOKEN="dev-token"
+export SIPP_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 
 In another terminal:
 
 ```bash
-export COGENTLM_GATEWAY_URL="http://127.0.0.1:8787"
-export COGENTLM_GATEWAY_TOKEN="dev-token"
-cargo run -p cogentlm-rust-examples --features gateway --bin gateway_query -- <model.gguf> local [input]
+export SIPP_GATEWAY_URL="http://127.0.0.1:8787"
+export SIPP_GATEWAY_TOKEN="dev-token"
+cargo run -p sipp-rust-examples --features gateway --bin gateway_query -- <model.gguf> local [input]
 node examples/node/gateway_query.mjs <model.gguf> local [input]
 python examples/python/gateway_query.py <model.gguf> local [input]
 ```
@@ -75,7 +75,7 @@ shortcut requires `OPENAI_API_KEY` in the gateway process and exposes targets
 
 ```bash
 export OPENAI_API_KEY="<openai-api-key>"
-export COGENTLM_GATEWAY_TOKEN="dev-token"
+export SIPP_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 ```
 
@@ -83,12 +83,12 @@ cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 
 Direct provider examples call the selected provider from the current trusted
 process without a gateway. By default they use the `gemini` preset, which maps
-to CogentLM's OpenAI-compatible provider descriptor.
+to Sipp's OpenAI-compatible provider descriptor.
 
 ```bash
-export COGENTLM_PROVIDER="gemini"
+export SIPP_PROVIDER="gemini"
 export GEMINI_API_KEY="<gemini-api-key>"
-cargo run -p cogentlm-rust-examples --bin provider_chat -- [input]
+cargo run -p sipp-rust-examples --bin provider_chat -- [input]
 node examples/node/provider_chat.mjs [input]
 python examples/python/provider_chat.py [input]
 ```
@@ -96,10 +96,10 @@ python examples/python/provider_chat.py [input]
 For any OpenAI-compatible provider, pass the generic descriptor fields:
 
 ```bash
-export COGENTLM_PROVIDER="openai_compatible"
-export COGENTLM_PROVIDER_BASE_URL="https://provider.example/v1"
-export COGENTLM_PROVIDER_API_KEY="<provider-api-key>"
-export COGENTLM_PROVIDER_MODEL="<provider-model>"
+export SIPP_PROVIDER="openai_compatible"
+export SIPP_PROVIDER_BASE_URL="https://provider.example/v1"
+export SIPP_PROVIDER_API_KEY="<provider-api-key>"
+export SIPP_PROVIDER_MODEL="<provider-model>"
 ```
 
 Use direct providers only in trusted server-side runtimes. Browser code should

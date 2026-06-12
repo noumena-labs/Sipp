@@ -1,6 +1,6 @@
 # Library API Overview
 
-The CogentLM libraries for Rust, Node.js, Python, and Browser expose the same
+The Sipp libraries for Rust, Node.js, Python, and Browser expose the same
 endpoint-oriented client model.
 
 At a high level:
@@ -14,7 +14,7 @@ gateway, through a provider, or across a hybrid setup.
 
 ## Core Client Methods
 
-`CogentClient` exposes four primary methods:
+`SippClient` exposes four primary methods:
 
 | Method  | Purpose                                                                      |
 | ------- | ---------------------------------------------------------------------------- |
@@ -57,7 +57,7 @@ Use a local endpoint when the current process should own model execution.
 
 ### Gateway Endpoint
 
-A gateway endpoint sends requests to a remote CogentLM gateway over HTTP. The
+A gateway endpoint sends requests to a remote Sipp gateway over HTTP. The
 gateway process owns provider credentials, local model paths, access policy,
 concurrency, and metrics.
 
@@ -91,14 +91,14 @@ trusted server-side code that manages its own credential lifecycle.
 | `baseUrl`  | string optional                                    | Override for the provider base URL. |
 
 Use a provider endpoint when server-side code should call a provider API
-directly without a CogentLM gateway.
+directly without a Sipp gateway.
 
 ---
 
 ## `query()` — Generate from a Raw Prompt
 
 ```text
-query(request: CogentQueryRequest) -> CogentTextRun
+query(request: SippQueryRequest) -> SippTextRun
 ```
 
 `query` sends the prompt string to the selected endpoint exactly as supplied.
@@ -114,7 +114,7 @@ prompts, or agent loops that render prompts themselves.
 | ----------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`        | `EndpointRef`                | Registered endpoint to target. May be omitted only when exactly one local endpoint supports the operation.                             |
 | `prompt`          | string                       | Raw prompt text.                                                                                                                       |
-| `options`         | `CogentTextOptions` optional | Shared generation options: `maxTokens`, `temperature`, `topP`, and `stop`.                                                             |
+| `options`         | `SippTextOptions` optional | Shared generation options: `maxTokens`, `temperature`, `topP`, and `stop`.                                                             |
 | `local`           | `LocalTextOptions` optional  | Local-only options such as `contextKey`, `grammar`, `jsonSchema`, sampling overrides, and media inputs. Rejected by gateway endpoints. |
 | `endpointOptions` | map optional                 | Free-form options forwarded to gateway endpoint implementations.                                                                       |
 | `providerOptions` | map optional                 | Free-form options forwarded to direct provider adapters. Rejected by gateway endpoints.                                                |
@@ -122,15 +122,15 @@ prompts, or agent loops that render prompts themselves.
 
 ### Return Value
 
-`query` returns a `CogentTextRun`.
+`query` returns a `SippTextRun`.
 
 | Member           | Type             | Description                                                 |
 | ---------------- | ---------------- | ----------------------------------------------------------- |
-| `response`       | Promise / Future | Resolves to `CogentTextResponse` when generation completes. |
+| `response`       | Promise / Future | Resolves to `SippTextResponse` when generation completes. |
 | `tokens`         | Async iterable   | Streams `TokenBatch` values when `emitTokens` is true.      |
 | `cancel(reason)` | method           | Cancels an in-flight generation.                            |
 
-`CogentTextResponse` contains the generated `text`, `finishReason`, token
+`SippTextResponse` contains the generated `text`, `finishReason`, token
 `usage`, and optional `localStats` for local endpoints.
 
 ---
@@ -138,7 +138,7 @@ prompts, or agent loops that render prompts themselves.
 ## `chat()` — Generate from Role Messages
 
 ```text
-chat(request: CogentChatRequest) -> CogentTextRun
+chat(request: SippChatRequest) -> SippTextRun
 ```
 
 `chat` sends ordered role/content messages to the selected endpoint. The
@@ -156,20 +156,20 @@ endpoint owns message rendering.
 | ------------ | --------------------- | ------------------------------------------ |
 | `endpoint`   | `EndpointRef`         | Registered endpoint to target.             |
 | `messages`   | `{ role, content }[]` | Ordered conversation turns.                |
-| `options`    | `CogentTextOptions`   | Same shared generation options as `query`. |
+| `options`    | `SippTextOptions`   | Same shared generation options as `query`. |
 | `local`      | `LocalTextOptions`    | Same local-only options as `query`.        |
 | `emitTokens` | boolean               | Same streaming control as `query`.         |
 
 ### Return Value
 
-`chat` returns the same `CogentTextRun` shape as `query`.
+`chat` returns the same `SippTextRun` shape as `query`.
 
 ---
 
 ## `embed()` — Generate an Embedding
 
 ```text
-embed(request: CogentEmbedRequest) -> CogentEmbeddingRun
+embed(request: SippEmbedRequest) -> SippEmbeddingRun
 ```
 
 `embed` produces a single embedding vector from text input. It does not accept
@@ -187,25 +187,25 @@ generation options and does not stream tokens.
 
 ### Return Value
 
-`embed` returns a `CogentEmbeddingRun`.
+`embed` returns a `SippEmbeddingRun`.
 
 | Member           | Type             | Description                                                    |
 | ---------------- | ---------------- | -------------------------------------------------------------- |
-| `response`       | Promise / Future | Resolves to `CogentEmbeddingResponse` when encoding completes. |
+| `response`       | Promise / Future | Resolves to `SippEmbeddingResponse` when encoding completes. |
 | `cancel(reason)` | method           | Cancels an in-flight embedding.                                |
 
-`CogentEmbeddingResponse` contains the float `values` array, optional token
+`SippEmbeddingResponse` contains the float `values` array, optional token
 `usage`, the `pooling` strategy, and the `normalized` flag.
 
 ---
 
 ## Gateway and Client Symmetry
 
-The same `CogentClient` API works on both sides of the gateway boundary.
+The same `SippClient` API works on both sides of the gateway boundary.
 
 ### Server Side
 
-A server process creates a `CogentClient`, registers local endpoints, and maps
+A server process creates a `SippClient`, registers local endpoints, and maps
 HTTP routes to `query`, `chat`, or `embed`.
 
 ```text
@@ -221,7 +221,7 @@ Python, or Rust servers can also use it through the gateway profile helpers.
 
 ### Client Side
 
-A client process creates a `CogentClient`, registers gateway endpoints, and
+A client process creates a `SippClient`, registers gateway endpoints, and
 calls `query`, `chat`, or `embed` the same way it would call a local endpoint.
 
 ```text
@@ -278,7 +278,7 @@ flowchart LR
     subgraph CLIENT["Client Process"]
         direction TB
         CApp["Application Code"]:::client_node
-        CClient["CogentClient<br/>add(...) -> EndpointRef<br/>query / chat / embed"]:::client_node
+        CClient["SippClient<br/>add(...) -> EndpointRef<br/>query / chat / embed"]:::client_node
         CApp --> CClient
 
         %% Logical grouping for endpoint registration options
@@ -306,7 +306,7 @@ flowchart LR
     subgraph SERVER["Server Process / Gateway Server"]
         direction TB
         SGateway["Gateway Server<br/>HTTP: /v1/query, /chat, /embed"]:::gateway_node
-        SClient["CogentClient (same lib)"]:::client_node
+        SClient["SippClient (same lib)"]:::client_node
         SGateway --> SClient
 
         %% Logical grouping for endpoint registration options

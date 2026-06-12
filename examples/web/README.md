@@ -2,7 +2,7 @@
 
 The web examples are Vite pages that demonstrate browser-local GGUF inference
 and gateway calls. Shared code in `src/common.ts` handles DOM wiring and output
-formatting; each page module owns its `CogentClient`, endpoint registration,
+formatting; each page module owns its `SippClient`, endpoint registration,
 request construction, streaming, and cleanup.
 
 ## Serve
@@ -32,7 +32,7 @@ cargo xtask run examples gateway web --case query
 For a manually started gateway:
 
 ```bash
-export COGENTLM_GATEWAY_TOKEN="dev-token"
+export SIPP_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-local --model <model.gguf> --bind 127.0.0.1:8787
 ```
 

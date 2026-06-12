@@ -40,9 +40,9 @@ fn labels_features_and_binary_names_are_stable() {
     assert_eq!(
         cli_binary_file_name(),
         if cfg!(windows) {
-            "cogentlm.exe"
+            "sipp.exe"
         } else {
-            "cogentlm"
+            "sipp"
         }
     );
 }

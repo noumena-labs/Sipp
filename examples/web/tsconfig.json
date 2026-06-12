@@ -13,8 +13,8 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
-      "@noumena-labs/cogentlm": [
-        "../../.build/artifacts/npm/cogentlm/dist/types/index.d.ts"
+      "@noumena-labs/sipp": [
+        "../../.build/artifacts/npm/sipp/dist/types/index.d.ts"
       ]
     }
   },

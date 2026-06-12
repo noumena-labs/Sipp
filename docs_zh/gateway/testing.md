@@ -9,8 +9,8 @@ Bash：
 ```bash
 export GATEWAY_URL="http://127.0.0.1:8080"
 export GATEWAY_MANAGEMENT_URL="http://127.0.0.1:9090"
-export COGENTLM_GATEWAY_TOKEN="replace-me"
-export COGENTLM_GATEWAY_TARGET="local"
+export SIPP_GATEWAY_TOKEN="replace-me"
+export SIPP_GATEWAY_TARGET="local"
 ```
 
 PowerShell：
@@ -18,8 +18,8 @@ PowerShell：
 ```powershell
 $env:GATEWAY_URL = "http://127.0.0.1:8080"
 $env:GATEWAY_MANAGEMENT_URL = "http://127.0.0.1:9090"
-$env:COGENTLM_GATEWAY_TOKEN = "replace-me"
-$env:COGENTLM_GATEWAY_TARGET = "local"
+$env:SIPP_GATEWAY_TOKEN = "replace-me"
+$env:SIPP_GATEWAY_TARGET = "local"
 ```
 
 ## 管理端探针
@@ -44,11 +44,11 @@ http://127.0.0.1:9090/admin
 
 ```bash
 curl -sS "$GATEWAY_URL/v1/query" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -H "x-request-id: curl-query-1" \
   -d '{
-    "model": "'"$COGENTLM_GATEWAY_TARGET"'",
+    "model": "'"$SIPP_GATEWAY_TARGET"'",
     "prompt": "Explain gateway inference in one sentence.",
     "max_tokens": 64,
     "temperature": 0.2
@@ -82,10 +82,10 @@ curl -sS "$GATEWAY_URL/v1/query" \
 
 ```bash
 curl -sS "$GATEWAY_URL/v1/chat" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "'"$COGENTLM_GATEWAY_TARGET"'",
+    "model": "'"$SIPP_GATEWAY_TARGET"'",
     "messages": [
       { "role": "system", "content": "Answer briefly." },
       { "role": "user", "content": "What does the gateway own?" }
@@ -100,10 +100,10 @@ curl -sS "$GATEWAY_URL/v1/chat" \
 
 ```bash
 curl -sS "$GATEWAY_URL/v1/embed" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "'"$COGENTLM_GATEWAY_TARGET"'",
+    "model": "'"$SIPP_GATEWAY_TARGET"'",
     "input": "gateway inference"
   }'
 ```
@@ -126,10 +126,10 @@ curl -sS "$GATEWAY_URL/v1/embed" \
 
 ```bash
 curl -N -sS "$GATEWAY_URL/v1/query" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "'"$COGENTLM_GATEWAY_TARGET"'",
+    "model": "'"$SIPP_GATEWAY_TARGET"'",
     "prompt": "Write one short sentence about gateways.",
     "max_tokens": 64,
     "stream": true

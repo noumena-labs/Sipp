@@ -10,4 +10,4 @@ const links: readonly ExampleLink[] = [
   { href: '/gateway_embed.html', label: 'Gateway embed' },
 ];
 
-renderIndex('CogentLM Web Examples', links);
+renderIndex('Sipp Web Examples', links);

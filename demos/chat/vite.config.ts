@@ -3,11 +3,11 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 const examplesDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentlmDistDir = path.resolve(
+const sippDistDir = path.resolve(
   examplesDir,
-  '../../.build/artifacts/npm/cogentlm/dist/esm'
+  '../../.build/artifacts/npm/sipp/dist/esm'
 );
-const cogentlmEntry = path.join(cogentlmDistDir, 'index.js');
+const sippEntry = path.join(sippDistDir, 'index.js');
 const appOutDir = path.resolve(examplesDir, '../../.build/artifacts/demos/chat');
 
 export default defineConfig({
@@ -17,7 +17,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@noumena-labs/cogentlm': cogentlmEntry,
+      '@noumena-labs/sipp': sippEntry,
     },
     preserveSymlinks: true,
   },
@@ -37,6 +37,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm'],
+    exclude: ['@noumena-labs/sipp'],
   },
 });

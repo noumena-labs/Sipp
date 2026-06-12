@@ -1,5 +1,5 @@
 [package]
-name = "cogentlm-gateway-example"
+name = "sipp-gateway-example"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,25 +8,25 @@ publish = false
 autobins = false
 
 [[bin]]
-name = "cogentlm-gateway-example"
+name = "sipp-gateway-example"
 path = "src/main.rs"
 
 [features]
 default = ["native"]
-native = ["cogentlm/native", "cogentlm-gateway/native"]
-backend-dl = ["cogentlm-gateway/backend-dl"]
-cuda = ["cogentlm-gateway/cuda"]
-metal = ["cogentlm-gateway/metal"]
-vulkan = ["cogentlm-gateway/vulkan"]
-openmp = ["cogentlm-gateway/openmp"]
+native = ["sipp/native", "sipp-gateway/native"]
+backend-dl = ["sipp-gateway/backend-dl"]
+cuda = ["sipp-gateway/cuda"]
+metal = ["sipp-gateway/metal"]
+vulkan = ["sipp-gateway/vulkan"]
+openmp = ["sipp-gateway/openmp"]
 
 [dependencies]
 anyhow.workspace = true
 axum = "0.8"
 bytes = "1"
 clap.workspace = true
-cogentlm = { workspace = true, features = ["gateway", "providers"] }
-cogentlm-gateway.workspace = true
+sipp = { workspace = true, features = ["gateway", "providers"] }
+sipp-gateway.workspace = true
 futures-util = "0.3"
 serde.workspace = true
 serde_json.workspace = true

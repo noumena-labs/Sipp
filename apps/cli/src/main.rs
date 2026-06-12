@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{Parser, ValueEnum};
-use cogentlm::backend::set_llama_log_quiet;
-use cogentlm::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
-use cogentlm::lifecycle::{BackendPolicy, BackendPreference, ModelLoadOptions, StatsMode};
-use cogentlm::runtime::metrics::RuntimeObservabilityMetrics;
-use cogentlm::runtime::request::{GenerateResponseStatus, ResponseOutput};
-use cogentlm::runtime::{InferenceRuntime, RequestStepResult};
+use sipp::backend::set_llama_log_quiet;
+use sipp::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
+use sipp::lifecycle::{BackendPolicy, BackendPreference, ModelLoadOptions, StatsMode};
+use sipp::runtime::metrics::RuntimeObservabilityMetrics;
+use sipp::runtime::request::{GenerateResponseStatus, ResponseOutput};
+use sipp::runtime::{InferenceRuntime, RequestStepResult};
 use serde_json::json;
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -25,8 +25,8 @@ mod main_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug, Parser)]
-#[command(name = "cogentlm")]
-#[command(about = "CogentLM Rust runtime proof-of-concept CLI")]
+#[command(name = "sipp")]
+#[command(about = "Sipp Rust runtime proof-of-concept CLI")]
 struct Args {
     /// Path to a GGUF model.
     model: PathBuf,

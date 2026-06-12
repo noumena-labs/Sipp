@@ -9,13 +9,13 @@
 ## 浏览器本地推理
 
 ```bash
-npm install cogentlm
+npm install sipp
 ```
 
 ```ts
-import { CogentClient, type ChatMessage } from 'cogentlm';
+import { SippClient, type ChatMessage } from 'sipp';
 
-const client = new CogentClient();
+const client = new SippClient();
 const messages: readonly ChatMessage[] = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain local browser inference.' },
@@ -58,7 +58,7 @@ const embedEndpoint = await client.add('embed', {
 });
 
 // embed：返回向量数据。指定的本地端点必须具备嵌入生成能力。
-const embedding = await client.embed('CogentLM embedding input.', {
+const embedding = await client.embed('Sipp embedding input.', {
   endpoint: embedEndpoint,
   contextKey: 'browser-embed',
   normalize: true,
@@ -71,13 +71,13 @@ await client.close();
 ## Node.js 本地推理
 
 ```bash
-npm install cogentlm-server
+npm install sipp-server
 ```
 
 ```ts
-import { CogentClient } from 'cogentlm-server';
+import { SippClient } from 'sipp-server';
 
-const client = new CogentClient();
+const client = new SippClient();
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain local Node.js inference.' },
@@ -124,7 +124,7 @@ const embedEndpoint = await client.add('embed', {
 // embed：返回向量数据。指定的本地端点必须具备嵌入生成能力。
 const embedding = await client.embed({
   endpoint: embedEndpoint,
-  input: 'CogentLM embedding input.',
+  input: 'Sipp embedding input.',
   local: { contextKey: 'node-embed', normalize: true },
 }).response;
 
@@ -136,14 +136,14 @@ console.log(query.text, chat.text, embedding.values.length);
 ## Python 本地推理
 
 ```bash
-pip install cogentlm
+pip install sipp
 ```
 
 ```python
-from cogentlm import (
+from sipp import (
     ChatMessage,
-    CogentClient,
-    CogentTextOptions,
+    SippClient,
+    SippTextOptions,
     ContextRuntimeConfig,
     LocalEmbedOptions,
     LocalTextOptions,
@@ -151,7 +151,7 @@ from cogentlm import (
     NativeRuntimeConfig,
 )
 
-client = CogentClient()
+client = SippClient()
 messages = [
     ChatMessage("system", "Answer concisely."),
     ChatMessage("user", "Explain local Python inference."),
@@ -165,7 +165,7 @@ query_prompt = "\n".join(
         "<|assistant|>",
     ]
 )
-text_options = CogentTextOptions(max_tokens=64)
+text_options = SippTextOptions(max_tokens=64)
 
 text_endpoint = client.add("text", LocalModelDescriptor("chat.gguf"))
 
@@ -201,7 +201,7 @@ embed_endpoint = client.add(
 
 # embed：返回向量数据。指定的本地端点必须具备嵌入生成能力。
 embedding = client.embed(
-    "CogentLM embedding input.",
+    "Sipp embedding input.",
     endpoint=embed_endpoint,
     local=LocalEmbedOptions(context_key="python-embed", normalize=True),
 ).result()
@@ -212,19 +212,19 @@ print(query["text"], chat["text"], len(embedding["values"]))
 ## Rust 本地推理
 
 ```bash
-cargo add cogentlm
+cargo add sipp
 ```
 
 ```rust
-use cogentlm::engine::{
+use sipp::engine::{
     ChatMessage, ChatRole, ContextRuntimeConfig, NativeRuntimeConfig, PoolingType,
 };
-use cogentlm::{
-    CogentChatRequest, CogentClient, CogentEmbedRequest, CogentQueryRequest,
-    CogentTextOptions, EndpointDescriptor, LocalEmbedOptions, LocalTextOptions,
+use sipp::{
+    SippChatRequest, SippClient, SippEmbedRequest, SippQueryRequest,
+    SippTextOptions, EndpointDescriptor, LocalEmbedOptions, LocalTextOptions,
 };
 
-let mut client = CogentClient::new();
+let mut client = SippClient::new();
 let messages = vec![
     ChatMessage::new(ChatRole::System, "Answer concisely."),
     ChatMessage::new(ChatRole::User, "Explain local Rust inference."),
@@ -237,7 +237,7 @@ let query_prompt = [
     "<|assistant|>",
 ]
 .join("\n");
-let text_options = CogentTextOptions {
+let text_options = SippTextOptions {
     max_tokens: Some(64),
     ..Default::default()
 };
@@ -248,7 +248,7 @@ let text_endpoint = client
 
 // query：传递原始提示词。请在应用层将提示词渲染为目标模型对应的模板。
 let query = client
-    .query(CogentQueryRequest {
+    .query(SippQueryRequest {
         endpoint: Some(text_endpoint.clone()),
         prompt: query_prompt,
         options: text_options.clone(),
@@ -262,7 +262,7 @@ let query = client
 
 // chat：传递角色消息列表。本地运行时会自动读取并应用 tokenizer.chat_template。
 let chat = client
-    .chat(CogentChatRequest {
+    .chat(SippChatRequest {
         endpoint: Some(text_endpoint),
         messages,
         options: text_options,
@@ -280,9 +280,9 @@ let embed_endpoint = client
 
 // embed：返回向量数据。指定的本地端点必须具备嵌入生成能力。
 let embedding = client
-    .embed(CogentEmbedRequest {
+    .embed(SippEmbedRequest {
         endpoint: Some(embed_endpoint),
-        input: "CogentLM embedding input.".to_string(),
+        input: "Sipp embedding input.".to_string(),
         local: LocalEmbedOptions {
             context_key: Some("rust-embed".to_string()),
             normalize: Some(true),
@@ -311,9 +311,9 @@ fn embed_config() -> NativeRuntimeConfig {
 网关客户端会在网关服务端进程内安全托管模型路径、服务商凭证、请求路由策略及各项性能指标。以下代码片段演示了浏览器端的网关调用，Node.js 同样可复用这套统一的请求对象结构。
 
 ```ts
-import { CogentClient, type ChatMessage } from 'cogentlm';
+import { SippClient, type ChatMessage } from 'sipp';
 
-const client = new CogentClient();
+const client = new SippClient();
 const endpoint = await client.add('gateway', {
   kind: 'gateway',
   target: 'local',
@@ -342,7 +342,7 @@ const query = await client.query(queryPrompt, {
 const chat = await client.chat(messages, { endpoint, maxTokens: 64 }).response;
 
 // embed：请求的后端目标必须支持嵌入生成。
-const embedding = await client.embed('CogentLM embedding input.', {
+const embedding = await client.embed('Sipp embedding input.', {
   endpoint,
 }).response;
 
@@ -357,7 +357,7 @@ await client.close();
 除非在绝对安全可控的服务端代码中 (比如自建本地服务)，否则请勿直连第三方服务商的端点。服务商的能力支持情况取决于你选用的具体模型：`query` 接口要求服务商或模型兼容补全（completion）模式，`chat` 支持大部分服务商chat模型端口，而 `embed` 则必须调用专门的嵌入模型。
 
 ```ts
-import { CogentClient } from 'cogentlm-server';
+import { SippClient } from 'sipp-server';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -367,7 +367,7 @@ function env(name: string): string {
   return value;
 }
 
-const client = new CogentClient();
+const client = new SippClient();
 const chatMessages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain provider inference.' },
@@ -410,7 +410,7 @@ const chat = await client.chat({
 // embed：调用服务商提供的原生嵌入模型。
 const embedding = await client.embed({
   endpoint: embedEndpoint,
-  input: 'CogentLM embedding input.',
+  input: 'Sipp embedding input.',
 }).response;
 
 console.log(query.text, chat.text, embedding.values.length);

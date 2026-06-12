@@ -21,7 +21,7 @@ impl TempDir {
     pub(crate) fn new(label: &str) -> Self {
         let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
         let path =
-            env::temp_dir().join(format!("cogentlm-sys-{label}-{}-{id}", std::process::id()));
+            env::temp_dir().join(format!("sipp-sys-{label}-{}-{id}", std::process::id()));
         if path.exists() {
             fs::remove_dir_all(&path).expect("remove stale temp dir");
         }

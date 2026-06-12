@@ -1,6 +1,6 @@
 # Rust Package
 
-The Rust package target is `cogentlm`. It is the public facade crate for Rust
+The Rust package target is `sipp`. It is the public facade crate for Rust
 applications and re-exports the high-level client API plus selected runtime,
 backend, lifecycle, shard, provider, and gateway types.
 
@@ -10,11 +10,11 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 ## Install
 
 ```bash
-cargo add cogentlm
+cargo add sipp
 ```
 
 The release workflow packages a Rust source artifact; crates.io publishing of
-the `cogentlm` and `cogentlm-sys` crates is pending release wiring. Use
+the `sipp` and `sipp-sys` crates is pending release wiring. Use
 [Source Builds](../maintainers/source-builds.md) when consuming the crate from
 this checkout.
 
@@ -23,16 +23,16 @@ this checkout.
 - Rust applications that need local GGUF inference.
 - Gateway-backed query, chat, and embedding calls.
 - Direct provider descriptors behind the `providers` feature.
-- Shared CogentLM value types across application boundaries.
+- Shared Sipp value types across application boundaries.
 
 ## Local GGUF Query
 
 ```rust
-use cogentlm::{
-    CogentClient, CogentQueryRequest, CogentTextOptions, EndpointDescriptor,
+use sipp::{
+    SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor,
     LocalTextOptions,
 };
-use cogentlm::engine::{
+use sipp::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, KvReuseMode, NativeRuntimeConfig,
     ObservabilityRuntimeConfig, SchedulerRuntimeConfig,
 };
@@ -40,7 +40,7 @@ use cogentlm::engine::{
 async fn run(
     model_path: std::path::PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = CogentClient::new();
+    let mut client = SippClient::new();
     let endpoint = client
         .add(
             "default",
@@ -49,10 +49,10 @@ async fn run(
         .await?;
 
     let response = client
-        .query(CogentQueryRequest {
+        .query(SippQueryRequest {
             endpoint: Some(endpoint),
-            prompt: "Explain CogentLM in one sentence.".to_string(),
-            options: CogentTextOptions {
+            prompt: "Explain Sipp in one sentence.".to_string(),
+            options: SippTextOptions {
                 max_tokens: Some(64),
                 ..Default::default()
             },
@@ -97,22 +97,22 @@ config groups and request option boundaries.
 ## Gateway Query
 
 ```rust
-use cogentlm::{
-    CogentClient, CogentQueryRequest, CogentTextOptions, EndpointDescriptor,
+use sipp::{
+    SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor,
     GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
     GatewayTimeoutPolicy,
 };
 
-let mut client = CogentClient::new();
+let mut client = SippClient::new();
 let endpoint = client
     .add(
         "gateway",
         EndpointDescriptor::gateway(GatewayEndpointConfig {
-            target: std::env::var("COGENTLM_GATEWAY_TARGET")?,
-            base_url: std::env::var("COGENTLM_GATEWAY_URL")?,
+            target: std::env::var("SIPP_GATEWAY_TARGET")?,
+            base_url: std::env::var("SIPP_GATEWAY_URL")?,
             routes: GatewayRoutes::default(),
             authentication: GatewayAuthentication::Bearer(GatewaySecret::new(
-                std::env::var("COGENTLM_GATEWAY_TOKEN")?,
+                std::env::var("SIPP_GATEWAY_TOKEN")?,
             )),
             static_headers: Default::default(),
             timeouts: GatewayTimeoutPolicy::default(),
@@ -122,10 +122,10 @@ let endpoint = client
     .await?;
 
 let response = client
-    .query(CogentQueryRequest {
+    .query(SippQueryRequest {
         endpoint: Some(endpoint),
         prompt: "Explain gateway inference.".to_string(),
-        options: CogentTextOptions {
+        options: SippTextOptions {
             max_tokens: Some(64),
             ..Default::default()
         },

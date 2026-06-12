@@ -1,4 +1,4 @@
-//! Tests the `build_support::util` module in `cogentlm-sys`.
+//! Tests the `build_support::util` module in `sipp-sys`.
 //!
 //! Covers deterministic path sanitization and path-component normalization
 //! without invoking native build tools.

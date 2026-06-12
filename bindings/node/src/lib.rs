@@ -1,4 +1,4 @@
-//! N-API bindings for the public CogentLM Node package.
+//! N-API bindings for the public Sipp Node package.
 //!
 //! This crate exposes the shared Rust client facade to JavaScript while
 //! translating Node request objects, async tasks, and native errors.
@@ -8,15 +8,15 @@ use std::{
     time::Duration,
 };
 
-use cogentlm::backend::{
+use sipp::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
-use cogentlm::core::TokenUsage as CoreTokenUsage;
-use cogentlm::engine::protocol::{
+use sipp::core::TokenUsage as CoreTokenUsage;
+use sipp::engine::protocol::{
     CacheSource as CoreCacheSource, RequestStats as CoreRequestStats,
 };
-use cogentlm::engine::{
+use sipp::engine::{
     ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode, GpuLayerConfig,
     KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
@@ -26,21 +26,21 @@ use cogentlm::engine::{
     SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
     SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
 };
-use cogentlm::runtime::config::{
+use sipp::runtime::config::{
     SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
 };
-use cogentlm::{
+use sipp::{
     AnthropicProviderConfig as CoreAnthropicProviderConfig,
-    CogentCancellationHandle as CoreCancellationHandle,
-    CogentCancellationReason as CoreCancellationReason, CogentChatRequest as CoreClientChatRequest,
-    CogentClient as CoreClient, CogentEmbedRequest as CoreClientEmbedRequest,
-    CogentEmbeddingResponse as CoreClientEmbeddingResponse,
-    CogentEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
-    CogentEmbeddingRun as CoreClientEmbeddingRun, CogentError as CoreClientError,
-    CogentQueryRequest as CoreClientQueryRequest, CogentRequestContext as CoreClientRequestContext,
-    CogentTextOptions as CoreClientTextOptions, CogentTextResponse as CoreClientTextResponse,
-    CogentTextResponseFuture as CoreClientTextResponseFuture, CogentTextRun as CoreClientTextRun,
-    CogentTokenBatches as CoreClientTokenBatches, EndpointDescriptor as CoreEndpointDescriptor,
+    SippCancellationHandle as CoreCancellationHandle,
+    SippCancellationReason as CoreCancellationReason, SippChatRequest as CoreClientChatRequest,
+    SippClient as CoreClient, SippEmbedRequest as CoreClientEmbedRequest,
+    SippEmbeddingResponse as CoreClientEmbeddingResponse,
+    SippEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
+    SippEmbeddingRun as CoreClientEmbeddingRun, SippError as CoreClientError,
+    SippQueryRequest as CoreClientQueryRequest, SippRequestContext as CoreClientRequestContext,
+    SippTextOptions as CoreClientTextOptions, SippTextResponse as CoreClientTextResponse,
+    SippTextResponseFuture as CoreClientTextResponseFuture, SippTextRun as CoreClientTextRun,
+    SippTokenBatches as CoreClientTokenBatches, EndpointDescriptor as CoreEndpointDescriptor,
     EndpointRef as CoreEndpointRef, GatewayAuthentication as CoreGatewayAuthentication,
     GatewayEndpointConfig as CoreGatewayEndpointConfig, GatewayRoutes as CoreGatewayRoutes,
     GatewaySecret as CoreGatewaySecret, GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy,
@@ -68,7 +68,7 @@ mod root_tests;
 #[path = "tests/stats_tests.rs"]
 mod stats_tests;
 
-type SharedCogentClient = Arc<Mutex<CoreClient>>;
+type SharedSippClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
 type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
 type SharedClientTokenBatches = Arc<Mutex<Option<CoreClientTokenBatches>>>;
@@ -335,8 +335,8 @@ pub struct ContextRuntimeConfig {
 }
 
 impl ContextRuntimeConfig {
-    fn to_core(&self) -> Result<cogentlm::engine::ContextRuntimeConfig> {
-        let mut core = cogentlm::engine::ContextRuntimeConfig {
+    fn to_core(&self) -> Result<sipp::engine::ContextRuntimeConfig> {
+        let mut core = sipp::engine::ContextRuntimeConfig {
             n_ctx: self.n_ctx,
             n_batch: self.n_batch,
             n_ubatch: self.n_ubatch,
@@ -445,8 +445,8 @@ pub struct CacheRuntimeConfig {
 }
 
 impl CacheRuntimeConfig {
-    fn to_core(&self) -> Result<cogentlm::engine::CacheRuntimeConfig> {
-        let mut core = cogentlm::engine::CacheRuntimeConfig::default();
+    fn to_core(&self) -> Result<sipp::engine::CacheRuntimeConfig> {
+        let mut core = sipp::engine::CacheRuntimeConfig::default();
         if let Some(value) = &self.mode {
             core.mode = parse_kv_reuse_mode(value)?;
         }
@@ -619,7 +619,7 @@ impl EndpointRef {
 
 /// Shared generation options for text-producing requests.
 #[napi(object)]
-pub struct CogentTextOptions {
+pub struct SippTextOptions {
     #[napi(js_name = "maxTokens")]
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
@@ -628,7 +628,7 @@ pub struct CogentTextOptions {
     pub stop: Option<Vec<String>>,
 }
 
-impl CogentTextOptions {
+impl SippTextOptions {
     fn to_core(&self) -> Result<CoreClientTextOptions> {
         Ok(CoreClientTextOptions {
             max_tokens: self.max_tokens,
@@ -701,12 +701,12 @@ impl LocalEmbedOptions {
 
 /// Prompt completion request routed to an inference endpoint.
 #[napi(object)]
-pub struct CogentQueryRequest {
+pub struct SippQueryRequest {
     #[napi(js_name = "requestId")]
     pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
     pub prompt: String,
-    pub options: Option<CogentTextOptions>,
+    pub options: Option<SippTextOptions>,
     pub local: Option<LocalTextOptions>,
     #[napi(js_name = "endpointOptions")]
     pub endpoint_options: Option<serde_json::Value>,
@@ -716,12 +716,12 @@ pub struct CogentQueryRequest {
     pub emit_tokens: Option<bool>,
 }
 
-impl CogentQueryRequest {
+impl SippQueryRequest {
     fn to_core(&self) -> Result<CoreClientQueryRequest> {
         Ok(CoreClientQueryRequest {
             endpoint: optional_endpoint(self.endpoint.as_ref())?,
             prompt: self.prompt.clone(),
-            options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
+            options: optional_core_or_default(self.options.as_ref(), SippTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
             endpoint_options: endpoint_options_or_empty(self.endpoint_options.clone())?,
             provider_options: provider_options_or_empty(self.provider_options.clone())?,
@@ -732,12 +732,12 @@ impl CogentQueryRequest {
 
 /// Chat completion request routed to an inference endpoint.
 #[napi(object)]
-pub struct CogentChatRequest {
+pub struct SippChatRequest {
     #[napi(js_name = "requestId")]
     pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
     pub messages: Vec<ChatMessage>,
-    pub options: Option<CogentTextOptions>,
+    pub options: Option<SippTextOptions>,
     pub local: Option<LocalTextOptions>,
     #[napi(js_name = "endpointOptions")]
     pub endpoint_options: Option<serde_json::Value>,
@@ -747,12 +747,12 @@ pub struct CogentChatRequest {
     pub emit_tokens: Option<bool>,
 }
 
-impl CogentChatRequest {
+impl SippChatRequest {
     fn to_core(&self) -> Result<CoreClientChatRequest> {
         Ok(CoreClientChatRequest {
             endpoint: optional_endpoint(self.endpoint.as_ref())?,
             messages: chat_messages_to_core(self.messages.clone())?,
-            options: optional_core_or_default(self.options.as_ref(), CogentTextOptions::to_core)?,
+            options: optional_core_or_default(self.options.as_ref(), SippTextOptions::to_core)?,
             local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
             endpoint_options: endpoint_options_or_empty(self.endpoint_options.clone())?,
             provider_options: provider_options_or_empty(self.provider_options.clone())?,
@@ -763,7 +763,7 @@ impl CogentChatRequest {
 
 /// Embedding request routed to an inference endpoint.
 #[napi(object)]
-pub struct CogentEmbedRequest {
+pub struct SippEmbedRequest {
     #[napi(js_name = "requestId")]
     pub request_id: Option<String>,
     pub endpoint: Option<EndpointRef>,
@@ -775,7 +775,7 @@ pub struct CogentEmbedRequest {
     pub provider_options: Option<serde_json::Value>,
 }
 
-impl CogentEmbedRequest {
+impl SippEmbedRequest {
     fn to_core(&self) -> Result<CoreClientEmbedRequest> {
         Ok(CoreClientEmbedRequest {
             endpoint: optional_endpoint(self.endpoint.as_ref())?,
@@ -1203,7 +1203,7 @@ impl From<CorePoolingType> for PoolingType {
 
 /// Final text response from a query or chat request.
 #[napi(object)]
-pub struct CogentTextResponse {
+pub struct SippTextResponse {
     pub endpoint: EndpointRef,
     pub text: String,
     #[napi(js_name = "finishReason")]
@@ -1211,12 +1211,12 @@ pub struct CogentTextResponse {
     pub usage: Option<TokenUsage>,
     #[napi(js_name = "localStats")]
     pub local_stats: Option<RequestStats>,
-    pub metadata: CogentResponseMetadata,
+    pub metadata: SippResponseMetadata,
 }
 
 /// Final vector response from an embedding request.
 #[napi(object)]
-pub struct CogentEmbeddingResponse {
+pub struct SippEmbeddingResponse {
     pub endpoint: EndpointRef,
     pub values: Vec<f64>,
     pub usage: Option<TokenUsage>,
@@ -1224,12 +1224,12 @@ pub struct CogentEmbeddingResponse {
     pub local_stats: Option<RequestStats>,
     pub pooling: Option<PoolingType>,
     pub normalized: Option<bool>,
-    pub metadata: CogentResponseMetadata,
+    pub metadata: SippResponseMetadata,
 }
 
 /// Request and upstream correlation metadata.
 #[napi(object)]
-pub struct CogentResponseMetadata {
+pub struct SippResponseMetadata {
     #[napi(js_name = "requestId")]
     pub request_id: Option<String>,
     #[napi(js_name = "upstreamRequestId")]
@@ -1263,16 +1263,16 @@ fn token_usage_to_node(usage: CoreTokenUsage) -> TokenUsage {
     }
 }
 
-fn response_metadata_to_node(metadata: cogentlm::CogentResponseMetadata) -> CogentResponseMetadata {
-    CogentResponseMetadata {
+fn response_metadata_to_node(metadata: sipp::SippResponseMetadata) -> SippResponseMetadata {
+    SippResponseMetadata {
         request_id: metadata.request_id,
         upstream_request_id: metadata.upstream_request_id,
         upstream_response_id: metadata.upstream_response_id,
     }
 }
 
-fn cogent_text_response_to_node(response: CoreClientTextResponse) -> CogentTextResponse {
-    CogentTextResponse {
+fn sipp_text_response_to_node(response: CoreClientTextResponse) -> SippTextResponse {
+    SippTextResponse {
         endpoint: endpoint_ref_to_node(response.endpoint),
         text: response.text,
         finish_reason: response.finish_reason.as_str().to_string(),
@@ -1282,10 +1282,10 @@ fn cogent_text_response_to_node(response: CoreClientTextResponse) -> CogentTextR
     }
 }
 
-fn cogent_embedding_response_to_node(
+fn sipp_embedding_response_to_node(
     response: CoreClientEmbeddingResponse,
-) -> CogentEmbeddingResponse {
-    CogentEmbeddingResponse {
+) -> SippEmbeddingResponse {
+    SippEmbeddingResponse {
         endpoint: endpoint_ref_to_node(response.endpoint),
         values: response.values.into_iter().map(f64::from).collect(),
         usage: response.usage.map(token_usage_to_node),
@@ -1319,13 +1319,13 @@ pub struct TokenBatch {
 }
 
 /// Client facade for registered inference endpoints.
-#[napi(js_name = "CogentClient")]
-pub struct CogentClient {
-    inner: SharedCogentClient,
+#[napi(js_name = "SippClient")]
+pub struct SippClient {
+    inner: SharedSippClient,
 }
 
 #[napi]
-impl CogentClient {
+impl SippClient {
     #[napi(constructor)]
     pub fn new() -> Result<Self> {
         Ok(Self {
@@ -1347,8 +1347,8 @@ impl CogentClient {
         }))
     }
 
-    #[napi(ts_return_type = "CogentTextRun")]
-    pub fn query(&self, request: CogentQueryRequest) -> Result<CogentTextRun> {
+    #[napi(ts_return_type = "SippTextRun")]
+    pub fn query(&self, request: SippQueryRequest) -> Result<SippTextRun> {
         let context = CoreClientRequestContext {
             request_id: request.request_id.clone(),
         };
@@ -1358,11 +1358,11 @@ impl CogentClient {
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
             .query_with_context(context, request);
-        Ok(CogentTextRun::from_core(run))
+        Ok(SippTextRun::from_core(run))
     }
 
-    #[napi(ts_return_type = "CogentTextRun")]
-    pub fn chat(&self, request: CogentChatRequest) -> Result<CogentTextRun> {
+    #[napi(ts_return_type = "SippTextRun")]
+    pub fn chat(&self, request: SippChatRequest) -> Result<SippTextRun> {
         let context = CoreClientRequestContext {
             request_id: request.request_id.clone(),
         };
@@ -1372,11 +1372,11 @@ impl CogentClient {
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
             .chat_with_context(context, request);
-        Ok(CogentTextRun::from_core(run))
+        Ok(SippTextRun::from_core(run))
     }
 
-    #[napi(ts_return_type = "CogentEmbeddingRun")]
-    pub fn embed(&self, request: CogentEmbedRequest) -> Result<CogentEmbeddingRun> {
+    #[napi(ts_return_type = "SippEmbeddingRun")]
+    pub fn embed(&self, request: SippEmbedRequest) -> Result<SippEmbeddingRun> {
         let context = CoreClientRequestContext {
             request_id: request.request_id.clone(),
         };
@@ -1386,19 +1386,19 @@ impl CogentClient {
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
             .embed_with_context(context, request);
-        Ok(CogentEmbeddingRun::from_core(run))
+        Ok(SippEmbeddingRun::from_core(run))
     }
 }
 
 /// Text generation handle with a final response and optional token stream.
-#[napi(js_name = "CogentTextRun")]
-pub struct CogentTextRun {
+#[napi(js_name = "SippTextRun")]
+pub struct SippTextRun {
     response: SharedClientTextResponse,
     tokens: SharedClientTokenBatches,
     cancellation: CoreCancellationHandle,
 }
 
-impl CogentTextRun {
+impl SippTextRun {
     fn from_core(run: CoreClientTextRun) -> Self {
         let (tokens, response, cancellation) = run.into_parts_with_cancel();
         Self {
@@ -1410,8 +1410,8 @@ impl CogentTextRun {
 }
 
 #[napi]
-impl CogentTextRun {
-    #[napi(js_name = "__response", ts_return_type = "Promise<CogentTextResponse>")]
+impl SippTextRun {
+    #[napi(js_name = "__response", ts_return_type = "Promise<SippTextResponse>")]
     pub fn response(&self) -> AsyncTask<ClientTextResultTask> {
         AsyncTask::new(ClientTextResultTask {
             response: self.response.clone(),
@@ -1434,13 +1434,13 @@ impl CogentTextRun {
 }
 
 /// Embedding request handle with a final embedding response.
-#[napi(js_name = "CogentEmbeddingRun")]
-pub struct CogentEmbeddingRun {
+#[napi(js_name = "SippEmbeddingRun")]
+pub struct SippEmbeddingRun {
     response: SharedClientEmbeddingResponse,
     cancellation: CoreCancellationHandle,
 }
 
-impl CogentEmbeddingRun {
+impl SippEmbeddingRun {
     fn from_core(run: CoreClientEmbeddingRun) -> Self {
         let (response, cancellation) = run.into_parts();
         Self {
@@ -1451,10 +1451,10 @@ impl CogentEmbeddingRun {
 }
 
 #[napi]
-impl CogentEmbeddingRun {
+impl SippEmbeddingRun {
     #[napi(
         js_name = "__response",
-        ts_return_type = "Promise<CogentEmbeddingResponse>"
+        ts_return_type = "Promise<SippEmbeddingResponse>"
     )]
     pub fn response(&self) -> AsyncTask<ClientEmbeddingResultTask> {
         AsyncTask::new(ClientEmbeddingResultTask {
@@ -1483,7 +1483,7 @@ fn cancellation_reason(reason: Option<String>) -> Result<CoreCancellationReason>
 }
 
 pub struct ClientAddTask {
-    client: SharedCogentClient,
+    client: SharedSippClient,
     id: String,
     descriptor: CoreEndpointDescriptor,
 }
@@ -1515,7 +1515,7 @@ pub struct ClientTextResultTask {
 
 impl Task for ClientTextResultTask {
     type Output = ClientTaskOutput<CoreClientTextResponse>;
-    type JsValue = CogentTextResponse;
+    type JsValue = SippTextResponse;
 
     fn compute(&mut self) -> Result<Self::Output> {
         let response = self
@@ -1529,7 +1529,7 @@ impl Task for ClientTextResultTask {
 
     fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
         output
-            .map(cogent_text_response_to_node)
+            .map(sipp_text_response_to_node)
             .map_err(|error| client_error_to_node(env, error))
     }
 }
@@ -1540,7 +1540,7 @@ pub struct ClientEmbeddingResultTask {
 
 impl Task for ClientEmbeddingResultTask {
     type Output = ClientTaskOutput<CoreClientEmbeddingResponse>;
-    type JsValue = CogentEmbeddingResponse;
+    type JsValue = SippEmbeddingResponse;
 
     fn compute(&mut self) -> Result<Self::Output> {
         let response = self
@@ -1554,7 +1554,7 @@ impl Task for ClientEmbeddingResultTask {
 
     fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
         output
-            .map(cogent_embedding_response_to_node)
+            .map(sipp_embedding_response_to_node)
             .map_err(|error| client_error_to_node(env, error))
     }
 }
@@ -1819,14 +1819,14 @@ fn provider_error_to_node(env: Env, error: CoreProviderEndpointError) -> Error {
     }
 }
 
-fn endpoint_error_to_node(env: Env, error: cogentlm::EndpointError) -> Error {
+fn endpoint_error_to_node(env: Env, error: sipp::EndpointError) -> Error {
     match endpoint_error_to_node_result(env, error) {
         Ok(error) => error,
         Err(error) => error,
     }
 }
 
-fn endpoint_error_to_node_result(env: Env, error: cogentlm::EndpointError) -> Result<Error> {
+fn endpoint_error_to_node_result(env: Env, error: sipp::EndpointError) -> Result<Error> {
     let mut object = env.create_error(Error::new(Status::GenericFailure, error.to_string()))?;
     object.set("name", "EndpointError")?;
     object.set("kind", error.kind)?;
@@ -1876,11 +1876,11 @@ fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
     }
 }
 
-fn core_error(error: cogentlm::error::Error) -> Error {
+fn core_error(error: sipp::error::Error) -> Error {
     match error {
-        cogentlm::error::Error::InvalidRequest(message)
-        | cogentlm::error::Error::InvalidConfig(message) => invalid_arg(message),
-        cogentlm::error::Error::UnsupportedOperation { operation, reason } => {
+        sipp::error::Error::InvalidRequest(message)
+        | sipp::error::Error::InvalidConfig(message) => invalid_arg(message),
+        sipp::error::Error::UnsupportedOperation { operation, reason } => {
             invalid_arg(format!("unsupported operation {operation}: {reason}"))
         }
         other => napi_error(other.to_string()),

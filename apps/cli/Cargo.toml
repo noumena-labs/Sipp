@@ -1,6 +1,6 @@
 [package]
-name = "cogentlm-cli"
-description = "Command-line interface for CogentLM local inference"
+name = "sipp-cli"
+description = "Command-line interface for Sipp local inference"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,21 +10,21 @@ publish = false
 
 [features]
 default = ["native"]
-native = ["cogentlm/native"]
-backend-dl = ["cogentlm/backend-dl"]
-cuda = ["cogentlm/cuda"]
-metal = ["cogentlm/metal"]
-vulkan = ["cogentlm/vulkan"]
-openmp = ["cogentlm/openmp"]
+native = ["sipp/native"]
+backend-dl = ["sipp/backend-dl"]
+cuda = ["sipp/cuda"]
+metal = ["sipp/metal"]
+vulkan = ["sipp/vulkan"]
+openmp = ["sipp/openmp"]
 
 [[bin]]
-name = "cogentlm"
+name = "sipp"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-cogentlm.workspace = true
+sipp.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

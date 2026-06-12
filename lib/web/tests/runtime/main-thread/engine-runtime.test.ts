@@ -62,8 +62,8 @@ function withWasmPthreadSupport<T>(callback: () => Promise<T>): Promise<T> {
 
 test('MainThreadEngineRuntime points pthread workers at the selected runtime module', async () => {
   await withWasmPthreadSupport(async () => {
-    const moduleUrl = 'https://example.test/wasm/cogentlm-wasm-pthread.js';
-    const wasmUrl = 'https://example.test/wasm/cogentlm-wasm-pthread.wasm';
+    const moduleUrl = 'https://example.test/wasm/sipp-wasm-pthread.js';
+    const wasmUrl = 'https://example.test/wasm/sipp-wasm-pthread.wasm';
     const runtime = new MainThreadEngineRuntime({
       executionMode: 'main-thread',
       wasmThreading: 'pthread',
@@ -82,7 +82,7 @@ test('MainThreadEngineRuntime points pthread workers at the selected runtime mod
 
     assert.equal(capturedOptions?.mainScriptUrlOrBlob, moduleUrl);
     assert.equal(
-      (capturedOptions?.locateFile as (path: string) => string)('CogentLM.wasm'),
+      (capturedOptions?.locateFile as (path: string) => string)('Sipp.wasm'),
       wasmUrl
     );
   });
@@ -107,7 +107,7 @@ test('MainThreadEngineRuntime rejects stale browser runtime ABI artifacts', asyn
 
   await assert.rejects(
     () => runtime.initModule(),
-    /CogentLM browser runtime ABI mismatch: expected 6, got 5/
+    /Sipp browser runtime ABI mismatch: expected 6, got 5/
   );
 });
 

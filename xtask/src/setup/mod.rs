@@ -1,4 +1,4 @@
-//! Interactive setup guide for the CogentLM workspace.
+//! Interactive setup guide for the Sipp workspace.
 
 mod launcher;
 
@@ -34,10 +34,10 @@ mod setup_tests;
 pub fn run(sh: &Shell, ctx: &BuildContext, args: &SetupArgs) -> Result<()> {
     let splash_played = splash::play(args.no_splash)?;
     if !splash_played {
-        output::banner("COGENTLM");
+        output::banner("SIPP");
     }
 
-    output::phase("CogentLM setup");
+    output::phase("Sipp setup");
     output::path("Workspace", ctx.workspace_root());
     output::detail(
         "Downloads",
@@ -55,7 +55,7 @@ pub fn run(sh: &Shell, ctx: &BuildContext, args: &SetupArgs) -> Result<()> {
     print_readiness(ctx);
 
     if should_install_launcher(args, interactive)? {
-        output::phase("Install clm launcher");
+        output::phase("Install sipp launcher");
         launcher::install(sh, ctx)?;
     } else {
         output::detail("Launcher", "skipped");
@@ -127,13 +127,13 @@ fn should_install_launcher(args: &SetupArgs, interactive: bool) -> Result<bool> 
     }
 
     if let Some(answer) = output::prompt_confirm(
-        "Install the repo-local clm launcher under .build/bin?",
+        "Install the repo-local sipp launcher under .build/bin?",
         true,
     )? {
         return Ok(answer);
     }
 
-    Confirm::new("Install the repo-local clm launcher under .build/bin?")
+    Confirm::new("Install the repo-local sipp launcher under .build/bin?")
         .with_default(true)
         .prompt()
         .context("failed to read launcher setup confirmation")
@@ -304,38 +304,38 @@ fn download_sample_model(sh: &Shell, ctx: &BuildContext) -> Result<()> {
 
 fn print_examples(ctx: &BuildContext, profile: SetupProfile) {
     output::phase("Next commands");
-    output::detail("Doctor", "clm doctor");
+    output::detail("Doctor", "sipp doctor");
     match profile {
         SetupProfile::Browser => {
-            output::detail("Build browser package", "clm build wasm");
-            output::detail("Run chat demo", "clm run demos serve chat");
-            output::detail("Run demo tests", "clm test unit suite demos");
+            output::detail("Build browser package", "sipp build wasm");
+            output::detail("Run chat demo", "sipp run demos serve chat");
+            output::detail("Run demo tests", "sipp test unit suite demos");
         }
         SetupProfile::Bindings => {
             let model = sample_model::sample_model_arg(ctx);
-            output::detail("Build Node bindings", "clm build node");
-            output::detail("Build Python bindings", "clm build python");
+            output::detail("Build Node bindings", "sipp build node");
+            output::detail("Build Python bindings", "sipp build python");
             output::detail(
                 "Node API tests",
-                "clm test unit suite node-package --backend cpu",
+                "sipp test unit suite node-package --backend cpu",
             );
             output::detail(
                 "Python API tests",
-                "clm test unit suite python-package --backend cpu",
+                "sipp test unit suite python-package --backend cpu",
             );
             output::detail(
                 "Model smoke",
-                format!("clm test smoke group local-model --backend cpu --model {model}"),
+                format!("sipp test smoke group local-model --backend cpu --model {model}"),
             );
         }
         SetupProfile::Full => {
             let model = sample_model::sample_model_arg(ctx);
-            output::detail("Build everything", "clm build all");
-            output::detail("Serve avatar demo", "clm run demos serve avatar");
-            output::detail("Run unit tests", "clm test unit group full");
+            output::detail("Build everything", "sipp build all");
+            output::detail("Serve avatar demo", "sipp run demos serve avatar");
+            output::detail("Run unit tests", "sipp test unit group full");
             output::detail(
                 "Run smoke tests",
-                format!("clm test smoke group full --backend cpu --model {model}"),
+                format!("sipp test smoke group full --backend cpu --model {model}"),
             );
         }
     }

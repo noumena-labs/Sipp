@@ -1,7 +1,7 @@
 # Avatar Demo
 
 `demos/avatar` is a React and three.js character demo showing how to pair
-`CogentClient` with the browser package character helpers and a VRM character.
+`SippClient` with the browser package character helpers and a VRM character.
 
 ## Run
 

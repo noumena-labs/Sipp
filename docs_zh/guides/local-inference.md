@@ -2,7 +2,7 @@
 
 本地推理指在当前浏览器、Node.js、Python、Rust 或 CLI 进程内直接运行 GGUF 模型。应用完全掌控模型选择、运行时生命周期、资源清理和向用户暴露的请求选项。
 
-通过 `CogentClient.add` 注册本地端点，保存返回的引用，在调用 `query`、`chat` 或 `embed` 时传入该引用。
+通过 `SippClient.add` 注册本地端点，保存返回的引用，在调用 `query`、`chat` 或 `embed` 时传入该引用。
 
 ## 端点调用流程
 
@@ -31,7 +31,7 @@ Node.js、Python、Rust 和 CLI 的本地端点使用文件系统路径。通过
 
 保持各类参数的作用域清晰分离：
 
-- 浏览器客户端参数（`executionMode`、`wasmThreading`、运行时资源 URL、`browserCache`），必须在初始化 `new CogentClient(...)` 时设置。
+- 浏览器客户端参数（`executionMode`、`wasmThreading`、运行时资源 URL、`browserCache`），必须在初始化 `new SippClient(...)` 时设置。
 - 本地端点加载选项（模型来源、浏览器后端偏好、进度回调、`NativeRuntimeConfig`），用于端点注册阶段。
 - 运行时配置组（`context`、`sampling`、`scheduler`、`cache`、`placement`、`multimodal`、`residency`、`observability`），定义端点稳定的运行行为。
 - 请求参数（`maxTokens`、`temperature`、`topP`、`stop`、取消控制、`emitTokens`），传递给 `query`、`chat` 或 `embed`。

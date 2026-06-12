@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from cogentlm import (
+from sipp import (
     CacheRuntimeConfig,
     ChatMessage,
-    CogentClient,
-    CogentTextOptions,
+    SippClient,
+    SippTextOptions,
     ContextRuntimeConfig,
     LocalModelDescriptor,
     LocalTextOptions,
@@ -35,14 +35,14 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
     return NativeRuntimeConfig(
         placement=ModelPlacementConfig(gpu_layers=gpu_layers()),
         context=ContextRuntimeConfig(
-            n_ctx=int_env("COGENTLM_CONTEXT", DEFAULT_CONTEXT),
-            n_threads=int_env("COGENTLM_THREADS"),
-            n_threads_batch=int_env("COGENTLM_THREADS"),
+            n_ctx=int_env("SIPP_CONTEXT", DEFAULT_CONTEXT),
+            n_threads=int_env("SIPP_THREADS"),
+            n_threads_batch=int_env("SIPP_THREADS"),
             embeddings=embeddings,
         ),
         sampling=SamplingRuntimeConfig(
-            temperature=float_env("COGENTLM_TEMPERATURE", DEFAULT_TEMPERATURE),
-            seed=int_env("COGENTLM_SEED", DEFAULT_SEED),
+            temperature=float_env("SIPP_TEMPERATURE", DEFAULT_TEMPERATURE),
+            seed=int_env("SIPP_SEED", DEFAULT_SEED),
         ),
         scheduler=SchedulerRuntimeConfig(
             continuous_batching=True,
@@ -54,19 +54,19 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
     )
 
 
-def text_options() -> CogentTextOptions:
-    return CogentTextOptions(
-        max_tokens=int_env("COGENTLM_MAX_TOKENS", DEFAULT_MAX_TOKENS),
-        temperature=float_env("COGENTLM_TEMPERATURE", DEFAULT_TEMPERATURE),
-        top_p=float_env("COGENTLM_TOP_P", DEFAULT_TOP_P),
+def text_options() -> SippTextOptions:
+    return SippTextOptions(
+        max_tokens=int_env("SIPP_MAX_TOKENS", DEFAULT_MAX_TOKENS),
+        temperature=float_env("SIPP_TEMPERATURE", DEFAULT_TEMPERATURE),
+        top_p=float_env("SIPP_TOP_P", DEFAULT_TOP_P),
     )
 
 
 def main() -> None:
-    model, prompt = read_local_args("chat", "Explain the CogentClient API in one sentence.")
+    model, prompt = read_local_args("chat", "Explain the SippClient API in one sentence.")
     set_llama_log_quiet(True)
 
-    client = CogentClient()
+    client = SippClient()
     client.add(
         "default",
         LocalModelDescriptor(model, runtime_config(embeddings=False)),

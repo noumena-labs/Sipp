@@ -1,5 +1,5 @@
 {
-  "name": "@noumena-labs/cogentlm",
+  "name": "@noumena-labs/sipp",
   "version": "0.1.0",
   "description": "Run powerful AI models locally with high-performance text and vision inference directly in the browser",
   "main": "dist/esm/index.js",
@@ -30,7 +30,7 @@
     "README.md"
   ],
   "scripts": {
-    "clean:ts": "node -e \"const fs=require('node:fs'); for (const p of ['../../.build/artifacts/npm/cogentlm/dist/esm','../../.build/artifacts/npm/cogentlm/dist/types','dist/esm','dist/types']) fs.rmSync(p,{recursive:true,force:true});\"",
+    "clean:ts": "node -e \"const fs=require('node:fs'); for (const p of ['../../.build/artifacts/npm/sipp/dist/esm','../../.build/artifacts/npm/sipp/dist/types','dist/esm','dist/types']) fs.rmSync(p,{recursive:true,force:true});\"",
     "build:ts": "tsc -p tsconfig.json",
     "build:stage": "node scripts/stage-package.mjs",
     "build": "bun run clean:ts && bun run build:ts && bun run build:stage",
@@ -39,7 +39,7 @@
   "keywords": [
     "ai",
     "llm",
-    "cogentlm",
+    "sipp",
     "inference",
     "webgpu",
     "wasm",
@@ -50,13 +50,13 @@
     "llama.cpp"
   ],
   "author": "noumena-labs",
-  "homepage": "https://www.cogentlm.com/",
+  "homepage": "https://www.sipp.com/",
   "bugs": {
-    "url": "https://github.com/noumena-labs/CogentLM/issues"
+    "url": "https://github.com/noumena-labs/Sipp/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/noumena-labs/CogentLM.git",
+    "url": "git+https://github.com/noumena-labs/Sipp.git",
     "directory": "lib/web"
   },
   "publishConfig": {

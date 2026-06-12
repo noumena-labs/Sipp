@@ -1,6 +1,6 @@
 # Known Issues
 
-This page tracks current issues that users may hit when running CogentLM.
+This page tracks current issues that users may hit when running Sipp.
 
 ## Browser Pulse Animations Can Reduce WebGPU Decode Throughput
 
@@ -13,7 +13,7 @@ during generation.
 
 Affected surface:
 
-- Browser-local inference through the `cogentlm` browser package.
+- Browser-local inference through the `sipp` browser package.
 - Demos or applications that keep pulse animations active while the model is
   decoding.
 
@@ -36,10 +36,10 @@ Workaround:
 
 1. Open **Windows Settings**.
 2. Go to **System > Display > Graphics**.
-3. Add the browser executable you use for CogentLM, such as Chrome, Edge, or
+3. Add the browser executable you use for Sipp, such as Chrome, Edge, or
    another Chromium-based browser.
 4. Set that browser to **High performance**.
-5. Restart the browser and reload the CogentLM page.
+5. Restart the browser and reload the Sipp page.
 
 This setting is stronger than relying on browser flags because it tells Windows
 which GPU the browser process should prefer.

@@ -1,6 +1,6 @@
 # Maintainers
 
-This section is for developers working from the CogentLM source checkout. It
+This section is for developers working from the Sipp source checkout. It
 covers repository structure, build orchestration, tests, coverage, and
 contribution workflow.
 
@@ -9,7 +9,7 @@ Application developers who only need the published packages should start with
 
 ## Start Here
 
-- [Source Builds](source-builds.md) covers checkout setup, `clm`, source
+- [Source Builds](source-builds.md) covers checkout setup, `sipp`, source
   examples, demos, and package build targets.
 - [Architecture](../architecture.md) explains crate and package boundaries.
 - [Gateway Architecture](../gateway/architecture.md) explains gateway

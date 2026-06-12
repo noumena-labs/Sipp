@@ -3,7 +3,7 @@ management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 8
 allowed_origins = []
-admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
+admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"
 
 [security.client_ip]
 source = "peer"
@@ -25,7 +25,7 @@ metrics = "/metrics"
 admin = "/admin"
 
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "hybrid-client"
 targets = ["local-gpu", "openai-chat"]
 

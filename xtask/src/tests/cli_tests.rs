@@ -421,7 +421,7 @@ fn test_unit_and_smoke_targets_parse() {
         "suite",
         "rust-crates",
         "--package",
-        "cogentlm-sys",
+        "sipp-sys",
     ]);
     let Commands::Test { command } = cli.command else {
         panic!("expected test command");
@@ -435,7 +435,7 @@ fn test_unit_and_smoke_targets_parse() {
     let TestUnitSuiteTarget::RustCrates(args) = args.target else {
         panic!("expected rust unit target");
     };
-    assert_eq!(args.package.as_deref(), Some("cogentlm-sys"));
+    assert_eq!(args.package.as_deref(), Some("sipp-sys"));
 
     let cli = Cli::parse_from(["xtask", "test", "unit", "group", "interface"]);
     let Commands::Test { command } = cli.command else {

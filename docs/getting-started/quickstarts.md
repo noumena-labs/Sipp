@@ -15,13 +15,13 @@ See [Examples And Demos](../examples-demos.md) for runnable end-to-end files.
 ## Browser Local
 
 ```bash
-npm install cogentlm
+npm install sipp
 ```
 
 ```ts
-import { CogentClient, type ChatMessage } from 'cogentlm';
+import { SippClient, type ChatMessage } from 'sipp';
 
-const client = new CogentClient();
+const client = new SippClient();
 const messages: readonly ChatMessage[] = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain local browser inference.' },
@@ -64,7 +64,7 @@ const embedEndpoint = await client.add('embed', {
 });
 
 // embed: vector output; local endpoint must be embedding-capable.
-const embedding = await client.embed('CogentLM embedding input.', {
+const embedding = await client.embed('Sipp embedding input.', {
   endpoint: embedEndpoint,
   contextKey: 'browser-embed',
   normalize: true,
@@ -77,13 +77,13 @@ await client.close();
 ## Node.js Local
 
 ```bash
-npm install cogentlm-server
+npm install sipp-server
 ```
 
 ```ts
-import { CogentClient } from 'cogentlm-server';
+import { SippClient } from 'sipp-server';
 
-const client = new CogentClient();
+const client = new SippClient();
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain local Node.js inference.' },
@@ -130,7 +130,7 @@ const embedEndpoint = await client.add('embed', {
 // embed: vector output; local endpoint must be embedding-capable.
 const embedding = await client.embed({
   endpoint: embedEndpoint,
-  input: 'CogentLM embedding input.',
+  input: 'Sipp embedding input.',
   local: { contextKey: 'node-embed', normalize: true },
 }).response;
 
@@ -145,14 +145,14 @@ embeddings through this runtime.
 ## Python Local
 
 ```bash
-pip install cogentlm
+pip install sipp
 ```
 
 ```python
-from cogentlm import (
+from sipp import (
     ChatMessage,
-    CogentClient,
-    CogentTextOptions,
+    SippClient,
+    SippTextOptions,
     ContextRuntimeConfig,
     LocalEmbedOptions,
     LocalTextOptions,
@@ -160,7 +160,7 @@ from cogentlm import (
     NativeRuntimeConfig,
 )
 
-client = CogentClient()
+client = SippClient()
 messages = [
     ChatMessage("system", "Answer concisely."),
     ChatMessage("user", "Explain local Python inference."),
@@ -174,7 +174,7 @@ query_prompt = "\n".join(
         "<|assistant|>",
     ]
 )
-text_options = CogentTextOptions(max_tokens=64)
+text_options = SippTextOptions(max_tokens=64)
 
 text_endpoint = client.add("text", LocalModelDescriptor("chat.gguf"))
 
@@ -210,7 +210,7 @@ embed_endpoint = client.add(
 
 # embed: vector output; local endpoint must be embedding-capable.
 embedding = client.embed(
-    "CogentLM embedding input.",
+    "Sipp embedding input.",
     endpoint=embed_endpoint,
     local=LocalEmbedOptions(context_key="python-embed", normalize=True),
 ).result()
@@ -221,19 +221,19 @@ print(query["text"], chat["text"], len(embedding["values"]))
 ## Rust Local
 
 ```bash
-cargo add cogentlm
+cargo add sipp
 ```
 
 ```rust
-use cogentlm::engine::{
+use sipp::engine::{
     ChatMessage, ChatRole, ContextRuntimeConfig, NativeRuntimeConfig, PoolingType,
 };
-use cogentlm::{
-    CogentChatRequest, CogentClient, CogentEmbedRequest, CogentQueryRequest,
-    CogentTextOptions, EndpointDescriptor, LocalEmbedOptions, LocalTextOptions,
+use sipp::{
+    SippChatRequest, SippClient, SippEmbedRequest, SippQueryRequest,
+    SippTextOptions, EndpointDescriptor, LocalEmbedOptions, LocalTextOptions,
 };
 
-let mut client = CogentClient::new();
+let mut client = SippClient::new();
 let messages = vec![
     ChatMessage::new(ChatRole::System, "Answer concisely."),
     ChatMessage::new(ChatRole::User, "Explain local Rust inference."),
@@ -246,7 +246,7 @@ let query_prompt = [
     "<|assistant|>",
 ]
 .join("\n");
-let text_options = CogentTextOptions {
+let text_options = SippTextOptions {
     max_tokens: Some(64),
     ..Default::default()
 };
@@ -257,7 +257,7 @@ let text_endpoint = client
 
 // query: raw prompt; replace markers with the target model's template.
 let query = client
-    .query(CogentQueryRequest {
+    .query(SippQueryRequest {
         endpoint: Some(text_endpoint.clone()),
         prompt: query_prompt,
         options: text_options.clone(),
@@ -271,7 +271,7 @@ let query = client
 
 // chat: role messages; local runtime uses tokenizer.chat_template.
 let chat = client
-    .chat(CogentChatRequest {
+    .chat(SippChatRequest {
         endpoint: Some(text_endpoint),
         messages,
         options: text_options,
@@ -289,9 +289,9 @@ let embed_endpoint = client
 
 // embed: vector output; local endpoint must be embedding-capable.
 let embedding = client
-    .embed(CogentEmbedRequest {
+    .embed(SippEmbedRequest {
         endpoint: Some(embed_endpoint),
-        input: "CogentLM embedding input.".to_string(),
+        input: "Sipp embedding input.".to_string(),
         local: LocalEmbedOptions {
             context_key: Some("rust-embed".to_string()),
             normalize: Some(true),
@@ -322,9 +322,9 @@ metrics in the gateway process. The example uses the browser package shape;
 Node.js uses the same request-object shape shown above.
 
 ```ts
-import { CogentClient, type ChatMessage } from 'cogentlm';
+import { SippClient, type ChatMessage } from 'sipp';
 
-const client = new CogentClient();
+const client = new SippClient();
 const endpoint = await client.add('gateway', {
   kind: 'gateway',
   target: 'local',
@@ -353,7 +353,7 @@ const query = await client.query(queryPrompt, {
 const chat = await client.chat(messages, { endpoint, maxTokens: 64 }).response;
 
 // embed: target must support embeddings.
-const embedding = await client.embed('CogentLM embedding input.', {
+const embedding = await client.embed('Sipp embedding input.', {
   endpoint,
 }).response;
 
@@ -372,7 +372,7 @@ model-specific: `query` needs a completion-compatible provider or model,
 `chat` needs a chat model, and `embed` needs an embedding model.
 
 ```ts
-import { CogentClient } from 'cogentlm-server';
+import { SippClient } from 'sipp-server';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -382,7 +382,7 @@ function env(name: string): string {
   return value;
 }
 
-const client = new CogentClient();
+const client = new SippClient();
 const chatMessages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain provider inference.' },
@@ -425,7 +425,7 @@ const chat = await client.chat({
 // embed: provider-native embedding model.
 const embedding = await client.embed({
   endpoint: embedEndpoint,
-  input: 'CogentLM embedding input.',
+  input: 'Sipp embedding input.',
 }).response;
 
 console.log(query.text, chat.text, embedding.values.length);

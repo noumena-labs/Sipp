@@ -21,10 +21,10 @@ python examples/python/embed.py <model.gguf> [input]
 python examples/python/vision_chat.py <model.gguf> <projector.gguf> <image> [input]
 ```
 
-Note that if you encountered `ModuleNotFoundError: No module named 'cogentlm'`,
+Note that if you encountered `ModuleNotFoundError: No module named 'sipp'`,
 use `.\lib\python\.venv\Scripts\python`.
 
-Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a built backend.
+Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a built backend.
 
 ## Gateway Clients
 
@@ -34,8 +34,8 @@ Use the one-command gateway workflow when possible:
 cargo xtask run examples gateway python --case query
 ```
 
-For a manually started gateway, set `COGENTLM_GATEWAY_URL` and
-`COGENTLM_GATEWAY_TOKEN`, then run:
+For a manually started gateway, set `SIPP_GATEWAY_URL` and
+`SIPP_GATEWAY_TOKEN`, then run:
 
 ```bash
 python examples/python/gateway_query.py <model.gguf> local [input]
@@ -49,10 +49,10 @@ python examples/python/gateway_embed.py <model.gguf> local [input]
 
 Direct provider examples call the selected provider from the Python process
 without a gateway. By default they use the `gemini` preset, which maps to
-CogentLM's OpenAI-compatible provider descriptor.
+Sipp's OpenAI-compatible provider descriptor.
 
 ```bash
-export COGENTLM_PROVIDER="gemini"
+export SIPP_PROVIDER="gemini"
 export GEMINI_API_KEY="<gemini-api-key>"
 python examples/python/provider_chat.py [input]
 ```
@@ -60,10 +60,10 @@ python examples/python/provider_chat.py [input]
 For any OpenAI-compatible provider, pass the generic descriptor fields:
 
 ```bash
-export COGENTLM_PROVIDER="openai_compatible"
-export COGENTLM_PROVIDER_BASE_URL="https://provider.example/v1"
-export COGENTLM_PROVIDER_API_KEY="<provider-api-key>"
-export COGENTLM_PROVIDER_MODEL="<provider-model>"
+export SIPP_PROVIDER="openai_compatible"
+export SIPP_PROVIDER_BASE_URL="https://provider.example/v1"
+export SIPP_PROVIDER_API_KEY="<provider-api-key>"
+export SIPP_PROVIDER_MODEL="<provider-model>"
 python examples/python/provider_chat.py [input]
 ```
 

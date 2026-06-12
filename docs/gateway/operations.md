@@ -47,8 +47,8 @@ The metrics route renders low-cardinality Prometheus text. Current gateway
 metrics include request and error counters by operation, for example:
 
 ```text
-cogentlm_gateway_requests_total{operation="query"} 3
-cogentlm_gateway_errors_total{operation="chat"} 1
+sipp_gateway_requests_total{operation="query"} 3
+sipp_gateway_errors_total{operation="chat"} 1
 ```
 
 Target-level local runtime metrics depend on the target `stats` setting:
@@ -64,7 +64,7 @@ environment to control verbosity:
 
 ```bash
 RUST_LOG=info
-RUST_LOG=debug,cogentlm_gateway_server=trace
+RUST_LOG=debug,sipp_gateway_server=trace
 ```
 
 Do not log bearer token values, provider credentials, or production TOML

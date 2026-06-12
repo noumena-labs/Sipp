@@ -1,6 +1,6 @@
 # Browser Package
 
-The browser package target is `cogentlm`. It exposes `CogentClient` for
+The browser package target is `sipp`. It exposes `SippClient` for
 browser-local GGUF inference, gateway calls, provider descriptors where
 supported, token streaming, OPFS-backed model caching, and browser runtime
 lifecycle management.
@@ -11,11 +11,11 @@ See the [Library API Overview](../api/) for the shared `add`, `query`,
 ## Install
 
 ```bash
-npm install cogentlm
+npm install sipp
 ```
 
 Use this package in browser code. For server routes or Node services, use
-[`cogentlm-server`](node.md).
+[`sipp-server`](node.md).
 
 ## Use It For
 
@@ -28,9 +28,9 @@ Use this package in browser code. For server routes or Node services, use
 ## Local GGUF Chat
 
 ```ts
-import { CogentClient, type ChatMessage } from 'cogentlm';
+import { SippClient, type ChatMessage } from 'sipp';
 
-const client = new CogentClient();
+const client = new SippClient();
 const endpoint = await client.add('default', {
   kind: 'local',
   source: '/models/model.gguf',
@@ -44,7 +44,7 @@ const endpoint = await client.add('default', {
 
 const messages: readonly ChatMessage[] = [
   { role: 'system', content: 'Answer concisely.' },
-  { role: 'user', content: 'Explain CogentLM in one sentence.' },
+  { role: 'user', content: 'Explain Sipp in one sentence.' },
 ];
 
 const run = client.chat(messages, {
@@ -99,7 +99,7 @@ gateway tokens in browser bundles.
 
 ## Browser Runtime Options
 
-The browser runtime links CogentLM's Rust WASM ABI with llama.cpp and ggml
+The browser runtime links Sipp's Rust WASM ABI with llama.cpp and ggml
 through Emscripten. It runs GGUF text and vision models with WebGPU when the
 browser exposes a compatible adapter, and falls back to CPU execution for
 compatible local workflows. OPFS-backed model caching keeps repeated browser
@@ -111,7 +111,7 @@ apps should not override asset URLs. Use `executionMode`, `wasmThreading`,
 needs explicit control over browser execution, storage, or local runtime
 behavior.
 
-See [Runtime Options](../reference/runtime-options.md) for `CogentClient`
+See [Runtime Options](../reference/runtime-options.md) for `SippClient`
 options, WebGPU/backend selection, worker mode, pthread requirements, and
 local runtime config groups.
 

@@ -1,4 +1,4 @@
-name: cogentlm-gateway-development
+name: sipp-gateway-development
 
 x-gateway-common: &gateway-common
   env_file:
@@ -8,7 +8,7 @@ x-gateway-common: &gateway-common
   volumes:
     - type: bind
       source: ./config/development.toml
-      target: /etc/cogentlm/gateway.toml
+      target: /etc/sipp/gateway.toml
       read_only: true
     - type: bind
       source: ../../.build/models
@@ -33,32 +33,32 @@ x-gateway-common: &gateway-common
 services:
   gateway-cpu:
     <<: *gateway-common
-    image: cogentlm-gateway:cpu
+    image: sipp-gateway:cpu
     profiles: ["cpu"]
     build:
       context: ../..
       dockerfile: apps/gateway-server/Dockerfile
       args:
-        COGENTLM_GATEWAY_BACKEND: cpu
-        COGENTLM_GATEWAY_BUILDER_IMAGE: rust:bookworm
-        COGENTLM_GATEWAY_RUNTIME_IMAGE: debian:bookworm-slim
-        COGENTLM_GATEWAY_INSTALL_RUSTUP: "0"
+        SIPP_GATEWAY_BACKEND: cpu
+        SIPP_GATEWAY_BUILDER_IMAGE: rust:bookworm
+        SIPP_GATEWAY_RUNTIME_IMAGE: debian:bookworm-slim
+        SIPP_GATEWAY_INSTALL_RUSTUP: "0"
 
   gateway-cuda:
     <<: *gateway-common
-    image: cogentlm-gateway:cuda
+    image: sipp-gateway:cuda
     profiles: ["cuda"]
     build:
       context: ../..
       dockerfile: apps/gateway-server/Dockerfile
       args:
-        COGENTLM_GATEWAY_BACKEND: cuda
-        COGENTLM_GATEWAY_BUILDER_IMAGE: nvidia/cuda:13.3.0-devel-ubuntu24.04
-        COGENTLM_GATEWAY_RUNTIME_IMAGE: nvidia/cuda:13.3.0-runtime-ubuntu24.04
-        COGENTLM_GATEWAY_INSTALL_RUSTUP: "1"
+        SIPP_GATEWAY_BACKEND: cuda
+        SIPP_GATEWAY_BUILDER_IMAGE: nvidia/cuda:13.3.0-devel-ubuntu24.04
+        SIPP_GATEWAY_RUNTIME_IMAGE: nvidia/cuda:13.3.0-runtime-ubuntu24.04
+        SIPP_GATEWAY_INSTALL_RUSTUP: "1"
         # Portable cloud GPU list. Narrow to one architecture for faster
         # builds; when empty, xtask applies this same portable default.
-        COGENTLM_CUDA_ARCHITECTURES: "75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real"
+        SIPP_CUDA_ARCHITECTURES: "75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real"
     deploy:
       resources:
         reservations:
@@ -69,15 +69,15 @@ services:
 
   gateway-vulkan-linux:
     <<: *gateway-common
-    image: cogentlm-gateway:vulkan
+    image: sipp-gateway:vulkan
     profiles: ["vulkan-linux"]
     build:
       context: ../..
       dockerfile: apps/gateway-server/Dockerfile
       args:
-        COGENTLM_GATEWAY_BACKEND: vulkan
-        COGENTLM_GATEWAY_BUILDER_IMAGE: rust:bookworm
-        COGENTLM_GATEWAY_RUNTIME_IMAGE: ubuntu:22.04
-        COGENTLM_GATEWAY_INSTALL_RUSTUP: "0"
+        SIPP_GATEWAY_BACKEND: vulkan
+        SIPP_GATEWAY_BUILDER_IMAGE: rust:bookworm
+        SIPP_GATEWAY_RUNTIME_IMAGE: ubuntu:22.04
+        SIPP_GATEWAY_INSTALL_RUSTUP: "0"
     devices:
       - /dev/dri:/dev/dri

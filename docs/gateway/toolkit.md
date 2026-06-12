@@ -1,7 +1,7 @@
 # Gateway Toolkit
 
-`cogentlm-gateway` is a route-free Rust HTTP toolkit for applications that want
-to expose CogentLM inference through their own server framework.
+`sipp-gateway` is a route-free Rust HTTP toolkit for applications that want
+to expose Sipp inference through their own server framework.
 
 The toolkit provides codecs, authentication and observability traits, HTTP
 error helpers, and the first-party JSON/SSE profile. Applications bind sockets,
@@ -13,22 +13,22 @@ listener management.
 
 ## Distribution
 
-The toolkit crate target is `cogentlm-gateway`. crates.io publishing covers
-the `cogentlm` and `cogentlm-sys` crates; the toolkit is intentionally
+The toolkit crate target is `sipp-gateway`. crates.io publishing covers
+the `sipp` and `sipp-sys` crates; the toolkit is intentionally
 source-distributed. Use [Source Builds](../maintainers/source-builds.md) when
 consuming the toolkit from this checkout.
 
 ## Use It For
 
 - Building application-owned HTTP gateway routes.
-- Translating request bodies into typed CogentLM requests.
+- Translating request bodies into typed Sipp requests.
 - Encoding JSON and SSE responses.
-- Sharing the first-party protocol profile with CogentLM clients.
+- Sharing the first-party protocol profile with Sipp clients.
 
 ## Minimal Handler Shape
 
 ```rust
-use cogentlm_gateway::{GatewayCodec, ProtocolCodec};
+use sipp_gateway::{GatewayCodec, ProtocolCodec};
 
 let codec = GatewayCodec;
 let mut decoded = codec.decode_query(&body)?;
@@ -40,7 +40,7 @@ let bytes = codec.encode_text(&decoded.target, &response)?;
 Custom gateway applications own sockets, route layout, authentication,
 configuration files, target policy, CORS, logging, and deployment defaults.
 Node route handlers can use the matching gateway profile helpers exported by
-`cogentlm-server` when implementing the same first-party profile in framework
+`sipp-server` when implementing the same first-party profile in framework
 routes.
 
 ## Boundaries

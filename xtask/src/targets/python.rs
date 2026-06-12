@@ -22,7 +22,7 @@ mod python_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const PYTHON_PACKAGE_NAME: &str = "cogentlm";
+const PYTHON_PACKAGE_NAME: &str = "sipp";
 const PYTHON_NATIVE_MODULE_NAME: &str = "_native";
 const PYTHON_BACKEND_BINARY_DIR: &str = "binaries";
 
@@ -317,7 +317,7 @@ fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if file_name.starts_with("cogentlm-")
+        if file_name.starts_with("sipp-")
             && path.extension().and_then(|ext| ext.to_str()) == Some("whl")
         {
             sh.remove_path(path)?;

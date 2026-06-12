@@ -5,18 +5,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use cogentlm::engine::NativeRuntimeConfig;
+use sipp::engine::NativeRuntimeConfig;
 #[cfg(test)]
-use cogentlm::lifecycle::BackendCapabilities;
-use cogentlm::lifecycle::{
+use sipp::lifecycle::BackendCapabilities;
+use sipp::lifecycle::{
     BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
 };
-use cogentlm::{
-    AnthropicProviderConfig, CogentClient, EndpointDescriptor, EndpointRef,
+use sipp::{
+    AnthropicProviderConfig, SippClient, EndpointDescriptor, EndpointRef,
     OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig,
     ProviderEndpointConfig, ProviderSecret,
 };
-use cogentlm_gateway::GatewayRoutes;
+use sipp_gateway::GatewayRoutes;
 use serde::Deserialize;
 
 /// Standalone application configuration.
@@ -131,7 +131,7 @@ impl GatewayServerConfig {
 
     /// Load endpoints and return the application-owned client runtime.
     pub async fn build_runtime(&self) -> anyhow::Result<GatewayServerRuntime> {
-        let mut client = CogentClient::new();
+        let mut client = SippClient::new();
         let mut targets = BTreeMap::new();
         let mut summaries = Vec::new();
         for target in &self.targets {
@@ -264,7 +264,7 @@ impl RateLimitConfig {
 /// Loaded application runtime used by explicit route handlers.
 #[derive(Clone)]
 pub struct GatewayServerRuntime {
-    pub(crate) client: Arc<CogentClient>,
+    pub(crate) client: Arc<SippClient>,
     pub(crate) targets: Arc<BTreeMap<String, EndpointRef>>,
     pub(crate) target_summaries: Arc<Vec<TargetSummary>>,
 }

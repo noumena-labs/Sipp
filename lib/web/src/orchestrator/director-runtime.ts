@@ -258,5 +258,5 @@ function logDirectorRun(args: {
 }
 
 function isPromptTraceEnabled(): boolean {
-  return (globalThis as { COGENT_TRACE_PROMPTS?: boolean }).COGENT_TRACE_PROMPTS === true;
+  return (globalThis as { SIPP_TRACE_PROMPTS?: boolean }).SIPP_TRACE_PROMPTS === true;
 }

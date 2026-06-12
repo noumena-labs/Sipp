@@ -1,12 +1,12 @@
 # Inference Operations
 
-CogentLM separates the operation from the endpoint. Choose `query`, `chat`, or
+Sipp separates the operation from the endpoint. Choose `query`, `chat`, or
 `embed` based on the input shape and expected output, then pass the endpoint
 reference that decides where the request runs.
 
 ## Shared Contract
 
-1. Register a local, gateway, or provider descriptor with `CogentClient.add`.
+1. Register a local, gateway, or provider descriptor with `SippClient.add`.
 2. Keep the returned endpoint reference.
 3. Pass that reference to `query`, `chat`, or `embed`.
 
@@ -25,10 +25,10 @@ does not use generation options or token streaming.
 Local endpoints run a GGUF model in the current browser, Node.js, Python, Rust,
 or CLI process.
 
-| Operation | What CogentLM sends to the runtime | Template behavior | Local-only options |
+| Operation | What Sipp sends to the runtime | Template behavior | Local-only options |
 | --- | --- | --- | --- |
 | `query` | The prompt string exactly as supplied. Decoder-only models run the normal decode path; encoder-decoder models run an encoder pass and then the decoder loop. | No chat template is applied. Use this when the application owns a custom or generic prompt format. | Context keys, grammars, JSON schema, sampling overrides, media inputs. |
-| `chat` | Messages are rendered to one prompt with llama.cpp chat-template support and `add_assistant = true`. | Requires the GGUF to declare `tokenizer.chat_template`. CogentLM checks model metadata, not the llama.cpp fallback chain, before allowing local `chat`. | Same text options as `query`, including context keys and media inputs. |
+| `chat` | Messages are rendered to one prompt with llama.cpp chat-template support and `add_assistant = true`. | Requires the GGUF to declare `tokenizer.chat_template`. Sipp checks model metadata, not the llama.cpp fallback chain, before allowing local `chat`. | Same text options as `query`, including context keys and media inputs. |
 | `embed` | The input text is encoded by the local embedding runtime. | No chat template and no generation. | Context key and embedding normalization. |
 
 Local `chat` is a prompt renderer plus generation call, not a conversation
@@ -68,7 +68,7 @@ const run = client.query({
 
 ### Local Chat With The Model Template
 
-Use `chat` when the GGUF model declares the chat template it expects. CogentLM
+Use `chat` when the GGUF model declares the chat template it expects. Sipp
 passes the role messages to llama.cpp template rendering and then generates
 from the rendered prompt.
 
@@ -92,7 +92,7 @@ template the application wants to control.
 ### Local Query With Encoder-Decoder Models
 
 Use `query` for encoder-decoder GGUF models. The source prompt is encoded
-first; CogentLM then drives the decoder from the model's decoder-start token.
+first; Sipp then drives the decoder from the model's decoder-start token.
 
 ```ts
 const endpoint = await client.add('t5-local', {
@@ -166,10 +166,10 @@ an OpenAI-compatible target may expose chat but not completions, so gateway
 const endpoint = await client.add('gateway-openai', {
   kind: 'gateway',
   target: 'openai-chat',
-  baseUrl: process.env.COGENTLM_GATEWAY_URL!,
+  baseUrl: process.env.SIPP_GATEWAY_URL!,
   authentication: {
     kind: 'bearer',
-    value: process.env.COGENTLM_GATEWAY_TOKEN!,
+    value: process.env.SIPP_GATEWAY_TOKEN!,
   },
 });
 
@@ -188,8 +188,8 @@ const run = client.chat({
 Raw-prompt query:
 
 ```bash
-curl -X POST "$COGENTLM_GATEWAY_URL/v1/query" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+curl -X POST "$SIPP_GATEWAY_URL/v1/query" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "model": "compatible-completion",
@@ -201,8 +201,8 @@ curl -X POST "$COGENTLM_GATEWAY_URL/v1/query" \
 Chat:
 
 ```bash
-curl -X POST "$COGENTLM_GATEWAY_URL/v1/chat" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+curl -X POST "$SIPP_GATEWAY_URL/v1/chat" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "model": "anthropic-chat",
@@ -217,8 +217,8 @@ curl -X POST "$COGENTLM_GATEWAY_URL/v1/chat" \
 Embedding:
 
 ```bash
-curl -X POST "$COGENTLM_GATEWAY_URL/v1/embed" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+curl -X POST "$SIPP_GATEWAY_URL/v1/embed" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "content-type: application/json" \
   -d '{
     "model": "openai-embed",

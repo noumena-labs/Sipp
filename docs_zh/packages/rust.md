@@ -1,32 +1,32 @@
 # Rust 包
 
-Rust 包发布名称为 `cogentlm`。作为 Rust 应用的公共 Crate，负责客户端 API 以及运行时、后端、生命周期、分片、提供商和网关等核心类型。
+Rust 包发布名称为 `sipp`。作为 Rust 应用的公共 Crate，负责客户端 API 以及运行时、后端、生命周期、分片、提供商和网关等核心类型。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api)。
 
 ## 安装
 
 ```bash
-cargo add cogentlm
+cargo add sipp
 ```
 
-发布流程目前打包 Rust 源码工件；`cogentlm` 与 `cogentlm-sys` 两个 crate 的 crates.io 发布流程尚待接通。需直接从源码使用该包时，见[源码构建](../maintainers/source-builds.md)。
+发布流程目前打包 Rust 源码工件；`sipp` 与 `sipp-sys` 两个 crate 的 crates.io 发布流程尚待接通。需直接从源码使用该包时，见[源码构建](../maintainers/source-builds.md)。
 
 ## 适用场景
 
 - Rust 应用中执行本地 GGUF 推理。
 - 通过网关发起 query、chat、embedding 调用。
 - 启用 `providers` 特性后，直接使用提供商描述符调用外部 API。
-- 在应用的不同模块间共享 CogentLM 数据类型。
+- 在应用的不同模块间共享 Sipp 数据类型。
 
 ## 本地推理 (Query)
 
 ```rust
-use cogentlm::{
-    CogentClient, CogentQueryRequest, CogentTextOptions, EndpointDescriptor,
+use sipp::{
+    SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor,
     LocalTextOptions,
 };
-use cogentlm::engine::{
+use sipp::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, KvReuseMode, NativeRuntimeConfig,
     ObservabilityRuntimeConfig, SchedulerRuntimeConfig,
 };
@@ -34,7 +34,7 @@ use cogentlm::engine::{
 async fn run(
     model_path: std::path::PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = CogentClient::new();
+    let mut client = SippClient::new();
     let endpoint = client
         .add(
             "default",
@@ -43,10 +43,10 @@ async fn run(
         .await?;
 
     let response = client
-        .query(CogentQueryRequest {
+        .query(SippQueryRequest {
             endpoint: Some(endpoint),
-            prompt: "Explain CogentLM in one sentence.".to_string(),
-            options: CogentTextOptions {
+            prompt: "Explain Sipp in one sentence.".to_string(),
+            options: SippTextOptions {
                 max_tokens: Some(64),
                 ..Default::default()
             },
@@ -90,22 +90,22 @@ fn runtime_config() -> NativeRuntimeConfig {
 ## 网关推理
 
 ```rust
-use cogentlm::{
-    CogentClient, CogentQueryRequest, CogentTextOptions, EndpointDescriptor,
+use sipp::{
+    SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor,
     GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
     GatewayTimeoutPolicy,
 };
 
-let mut client = CogentClient::new();
+let mut client = SippClient::new();
 let endpoint = client
     .add(
         "gateway",
         EndpointDescriptor::gateway(GatewayEndpointConfig {
-            target: std::env::var("COGENTLM_GATEWAY_TARGET")?,
-            base_url: std::env::var("COGENTLM_GATEWAY_URL")?,
+            target: std::env::var("SIPP_GATEWAY_TARGET")?,
+            base_url: std::env::var("SIPP_GATEWAY_URL")?,
             routes: GatewayRoutes::default(),
             authentication: GatewayAuthentication::Bearer(GatewaySecret::new(
-                std::env::var("COGENTLM_GATEWAY_TOKEN")?,
+                std::env::var("SIPP_GATEWAY_TOKEN")?,
             )),
             static_headers: Default::default(),
             timeouts: GatewayTimeoutPolicy::default(),
@@ -115,10 +115,10 @@ let endpoint = client
     .await?;
 
 let response = client
-    .query(CogentQueryRequest {
+    .query(SippQueryRequest {
         endpoint: Some(endpoint),
         prompt: "Explain gateway inference.".to_string(),
-        options: CogentTextOptions {
+        options: SippTextOptions {
             max_tokens: Some(64),
             ..Default::default()
         },

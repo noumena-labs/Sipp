@@ -2,7 +2,7 @@
 authors = ["Noumena Labs"]
 language = "en"
 src = "docs"
-title = "CogentLM Documentation"
+title = "Sipp Documentation"
 
 [build]
 build-dir = "book"
@@ -10,11 +10,11 @@ build-dir = "book"
 [preprocessor.mermaid]
 
 [output.html]
-additional-css = ["theme/cogentlm.css"]
+additional-css = ["theme/sipp.css"]
 additional-js = ["docs/assets/language-switch.js", "theme/mermaid-init.js"]
-edit-url-template = "https://github.com/noumena-labs/CogentLM/edit/master/{path}"
-git-repository-url = "https://github.com/noumena-labs/CogentLM"
-site-url = "/CogentLM/"
+edit-url-template = "https://github.com/noumena-labs/Sipp/edit/master/{path}"
+git-repository-url = "https://github.com/noumena-labs/Sipp"
+site-url = "/Sipp/"
 
 [output.html.search]
 enable = true

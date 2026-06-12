@@ -1,4 +1,4 @@
-import type { CogentClientOptions, EngineModuleOptions } from '../../engine/browser-client.js';
+import type { SippClientOptions, EngineModuleOptions } from '../../engine/browser-client.js';
 import type {
   BackendObservability,
   ChatMessage,
@@ -62,7 +62,7 @@ function normalizePairingErrorCode(code: string | undefined): RuntimePairingErro
 
 function resolveRuntimeSiblingUrl(moduleUrl: string, extension: string): string {
   const parsedModuleUrl = new URL(moduleUrl);
-  const filename = parsedModuleUrl.pathname.split('/').pop() ?? 'cogentlm-wasm.js';
+  const filename = parsedModuleUrl.pathname.split('/').pop() ?? 'sipp-wasm.js';
   const stem = filename.endsWith('.js') ? filename.slice(0, -'.js'.length) : filename;
   return new URL(`${stem}${extension}`, parsedModuleUrl).toString();
 }
@@ -87,11 +87,11 @@ function verifyRustBrowserEngineAbi(bridge: WasmBridge): number {
   try {
     abiVersion = bridge.rustBrowserEngineAbiVersion();
   } catch (error) {
-    throw new Error('CogentLM browser runtime ABI check failed.', { cause: error });
+    throw new Error('Sipp browser runtime ABI check failed.', { cause: error });
   }
   if (abiVersion !== EXPECTED_RUST_BROWSER_ENGINE_ABI_VERSION) {
     throw new Error(
-      `CogentLM browser runtime ABI mismatch: expected ${EXPECTED_RUST_BROWSER_ENGINE_ABI_VERSION}, got ${abiVersion}. Rebuild the WebAssembly runtime and clear cached browser runtime assets.`
+      `Sipp browser runtime ABI mismatch: expected ${EXPECTED_RUST_BROWSER_ENGINE_ABI_VERSION}, got ${abiVersion}. Rebuild the WebAssembly runtime and clear cached browser runtime assets.`
     );
   }
   return abiVersion;
@@ -122,7 +122,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private transportObservability: TransportObservability;
   private wasmBridgeOperationTail: Promise<void> = Promise.resolve();
 
-  constructor(private config: CogentClientOptions = {}) {
+  constructor(private config: SippClientOptions = {}) {
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
     this.modelLoader = new MainThreadModelLoader(this.config);
@@ -417,7 +417,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
         const moduleConfig: EngineModuleOptions = { ...(this.config.moduleOptions ?? {}) };
         const userLocateFile = moduleConfig.locateFile;
         moduleConfig.printErr ??= (message: string) => {
-          if (typeof message === 'string' && message.startsWith('[cogentlm/')) {
+          if (typeof message === 'string' && message.startsWith('[sipp/')) {
             console.log(message);
           }
         };

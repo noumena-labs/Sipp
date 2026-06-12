@@ -10,8 +10,8 @@
 
 import * as THREE from 'three';
 import { VRMExpressionPresetName, VRMHumanBoneName } from '@pixiv/three-vrm';
-import type { ActionEvent } from '@noumena-labs/cogentlm/character';
-import { CharacterEventBus } from '@noumena-labs/cogentlm/character';
+import type { ActionEvent } from '@noumena-labs/sipp/character';
+import { CharacterEventBus } from '@noumena-labs/sipp/character';
 import {
   dispatchAvatarAction,
   getRequiredClipActions,

@@ -1,29 +1,29 @@
-# CogentLM Browser Package
+# Sipp Browser Package
 
-`lib/web` is the browser package source for the public `cogentlm` package. It
+`lib/web` is the browser package source for the public `sipp` package. It
 supports browser-local GGUF inference, gateway calls, streaming text, OPFS model
-caching, and browser runtime lifecycle management through `CogentClient`.
+caching, and browser runtime lifecycle management through `SippClient`.
 
 Source builds use the workspace manifest in this directory. Public docs use the
-`cogentlm` package target.
+`sipp` package target.
 
 ## Source Checkout
 
 From the repository root, after `source ./setup.sh`:
 
 ```bash
-clm build wasm && clm run examples serve browser
+sipp build wasm && sipp run examples serve browser
 ```
 
-`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+`sipp` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
 if the launcher is not active.
 
 ## Local GGUF Query
 
 ```ts
-import { CogentClient } from 'cogentlm';
+import { SippClient } from 'sipp';
 
-const client = new CogentClient();
+const client = new SippClient();
 await client.add('default', {
   kind: 'local',
   source: '/models/model.gguf',
@@ -37,7 +37,7 @@ await client.add('default', {
   },
 });
 
-const run = client.query('Explain CogentLM in one sentence.', {
+const run = client.query('Explain Sipp in one sentence.', {
   emitTokens: true,
   maxTokens: 64,
   contextKey: 'web-local',
@@ -61,7 +61,7 @@ OPFS-backed caching for repeated model loads.
 
 <!--
 Future benchmark graph placeholder:
-- CogentLM browser WebGPU engine
+- Sipp browser WebGPU engine
 - transformers.js WebGPU
 - WebLLM WebGPU
 Add the graph only with checked-in benchmark methodology, model names, browser

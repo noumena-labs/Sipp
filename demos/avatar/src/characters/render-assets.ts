@@ -1,4 +1,4 @@
-import type { CharacterConfig } from '@noumena-labs/cogentlm/character';
+import type { CharacterConfig } from '@noumena-labs/sipp/character';
 import {
   getRequiredClipActions,
   getUnsupportedAvatarActions,

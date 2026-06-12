@@ -1,4 +1,4 @@
-import type { ChatMessage, CogentClient } from '@noumena-labs/cogentlm';
+import type { ChatMessage, SippClient } from '@noumena-labs/sipp';
 
 export const DRAWING_COLORS = ['#111827', '#ffffff', '#ef4444', '#f97316', '#facc15', '#22c55e', '#38bdf8', '#8b5cf6'] as const;
 export const HECKLE_VOICES = [
@@ -114,7 +114,7 @@ export async function loadDrawingDirectorConfig(url: string): Promise<DrawingDir
 
 export class DrawingDirector {
   public constructor(
-    private readonly client: CogentClient,
+    private readonly client: SippClient,
     private readonly config: DrawingDirectorConfig
   ) { }
 

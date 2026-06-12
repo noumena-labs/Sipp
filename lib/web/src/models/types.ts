@@ -552,7 +552,7 @@ export interface ModelLifecycleService {
   close(): void | Promise<void>;
 }
 
-export interface CogentClient {
+export interface SippClient {
   readonly observability: EngineObservability;
   /** Register or replace a local, gateway, or direct provider endpoint. */
   add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef>;

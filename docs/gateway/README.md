@@ -1,8 +1,8 @@
 # Gateway
 
-CogentLM gateway workflows put one HTTP boundary in front of local GGUF
+Sipp gateway workflows put one HTTP boundary in front of local GGUF
 targets and provider-backed targets. Applications still use the same client
-model: register an endpoint with `CogentClient.add`, keep the returned
+model: register an endpoint with `SippClient.add`, keep the returned
 endpoint reference, and choose that reference for `query`, `chat`, or `embed`.
 
 Use a gateway when you want a separate process to own model paths, provider
@@ -41,7 +41,7 @@ first-party server from the source checkout or with the provided Dockerfile.
   and an Admin Dashboard.
 - **Docker image**: `apps/gateway-server/Dockerfile` builds the same staged
   gateway distribution and runs
-  `cogentlm-gateway serve --config /etc/cogentlm/gateway.toml`.
+  `sipp-gateway serve --config /etc/sipp/gateway.toml`.
 - **Gateway toolkit**: `lib/gateway` provides codecs, HTTP error helpers,
   authentication traits, observability traits, and the first-party JSON/SSE
   profile for custom applications.

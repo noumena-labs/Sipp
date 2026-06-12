@@ -1,14 +1,14 @@
 use bytes::Bytes;
-use cogentlm::core::{ChatMessage, ChatRole, TokenUsage};
-use cogentlm::{
-    CogentChatRequest, CogentEmbedRequest, CogentEmbeddingResponse, CogentQueryRequest,
-    CogentTextOptions, CogentTextResponse,
+use sipp::core::{ChatMessage, ChatRole, TokenUsage};
+use sipp::{
+    SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippQueryRequest,
+    SippTextOptions, SippTextResponse,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::toolkit::{DecodedRequest, GatewayHttpError, ProtocolCodec, ToolkitResult};
 
-/// First-party Cogent query JSON body.
+/// First-party Sipp query JSON body.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QueryBody {
     pub model: String,
@@ -24,7 +24,7 @@ pub struct QueryBody {
     pub options: serde_json::Map<String, serde_json::Value>,
 }
 
-/// First-party Cogent chat JSON body.
+/// First-party Sipp chat JSON body.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatBody {
     pub model: String,
@@ -40,14 +40,14 @@ pub struct ChatBody {
     pub options: serde_json::Map<String, serde_json::Value>,
 }
 
-/// First-party Cogent chat message.
+/// First-party Sipp chat message.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessageBody {
     pub role: ChatRole,
     pub content: String,
 }
 
-/// First-party Cogent embedding JSON body.
+/// First-party Sipp embedding JSON body.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EmbedBody {
     pub model: String,
@@ -107,26 +107,26 @@ impl From<UsageBody> for TokenUsage {
 pub struct GatewayCodec;
 
 impl ProtocolCodec for GatewayCodec {
-    fn decode_query(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<CogentQueryRequest>> {
+    fn decode_query(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<SippQueryRequest>> {
         let body: QueryBody = decode(body)?;
         Ok(DecodedRequest {
             target: body.model,
             stream: body.stream,
-            request: CogentQueryRequest {
+            request: SippQueryRequest {
                 prompt: body.prompt,
                 options: text_options(body.max_tokens, body.temperature, body.top_p, body.stop),
                 endpoint_options: body.options,
-                ..CogentQueryRequest::default()
+                ..SippQueryRequest::default()
             },
         })
     }
 
-    fn decode_chat(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<CogentChatRequest>> {
+    fn decode_chat(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<SippChatRequest>> {
         let body: ChatBody = decode(body)?;
         Ok(DecodedRequest {
             target: body.model,
             stream: body.stream,
-            request: CogentChatRequest {
+            request: SippChatRequest {
                 messages: body
                     .messages
                     .into_iter()
@@ -134,25 +134,25 @@ impl ProtocolCodec for GatewayCodec {
                     .collect(),
                 options: text_options(body.max_tokens, body.temperature, body.top_p, body.stop),
                 endpoint_options: body.options,
-                ..CogentChatRequest::default()
+                ..SippChatRequest::default()
             },
         })
     }
 
-    fn decode_embed(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<CogentEmbedRequest>> {
+    fn decode_embed(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<SippEmbedRequest>> {
         let body: EmbedBody = decode(body)?;
         Ok(DecodedRequest {
             target: body.model,
             stream: false,
-            request: CogentEmbedRequest {
+            request: SippEmbedRequest {
                 input: body.input,
                 endpoint_options: body.options,
-                ..CogentEmbedRequest::default()
+                ..SippEmbedRequest::default()
             },
         })
     }
 
-    fn encode_text(&self, target: &str, response: &CogentTextResponse) -> ToolkitResult<Bytes> {
+    fn encode_text(&self, target: &str, response: &SippTextResponse) -> ToolkitResult<Bytes> {
         encode(&TextBody {
             id: response
                 .metadata
@@ -169,7 +169,7 @@ impl ProtocolCodec for GatewayCodec {
     fn encode_embedding(
         &self,
         target: &str,
-        response: &CogentEmbeddingResponse,
+        response: &SippEmbeddingResponse,
     ) -> ToolkitResult<Bytes> {
         encode(&EmbeddingBody {
             id: response
@@ -185,21 +185,21 @@ impl ProtocolCodec for GatewayCodec {
 
     fn encode_stream_event(
         &self,
-        event: &cogentlm::gateway_core::GatewayStreamEvent,
+        event: &sipp::gateway_core::GatewayStreamEvent,
     ) -> ToolkitResult<Bytes> {
         let (name, value) = match event {
-            cogentlm::gateway_core::GatewayStreamEvent::TokenBatch(batch) => (
+            sipp::gateway_core::GatewayStreamEvent::TokenBatch(batch) => (
                 "token",
                 serde_json::json!({
                     "text": batch.text,
                     "sequence": batch.sequence_start,
                 }),
             ),
-            cogentlm::gateway_core::GatewayStreamEvent::Usage(usage) => (
+            sipp::gateway_core::GatewayStreamEvent::Usage(usage) => (
                 "usage",
                 serde_json::to_value(UsageBody::from(*usage)).map_err(encode_error)?,
             ),
-            cogentlm::gateway_core::GatewayStreamEvent::Finished { finish_reason, .. } => (
+            sipp::gateway_core::GatewayStreamEvent::Finished { finish_reason, .. } => (
                 "done",
                 serde_json::json!({
                     "finish_reason": finish_reason.as_str(),
@@ -255,8 +255,8 @@ fn text_options(
     temperature: Option<f32>,
     top_p: Option<f32>,
     stop: Vec<String>,
-) -> CogentTextOptions {
-    CogentTextOptions {
+) -> SippTextOptions {
+    SippTextOptions {
         max_tokens,
         temperature,
         top_p,

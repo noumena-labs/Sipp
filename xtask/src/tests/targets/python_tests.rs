@@ -22,11 +22,11 @@ fn python_paths_are_rooted_under_lib_python() {
     assert_eq!(python_project_dir(&ctx), temp.join("lib/python"));
     assert_eq!(
         python_package_dir(&ctx),
-        temp.join("lib/python/python/cogentlm")
+        temp.join("lib/python/python/sipp")
     );
     assert_eq!(
         backend_binary_dir(&ctx),
-        temp.join("lib/python/python/cogentlm/binaries")
+        temp.join("lib/python/python/sipp/binaries")
     );
 }
 
@@ -47,14 +47,14 @@ fn backend_expansion_and_labels_are_stable() {
 #[test]
 fn wheel_and_native_extension_discovery_match_packaging_conventions() {
     let temp = TempDir::new("target-python-discovery");
-    let wheel = temp.write("dist/cogentlm-0.1.0-py3-none-any.whl", "");
+    let wheel = temp.write("dist/sipp-0.1.0-py3-none-any.whl", "");
     temp.write("dist/readme.txt", "");
     let extension = if cfg!(windows) {
-        temp.write("extracted/cogentlm/_native.pyd", "")
+        temp.write("extracted/sipp/_native.pyd", "")
     } else {
-        temp.write("extracted/cogentlm/_native.so", "")
+        temp.write("extracted/sipp/_native.so", "")
     };
-    temp.write("extracted/cogentlm/other.py", "");
+    temp.write("extracted/sipp/other.py", "");
 
     assert_eq!(
         find_wheel_artifact(&temp.join("dist")).unwrap(),
@@ -86,17 +86,17 @@ fn backend_binary_preparation_preserves_gitkeep_only() {
 }
 
 #[test]
-fn dist_preparation_removes_only_cogentlm_wheels() {
+fn dist_preparation_removes_only_sipp_wheels() {
     let temp = TempDir::new("target-python-dist");
     let dist = temp.create_dir("dist");
-    temp.write("dist/cogentlm-0.1.0.whl", "");
+    temp.write("dist/sipp-0.1.0.whl", "");
     temp.write("dist/other-0.1.0.whl", "");
-    temp.write("dist/cogentlm-0.1.0.txt", "");
+    temp.write("dist/sipp-0.1.0.txt", "");
     let sh = xshell::Shell::new().unwrap();
 
     prepare_dist_dir(&sh, &dist).unwrap();
 
-    assert!(!dist.join("cogentlm-0.1.0.whl").exists());
+    assert!(!dist.join("sipp-0.1.0.whl").exists());
     assert!(dist.join("other-0.1.0.whl").exists());
-    assert!(dist.join("cogentlm-0.1.0.txt").exists());
+    assert!(dist.join("sipp-0.1.0.txt").exists());
 }

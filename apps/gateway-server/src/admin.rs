@@ -9,7 +9,7 @@ use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::routing::{get, put};
 use axum::{Json, Router};
-use cogentlm::backend::backend_observability_json;
+use sipp::backend::backend_observability_json;
 use rand::random;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,8 +18,8 @@ use crate::config::{RouteConfig, TargetSummary};
 use crate::metrics::GatewayMetrics;
 use crate::runtime::{GatewayControls, GatewaySecurity};
 
-const CSRF_HEADER: &str = "x-cogentlm-admin-csrf";
-const SESSION_COOKIE: &str = "cogentlm_gateway_admin";
+const CSRF_HEADER: &str = "x-sipp-admin-csrf";
+const SESSION_COOKIE: &str = "sipp_gateway_admin";
 const SESSION_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 
 #[derive(Clone)]

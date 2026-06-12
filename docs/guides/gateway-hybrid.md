@@ -1,6 +1,6 @@
 # Gateway And Hybrid Inference
 
-Gateway inference lets an application call a separate CogentLM gateway over
+Gateway inference lets an application call a separate Sipp gateway over
 HTTP. Hybrid inference registers local and gateway endpoints in the same client
 so each request can choose where it runs.
 

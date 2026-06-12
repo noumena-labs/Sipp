@@ -9,62 +9,62 @@ set(LLAMA_BUILD_TESTS OFF CACHE BOOL "Skip llama.cpp tests" FORCE)
 set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "Skip llama.cpp tools by default" FORCE)
 
 # Ensure the parent provided the root llama.cpp path
-if(NOT DEFINED COGENTLM_LLAMA_CPP_DIR)
-    message(FATAL_ERROR "COGENTLM_LLAMA_CPP_DIR must be defined before including llama_mtmd_sources.cmake")
+if(NOT DEFINED SIPP_LLAMA_CPP_DIR)
+    message(FATAL_ERROR "SIPP_LLAMA_CPP_DIR must be defined before including llama_mtmd_sources.cmake")
 endif()
 
-add_subdirectory("${COGENTLM_LLAMA_CPP_DIR}" llama.cpp)
-include_directories("${COGENTLM_LLAMA_CPP_DIR}/include")
-include_directories("${COGENTLM_LLAMA_CPP_DIR}/ggml/include")
+add_subdirectory("${SIPP_LLAMA_CPP_DIR}" llama.cpp)
+include_directories("${SIPP_LLAMA_CPP_DIR}/include")
+include_directories("${SIPP_LLAMA_CPP_DIR}/ggml/include")
 
 # Define MTMD directories standardized for both builds
-set(COGENTLM_MTMD_DIR "${COGENTLM_LLAMA_CPP_DIR}/tools/mtmd")
-set(COGENTLM_MTMD_MODEL_DIR "${COGENTLM_MTMD_DIR}/models")
+set(SIPP_MTMD_DIR "${SIPP_LLAMA_CPP_DIR}/tools/mtmd")
+set(SIPP_MTMD_MODEL_DIR "${SIPP_MTMD_DIR}/models")
 
 set(SHARED_MTMD_SOURCES
-    ${COGENTLM_MTMD_DIR}/mtmd.cpp
-    ${COGENTLM_MTMD_DIR}/mtmd-audio.cpp
-    ${COGENTLM_MTMD_DIR}/mtmd-image.cpp
-    ${COGENTLM_MTMD_DIR}/mtmd-helper.cpp
-    ${COGENTLM_MTMD_DIR}/clip.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/cogvlm.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/conformer.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/dotsocr.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/gemma4a.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/gemma4v.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/glm4v.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/granite-speech.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/hunyuanvl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/internvl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/kimivl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/kimik25.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/nemotron-v2-vl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/llama4.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/llava.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/minicpmv.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/mimovl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/paddleocr.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/pixtral.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/qwen2vl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/qwen3vl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/qwen3a.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/step3vl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/siglip.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/whisper-enc.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/deepseekocr.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/deepseekocr2.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/mobilenetv5.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/youtuvl.cpp
-    ${COGENTLM_MTMD_MODEL_DIR}/yasa2.cpp
+    ${SIPP_MTMD_DIR}/mtmd.cpp
+    ${SIPP_MTMD_DIR}/mtmd-audio.cpp
+    ${SIPP_MTMD_DIR}/mtmd-image.cpp
+    ${SIPP_MTMD_DIR}/mtmd-helper.cpp
+    ${SIPP_MTMD_DIR}/clip.cpp
+    ${SIPP_MTMD_MODEL_DIR}/cogvlm.cpp
+    ${SIPP_MTMD_MODEL_DIR}/conformer.cpp
+    ${SIPP_MTMD_MODEL_DIR}/dotsocr.cpp
+    ${SIPP_MTMD_MODEL_DIR}/gemma4a.cpp
+    ${SIPP_MTMD_MODEL_DIR}/gemma4v.cpp
+    ${SIPP_MTMD_MODEL_DIR}/glm4v.cpp
+    ${SIPP_MTMD_MODEL_DIR}/granite-speech.cpp
+    ${SIPP_MTMD_MODEL_DIR}/hunyuanvl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/internvl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/kimivl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/kimik25.cpp
+    ${SIPP_MTMD_MODEL_DIR}/nemotron-v2-vl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/llama4.cpp
+    ${SIPP_MTMD_MODEL_DIR}/llava.cpp
+    ${SIPP_MTMD_MODEL_DIR}/minicpmv.cpp
+    ${SIPP_MTMD_MODEL_DIR}/mimovl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/paddleocr.cpp
+    ${SIPP_MTMD_MODEL_DIR}/pixtral.cpp
+    ${SIPP_MTMD_MODEL_DIR}/qwen2vl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/qwen3vl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/qwen3a.cpp
+    ${SIPP_MTMD_MODEL_DIR}/step3vl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/siglip.cpp
+    ${SIPP_MTMD_MODEL_DIR}/whisper-enc.cpp
+    ${SIPP_MTMD_MODEL_DIR}/deepseekocr.cpp
+    ${SIPP_MTMD_MODEL_DIR}/deepseekocr2.cpp
+    ${SIPP_MTMD_MODEL_DIR}/mobilenetv5.cpp
+    ${SIPP_MTMD_MODEL_DIR}/youtuvl.cpp
+    ${SIPP_MTMD_MODEL_DIR}/yasa2.cpp
 )
 
 # Build mtmd as a library for both Wasm and Native
 add_library(mtmd ${SHARED_MTMD_SOURCES})
 target_link_libraries(mtmd PUBLIC ggml llama)
-target_include_directories(mtmd PUBLIC "${COGENTLM_MTMD_DIR}")
+target_include_directories(mtmd PUBLIC "${SIPP_MTMD_DIR}")
 target_include_directories(mtmd PRIVATE
-  "${COGENTLM_LLAMA_CPP_DIR}"
-  "${COGENTLM_LLAMA_CPP_DIR}/vendor"
+  "${SIPP_LLAMA_CPP_DIR}"
+  "${SIPP_LLAMA_CPP_DIR}/vendor"
 )
 target_compile_features(mtmd PRIVATE cxx_std_17)
 

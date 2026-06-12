@@ -36,7 +36,7 @@ fn doctor_labels_are_stable() {
 
 #[test]
 fn command_status_helpers_distinguish_required_and_optional_missing_tools() {
-    let missing = "cogentlm-definitely-not-installed-command";
+    let missing = "sipp-definitely-not-installed-command";
     let required = required_command_status("Required", missing, "fix required");
     let optional = optional_command_status("Optional", missing, "fix optional");
 

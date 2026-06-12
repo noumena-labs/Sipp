@@ -13,7 +13,7 @@ management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 4
 allowed_origins = []
-admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
+admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"
 
 [security.client_ip]
 source = "peer"
@@ -35,7 +35,7 @@ metrics = "/metrics"
 admin = "/admin"
 
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "production-client"
 targets = ["local"]
 
@@ -59,7 +59,7 @@ inference:
 
 ```toml
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "gpu-client"
 targets = ["local-gpu"]
 
@@ -82,7 +82,7 @@ and route client prompts to upstream APIs without loading a local model:
 
 ```toml
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "provider-client"
 targets = ["openai-chat"]
 
@@ -105,7 +105,7 @@ server-hosted local model and provider endpoints:
 
 ```toml
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "hybrid-client"
 targets = ["local-gpu", "openai-chat"]
 
@@ -148,8 +148,8 @@ TOML names secret environment variables. Secret values belong in a private
 `.env` file or production secret manager, not in TOML.
 
 ```bash
-COGENTLM_GATEWAY_ADMIN_PASSWORD=replace-me
-COGENTLM_GATEWAY_TOKEN=replace-me
+SIPP_GATEWAY_ADMIN_PASSWORD=replace-me
+SIPP_GATEWAY_TOKEN=replace-me
 OPENAI_API_KEY=replace-me
 ANTHROPIC_API_KEY=replace-me
 ```
@@ -180,7 +180,7 @@ label and a target allowlist:
 
 ```toml
 [[tokens]]
-env = "COGENTLM_GATEWAY_TOKEN"
+env = "SIPP_GATEWAY_TOKEN"
 caller = "browser-client"
 targets = ["local", "openai-chat"]
 ```
@@ -335,5 +335,5 @@ The dashboard serves a React single-page application from the gateway
 distribution's `admin-ui` asset directory and exposes session-protected JSON
 endpoints under `<admin>/api/*`. Login uses `POST <admin>/api/session`, logout
 uses `DELETE <admin>/api/session`, and mutating admin API calls require the
-session CSRF token in the `x-cogentlm-admin-csrf` header. Runtime edits made
+session CSRF token in the `x-sipp-admin-csrf` header. Runtime edits made
 from the dashboard affect only the running process and reset on restart.

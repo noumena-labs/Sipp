@@ -1,6 +1,6 @@
 # Configuration
 
-CogentLM configuration is intentionally split by responsibility. Core crates do
+Sipp configuration is intentionally split by responsibility. Core crates do
 not own HTTP routes, authentication schemes, TOML files, or deployment policy.
 
 ## Runtime Configuration
@@ -30,12 +30,12 @@ separate applications composed from `lib/gateway`.
 
 ## Environment Variables
 
-- `COGENTLM_GATEWAY_TOKEN`: development bearer token for examples and gateway
+- `SIPP_GATEWAY_TOKEN`: development bearer token for examples and gateway
   server commands.
-- `COGENTLM_GATEWAY_ADMIN_PASSWORD`: Admin Dashboard password used by gateway
+- `SIPP_GATEWAY_ADMIN_PASSWORD`: Admin Dashboard password used by gateway
   examples.
-- `COGENTLM_GATEWAY_URL`: gateway base URL for client examples.
-- `COGENTLM_NODE_BACKEND`: Node runtime backend selection.
-- `COGENTLM_PYTHON_BACKEND`: Python runtime backend selection.
+- `SIPP_GATEWAY_URL`: gateway base URL for client examples.
+- `SIPP_NODE_BACKEND`: Node runtime backend selection.
+- `SIPP_PYTHON_BACKEND`: Python runtime backend selection.
 - `OPENAI_API_KEY`: provider credential used by OpenAI examples and
   provider-backed gateway targets.

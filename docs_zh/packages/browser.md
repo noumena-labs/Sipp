@@ -1,16 +1,16 @@
 # 浏览器包
 
-浏览器包发布名称为 `cogentlm`。提供 `CogentClient` 客户端，支持浏览器本地 GGUF 推理、网关调用、提供商描述符、Token 流式传输、基于 OPFS 的模型缓存以及浏览器运行时生命周期管理。
+浏览器包发布名称为 `sipp`。提供 `SippClient` 客户端，支持浏览器本地 GGUF 推理、网关调用、提供商描述符、Token 流式传输、基于 OPFS 的模型缓存以及浏览器运行时生命周期管理。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api/)。
 
 ## 安装
 
 ```bash
-npm install cogentlm
+npm install sipp
 ```
 
-在浏览器环境中使用此包。服务器路由或 Node 服务改用 [`cogentlm-server`](node.md)。
+在浏览器环境中使用此包。服务器路由或 Node 服务改用 [`sipp-server`](node.md)。
 
 ## 适用场景
 
@@ -23,9 +23,9 @@ npm install cogentlm
 ## 本地推理
 
 ```ts
-import { CogentClient, type ChatMessage } from 'cogentlm';
+import { SippClient, type ChatMessage } from 'sipp';
 
-const client = new CogentClient();
+const client = new SippClient();
 const endpoint = await client.add('default', {
   kind: 'local',
   source: '/models/model.gguf',
@@ -39,7 +39,7 @@ const endpoint = await client.add('default', {
 
 const messages: readonly ChatMessage[] = [
   { role: 'system', content: 'Answer concisely.' },
-  { role: 'user', content: 'Explain CogentLM in one sentence.' },
+  { role: 'user', content: 'Explain Sipp in one sentence.' },
 ];
 
 const run = client.chat(messages, {
@@ -89,11 +89,11 @@ const run = client.chat(messages, {
 
 ## 浏览器运行时选项
 
-浏览器运行时通过 Emscripten 将 CogentLM 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器支持兼容适配器时，引擎优先使用 WebGPU 运行 GGUF 文本和视觉模型；WebGPU 不可用时自动回退到 CPU。首次下载模型或导入文件后，基于 OPFS 的模型缓存可加速后续加载。
+浏览器运行时通过 Emscripten 将 Sipp 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器支持兼容适配器时，引擎优先使用 WebGPU 运行 GGUF 文本和视觉模型；WebGPU 不可用时自动回退到 CPU。首次下载模型或导入文件后，基于 OPFS 的模型缓存可加速后续加载。
 
 该包在运行时自动解析其打包的 JavaScript 和 WASM 资源，通常无需手动覆盖资源 URL。只有应用需要精细控制浏览器的执行、存储或本地运行时行为时，才需要配置 `executionMode`、`wasmThreading`、`browserCache` 以及本地端点的 `options.runtime`。
 
-`CogentClient` 选项、WebGPU 和后端选择、Worker 模式、pthread 要求及本地运行时配置组的详情，见[运行时选项](../reference/runtime-options.md)。
+`SippClient` 选项、WebGPU 和后端选择、Worker 模式、pthread 要求及本地运行时配置组的详情，见[运行时选项](../reference/runtime-options.md)。
 
 ## 相关文档
 

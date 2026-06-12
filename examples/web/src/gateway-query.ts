@@ -1,4 +1,4 @@
-import { CogentClient, type BrowserTextRun, type EndpointRef } from '@noumena-labs/cogentlm';
+import { SippClient, type BrowserTextRun, type EndpointRef } from '@noumena-labs/sipp';
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
@@ -27,7 +27,7 @@ elements.runForm.addEventListener('submit', async (event) => {
     return;
   }
 
-  const client = new CogentClient();
+  const client = new SippClient();
   try {
     const endpoint = await client.add('gateway', { kind: 'gateway', ...config });
     const run = client.query(prompt, {

@@ -1,4 +1,4 @@
-//! Cached launcher installer for the short `clm` developer command.
+//! Cached launcher installer for the short `sipp` developer command.
 
 use crate::output;
 use crate::utils::BuildContext;
@@ -25,7 +25,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 TARGET="$ROOT/.build/xtask/debug/xtask"
-STAMP="$ROOT/.build/xtask/clm.stamp"
+STAMP="$ROOT/.build/xtask/sipp.stamp"
 
 needs_build=0
 if [ ! -x "$TARGET" ] || [ ! -f "$STAMP" ]; then
@@ -44,7 +44,7 @@ exec "$TARGET" "$@"
 "#;
 
 const WINDOWS_CMD_LAUNCHER: &str = r#"@echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0clm.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0sipp.ps1" %*
 exit /b %ERRORLEVEL%
 "#;
 
@@ -52,7 +52,7 @@ const WINDOWS_PS_LAUNCHER: &str = r#"$ErrorActionPreference = "Stop"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Resolve-Path (Join-Path $ScriptRoot "..\..")
 $Target = Join-Path $Root ".build\xtask\debug\xtask.exe"
-$Stamp = Join-Path $Root ".build\xtask\clm.stamp"
+$Stamp = Join-Path $Root ".build\xtask\sipp.stamp"
 
 $SourceRoots = @(
   (Join-Path $Root "xtask\src"),
@@ -103,27 +103,27 @@ if ($NeedsBuild) {
 exit $LASTEXITCODE
 "#;
 
-/// Installs the repo-local `clm` launcher scripts under `.build/bin`.
+/// Installs the repo-local `sipp` launcher scripts under `.build/bin`.
 pub(crate) fn install(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let bin_dir = ctx.launcher_bin_dir();
     sh.create_dir(&bin_dir)
         .with_context(|| format!("failed to create {}", bin_dir.display()))?;
 
-    write_launcher(&bin_dir.join("clm"), &UNIX_LAUNCHER.replace("\r\n", "\n"))?;
-    write_launcher(&bin_dir.join("clm.cmd"), WINDOWS_CMD_LAUNCHER)?;
-    write_launcher(&bin_dir.join("clm.ps1"), WINDOWS_PS_LAUNCHER)?;
-    write_launcher(&bin_dir.join("cogentlm-env.sh"), &unix_env_script(&bin_dir))?;
+    write_launcher(&bin_dir.join("sipp"), &UNIX_LAUNCHER.replace("\r\n", "\n"))?;
+    write_launcher(&bin_dir.join("sipp.cmd"), WINDOWS_CMD_LAUNCHER)?;
+    write_launcher(&bin_dir.join("sipp.ps1"), WINDOWS_PS_LAUNCHER)?;
+    write_launcher(&bin_dir.join("sipp-env.sh"), &unix_env_script(&bin_dir))?;
     write_launcher(
-        &bin_dir.join("cogentlm-env.ps1"),
+        &bin_dir.join("sipp-env.ps1"),
         &powershell_env_script(&bin_dir),
     )?;
-    write_launcher(&bin_dir.join("cogentlm-env.cmd"), &cmd_env_script(&bin_dir))?;
-    make_unix_launcher_executable(&bin_dir.join("clm"))?;
-    make_unix_launcher_executable(&bin_dir.join("cogentlm-env.sh"))?;
+    write_launcher(&bin_dir.join("sipp-env.cmd"), &cmd_env_script(&bin_dir))?;
+    make_unix_launcher_executable(&bin_dir.join("sipp"))?;
+    make_unix_launcher_executable(&bin_dir.join("sipp-env.sh"))?;
 
-    output::success("Installed clm launcher");
+    output::success("Installed sipp launcher");
     output::path("Launcher directory", &bin_dir);
-    output::detail("Use", "clm build core");
+    output::detail("Use", "sipp build core");
     print_activation_hint(&bin_dir);
     Ok(())
 }
@@ -135,23 +135,23 @@ fn write_launcher(path: &Path, contents: &str) -> Result<()> {
 
 fn print_activation_hint(bin_dir: &Path) {
     if path_contains(bin_dir) {
-        output::success("clm is active in this terminal session");
+        output::success("sipp is active in this terminal session");
         return;
     }
 
     if cfg!(windows) {
         output::detail(
             "Activate PowerShell",
-            format!(". {}", powershell_quote(&bin_dir.join("cogentlm-env.ps1"))),
+            format!(". {}", powershell_quote(&bin_dir.join("sipp-env.ps1"))),
         );
         output::detail(
             "Activate CMD",
-            format!("call {}", cmd_quote(&bin_dir.join("cogentlm-env.cmd"))),
+            format!("call {}", cmd_quote(&bin_dir.join("sipp-env.cmd"))),
         );
     } else {
         output::detail(
             "Activate",
-            format!("source {}", shell_quote(&bin_dir.join("cogentlm-env.sh"))),
+            format!("source {}", shell_quote(&bin_dir.join("sipp-env.sh"))),
         );
     }
 }
@@ -186,10 +186,10 @@ fn unix_env_script(bin_dir: &Path) -> String {
 
     format!(
         r#"#!/usr/bin/env sh
-COGENTLM_BIN={bin_dir_quoted}
+SIPP_BIN={bin_dir_quoted}
 case ":${{PATH:-}}:" in
-  *:"$COGENTLM_BIN":*) ;;
-  *) export PATH="$COGENTLM_BIN${{PATH:+:$PATH}}" ;;
+  *:"$SIPP_BIN":*) ;;
+  *) export PATH="$SIPP_BIN${{PATH:+:$PATH}}" ;;
 esac
 "#
     )
@@ -199,13 +199,13 @@ esac
 fn powershell_env_script(bin_dir: &Path) -> String {
     let bin_dir = powershell_quote_str(&bin_dir.display().to_string());
     format!(
-        r#"$CogentLmBin = {bin_dir}
+        r#"$SippBin = {bin_dir}
 $PathParts = @()
 if ($env:Path) {{
   $PathParts = $env:Path -split [System.IO.Path]::PathSeparator
 }}
-if ($PathParts -notcontains $CogentLmBin) {{
-  $env:Path = "$CogentLmBin$([System.IO.Path]::PathSeparator)$env:Path"
+if ($PathParts -notcontains $SippBin) {{
+  $env:Path = "$SippBin$([System.IO.Path]::PathSeparator)$env:Path"
 }}
 "#
     )
@@ -215,9 +215,9 @@ fn cmd_env_script(bin_dir: &Path) -> String {
     let bin_dir = bin_dir.display().to_string().replace('%', "%%");
     format!(
         r#"@echo off
-set "COGENTLM_BIN={bin_dir}"
-echo ;%PATH%; | find /I ";%COGENTLM_BIN%;" >nul
-if errorlevel 1 set "PATH=%COGENTLM_BIN%;%PATH%"
+set "SIPP_BIN={bin_dir}"
+echo ;%PATH%; | find /I ";%SIPP_BIN%;" >nul
+if errorlevel 1 set "PATH=%SIPP_BIN%;%PATH%"
 "#
     )
 }
