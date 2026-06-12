@@ -14,13 +14,13 @@ use axum::routing::{get, post};
 use axum::Router;
 use bytes::Bytes;
 use clap::Parser;
-use cogentlm_client::{
+use cogentlm::engine::{NativeRuntimeConfig, PoolingType};
+use cogentlm::gateway_core::{GatewayStreamEvent, Operation};
+use cogentlm::{
     CogentClient, CogentRequestContext, CogentTextResponseFuture, CogentTokenBatches,
     EndpointDescriptor, EndpointRef,
 };
-use cogentlm_engine::engine::{NativeRuntimeConfig, PoolingType};
 use cogentlm_gateway::{request_id, GatewayCodec, GatewayHttpError, ProtocolCodec};
-use cogentlm_gateway_core::{GatewayStreamEvent, Operation};
 use futures_util::future::{select, Either};
 use futures_util::{stream, Stream, StreamExt};
 
@@ -294,7 +294,7 @@ fn text_event_stream(
 
 fn finish_text_stream(
     state: &mut TextStreamState,
-    response: cogentlm_client::CogentResult<cogentlm_client::CogentTextResponse>,
+    response: cogentlm::CogentResult<cogentlm::CogentTextResponse>,
 ) {
     state.terminal = true;
     match response {

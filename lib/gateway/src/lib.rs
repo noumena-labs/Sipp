@@ -1,13 +1,13 @@
 //! Developer-facing gateway protocol helpers.
 //!
-//! [`cogentlm_gateway_core`] remains protocol neutral. This package contains
+//! [`cogentlm::gateway_core`] remains protocol neutral. This package contains
 //! route-free HTTP helpers and the optional first-party gateway JSON/SSE
 //! profile. Applications own their route handlers.
 
 mod profile;
 mod toolkit;
 
-pub use cogentlm_client::{
+pub use cogentlm::{
     GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
     GatewayTimeoutPolicy,
 };

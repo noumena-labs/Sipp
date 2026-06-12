@@ -1,13 +1,7 @@
 [workspace]
 members = [
-    "lib/rust",
-    "crates/core",
-    "crates/shard",
+    "crates/cogentlm",
     "crates/sys",
-    "crates/engine",
-    "crates/gateway-core",
-    "crates/providers",
-    "crates/client",
     "apps/cli",
     "apps/gateway-server",
     "lib/gateway",
@@ -33,16 +27,9 @@ clap = { version = "4.5", features = ["derive"] }
 cmake = "0.1"
 cxx = "1"
 cxx-build = "1"
-cogentlm = { path = "lib/rust", version = "0.1.0", default-features = false }
-cogentlm-core = { path = "crates/core", version = "0.1.0" }
-cogentlm-shard = { path = "crates/shard", version = "0.1.0" }
+cogentlm = { path = "crates/cogentlm", version = "0.1.0", default-features = false }
 cogentlm-sys = { path = "crates/sys", version = "0.1.0" }
-cogentlm-engine = { path = "crates/engine", version = "0.1.0", default-features = false }
-cogentlm-gateway-core = { path = "crates/gateway-core", version = "0.1.0" }
 cogentlm-gateway = { path = "lib/gateway", version = "0.1.0", default-features = false }
-cogentlm-providers = { path = "crates/providers", version = "0.1.0" }
-cogentlm-gateway-server = { path = "apps/gateway-server", version = "0.1.0" }
-cogentlm-client = { path = "crates/client", version = "0.1.0", default-features = false }
 futures = "0.3"
 futures-channel = "0.3"
 futures-core = "0.3"

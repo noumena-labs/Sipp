@@ -6,22 +6,21 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
+publish = false
 
 [features]
 default = ["native", "providers"]
-native = ["cogentlm-client/native", "cogentlm-gateway-core/native"]
-backend-dl = ["cogentlm-client/backend-dl", "cogentlm-gateway-core/backend-dl"]
-cuda = ["cogentlm-client/cuda", "cogentlm-gateway-core/cuda"]
-metal = ["cogentlm-client/metal", "cogentlm-gateway-core/metal"]
-vulkan = ["cogentlm-client/vulkan", "cogentlm-gateway-core/vulkan"]
-openmp = ["cogentlm-client/openmp", "cogentlm-gateway-core/openmp"]
-providers = ["cogentlm-client/providers", "cogentlm-gateway-core/providers"]
+native = ["cogentlm/native"]
+backend-dl = ["cogentlm/backend-dl"]
+cuda = ["cogentlm/cuda"]
+metal = ["cogentlm/metal"]
+vulkan = ["cogentlm/vulkan"]
+openmp = ["cogentlm/openmp"]
+providers = ["cogentlm/providers"]
 
 [dependencies]
 bytes = "1"
-cogentlm-client.workspace = true
-cogentlm-core.workspace = true
-cogentlm-gateway-core.workspace = true
+cogentlm = { workspace = true, features = ["gateway"] }
 http = "1"
 serde.workspace = true
 serde_json.workspace = true

@@ -13,10 +13,10 @@ listener management.
 
 ## Distribution
 
-The toolkit crate target is `cogentlm-gateway`. The current release workflow
-packages Rust source artifacts but does not publish Rust crates to crates.io.
-Use [Source Builds](../maintainers/source-builds.md) when consuming the
-toolkit from this checkout until Rust crate publishing is enabled.
+The toolkit crate target is `cogentlm-gateway`. crates.io publishing covers
+the `cogentlm` and `cogentlm-sys` crates; the toolkit is intentionally
+source-distributed. Use [Source Builds](../maintainers/source-builds.md) when
+consuming the toolkit from this checkout.
 
 ## Use It For
 

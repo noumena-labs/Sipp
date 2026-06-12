@@ -40,7 +40,7 @@ unless a local CogentLM rule below is stricter.
 
 #### Libraries
 
-For library crates such as `crates/core`, `crates/engine`, `crates/shard`, and similar reusable crates:
+For library crates and modules such as `crates/cogentlm` (including its `core`, `shard`, engine, `client`, `providers`, and `gateway_core` module folders), `lib/gateway`, and similar reusable code:
 
 * Do not use `anyhow::Result` in library APIs.
 * Define a crate-local custom error enum using `thiserror::Error`.
@@ -480,13 +480,13 @@ Use the package manager and task runner already used by the affected workspace.
 
 The repository is organized by responsibility:
 
-* `crates/`: Core Rust implementation.
+* `crates/`: The published `cogentlm` and `cogentlm-sys` crates.
 * `bindings/`: FFI and language bindings such as Node, Python, and WASM.
 * `apps/`: First-party applications such as the Rust CLI.
 * `demos/`: Browser demos using the public browser package.
 * `tools/`: Developer tools such as the browser playground.
 * `examples/`: Runnable onboarding examples for public package surfaces.
-* `lib/`: Public facade and language/runtime package source, including Rust, Python, Node, and browser packages.
+* `lib/`: Language/runtime package source (Python, Node, and browser packages) plus the source-distributed gateway toolkit.
 * `docs/`: User-facing and contributor-facing documentation.
 * `xtask/`: Developer automation and repository maintenance tooling.
 * `.agents/skills/`: Agent skills and repository-specific agent guidance.

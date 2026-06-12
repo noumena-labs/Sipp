@@ -56,15 +56,9 @@ const SKIPPED_DEMO_TEST_DIRS: &[&str] =
 
 const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::lib("cogentlm"),
-    RustTestTarget::lib("cogentlm-core"),
-    RustTestTarget::lib("cogentlm-shard"),
     RustTestTarget::lib("cogentlm-sys"),
-    RustTestTarget::lib("cogentlm-engine"),
-    RustTestTarget::lib("cogentlm-gateway-core"),
     RustTestTarget::lib("cogentlm-gateway"),
     RustTestTarget::package("cogentlm-gateway-server"),
-    RustTestTarget::lib("cogentlm-providers"),
-    RustTestTarget::lib("cogentlm-client"),
     RustTestTarget::bin("cogentlm-cli", "cogentlm"),
 ];
 const XTASK_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::package("xtask")];
@@ -73,27 +67,17 @@ const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::package("cogentlm-py"),
     RustTestTarget::package("cogentlm-wasm"),
 ];
-const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] = &[
-    RustTestTarget::test("cogentlm", "public_api"),
-    RustTestTarget::test("cogentlm-client", "public_api"),
-    RustTestTarget::test("cogentlm-providers", "public_api"),
-    RustTestTarget::test("cogentlm-shard", "public_api"),
-];
+const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] =
+    &[RustTestTarget::test("cogentlm", "public_api")];
 const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
     &[RustTestTarget::test("cogentlm-cli", "cli_black_box")];
 
 const XTASK_SOURCE_ROOTS: &[&str] = &["xtask/src"];
 const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
-    "lib/rust/src",
-    "crates/core/src",
-    "crates/shard/src",
+    "crates/cogentlm/src",
     "crates/sys/src",
-    "crates/engine/src",
-    "crates/gateway-core/src",
     "lib/gateway/src",
     "apps/gateway-server/src",
-    "crates/providers/src",
-    "crates/client/src",
     "apps/cli/src",
 ];
 const RUST_BINDING_SOURCE_ROOTS: &[&str] = &[
@@ -104,12 +88,7 @@ const RUST_BINDING_SOURCE_ROOTS: &[&str] = &[
 ];
 const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["lib/web/src"];
 const DEMO_TS_SOURCE_ROOTS: &[&str] = &["demos"];
-const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &[
-    "lib/rust/src",
-    "crates/client/src",
-    "crates/providers/src",
-    "crates/shard/src",
-];
+const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &["crates/cogentlm/src"];
 const CLI_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
     "bindings/node/src",
@@ -127,15 +106,15 @@ const GATEWAY_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &[
     "examples/rust/src",
     "examples/node",
     "examples/python",
-    "crates/gateway-core/src",
+    "crates/cogentlm/src/gateway_core",
     "lib/gateway/src",
     "apps/gateway-server/src",
-    "crates/providers/src",
+    "crates/cogentlm/src/providers",
 ];
 const BROWSER_EXAMPLE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/web", "lib/web/src"];
 const BROWSER_PLAYGROUND_SMOKE_SOURCE_ROOTS: &[&str] = &["tools/playground"];
 const PUBLIC_DOC_RUST_FILES: &[&str] = &[
-    "lib/rust/src/lib.rs",
+    "crates/cogentlm/src/lib.rs",
     "bindings/node/src/lib.rs",
     "bindings/python/src/lib.rs",
 ];
@@ -886,7 +865,7 @@ fn run_rust_coverage_targets(
         let package = target.package;
         let mut lcov_cmd = cmd!(
             sh,
-            "cargo llvm-cov --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|tools -p {package}"
+            "cargo llvm-cov --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|llama\\.cpp|\\.build|target|tests|examples|demos|tools -p {package}"
         );
         if coverage_state.rust_started {
             lcov_cmd = lcov_cmd.arg("--no-clean");
@@ -915,7 +894,7 @@ fn run_rust_coverage_targets(
 
     let html_cmd = cmd!(
         sh,
-        "cargo llvm-cov --html --no-run --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|tools"
+        "cargo llvm-cov --html --no-run --output-dir {rust_html} --ignore-filename-regex third_party|llama\\.cpp|\\.build|target|tests|examples|demos|tools"
     );
     let html_cmd = apply_toolchains(sh, ctx, html_cmd, None)?;
     output::run_build_command("Writing Rust HTML coverage report", html_cmd)?;
@@ -1883,7 +1862,7 @@ fn collect_rust_public_doc_violations(
         violations.push(format!("{display}:1: missing crate or module rustdoc"));
     }
 
-    let check_facade_items = display == "lib/rust/src/lib.rs";
+    let check_facade_items = display == "crates/cogentlm/src/lib.rs";
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         let check_top_level_facade_item = check_facade_items && line.starts_with("pub ");
@@ -2084,14 +2063,14 @@ fn write_rust_coverage_reports(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         "Writing Rust LCOV report",
         cmd!(
             sh,
-            "cargo llvm-cov report --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|tools"
+            "cargo llvm-cov report --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|llama\\.cpp|\\.build|target|tests|examples|demos|tools"
         ),
     )?;
     output::run_build_command(
         "Writing Rust HTML report",
         cmd!(
             sh,
-            "cargo llvm-cov report --html --output-dir {rust_html} --ignore-filename-regex third_party|\\.build|target|tests|examples|demos|tools"
+            "cargo llvm-cov report --html --output-dir {rust_html} --ignore-filename-regex third_party|llama\\.cpp|\\.build|target|tests|examples|demos|tools"
         ),
     )?;
     Ok(())
@@ -3340,7 +3319,15 @@ fn collect_files_with_suffix(root: &Path, suffix: &str) -> Result<Vec<PathBuf>> 
 fn is_ignored_layout_dir(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
-        Some("target" | "node_modules" | ".build" | "third_party" | ".venv" | ".pytest_cache")
+        Some(
+            "target"
+                | "node_modules"
+                | ".build"
+                | "third_party"
+                | "llama.cpp"
+                | ".venv"
+                | ".pytest_cache"
+        )
     )
 }
 
@@ -3580,16 +3567,10 @@ fn rust_target_case_files(ctx: &BuildContext, targets: &[RustTestTarget]) -> Res
 
 fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
     let relative: &[&str] = match package {
-        "cogentlm" => &["lib", "rust"],
-        "cogentlm-core" => &["crates", "core"],
-        "cogentlm-shard" => &["crates", "shard"],
+        "cogentlm" => &["crates", "cogentlm"],
         "cogentlm-sys" => &["crates", "sys"],
-        "cogentlm-engine" => &["crates", "engine"],
-        "cogentlm-gateway-core" => &["crates", "gateway-core"],
         "cogentlm-gateway" => &["lib", "gateway"],
-        "cogentlm-providers" => &["crates", "providers"],
         "cogentlm-gateway-server" => &["apps", "gateway-server"],
-        "cogentlm-client" => &["crates", "client"],
         "cogentlm-cli" => &["apps", "cli"],
         "xtask" => &["xtask"],
         "cogentlm-napi" => &["bindings", "node"],

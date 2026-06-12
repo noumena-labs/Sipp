@@ -5,7 +5,9 @@ layer for deleted gateway route-autowiring or remote endpoint APIs.
 
 ## Core Execution
 
-`crates/gateway-core` exposes only typed query, chat, and embed execution:
+`cogentlm::gateway_core` (the `gateway_core` module of the `cogentlm` crate,
+behind the `gateway` feature) exposes only typed query, chat, and embed
+execution:
 
 - `GatewayRequestContext` and cancellation.
 - `TargetResolver`, `Authorizer`, `AdmissionController`, and
@@ -16,9 +18,9 @@ layer for deleted gateway route-autowiring or remote endpoint APIs.
 It does not depend on HTTP, Axum routes, JSON, SSE, bearer tokens, status
 codes, aliases, TOML, or fixed limits.
 
-`crates/client` owns local, provider, and gateway endpoint registration through
-`CogentClient.add(...)`. Gateway endpoints call an HTTP gateway as a client
-transport and are never selected implicitly.
+The `cogentlm` client API owns local, provider, and gateway endpoint
+registration through `CogentClient.add(...)`. Gateway endpoints call an HTTP
+gateway as a client transport and are never selected implicitly.
 
 ## Developer Toolkit
 

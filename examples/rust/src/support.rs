@@ -7,7 +7,7 @@ use cogentlm::{CogentEmbeddingResponse, CogentTextResponse};
 
 pub type ExampleResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-pub const DEFAULT_MAX_TOKENS: u32 = 128;
+pub const DEFAULT_MAX_TOKENS: u32 = 2048;
 pub const DEFAULT_TEMPERATURE: f32 = 0.7;
 pub const DEFAULT_TOP_P: f32 = 0.8;
 pub const DEFAULT_CONTEXT: i32 = 2048;

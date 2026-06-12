@@ -8,7 +8,28 @@ use std::{
     time::Duration,
 };
 
-use cogentlm_client::{
+use cogentlm::backend::{
+    backend_observability_json as core_backend_observability_json,
+    set_llama_log_quiet as core_set_llama_log_quiet,
+};
+use cogentlm::core::TokenUsage as CoreTokenUsage;
+use cogentlm::engine::protocol::{
+    CacheSource as CoreCacheSource, RequestStats as CoreRequestStats,
+};
+use cogentlm::engine::{
+    ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode, GpuLayerConfig,
+    KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
+    MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
+    NativeRuntimeConfig as CoreNativeRuntimeConfig,
+    ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
+    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig, RopeScaling, SamplerStage,
+    SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
+    SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
+};
+use cogentlm::runtime::config::{
+    SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
+};
+use cogentlm::{
     AnthropicProviderConfig as CoreAnthropicProviderConfig,
     CogentCancellationHandle as CoreCancellationHandle,
     CogentCancellationReason as CoreCancellationReason, CogentChatRequest as CoreClientChatRequest,
@@ -31,27 +52,6 @@ use cogentlm_client::{
     ProviderEndpointError as CoreProviderEndpointError,
     ProviderEndpointErrorKind as CoreProviderEndpointErrorKind,
     ProviderSecret as CoreProviderSecret,
-};
-use cogentlm_core::TokenUsage as CoreTokenUsage;
-use cogentlm_engine::backend::{
-    backend_observability_json as core_backend_observability_json,
-    set_llama_log_quiet as core_set_llama_log_quiet,
-};
-use cogentlm_engine::engine::protocol::{
-    CacheSource as CoreCacheSource, RequestStats as CoreRequestStats,
-};
-use cogentlm_engine::engine::{
-    ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode, GpuLayerConfig,
-    KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
-    MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
-    NativeRuntimeConfig as CoreNativeRuntimeConfig,
-    ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
-    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig, RopeScaling, SamplerStage,
-    SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
-    SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
-};
-use cogentlm_engine::runtime::config::{
-    SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
 };
 use futures::executor::block_on;
 use futures::StreamExt;
@@ -335,8 +335,8 @@ pub struct ContextRuntimeConfig {
 }
 
 impl ContextRuntimeConfig {
-    fn to_core(&self) -> Result<cogentlm_engine::engine::ContextRuntimeConfig> {
-        let mut core = cogentlm_engine::engine::ContextRuntimeConfig {
+    fn to_core(&self) -> Result<cogentlm::engine::ContextRuntimeConfig> {
+        let mut core = cogentlm::engine::ContextRuntimeConfig {
             n_ctx: self.n_ctx,
             n_batch: self.n_batch,
             n_ubatch: self.n_ubatch,
@@ -445,8 +445,8 @@ pub struct CacheRuntimeConfig {
 }
 
 impl CacheRuntimeConfig {
-    fn to_core(&self) -> Result<cogentlm_engine::engine::CacheRuntimeConfig> {
-        let mut core = cogentlm_engine::engine::CacheRuntimeConfig::default();
+    fn to_core(&self) -> Result<cogentlm::engine::CacheRuntimeConfig> {
+        let mut core = cogentlm::engine::CacheRuntimeConfig::default();
         if let Some(value) = &self.mode {
             core.mode = parse_kv_reuse_mode(value)?;
         }
@@ -1263,9 +1263,7 @@ fn token_usage_to_node(usage: CoreTokenUsage) -> TokenUsage {
     }
 }
 
-fn response_metadata_to_node(
-    metadata: cogentlm_client::CogentResponseMetadata,
-) -> CogentResponseMetadata {
+fn response_metadata_to_node(metadata: cogentlm::CogentResponseMetadata) -> CogentResponseMetadata {
     CogentResponseMetadata {
         request_id: metadata.request_id,
         upstream_request_id: metadata.upstream_request_id,
@@ -1821,14 +1819,14 @@ fn provider_error_to_node(env: Env, error: CoreProviderEndpointError) -> Error {
     }
 }
 
-fn endpoint_error_to_node(env: Env, error: cogentlm_client::EndpointError) -> Error {
+fn endpoint_error_to_node(env: Env, error: cogentlm::EndpointError) -> Error {
     match endpoint_error_to_node_result(env, error) {
         Ok(error) => error,
         Err(error) => error,
     }
 }
 
-fn endpoint_error_to_node_result(env: Env, error: cogentlm_client::EndpointError) -> Result<Error> {
+fn endpoint_error_to_node_result(env: Env, error: cogentlm::EndpointError) -> Result<Error> {
     let mut object = env.create_error(Error::new(Status::GenericFailure, error.to_string()))?;
     object.set("name", "EndpointError")?;
     object.set("kind", error.kind)?;
@@ -1878,11 +1876,11 @@ fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
     }
 }
 
-fn core_error(error: cogentlm_engine::Error) -> Error {
+fn core_error(error: cogentlm::error::Error) -> Error {
     match error {
-        cogentlm_engine::Error::InvalidRequest(message)
-        | cogentlm_engine::Error::InvalidConfig(message) => invalid_arg(message),
-        cogentlm_engine::Error::UnsupportedOperation { operation, reason } => {
+        cogentlm::error::Error::InvalidRequest(message)
+        | cogentlm::error::Error::InvalidConfig(message) => invalid_arg(message),
+        cogentlm::error::Error::UnsupportedOperation { operation, reason } => {
             invalid_arg(format!("unsupported operation {operation}: {reason}"))
         }
         other => napi_error(other.to_string()),

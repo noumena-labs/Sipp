@@ -6,7 +6,7 @@ use std::os::raw::{c_char, c_void};
 use std::path::Path;
 use std::ptr;
 
-use cogentlm_shard::{
+use cogentlm::shard::{
     plan_gguf_split, split_gguf, BrowserCacheLayout, BrowserCachePolicy, GgufError, GgufReadAt,
     GgufShardSink, GgufSplitOptions,
 };

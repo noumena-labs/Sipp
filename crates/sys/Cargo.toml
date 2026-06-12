@@ -3,10 +3,33 @@ name = "cogentlm-sys"
 description = "Native llama.cpp FFI layer for CogentLM"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+# Apache-2.0 for the FFI layer, MIT for the vendored llama.cpp tree.
+license = "Apache-2.0 AND MIT"
 repository.workspace = true
 readme = "../../README.md"
 links = "cogentlm"
+# Whitelist for `cargo package`: ship only the FFI sources plus the subset of
+# the vendored llama.cpp tree that the CMake build consumes (no models/, docs/,
+# examples/, or CI assets — they would blow the crates.io size limit).
+include = [
+    "/src/**",
+    "/build_support/**",
+    "/native/**",
+    "/cmake/**",
+    "/build.rs",
+    "/CMakeLists.txt",
+    "/llama_mtmd_sources.cmake",
+    "/llama.cpp/CMakeLists.txt",
+    "/llama.cpp/cmake/**",
+    "/llama.cpp/src/**",
+    "/llama.cpp/include/**",
+    "/llama.cpp/ggml/**",
+    "/llama.cpp/common/**",
+    "/llama.cpp/vendor/**",
+    "/llama.cpp/tools/mtmd/**",
+    "/llama.cpp/LICENSE",
+    "/llama.cpp/licenses/**",
+]
 
 [features]
 default = ["native"]

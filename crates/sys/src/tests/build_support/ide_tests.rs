@@ -13,7 +13,7 @@ use super::*;
 
 fn test_context(temp: &TempDir) -> BuildContext {
     let manifest_dir = temp.join("workspace/crates/sys");
-    let llama_dir = temp.join("workspace/third_party/llama.cpp");
+    let llama_dir = temp.join("workspace/crates/sys/llama.cpp");
     fs::create_dir_all(&manifest_dir).expect("manifest dir");
     BuildContext {
         manifest_dir,

@@ -36,7 +36,7 @@ set(CE_WASM_RUST_STATICLIB "" CACHE FILEPATH "Rust wasm32 Emscripten staticlib f
 
 # Calculate paths relative to the bindings/wasm directory
 set(CE_RUST_SYS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../crates/sys")
-set(COGENTLM_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp")
+set(COGENTLM_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../crates/sys/llama.cpp")
 
 # llama.cpp Wasm subproject
 set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for cogentlm" FORCE)

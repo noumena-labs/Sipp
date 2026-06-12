@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use cogentlm_engine::backend::set_llama_log_quiet;
+use cogentlm::backend::set_llama_log_quiet;
 use cogentlm_gateway_server::{
     config::GatewayServerConfig, http::GatewayHttpService, metrics::GatewayMetrics,
 };

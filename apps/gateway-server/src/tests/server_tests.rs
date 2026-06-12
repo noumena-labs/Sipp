@@ -13,12 +13,12 @@ use axum::http::{
     header::{COOKIE, SET_COOKIE},
     Request, StatusCode,
 };
-use cogentlm_client::{
+use cogentlm::engine::{GpuLayerConfig, NativeRuntimeConfig};
+use cogentlm::lifecycle::{BackendCapabilities, StatsMode};
+use cogentlm::{
     CogentClient, EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes,
     GatewayTimeoutPolicy,
 };
-use cogentlm_engine::engine::{GpuLayerConfig, NativeRuntimeConfig};
-use cogentlm_engine::lifecycle::{BackendCapabilities, StatsMode};
 use tower::ServiceExt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

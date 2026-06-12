@@ -63,8 +63,8 @@ Test command reports are written under `.build/test/`:
 - `verify-report.json` and `verify-report.md`
 
 The baseline includes first-party `crates/` and `bindings/` code. It
-intentionally excludes generated outputs, caches, tests, examples, and
-`third_party/`.
+intentionally excludes generated outputs, caches, tests, examples,
+`third_party/`, and the vendored `crates/sys/llama.cpp/` tree.
 
 ## Policy
 

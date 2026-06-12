@@ -71,7 +71,7 @@ __pycache__/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-/third_party/llama.cpp/build/
+/crates/sys/llama.cpp/build/
 *.o
 *.a
 *.so
@@ -128,3 +128,4 @@ target-wasm*/
 .vscode/
 .zed/
 .claude/
+.antigravitycli/

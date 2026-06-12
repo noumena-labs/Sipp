@@ -8,7 +8,7 @@
 
 ## 分发方式
 
-对应 Rust crate `cogentlm-gateway`。当前发布工作流会打包 Rust 源码工件，但暂未发布到 crates.io。正式发布前如需直接依赖源码，见[源码构建](../maintainers/source-builds.md)。
+对应 Rust crate `cogentlm-gateway`。crates.io 仅发布 `cogentlm` 与 `cogentlm-sys` 两个 crate；工具包本身有意以源码形式分发。直接依赖源码的方式见[源码构建](../maintainers/source-builds.md)。
 
 ## 适用场景
 

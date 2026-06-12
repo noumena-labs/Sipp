@@ -4,7 +4,7 @@
 
 ## 核心执行层
 
-`crates/gateway-core` 只暴露强类型的 query、chat、embed 执行逻辑：
+`cogentlm::gateway_core`（`cogentlm` crate 的 `gateway_core` 模块，由 `gateway` feature 启用）只暴露强类型的 query、chat、embed 执行逻辑：
 
 - `GatewayRequestContext` 和取消处理。
 - `TargetResolver`、`Authorizer`、`AdmissionController`、`GatewayExecutor`。
@@ -13,7 +13,7 @@
 
 这一层不依赖 HTTP、Axum 路由、JSON、SSE、Bearer Token、状态码、别名、TOML 或任何固定限制。
 
-`crates/client` 负责注册本地、服务商和网关三种端点。网关端点通过 HTTP 调用远程网关，必须显式指定，不会自动使用。
+`cogentlm` 客户端 API 负责注册本地、服务商和网关三种端点。网关端点通过 HTTP 调用远程网关，必须显式指定，不会自动使用。
 
 ## 开发工具包
 

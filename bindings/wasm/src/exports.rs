@@ -4,7 +4,7 @@ use std::os::raw::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::{env, fs, ptr, slice};
 
-use cogentlm_engine::backend::backend_observability_json;
+use cogentlm::backend::backend_observability_json;
 use serde_json::{json, Value};
 
 use crate::engine::{BrowserEngine, BrowserMediaInput, BrowserTextRequestArgs, ABI_VERSION};

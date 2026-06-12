@@ -2,24 +2,25 @@
 
 CogentLM separates inference primitives from protocol and deployment policy.
 
-## Foundational Crates
+## Published Crates
 
-- **`crates/sys`**: Unsafe FFI bindings and native llama.cpp shims.
-- **`crates/core`**: Low-level shared types.
-- **`crates/engine`**: Local inference, scheduling, model lifecycle, and memory management.
-- **`crates/shard`**: GGUF cache planning and split-file utilities.
-- **`crates/client`**: Typed query, chat, and embed dispatch. It owns local, provider, and gateway endpoint descriptors.
-- **`crates/gateway-core`**: Protocol-neutral gateway execution. It owns request context, cancellation, typed pipeline ordering, streaming events, and resolver, authorizer, admission, and executor traits.
-- **`crates/providers`**: Explicitly selected external provider adapters. Provider wire requirements do not define gateway-core behavior.
+- **`crates/cogentlm`**: The public `cogentlm` library published to crates.io.
+  Internal module folders keep the former crate boundaries:
+  - **`core/`**: Low-level shared types (`cogentlm::core`).
+  - **`shard/`**: GGUF cache planning and split-file utilities (`cogentlm::shard`).
+  - **`backend/`, `engine/`, `lifecycle/`, `runtime/`**: Local inference, scheduling, model lifecycle, and memory management (former engine crate, public paths unchanged).
+  - **`client/`**: Typed query, chat, and embed dispatch re-exported at the crate root. It owns local, provider, and gateway endpoint descriptors.
+  - **`providers/`** (feature `providers`): Explicitly selected external provider adapters (`cogentlm::providers`).
+  - **`gateway_core/`** (feature `gateway`): Protocol-neutral gateway execution (`cogentlm::gateway_core`). It owns request context, cancellation, typed pipeline ordering, streaming events, and resolver, authorizer, admission, and executor traits.
+- **`crates/sys`**: The `cogentlm-sys` crate — unsafe FFI bindings, native llama.cpp shims, and the vendored `llama.cpp/` source tree.
 
 Nothing under `crates/` owns HTTP routes, JSON/SSE contracts, authentication schemes, configuration files, application limits, or deployment defaults.
 
 ## Developer Libraries
 
-- **`lib/gateway`**: Route-free HTTP gateway toolkit outside the foundational crates. It provides codecs, authentication traits, error translation, observability, and response helpers.
+- **`lib/gateway`**: Route-free HTTP gateway toolkit outside the published crates (`publish = false`, consumed from source checkouts). It provides codecs, authentication traits, error translation, observability, and response helpers.
 - **`lib/gateway::GatewayCodec`**: Optional first-party query/chat/embed JSON and SSE profile.
-- **`cogentlm_client::GatewayEndpointConfig`**: Client-owned descriptor for calling an HTTP gateway endpoint.
-- **`lib/rust`**: Public Rust facade.
+- **`cogentlm::GatewayEndpointConfig`**: Client-owned descriptor for calling an HTTP gateway endpoint.
 - **`lib/node`**, **`lib/python`**, and **`lib/web`**: Public language packages exposing local inference, provider adapters, and gateway endpoint descriptors through the unified add API.
 
 Arbitrary wire formats are implemented programmatically through `ProtocolCodec`. The core client remains limited to the query, chat, and embed inference capabilities.
@@ -37,4 +38,4 @@ Arbitrary wire formats are implemented programmatically through `ProtocolCodec`.
 - **`bindings/python`**: PyO3 host binding.
 - **`bindings/wasm`**: Browser WebAssembly/WebGPU ABI and native link target.
 
-Bindings expose endpoint construction but do not move protocol policy back into `crates/client`.
+Bindings expose endpoint construction but do not move protocol policy back into the client modules.

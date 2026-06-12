@@ -14,10 +14,10 @@ layers for each host environment.
 Node / Python / CLI
         |
         v
-crates/engine
+crates/cogentlm
         |
         v
-crates/engine/src/native_bridge.rs
+crates/cogentlm/src/native_bridge.rs
         |
         v
 crates/sys/src/bridge.rs            (cxx declarations)
@@ -29,7 +29,7 @@ crates/sys/native/cxx_bridge        (C++ RAII facade)
 crates/sys/native/llama_shim        (C ABI shim)
         |
         v
-third_party/llama.cpp, ggml, mtmd
+crates/sys/llama.cpp, ggml, mtmd
 ```
 
 Browser builds add one more host-facing layer above the same engine:
@@ -44,7 +44,7 @@ bindings/wasm/src/exports.rs                      (CE_* exports)
 bindings/wasm/src/engine/mod.rs                   (BrowserEngine)
         |
         v
-crates/engine -> crates/sys -> llama.cpp
+crates/cogentlm -> crates/sys -> llama.cpp
 ```
 
 ## Native Core Boundary
@@ -64,7 +64,7 @@ The important files are:
   llama.cpp/common/mtmd behavior.
 - `crates/sys/native/llama_shim/cogent_shim.cpp`: the shim implementation that
   calls llama.cpp C and C++ APIs.
-- `crates/engine/src/native_bridge.rs`: the safe, crate-private engine facade
+- `crates/cogentlm/src/native_bridge.rs`: the safe, crate-private engine facade
   over `cogentlm_sys::bridge`.
 
 The repo does not currently use Rust `bindgen` to generate raw bindings from
@@ -109,7 +109,7 @@ through it, accept generated tokens, reset it, or attach/detach backend sampling
 to a runtime sequence.
 
 Rust engine code should use `NativeRuntimeHandle`, `NativeBatchHandle`, and
-`SamplerHandle` from `crates/engine/src/native_bridge.rs`, not raw
+`SamplerHandle` from `crates/cogentlm/src/native_bridge.rs`, not raw
 `cogentlm_sys::bridge` types. That facade centralizes null checks, pinning,
 error mapping, and test-only empty handles.
 
@@ -125,7 +125,7 @@ script.
    generated CXX glue plus `native/cxx_bridge/cogent_cxx.cpp`.
 4. `build_support/link.rs` links the CMake outputs and target-specific system
    libraries.
-5. `crates/engine` links against `cogentlm-sys` and exposes safe runtime APIs.
+5. The engine modules of `crates/cogentlm` link against `cogentlm-sys` and expose safe runtime APIs.
 
 For Emscripten targets, `crates/sys` only compiles the CXX bridge during Cargo's
 Rust staticlib build. The final browser CMake step later links that Rust
@@ -181,14 +181,14 @@ The browser build has two linked pieces:
 
 ## Node And Python Bindings
 
-Node and Python bindings are high-level host bindings over `cogentlm-engine`.
+Node and Python bindings are high-level host bindings over the `cogentlm` engine modules.
 They do not call llama.cpp or the CXX bridge directly.
 
 `bindings/node/src/lib.rs` uses napi-rs. The `#[napi]` macros and
 `napi::bindgen_prelude` generate the JavaScript-facing native module surface:
 configuration objects, `CogentEngine`, `ModelService`, explicit gateway
 descriptors, async tasks, event draining, and small backend helpers. Native model
-execution still flows through `cogentlm-engine` and then `native_bridge.rs`.
+execution still flows through the `cogentlm` engine modules and then `native_bridge.rs`.
 
 `bindings/python/src/lib.rs` uses PyO3 and Maturin. The `#[pyclass]`,
 `#[pymethods]`, `#[pyfunction]`, and `#[pymodule]` surfaces mirror the same
@@ -225,13 +225,13 @@ Keep these rules in mind when changing boundary code:
 
 Most native changes follow this path:
 
-1. Decide whether the feature belongs in `crates/engine` or really needs a new
+1. Decide whether the feature belongs in the `crates/cogentlm` engine modules or really needs a new
    llama.cpp bridge call. Prefer engine-level composition when possible.
 2. If the feature needs llama.cpp/common/mtmd internals, add or adjust a focused
    function in `cogent_shim.h` and `cogent_shim.cpp`.
 3. Add the Rust-shaped method in `cogent_cxx.h` and `cogent_cxx.cpp`.
 4. Add the matching declaration to `crates/sys/src/bridge.rs`.
-5. Add a safe wrapper in `crates/engine/src/native_bridge.rs`.
+5. Add a safe wrapper in `crates/cogentlm/src/native_bridge.rs`.
 6. Use that wrapper from the runtime, scheduler, lifecycle, or model-service
    module that owns the behavior.
 7. Expose the behavior through Node, Python, or Wasm only if it is part of those
@@ -254,7 +254,7 @@ engine APIs. Avoid duplicating engine behavior in the binding layer.
 Use this file map to narrow investigation quickly:
 
 - Load, backend selection, decode/encode failures: start in
-  `crates/engine/src/runtime/inference_runtime`, then follow
+  `crates/cogentlm/src/runtime/inference_runtime`, then follow
   `native_bridge.rs` into `cogent_cxx.cpp`.
 - Llama.cpp parameter parsing, sampler JSON, chat templates, mtmd, backend
   observability: inspect `cogent_shim.cpp`.

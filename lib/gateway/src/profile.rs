@@ -1,9 +1,9 @@
 use bytes::Bytes;
-use cogentlm_client::{
+use cogentlm::core::{ChatMessage, ChatRole, TokenUsage};
+use cogentlm::{
     CogentChatRequest, CogentEmbedRequest, CogentEmbeddingResponse, CogentQueryRequest,
     CogentTextOptions, CogentTextResponse,
 };
-use cogentlm_core::{ChatMessage, ChatRole, TokenUsage};
 use serde::{Deserialize, Serialize};
 
 use crate::toolkit::{DecodedRequest, GatewayHttpError, ProtocolCodec, ToolkitResult};
@@ -185,21 +185,21 @@ impl ProtocolCodec for GatewayCodec {
 
     fn encode_stream_event(
         &self,
-        event: &cogentlm_gateway_core::GatewayStreamEvent,
+        event: &cogentlm::gateway_core::GatewayStreamEvent,
     ) -> ToolkitResult<Bytes> {
         let (name, value) = match event {
-            cogentlm_gateway_core::GatewayStreamEvent::TokenBatch(batch) => (
+            cogentlm::gateway_core::GatewayStreamEvent::TokenBatch(batch) => (
                 "token",
                 serde_json::json!({
                     "text": batch.text,
                     "sequence": batch.sequence_start,
                 }),
             ),
-            cogentlm_gateway_core::GatewayStreamEvent::Usage(usage) => (
+            cogentlm::gateway_core::GatewayStreamEvent::Usage(usage) => (
                 "usage",
                 serde_json::to_value(UsageBody::from(*usage)).map_err(encode_error)?,
             ),
-            cogentlm_gateway_core::GatewayStreamEvent::Finished { finish_reason, .. } => (
+            cogentlm::gateway_core::GatewayStreamEvent::Finished { finish_reason, .. } => (
                 "done",
                 serde_json::json!({
                     "finish_reason": finish_reason.as_str(),

@@ -151,8 +151,8 @@ See [Source Builds](docs/maintainers/source-builds.md),
 
 ## Repository Layout
 
-- [crates](crates/README.md): foundational Rust crates.
-- [lib](lib/rust/README.md): public package facades and gateway toolkit.
+- [crates](crates/README.md): the published `cogentlm` and `cogentlm-sys` crates.
+- [lib](lib/gateway/README.md): language package surfaces and gateway toolkit.
 - [bindings](bindings/README.md): Node, Python, and browser WASM bindings.
 - [apps](apps/README.md): first-party applications.
 - [examples](examples/README.md): small, runnable integrations.

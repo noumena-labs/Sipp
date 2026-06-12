@@ -56,7 +56,7 @@ cargo xtask run demos build avatar
 cargo xtask run llama backend-ops --backend cpu
 cargo xtask test list
 cargo xtask test unit suite xtask
-cargo xtask test unit suite rust-crates --package cogentlm-core
+cargo xtask test unit suite rust-crates --package cogentlm
 cargo xtask test unit suite node-package --backend cpu
 cargo xtask test smoke group local-model --backend cpu --model <model.gguf>
 cargo xtask test smoke suite example-browser

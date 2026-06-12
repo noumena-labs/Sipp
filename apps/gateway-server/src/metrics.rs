@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
-use cogentlm_core::TokenUsage;
-use cogentlm_gateway_core::Operation;
+use cogentlm::core::TokenUsage;
+use cogentlm::gateway_core::Operation;
 use serde::Serialize;
 
 const TIMESERIES_BUCKET_SECONDS: u64 = 10;
