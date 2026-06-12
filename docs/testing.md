@@ -21,7 +21,7 @@ cargo xtask test unit group full
 cargo xtask test unit group whitebox
 cargo xtask test unit group interface
 cargo xtask test unit suite xtask
-cargo xtask test unit suite rust-crates --package cogentlm-engine
+cargo xtask test unit suite rust-crates --package cogentlm
 cargo xtask test unit suite browser-package
 cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
@@ -50,11 +50,11 @@ Unit suite names expose suite-specific options, such as
 | Command | What runs | Code location |
 | --- | --- | --- |
 | `cargo xtask test unit suite xtask` | xtask CLI and orchestration tests | `xtask/src/tests` |
-| `cargo xtask test unit suite rust-crates` | Core workspace crate unit tests | `crates`, `lib/rust` |
+| `cargo xtask test unit suite rust-crates` | Workspace crate unit tests | `crates`, `lib/gateway`, `apps` |
 | `cargo xtask test unit suite rust-bindings` | Rust binding crate unit tests | `bindings/node`, `bindings/python`, `bindings/wasm` |
 | `cargo xtask test unit suite browser-package` | Browser package TypeScript tests | `lib/web/tests` |
 | `cargo xtask test unit suite demos` | Browser demo TypeScript tests | `demos` |
-| `cargo xtask test unit suite api` | Crate-level public API integration tests | `lib/rust/tests`, `crates/*/tests` |
+| `cargo xtask test unit suite api` | Crate-level public API integration tests | `crates/cogentlm/tests` |
 | `cargo xtask test unit suite cli` | CLI black-box integration tests | `apps/cli/tests` |
 | `cargo xtask test unit suite node-package` | Deterministic Node package API tests | `lib/node`, `bindings/node` |
 | `cargo xtask test unit suite python-package` | Deterministic Python package API tests | `lib/python`, `bindings/python` |
@@ -89,7 +89,7 @@ cases require a model/runtime that reports embedding support.
 | `cargo xtask test smoke suite example-gateway` | Embedded local gateway proxy plus Rust/Node/Python local-and-gateway clients | `examples/gateway`, `examples/rust`, `examples/node`, `examples/python` |
 | `cargo xtask test smoke suite example-browser` | Browser `query.html`/`chat.html`/`embed.html` examples through Playwright | `examples/web` |
 | `cargo xtask test smoke suite playground-browser` | Browser playground runtime smoke through Playwright | `tools/playground` |
-| `cargo xtask test smoke suite llama-backend-ops` | llama.cpp backend operation correctness smoke | `third_party/llama.cpp` |
+| `cargo xtask test smoke suite llama-backend-ops` | llama.cpp backend operation correctness smoke | `crates/sys/llama.cpp` |
 
 ## Smoke Groups
 
@@ -123,4 +123,4 @@ and existing coverage artifacts.
 - `lib/web` publishes `@noumena-labs/cogentlm` and public `cogentlm`.
 - `lib/node` publishes `@noumena-labs/cogentlm-server` and public `cogentlm-server`.
 - `lib/python` publishes Python `cogentlm`.
-- `lib/rust` is the Rust facade crate used by Rust applications and examples.
+- `crates/cogentlm` is the Rust crate used by Rust applications and examples.

@@ -5,16 +5,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use cogentlm_client::{
+use cogentlm::engine::NativeRuntimeConfig;
+#[cfg(test)]
+use cogentlm::lifecycle::BackendCapabilities;
+use cogentlm::lifecycle::{
+    BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
+};
+use cogentlm::{
     AnthropicProviderConfig, CogentClient, EndpointDescriptor, EndpointRef,
     OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig,
     ProviderEndpointConfig, ProviderSecret,
-};
-use cogentlm_engine::engine::NativeRuntimeConfig;
-#[cfg(test)]
-use cogentlm_engine::lifecycle::BackendCapabilities;
-use cogentlm_engine::lifecycle::{
-    BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
 };
 use cogentlm_gateway::GatewayRoutes;
 use serde::Deserialize;

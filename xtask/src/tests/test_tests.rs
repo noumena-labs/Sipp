@@ -65,7 +65,7 @@ fn new_test_commands_parse() {
         "suite",
         "rust-crates",
         "--package",
-        "cogentlm-core",
+        "cogentlm-sys",
     ]);
 
     let Commands::Test { command } = cli.command else {
@@ -80,7 +80,7 @@ fn new_test_commands_parse() {
     let TestUnitSuiteTarget::RustCrates(args) = args.target else {
         panic!("expected rust target");
     };
-    assert_eq!(args.package.as_deref(), Some("cogentlm-core"));
+    assert_eq!(args.package.as_deref(), Some("cogentlm-sys"));
 }
 
 #[test]
@@ -334,7 +334,7 @@ fn unit_suite_selection_selects_one_suite() {
     let selection = selected_unit_suites(&TestUnitArgs {
         command: TestUnitCommands::Suite(TestUnitSuiteArgs {
             target: TestUnitSuiteTarget::RustCrates(crate::cli::TestUnitRustArgs {
-                package: Some("cogentlm-core".to_owned()),
+                package: Some("cogentlm-sys".to_owned()),
             }),
         }),
     })
@@ -348,7 +348,7 @@ fn unit_suite_selection_selects_one_suite() {
             .collect::<Vec<_>>(),
         vec![TestSuiteId::RustCrates]
     );
-    assert_eq!(selection.package.as_deref(), Some("cogentlm-core"));
+    assert_eq!(selection.package.as_deref(), Some("cogentlm-sys"));
 }
 
 #[test]
@@ -539,7 +539,7 @@ fn run_report_summarizes_failed_and_unknown_suite_counts() {
         vec![TestCaseReport {
             suite_id: TestSuiteId::RustCrates,
             name: "bad | case".to_owned(),
-            path: Some("crates/core/src/tests/error_tests.rs".to_owned()),
+            path: Some("crates/cogentlm/src/tests/error_tests.rs".to_owned()),
             status: CaseStatus::Failed,
             error: Some("bad | value\nnext".to_owned()),
         }],
@@ -812,17 +812,17 @@ fn run_keeps_demo_example_tool_and_llama_groups() {
 #[test]
 fn package_filter_only_applies_to_rust_crates_suite() {
     let rust_crates = suite_by_id(TestSuiteId::RustCrates).unwrap();
-    assert!(validate_package_filter(&[rust_crates], Some("cogentlm-core")).is_ok());
+    assert!(validate_package_filter(&[rust_crates], Some("cogentlm-sys")).is_ok());
 
     let xtask = suite_by_id(TestSuiteId::Xtask).unwrap();
     assert!(validate_package_filter(&[xtask], Some("xtask")).is_err());
-    assert!(validate_package_filter(&[rust_crates, xtask], Some("cogentlm-core")).is_err());
+    assert!(validate_package_filter(&[rust_crates, xtask], Some("cogentlm-sys")).is_err());
 }
 
 #[test]
 fn filtered_rust_targets_reject_unknown_packages() {
-    let targets = filtered_rust_targets(RUST_CRATE_TEST_TARGETS, Some("cogentlm-core")).unwrap();
-    assert_eq!(targets, vec![RustTestTarget::lib("cogentlm-core")]);
+    let targets = filtered_rust_targets(RUST_CRATE_TEST_TARGETS, Some("cogentlm-sys")).unwrap();
+    assert_eq!(targets, vec![RustTestTarget::lib("cogentlm-sys")]);
     assert!(filtered_rust_targets(RUST_CRATE_TEST_TARGETS, Some("xtask")).is_err());
 }
 

@@ -306,7 +306,10 @@ impl BuildContext {
     }
 
     pub(crate) fn llama_cpp_dir(&self) -> PathBuf {
-        self.workspace_root.join("third_party").join("llama.cpp")
+        self.workspace_root
+            .join("crates")
+            .join("sys")
+            .join("llama.cpp")
     }
 
     pub(crate) fn demo_dir(&self, demo: &str) -> PathBuf {

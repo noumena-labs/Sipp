@@ -9,7 +9,7 @@ use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::routing::{get, put};
 use axum::{Json, Router};
-use cogentlm_engine::backend::backend_observability_json;
+use cogentlm::backend::backend_observability_json;
 use rand::random;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

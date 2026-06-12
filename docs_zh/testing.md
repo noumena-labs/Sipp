@@ -20,7 +20,7 @@ cargo xtask test unit group full
 cargo xtask test unit group whitebox
 cargo xtask test unit group interface
 cargo xtask test unit suite xtask
-cargo xtask test unit suite rust-crates --package cogentlm-engine
+cargo xtask test unit suite rust-crates --package cogentlm
 cargo xtask test unit suite browser-package
 cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
@@ -47,11 +47,11 @@ cargo xtask test verify --changed
 | 命令 | 测试内容 | 代码路径 |
 | --- | --- | --- |
 | `cargo xtask test unit suite xtask` | xtask 工具及编排逻辑测试 | `xtask/src/tests` |
-| `cargo xtask test unit suite rust-crates` | 核心工作区 Crate 的单元测试 | `crates`, `lib/rust` |
+| `cargo xtask test unit suite rust-crates` | 工作区 Crate 的单元测试 | `crates`, `lib/gateway`, `apps` |
 | `cargo xtask test unit suite rust-bindings` | Rust 绑定 Crate 的单元测试 | `bindings/node`, `bindings/python`, `bindings/wasm` |
 | `cargo xtask test unit suite browser-package` | 浏览器包 TypeScript 测试 | `lib/web/tests` |
 | `cargo xtask test unit suite demos` | 浏览器端演示项目的 TypeScript 测试 | `demos` |
-| `cargo xtask test unit suite api` | 库级别公共 API 集成测试 | `lib/rust/tests`, `crates/*/tests` |
+| `cargo xtask test unit suite api` | 库级别公共 API 集成测试 | `crates/cogentlm/tests` |
 | `cargo xtask test unit suite cli` | CLI 的黑盒集成测试 | `apps/cli/tests` |
 | `cargo xtask test unit suite node-package` | Node 库的确定性 API 测试 | `lib/node`, `bindings/node` |
 | `cargo xtask test unit suite python-package` | Python 库的确定性 API 测试 | `lib/python`, `bindings/python` |
@@ -82,7 +82,7 @@ cargo xtask test verify --changed
 | `cargo xtask test smoke suite example-gateway` | 嵌入式本地网关代理 + Rust/Node/Python 客户端示例 | `examples/gateway`, `examples/rust`, `examples/node`, `examples/python` |
 | `cargo xtask test smoke suite example-browser` | Playwright 自动化执行浏览器示例（`query.html`/`chat.html`/`embed.html`） | `examples/web` |
 | `cargo xtask test smoke suite playground-browser` | Playwright 自动化执行 Playground 测试 | `tools/playground` |
-| `cargo xtask test smoke suite llama-backend-ops` | 验证 llama.cpp 后端操作正确性 | `third_party/llama.cpp` |
+| `cargo xtask test smoke suite llama-backend-ops` | 验证 llama.cpp 后端操作正确性 | `crates/sys/llama.cpp` |
 
 ## 冒烟测试组
 
@@ -105,4 +105,4 @@ cargo xtask test verify --changed
 - `lib/web` 构建并发布 `@noumena-labs/cogentlm` 及通用浏览器包 `cogentlm`。
 - `lib/node` 构建并发布 `@noumena-labs/cogentlm-server` 及通用 Node 服务端包 `cogentlm-server`。
 - `lib/python` 构建并发布 Python 包 `cogentlm`。
-- `lib/rust` 提供 Rust 门面 API，供外部 Rust 应用和示例使用。
+- `crates/cogentlm` 提供 Rust 库 API，供外部 Rust 应用和示例使用。

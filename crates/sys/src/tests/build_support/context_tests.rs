@@ -179,10 +179,7 @@ fn build_context_new_reads_manifest_target_features_and_env() {
 
     let context = BuildContext::new();
     assert_eq!(context.manifest_dir, manifest_dir);
-    assert_eq!(
-        context.llama_dir,
-        context.manifest_dir.join("../../third_party/llama.cpp")
-    );
+    assert_eq!(context.llama_dir, context.manifest_dir.join("llama.cpp"));
     assert_eq!(context.target, "wasm32-unknown-emscripten");
     assert_eq!(context.target_kind, TargetKind::Emscripten);
     assert!(context.features.vulkan);
@@ -215,7 +212,7 @@ fn workspace_and_default_cmake_paths_use_target_and_backend_tags() {
 #[test]
 fn validate_llama_dir_accepts_expected_header() {
     let temp = TempDir::new("context-llama-ok");
-    let llama_dir = temp.join("third_party/llama.cpp");
+    let llama_dir = temp.join("crates/sys/llama.cpp");
     fs::create_dir_all(llama_dir.join("include")).expect("llama include dir");
     fs::write(llama_dir.join("include/llama.h"), b"").expect("llama header");
     let mut context = context_for(
@@ -236,7 +233,7 @@ fn validate_llama_dir_panics_for_missing_header() {
         "",
         flags(false, false, false, false, false),
     );
-    context.llama_dir = temp.join("third_party/llama.cpp");
+    context.llama_dir = temp.join("crates/sys/llama.cpp");
 
     let panic = std::panic::catch_unwind(|| context.validate_llama_dir())
         .expect_err("missing llama.h should panic");

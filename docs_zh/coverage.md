@@ -46,7 +46,7 @@ cargo xtask test verify --changed
 - `run-report.json` 和 `run-report.md`
 - `verify-report.json` 和 `verify-report.md`
 
-覆盖率基准（baseline）只包含 `crates/` 和 `bindings/` 目录下的第一方代码，排除了构建输出、缓存、测试、示例和 `third_party/`。
+覆盖率基准（baseline）只包含 `crates/` 和 `bindings/` 目录下的第一方代码，排除了构建输出、缓存、测试、示例、`third_party/` 以及内嵌的 `crates/sys/llama.cpp/` 第三方源码。
 
 ## 覆盖率策略
 

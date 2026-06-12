@@ -1,4 +1,4 @@
 [submodule "third_party/llama.cpp"]
-	path = third_party/llama.cpp
+	path = crates/sys/llama.cpp
 	url = git@github.com:noumena-labs/llama.cpp.git
 	branch = master

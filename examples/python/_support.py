@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 
-DEFAULT_MAX_TOKENS = 128
+DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.8
 DEFAULT_CONTEXT = 2048

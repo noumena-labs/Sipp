@@ -309,12 +309,22 @@ dependencies = [
 name = "cogentlm"
 version = "0.1.0"
 dependencies = [
- "cogentlm-client",
- "cogentlm-core",
- "cogentlm-engine",
- "cogentlm-gateway",
- "cogentlm-shard",
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "cogentlm-sys",
+ "cxx",
  "futures",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -329,72 +339,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "cogentlm-client"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "cogentlm-core",
- "cogentlm-engine",
- "cogentlm-providers",
- "futures",
- "futures-channel",
- "futures-core",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "wiremock",
-]
-
-[[package]]
-name = "cogentlm-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "cogentlm-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cogentlm-core",
- "cogentlm-shard",
- "cogentlm-sys",
- "cxx",
- "futures",
- "futures-channel",
- "futures-core",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "cogentlm-gateway"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "cogentlm-client",
- "cogentlm-core",
- "cogentlm-gateway-core",
+ "cogentlm",
  "http",
  "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "cogentlm-gateway-core"
-version = "0.1.0"
-dependencies = [
- "cogentlm-client",
- "cogentlm-core",
- "futures-util",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -408,10 +359,8 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
- "cogentlm-client",
- "cogentlm-engine",
+ "cogentlm",
  "cogentlm-gateway",
- "cogentlm-gateway-core",
  "futures-util",
  "serde",
  "serde_json",
@@ -426,11 +375,8 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
- "cogentlm-client",
- "cogentlm-core",
- "cogentlm-engine",
+ "cogentlm",
  "cogentlm-gateway",
- "cogentlm-gateway-core",
  "futures-util",
  "http",
  "rand",
@@ -449,9 +395,7 @@ dependencies = [
 name = "cogentlm-napi"
 version = "0.1.0"
 dependencies = [
- "cogentlm-client",
- "cogentlm-core",
- "cogentlm-engine",
+ "cogentlm",
  "futures",
  "napi",
  "napi-build",
@@ -462,28 +406,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cogentlm-providers"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "cogentlm-core",
- "futures-util",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "wiremock",
-]
-
-[[package]]
 name = "cogentlm-py"
 version = "0.1.0"
 dependencies = [
- "cogentlm-client",
- "cogentlm-core",
- "cogentlm-engine",
+ "cogentlm",
  "futures",
  "pyo3",
  "serde",
@@ -496,17 +422,8 @@ name = "cogentlm-rust-examples"
 version = "0.1.0"
 dependencies = [
  "cogentlm",
- "cogentlm-providers",
  "futures",
  "tokio",
-]
-
-[[package]]
-name = "cogentlm-shard"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -523,9 +440,7 @@ dependencies = [
 name = "cogentlm-wasm"
 version = "0.1.0"
 dependencies = [
- "cogentlm-client",
- "cogentlm-engine",
- "cogentlm-shard",
+ "cogentlm",
  "serde",
  "serde_json",
  "sha2",

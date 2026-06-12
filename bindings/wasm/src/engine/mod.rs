@@ -12,20 +12,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::backend::set_llama_log_quiet;
+use cogentlm::backend::set_llama_log_quiet;
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::engine::protocol::{EmbedOptions, PoolingType};
+use cogentlm::engine::protocol::{EmbedOptions, PoolingType};
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::runtime::config::{
-    NativeRuntimeConfig, RequestSampling, SamplingRuntimePatch,
-};
+use cogentlm::runtime::config::{NativeRuntimeConfig, RequestSampling, SamplingRuntimePatch};
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::runtime::request::{
+use cogentlm::runtime::request::{
     GenerateResponse, GenerateResponseStatus, ResponseOutput, TokenEmissionSink,
     TokenEmissionSinkRef,
 };
 #[cfg(target_family = "wasm")]
-use cogentlm_engine::runtime::{InferenceRuntime, SchedulerBurstResult};
+use cogentlm::runtime::{InferenceRuntime, SchedulerBurstResult};
 
 use crate::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};
 
@@ -1105,7 +1103,7 @@ fn scheduler_loop_result_from_runtime(result: SchedulerBurstResult) -> BrowserSc
 
 #[cfg(target_family = "wasm")]
 fn runtime_metrics_from_core(
-    metrics: cogentlm_engine::runtime::metrics::RuntimeObservabilityMetrics,
+    metrics: cogentlm::runtime::metrics::RuntimeObservabilityMetrics,
 ) -> BrowserRuntimeMetrics {
     BrowserRuntimeMetrics {
         ttft_ms: metrics.ttft_ms,

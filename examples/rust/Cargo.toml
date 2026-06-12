@@ -24,6 +24,10 @@ name = "vision_chat"
 path = "src/vision_chat.rs"
 
 [[bin]]
+name = "provider_chat"
+path = "src/provider_chat.rs"
+
+[[bin]]
 name = "gateway_query"
 path = "src/gateway_query.rs"
 required-features = ["gateway"]
@@ -38,10 +42,6 @@ name = "gateway_embed"
 path = "src/gateway_embed.rs"
 required-features = ["gateway"]
 
-[[bin]]
-name = "openai_provider_chat"
-path = "src/openai_provider_chat.rs"
-
 [features]
 default = ["native"]
 native = ["cogentlm/native"]
@@ -53,7 +53,6 @@ vulkan = ["cogentlm/vulkan"]
 openmp = ["cogentlm/openmp"]
 
 [dependencies]
-cogentlm.workspace = true
-cogentlm-providers.workspace = true
+cogentlm = { workspace = true, features = ["providers"] }
 futures.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

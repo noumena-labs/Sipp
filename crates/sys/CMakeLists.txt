@@ -21,7 +21,7 @@ if(GGML_BACKEND_DL)
   endif()
 endif()
 
-set(COGENTLM_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp")
+set(COGENTLM_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp")
 
 if(NOT EXISTS "${COGENTLM_LLAMA_CPP_DIR}/include/llama.h")
   message(FATAL_ERROR "Could not find llama.cpp at ${COGENTLM_LLAMA_CPP_DIR}")

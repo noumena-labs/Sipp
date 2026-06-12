@@ -268,17 +268,21 @@ void restore_llama_log_callback() {
     if (g_llama_log_quiet.load()) {
         common_log_set_verbosity_thold(-1);
         llama_log_set(quiet_llama_log_callback, nullptr);
+        mtmd_helper_log_set(quiet_llama_log_callback, nullptr);
     } else {
         common_log_set_verbosity_thold(LOG_DEFAULT_LLAMA);
         llama_log_set(nullptr, nullptr);
+        mtmd_helper_log_set(nullptr, nullptr);
     }
 #else
     if (g_llama_log_quiet.load()) {
         common_log_pause(common_log_main());
         llama_log_set(quiet_llama_log_callback, nullptr);
+        mtmd_helper_log_set(quiet_llama_log_callback, nullptr);
     } else {
         common_log_resume(common_log_main());
         llama_log_set(nullptr, nullptr);
+        mtmd_helper_log_set(nullptr, nullptr);
     }
 #endif
 }

@@ -1,20 +1,16 @@
-# Foundational Crates
+# Published Crates
 
-`crates/` contains the foundational Rust implementation. These crates provide
-inference primitives, endpoint registration, gateway execution traits, provider
-adapters, and native integration layers used by the public packages.
+`crates/` contains the two crates published to crates.io.
 
 ## Crates
 
-- `sys`: unsafe FFI bindings and native llama.cpp shims.
-- `core`: low-level shared types.
-- `engine`: local inference, scheduling, model lifecycle, and memory
-  management.
-- `shard`: GGUF cache planning and split-file utilities.
-- `client`: typed endpoint registration and query, chat, embed dispatch.
-- `gateway-core`: protocol-neutral gateway execution traits and pipeline
-  ordering.
-- `providers`: explicitly selected external provider adapters.
+- `cogentlm`: the public Rust library. Former foundational crates live on as
+  module folders — `core` (shared types), `shard` (GGUF planning and
+  split-file utilities), the engine modules (`backend`, `engine`, `lifecycle`,
+  `runtime`), the root-level client API, `providers` (feature `providers`),
+  and `gateway_core` (feature `gateway`).
+- `sys`: unsafe FFI bindings, native llama.cpp shims, and the vendored
+  `llama.cpp/` source tree (`cogentlm-sys`).
 
 ## Boundaries
 

@@ -13,13 +13,13 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use bytes::Bytes;
-use cogentlm_client::{CogentRequestContext, CogentTextResponseFuture, CogentTokenBatches};
-use cogentlm_core::TokenUsage;
+use cogentlm::core::TokenUsage;
+use cogentlm::gateway_core::{GatewayStreamEvent, Operation};
+use cogentlm::{CogentRequestContext, CogentTextResponseFuture, CogentTokenBatches};
 use cogentlm_gateway::{
     request_context, request_id, AuthenticatedRequest, Authenticator, GatewayCodec,
     GatewayHttpError, GatewayRoutes, ProtocolCodec, ToolkitResult,
 };
-use cogentlm_gateway_core::{GatewayStreamEvent, Operation};
 use futures_util::future::{select, Either};
 use futures_util::{stream, Stream, StreamExt};
 use tower_http::cors::CorsLayer;
@@ -469,17 +469,14 @@ fn caller_label(authenticated: &AuthenticatedRequest) -> Option<String> {
         .map(str::to_string)
 }
 
-fn resolve_endpoint(
-    state: &PublicState,
-    target: &str,
-) -> ToolkitResult<cogentlm_client::EndpointRef> {
+fn resolve_endpoint(state: &PublicState, target: &str) -> ToolkitResult<cogentlm::EndpointRef> {
     state.runtime.targets.get(target).cloned().ok_or_else(|| {
         GatewayHttpError::new(StatusCode::NOT_FOUND, "resolution", "target not found")
     })
 }
 
 fn authorize(
-    context: &cogentlm_gateway_core::GatewayRequestContext,
+    context: &cogentlm::gateway_core::GatewayRequestContext,
     target: &str,
 ) -> ToolkitResult<()> {
     let allowed = context
@@ -612,7 +609,7 @@ fn text_event_stream(
 
 fn finish_text_stream(
     state: &mut TextStreamState,
-    response: cogentlm_client::CogentResult<cogentlm_client::CogentTextResponse>,
+    response: cogentlm::CogentResult<cogentlm::CogentTextResponse>,
 ) {
     state.terminal = true;
     state._permit.take();

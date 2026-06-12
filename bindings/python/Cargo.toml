@@ -12,16 +12,14 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["native"]
-native = ["cogentlm-engine/native", "cogentlm-client/native"]
-cuda = ["cogentlm-engine/cuda", "cogentlm-client/cuda"]
-metal = ["cogentlm-engine/metal", "cogentlm-client/metal"]
-vulkan = ["cogentlm-engine/vulkan", "cogentlm-client/vulkan"]
-openmp = ["cogentlm-engine/openmp", "cogentlm-client/openmp"]
+native = ["cogentlm/native"]
+cuda = ["cogentlm/cuda"]
+metal = ["cogentlm/metal"]
+vulkan = ["cogentlm/vulkan"]
+openmp = ["cogentlm/openmp"]
 
 [dependencies]
-cogentlm-client = { workspace = true, default-features = false, features = ["providers"] }
-cogentlm-core.workspace = true
-cogentlm-engine.workspace = true
+cogentlm = { workspace = true, features = ["providers"] }
 futures.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py39", "extension-module"] }
 serde.workspace = true

@@ -186,7 +186,7 @@ Suites and code locations:
   example-gateway     embedded local gateway proxy plus local/gateway clients
   example-browser     examples/web query/chat/embed pages through Playwright
   playground-browser  tools/playground runtime smoke through Playwright
-  llama-backend-ops   third_party/llama.cpp test-backend-ops";
+  llama-backend-ops   crates/sys/llama.cpp test-backend-ops";
 
 const SMOKE_GROUP_HELP: &str = "\
 Run a named bundle of smoke suites.
@@ -201,7 +201,7 @@ Run deterministic tests through explicit suite and group namespaces.
 
 Examples:
   cargo xtask test unit suite xtask
-  cargo xtask test unit suite rust-crates --package cogentlm-core
+  cargo xtask test unit suite rust-crates --package cogentlm
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test unit group whitebox
   cargo xtask test unit group interface
@@ -214,7 +214,7 @@ Run exactly one deterministic unit suite.
 
 Suites and code locations:
   xtask             xtask CLI and orchestration tests under xtask/src/tests
-  rust-crates       core workspace crate unit tests under crates/ and lib/rust
+  rust-crates       workspace crate unit tests under crates/, lib/gateway, and apps/
   rust-bindings     Rust tests for Node, Python, and WASM binding crates
   browser-package   browser package TypeScript tests under lib/web/tests
   demos             browser demo TypeScript tests under demos/
@@ -239,7 +239,7 @@ Examples:
   cargo xtask test list --group unit --layer interface --cases --search router --format json
   cargo xtask test unit group full
   cargo xtask test unit group whitebox
-  cargo xtask test unit suite rust-crates --package cogentlm-core
+  cargo xtask test unit suite rust-crates --package cogentlm
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test smoke suite example-node --backend cpu
   cargo xtask test smoke suite playground-browser

@@ -11,7 +11,20 @@ use std::{
     time::Duration,
 };
 
-use cogentlm_client::{
+use cogentlm::backend::{
+    backend_observability_json as core_backend_observability_json,
+    set_llama_log_quiet as core_set_llama_log_quiet,
+};
+use cogentlm::core::TokenUsage;
+use cogentlm::engine::protocol::{CacheSource, RequestStats};
+use cogentlm::engine::{
+    ChatMessage, ChatRole, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
+    ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
+    ResidencyRuntimeConfig, RopeScaling, SamplerStage, SamplingRuntimeConfig,
+    SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+};
+use cogentlm::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
+use cogentlm::{
     AnthropicProviderConfig as CoreAnthropicProviderConfig, CogentChatRequest as ClientChatRequest,
     CogentClient as CoreCogentClient, CogentEmbedRequest as ClientEmbedRequest,
     CogentEmbeddingResponse as ClientEmbeddingResponse,
@@ -30,19 +43,6 @@ use cogentlm_client::{
     ProviderEndpointConfig as CoreProviderEndpointConfig,
     ProviderEndpointError as CoreProviderEndpointError, ProviderSecret as CoreProviderSecret,
 };
-use cogentlm_core::TokenUsage;
-use cogentlm_engine::backend::{
-    backend_observability_json as core_backend_observability_json,
-    set_llama_log_quiet as core_set_llama_log_quiet,
-};
-use cogentlm_engine::engine::protocol::{CacheSource, RequestStats};
-use cogentlm_engine::engine::{
-    ChatMessage, ChatRole, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
-    ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
-    ResidencyRuntimeConfig, RopeScaling, SamplerStage, SamplingRuntimeConfig,
-    SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
-};
-use cogentlm_engine::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
 use futures::executor::block_on;
 use futures::StreamExt;
 use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
@@ -291,7 +291,7 @@ impl PyModelPlacementConfig {
 #[pyclass(name = "ContextRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyContextRuntimeConfig {
-    core: cogentlm_engine::engine::ContextRuntimeConfig,
+    core: cogentlm::engine::ContextRuntimeConfig,
 }
 
 #[pymethods]
@@ -351,7 +351,7 @@ impl PyContextRuntimeConfig {
         embeddings: Option<bool>,
         pooling: Option<String>,
     ) -> PyResult<Self> {
-        let mut core = cogentlm_engine::engine::ContextRuntimeConfig {
+        let mut core = cogentlm::engine::ContextRuntimeConfig {
             n_ctx,
             n_batch,
             n_ubatch,
@@ -392,8 +392,8 @@ impl PyContextRuntimeConfig {
     }
 }
 
-fn parse_pooling_type(value: &str) -> PyResult<cogentlm_engine::engine::PoolingType> {
-    cogentlm_engine::engine::PoolingType::from_name(value)
+fn parse_pooling_type(value: &str) -> PyResult<cogentlm::engine::PoolingType> {
+    cogentlm::engine::PoolingType::from_name(value)
         .ok_or_else(|| PyValueError::new_err(format!("unknown pooling type: {value}")))
 }
 
@@ -473,7 +473,7 @@ impl PySchedulerRuntimeConfig {
 #[pyclass(name = "CacheRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyCacheRuntimeConfig {
-    core: cogentlm_engine::engine::CacheRuntimeConfig,
+    core: cogentlm::engine::CacheRuntimeConfig,
 }
 
 #[pymethods]
@@ -495,7 +495,7 @@ impl PyCacheRuntimeConfig {
         max_snapshot_entries: Option<i32>,
         max_snapshot_bytes: Option<usize>,
     ) -> PyResult<Self> {
-        let mut core = cogentlm_engine::engine::CacheRuntimeConfig::default();
+        let mut core = cogentlm::engine::CacheRuntimeConfig::default();
         if let Some(value) = mode {
             core.mode = parse_kv_reuse_mode(&value)?;
         }
@@ -1815,11 +1815,11 @@ fn to_py_client_error(error: ClientError) -> PyErr {
     }
 }
 
-fn to_py_error(error: cogentlm_engine::Error) -> PyErr {
+fn to_py_error(error: cogentlm::error::Error) -> PyErr {
     match error {
-        cogentlm_engine::Error::InvalidRequest(message)
-        | cogentlm_engine::Error::InvalidConfig(message) => PyValueError::new_err(message),
-        cogentlm_engine::Error::UnsupportedOperation { operation, reason } => {
+        cogentlm::error::Error::InvalidRequest(message)
+        | cogentlm::error::Error::InvalidConfig(message) => PyValueError::new_err(message),
+        cogentlm::error::Error::UnsupportedOperation { operation, reason } => {
             UnsupportedOperationError::new_err(format!(
                 "unsupported operation {operation}: {reason}"
             ))

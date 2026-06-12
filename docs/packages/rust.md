@@ -13,10 +13,10 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 cargo add cogentlm
 ```
 
-The current release workflow packages a Rust source artifact and blocks
-crates.io publishing until the private native submodule dependency is resolved.
-Use [Source Builds](../maintainers/source-builds.md) when consuming the facade
-from this checkout.
+The release workflow packages a Rust source artifact; crates.io publishing of
+the `cogentlm` and `cogentlm-sys` crates is pending release wiring. Use
+[Source Builds](../maintainers/source-builds.md) when consuming the crate from
+this checkout.
 
 ## Use It For
 

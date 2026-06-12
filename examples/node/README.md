@@ -42,4 +42,29 @@ node examples/node/gateway_embed.mjs <model.gguf> local [input]
 
 `gateway_embed` requires a model/runtime that reports embedding support.
 
+## Direct Provider Chat
+
+Direct provider examples call the selected provider from the Node process
+without a gateway. By default they use the `gemini` preset, which maps to
+CogentLM's OpenAI-compatible provider descriptor.
+
+```bash
+export COGENTLM_PROVIDER="gemini"
+export GEMINI_API_KEY="<gemini-api-key>"
+node examples/node/provider_chat.mjs [input]
+```
+
+For any OpenAI-compatible provider, pass the generic descriptor fields:
+
+```bash
+export COGENTLM_PROVIDER="openai_compatible"
+export COGENTLM_PROVIDER_BASE_URL="https://provider.example/v1"
+export COGENTLM_PROVIDER_API_KEY="<provider-api-key>"
+export COGENTLM_PROVIDER_MODEL="<provider-model>"
+node examples/node/provider_chat.mjs [input]
+```
+
+Keep provider credentials in trusted server-side Node code, not in browser
+bundles.
+
 See [../README.md](../README.md) for shared gateway and provider setup details.

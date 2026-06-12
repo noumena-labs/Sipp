@@ -31,11 +31,26 @@ cargo run -p cogentlm-rust-examples --features gateway --bin gateway_embed -- <m
 
 `gateway_embed` requires a model/runtime that reports embedding support.
 
-## Provider Example
+## Direct Provider Chat
+
+Direct provider examples call the selected provider from the Rust process
+without a gateway. By default they use the `gemini` preset, which maps to
+CogentLM's OpenAI-compatible provider descriptor.
 
 ```bash
-export OPENAI_API_KEY="<openai-api-key>"
-cargo run -p cogentlm-rust-examples --bin openai_provider_chat -- [input]
+export COGENTLM_PROVIDER="gemini"
+export GEMINI_API_KEY="<gemini-api-key>"
+cargo run -p cogentlm-rust-examples --bin provider_chat -- [input]
+```
+
+For any OpenAI-compatible provider, pass the generic descriptor fields:
+
+```bash
+export COGENTLM_PROVIDER="openai_compatible"
+export COGENTLM_PROVIDER_BASE_URL="https://provider.example/v1"
+export COGENTLM_PROVIDER_API_KEY="<provider-api-key>"
+export COGENTLM_PROVIDER_MODEL="<provider-model>"
+cargo run -p cogentlm-rust-examples --bin provider_chat -- [input]
 ```
 
 Provider credentials belong in trusted server or gateway processes, not

@@ -29,7 +29,7 @@ impl BuildContext {
     pub(crate) fn new() -> Self {
         let manifest_dir =
             sanitize_path(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-        let llama_dir = manifest_dir.join("../../third_party/llama.cpp");
+        let llama_dir = manifest_dir.join("llama.cpp");
         let target = env::var("TARGET").unwrap_or_default();
         let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
         let target_kind = targets::classify(&target_os, &target);

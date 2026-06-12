@@ -66,7 +66,7 @@ clm docs build --lang zh
 clm test list
 clm test list --group unit --layer interface --cases --search router --format json
 clm test unit group full
-clm test unit suite rust-crates --package cogentlm-engine
+clm test unit suite rust-crates --package cogentlm
 clm test unit suite node-package --backend cpu
 clm test unit suite browser-package
 clm test smoke suite example-node --backend cpu

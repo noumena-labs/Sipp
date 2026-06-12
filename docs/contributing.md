@@ -37,8 +37,8 @@ For each issue or PR:
 - Read the root README and the relevant package or app README.
 - Use `cargo xtask test list` to inspect available validation targets.
 - Use `cargo xtask` commands for builds and long-running workflows.
-- Avoid changing vendored files under `third_party/` unless the task is
-  explicitly about the vendor source.
+- Avoid changing vendored files under `third_party/` or `crates/sys/llama.cpp/`
+  unless the task is explicitly about the vendor source.
 
 ## Documentation Changes
 

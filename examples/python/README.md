@@ -21,6 +21,9 @@ python examples/python/embed.py <model.gguf> [input]
 python examples/python/vision_chat.py <model.gguf> <projector.gguf> <image> [input]
 ```
 
+Note that if you encountered `ModuleNotFoundError: No module named 'cogentlm'`,
+use `.\lib\python\.venv\Scripts\python`.
+
 Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a built backend.
 
 ## Gateway Clients
@@ -41,5 +44,27 @@ python examples/python/gateway_embed.py <model.gguf> local [input]
 ```
 
 `gateway_embed` requires a model/runtime that reports embedding support.
+
+## Direct Provider Chat
+
+Direct provider examples call the selected provider from the Python process
+without a gateway. By default they use the `gemini` preset, which maps to
+CogentLM's OpenAI-compatible provider descriptor.
+
+```bash
+export COGENTLM_PROVIDER="gemini"
+export GEMINI_API_KEY="<gemini-api-key>"
+python examples/python/provider_chat.py [input]
+```
+
+For any OpenAI-compatible provider, pass the generic descriptor fields:
+
+```bash
+export COGENTLM_PROVIDER="openai_compatible"
+export COGENTLM_PROVIDER_BASE_URL="https://provider.example/v1"
+export COGENTLM_PROVIDER_API_KEY="<provider-api-key>"
+export COGENTLM_PROVIDER_MODEL="<provider-model>"
+python examples/python/provider_chat.py [input]
+```
 
 See [../README.md](../README.md) for shared gateway and provider setup details.

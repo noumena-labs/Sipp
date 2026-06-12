@@ -5,25 +5,30 @@ The public package surfaces compose lower-level crates without moving HTTP
 routes, serialized wire formats, or deployment defaults into core inference
 layers.
 
-## Foundational Crates
+## Published Crates
 
-- `crates/sys`: unsafe FFI bindings and native llama.cpp shims.
-- `crates/core`: low-level shared types.
-- `crates/engine`: local inference, scheduling, lifecycle, and memory
-  management.
-- `crates/shard`: GGUF cache planning and split-file utilities.
-- `crates/client`: typed endpoint registration and query, chat, embed dispatch.
-- `crates/gateway-core`: protocol-neutral gateway execution traits and
-  pipeline ordering.
-- `crates/providers`: explicitly selected external provider adapters.
+- `crates/cogentlm`: the public `cogentlm` Rust library. Former foundational
+  crates continue as module folders:
+  - `core`: low-level shared types.
+  - `shard`: GGUF cache planning and split-file utilities.
+  - `backend`, `engine`, `lifecycle`, `runtime`: local inference, scheduling,
+    lifecycle, and memory management.
+  - `client`: typed endpoint registration and query, chat, embed dispatch,
+    re-exported at the crate root.
+  - `providers` (feature `providers`): explicitly selected external provider
+    adapters.
+  - `gateway_core` (feature `gateway`): protocol-neutral gateway execution
+    traits and pipeline ordering.
+- `crates/sys`: the `cogentlm-sys` crate — unsafe FFI bindings, native
+  llama.cpp shims, and the vendored `llama.cpp/` source tree.
 
 ## Public Libraries
 
-- `lib/rust`: Rust facade crate.
 - `lib/web`: browser package source.
 - `lib/node`: Node.js server package source.
 - `lib/python`: Python package source.
-- `lib/gateway`: route-free HTTP gateway toolkit.
+- `lib/gateway`: route-free HTTP gateway toolkit, consumed from source
+  checkouts.
 
 ## Applications And Examples
 

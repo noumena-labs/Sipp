@@ -12,8 +12,8 @@ larger browser experience.
 1. Run `rust`, `node`, or `python` for local GGUF `query`, `chat`, and `embed`.
 2. Run `web` for browser-local GGUF loading in Vite.
 3. Run `gateway` workflows to compare local endpoints with a gateway target.
-4. Inspect `rust/openai_provider_chat.rs` for direct provider calls from a
-   trusted server-side process.
+4. Run `provider_chat` for direct provider calls from a trusted server-side
+   process.
 
 All client examples register endpoints through `add(key, descriptor)`. The
 returned endpoint reference is passed to `query`, `chat`, or `embed` when a
@@ -79,6 +79,32 @@ export COGENTLM_GATEWAY_TOKEN="dev-token"
 cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 ```
 
+## Direct Provider Examples
+
+Direct provider examples call the selected provider from the current trusted
+process without a gateway. By default they use the `gemini` preset, which maps
+to CogentLM's OpenAI-compatible provider descriptor.
+
+```bash
+export COGENTLM_PROVIDER="gemini"
+export GEMINI_API_KEY="<gemini-api-key>"
+cargo run -p cogentlm-rust-examples --bin provider_chat -- [input]
+node examples/node/provider_chat.mjs [input]
+python examples/python/provider_chat.py [input]
+```
+
+For any OpenAI-compatible provider, pass the generic descriptor fields:
+
+```bash
+export COGENTLM_PROVIDER="openai_compatible"
+export COGENTLM_PROVIDER_BASE_URL="https://provider.example/v1"
+export COGENTLM_PROVIDER_API_KEY="<provider-api-key>"
+export COGENTLM_PROVIDER_MODEL="<provider-model>"
+```
+
+Use direct providers only in trusted server-side runtimes. Browser code should
+call a gateway or application route instead of holding provider credentials.
+
 ## Browser Examples
 
 ```bash
@@ -109,7 +135,8 @@ cargo xtask test smoke suite example-browser --case embed
 cargo xtask test smoke group examples
 ```
 
-OpenAI examples are documented and manual because they require a real API key.
+Direct provider examples are documented and manual because they require a real
+provider API key.
 
 See [docs/examples-demos.md](../docs/examples-demos.md) for the documentation
 index.
