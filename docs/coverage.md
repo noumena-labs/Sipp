@@ -1,6 +1,6 @@
 # Coverage
 
-CogentLM coverage is driven through the same test catalog used by
+Sipp coverage is driven through the same test catalog used by
 `cargo xtask test list`. General test command guidance lives in
 [testing.md](testing.md).
 

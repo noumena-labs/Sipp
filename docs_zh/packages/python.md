@@ -1,13 +1,13 @@
 # Python 包
 
-Python 包发布名称为 `cogentlm`。提供原生描述符类、运行句柄和 Token 流式传输，采用与 Rust 客户端相同的端点模型。
+Python 包发布名称为 `sipp`。提供原生描述符类、运行句柄和 Token 流式传输，采用与 Rust 客户端相同的端点模型。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api)。
 
 ## 安装
 
 ```bash
-pip install cogentlm
+pip install sipp
 ```
 
 ## 适用场景
@@ -22,10 +22,10 @@ pip install cogentlm
 ```python
 import sys
 
-from cogentlm import (
+from sipp import (
     CacheRuntimeConfig,
-    CogentClient,
-    CogentTextOptions,
+    SippClient,
+    SippTextOptions,
     ContextRuntimeConfig,
     LocalModelDescriptor,
     LocalTextOptions,
@@ -35,7 +35,7 @@ from cogentlm import (
 )
 
 
-client = CogentClient()
+client = SippClient()
 endpoint = client.add(
     "default",
     LocalModelDescriptor(
@@ -56,7 +56,7 @@ query_prompt = "\n".join(
         "<|system|>",
         "Answer concisely.",
         "<|user|>",
-        "Explain CogentLM in one sentence.",
+        "Explain Sipp in one sentence.",
         "<|assistant|>",
     ]
 )
@@ -64,30 +64,30 @@ run = client.query(
     # query 接收原始提示词；请确保提示词匹配目标模型的格式模板。
     query_prompt,
     endpoint=endpoint,
-    options=CogentTextOptions(max_tokens=64),
+    options=SippTextOptions(max_tokens=64),
     local=LocalTextOptions(context_key="python-local"),
 )
 print(run.result()["text"])
 ```
 
-设置环境变量 `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` 来选择原生后端引擎。关于本地运行时的配置参数与请求选项说明，请参阅[运行时选项](../reference/runtime-options.md)。
+设置环境变量 `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` 来选择原生后端引擎。关于本地运行时的配置参数与请求选项说明，请参阅[运行时选项](../reference/runtime-options.md)。
 
 ## 网关推理
 
 ```python
 import os
 
-from cogentlm import ChatMessage, CogentClient, CogentTextOptions, GatewayDescriptor
+from sipp import ChatMessage, SippClient, SippTextOptions, GatewayDescriptor
 
 
-client = CogentClient()
+client = SippClient()
 endpoint = client.add(
     "gateway",
     GatewayDescriptor(
-        os.environ["COGENTLM_GATEWAY_TARGET"],
-        os.environ["COGENTLM_GATEWAY_URL"],
+        os.environ["SIPP_GATEWAY_TARGET"],
+        os.environ["SIPP_GATEWAY_URL"],
         authentication_kind="bearer",
-        authentication_value=os.environ["COGENTLM_GATEWAY_TOKEN"],
+        authentication_value=os.environ["SIPP_GATEWAY_TOKEN"],
     ),
 )
 messages = [
@@ -97,7 +97,7 @@ messages = [
 run = client.chat(
     messages,
     endpoint=endpoint,
-    options=CogentTextOptions(max_tokens=64),
+    options=SippTextOptions(max_tokens=64),
 )
 print(run.result()["text"])
 ```

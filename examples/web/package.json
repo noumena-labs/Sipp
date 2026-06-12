@@ -1,5 +1,5 @@
 {
-  "name": "cogentlm-web-example",
+  "name": "sipp-web-example",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -9,7 +9,7 @@
     "preview": "bunx --bun vite preview"
   },
   "dependencies": {
-    "@noumena-labs/cogentlm": "workspace:*"
+    "@noumena-labs/sipp": "workspace:*"
   },
   "devDependencies": {
     "playwright-core": "^1.54.2",

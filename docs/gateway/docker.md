@@ -13,7 +13,7 @@ The separation is strict:
 The container runs:
 
 ```bash
-cogentlm-gateway serve --config /etc/cogentlm/gateway.toml
+sipp-gateway serve --config /etc/sipp/gateway.toml
 ```
 
 ## Files
@@ -44,8 +44,8 @@ cp apps/gateway-server/config/development.toml.example apps/gateway-server/confi
 Edit `apps/gateway-server/.env` and set only secrets:
 
 ```bash
-COGENTLM_GATEWAY_ADMIN_PASSWORD=replace-me
-COGENTLM_GATEWAY_TOKEN=replace-me
+SIPP_GATEWAY_ADMIN_PASSWORD=replace-me
+SIPP_GATEWAY_TOKEN=replace-me
 OPENAI_API_KEY=replace-me
 ANTHROPIC_API_KEY=replace-me
 ```
@@ -57,7 +57,7 @@ Edit `apps/gateway-server/config/development.toml`:
 - Keep `public_bind = "0.0.0.0:8080"` and
   `management_bind = "0.0.0.0:9090"` so the gateway listens inside the
   container.
-- Keep `admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"` unless the
+- Keep `admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"` unless the
   `.env` secret name also changes.
 
 Edit `apps/gateway-server/development.yml` for Docker concerns such as image
@@ -124,31 +124,31 @@ upstream.
 Keep production TOML, Compose, and `.env` copies outside the repository:
 
 ```bash
-mkdir -p /opt/cogentlm/gateway
-cp apps/gateway-server/.env.example /opt/cogentlm/gateway/.env
-cp apps/gateway-server/production.yml.example /opt/cogentlm/gateway/production.yml
-cp apps/gateway-server/config/production.toml.example /opt/cogentlm/gateway/production.toml
+mkdir -p /opt/sipp/gateway
+cp apps/gateway-server/.env.example /opt/sipp/gateway/.env
+cp apps/gateway-server/production.yml.example /opt/sipp/gateway/production.yml
+cp apps/gateway-server/config/production.toml.example /opt/sipp/gateway/production.toml
 ```
 
-Edit `/opt/cogentlm/gateway/.env` for secret values only. Edit
-`/opt/cogentlm/gateway/production.toml` for gateway runtime configuration.
-Edit `/opt/cogentlm/gateway/production.yml` for image names, host model
+Edit `/opt/sipp/gateway/.env` for secret values only. Edit
+`/opt/sipp/gateway/production.toml` for gateway runtime configuration.
+Edit `/opt/sipp/gateway/production.yml` for image names, host model
 mounts, ports, restart policy, and healthcheck.
 
 Deploy with one backend profile:
 
 ```bash
 # CPU
-docker compose --profile cpu --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml config
-docker compose --profile cpu --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml up -d gateway-cpu
+docker compose --profile cpu --env-file /opt/sipp/gateway/.env -f /opt/sipp/gateway/production.yml config
+docker compose --profile cpu --env-file /opt/sipp/gateway/.env -f /opt/sipp/gateway/production.yml up -d gateway-cpu
 
 # CUDA, requires NVIDIA Container Toolkit on the host
-docker compose --profile cuda --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml config
-docker compose --profile cuda --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml up -d gateway-cuda
+docker compose --profile cuda --env-file /opt/sipp/gateway/.env -f /opt/sipp/gateway/production.yml config
+docker compose --profile cuda --env-file /opt/sipp/gateway/.env -f /opt/sipp/gateway/production.yml up -d gateway-cuda
 
 # Vulkan on Linux hosts, requires /dev/dri rendering devices
-docker compose --profile vulkan-linux --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml config
-docker compose --profile vulkan-linux --env-file /opt/cogentlm/gateway/.env -f /opt/cogentlm/gateway/production.yml up -d gateway-vulkan-linux
+docker compose --profile vulkan-linux --env-file /opt/sipp/gateway/.env -f /opt/sipp/gateway/production.yml config
+docker compose --profile vulkan-linux --env-file /opt/sipp/gateway/.env -f /opt/sipp/gateway/production.yml up -d gateway-vulkan-linux
 ```
 
 For provider-only production, copy `production-provider-only.yml.example` and
@@ -176,12 +176,12 @@ explicitly:
 
 ```bash
 docker build \
-  --build-arg COGENTLM_GATEWAY_BACKEND=vulkan \
-  --build-arg COGENTLM_GATEWAY_BUILDER_IMAGE=rust:bookworm \
-  --build-arg COGENTLM_GATEWAY_RUNTIME_IMAGE=ubuntu:22.04 \
-  --build-arg COGENTLM_GATEWAY_INSTALL_RUSTUP=0 \
+  --build-arg SIPP_GATEWAY_BACKEND=vulkan \
+  --build-arg SIPP_GATEWAY_BUILDER_IMAGE=rust:bookworm \
+  --build-arg SIPP_GATEWAY_RUNTIME_IMAGE=ubuntu:22.04 \
+  --build-arg SIPP_GATEWAY_INSTALL_RUSTUP=0 \
   -f apps/gateway-server/Dockerfile \
-  -t cogentlm-gateway:vulkan .
+  -t sipp-gateway:vulkan .
 ```
 
 ## Backend Hardware & Docker Constraints
@@ -212,9 +212,9 @@ Supported first-party Docker profiles:
 
 ### CUDA Architecture Selection
 
-Set `COGENTLM_CUDA_ARCHITECTURES` to control the compiled GPU architecture
+Set `SIPP_CUDA_ARCHITECTURES` to control the compiled GPU architecture
 list. The value is passed verbatim to CMake, so use semicolon-separated
-entries. In Docker builds, pass it as the `COGENTLM_CUDA_ARCHITECTURES` build
+entries. In Docker builds, pass it as the `SIPP_CUDA_ARCHITECTURES` build
 arg; the Compose CUDA service forwards it to the builder stage.
 
 Defaults are layered:
@@ -223,7 +223,7 @@ Defaults are layered:
   to the portable cloud GPU list below so packaged artifacts stay
   deterministic across build hosts. Docker gateway builds run xtask, so they
   inherit the same default when the build arg is empty.
-- Raw `cargo build` of `cogentlm-sys` outside xtask does not set
+- Raw `cargo build` of `sipp-sys` outside xtask does not set
   `CMAKE_CUDA_ARCHITECTURES`, which lets vendored llama.cpp choose
   CUDA-version-aware defaults for the local toolkit.
 
@@ -249,7 +249,7 @@ for A100 only, `90` for H100/H200 only, or `89` for L4/L40S only.
 CUDA 13 removes offline compilation support for GPU architectures before
 compute capability 7.5, so `61` (Pascal) and `70` (Volta) are excluded from
 CUDA 13 builds. Supporting those GPUs requires a separate legacy build using a
-CUDA 12.x toolkit image with an explicit `COGENTLM_CUDA_ARCHITECTURES` list.
+CUDA 12.x toolkit image with an explicit `SIPP_CUDA_ARCHITECTURES` list.
 
 The `a`-suffix Blackwell entries are architecture-specific and not
 forward-compatible; keep them aligned with the targets vendored llama.cpp
@@ -273,7 +273,7 @@ TensorRT dependency is introduced.
 > 2. **Native Execution:** To utilize Apple Silicon GPU acceleration (Metal), macOS users must compile and run the gateway server natively:
 >    ```bash
 >    cargo xtask build gateway-server --backend metal
->    ./.build/artifacts/gateway-server/cogentlm-gateway serve --config apps/gateway-server/config/development.toml
+>    ./.build/artifacts/gateway-server/sipp-gateway serve --config apps/gateway-server/config/development.toml
 >    ```
 
 ## Health Check

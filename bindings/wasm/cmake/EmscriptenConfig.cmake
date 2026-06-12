@@ -1,5 +1,5 @@
 # ======================================================================================
-# Emscripten Configuration Module for CogentEngine
+# Emscripten Configuration Module for SippEngine
 # ======================================================================================
 # This file centralizes all Emscripten-specific settings to avoid duplication
 # and ensure consistency across all WASM targets.
@@ -303,7 +303,7 @@ endif()
 # Status Output
 # ======================================================================================
 message(STATUS "")
-message(STATUS "=== CogentEngine Emscripten Configuration ===")
+message(STATUS "=== SippEngine Emscripten Configuration ===")
 message(STATUS "  Pthreads:           ${CE_WASM_PTHREADS}")
 message(STATUS "  Debug mode:         ${CE_WASM_DEBUG}")
 message(STATUS "  Aggressive opt:     ${CE_WASM_AGGRESSIVE_OPT}")

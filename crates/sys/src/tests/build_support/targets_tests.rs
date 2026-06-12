@@ -1,4 +1,4 @@
-//! Tests the `build_support::targets` module in `cogentlm-sys`.
+//! Tests the `build_support::targets` module in `sipp-sys`.
 //!
 //! Covers target classification across deterministic OS/triple inputs without
 //! requiring host-specific native toolchains.

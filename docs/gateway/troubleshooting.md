@@ -28,12 +28,12 @@ GGML backend plugins in that same directory.
 - Linux: prepend the artifact directory to `LD_LIBRARY_PATH`.
 - macOS: prepend the artifact directory to `DYLD_LIBRARY_PATH`.
 
-The `clm run gateway-server ...` workflow handles this automatically.
+The `sipp run gateway-server ...` workflow handles this automatically.
 
 ## Relative Model Path Is Wrong
 
 Relative local target `model` paths resolve from the process working directory.
-`clm run gateway-server ...` runs from the workspace root. Direct executable
+`sipp run gateway-server ...` runs from the workspace root. Direct executable
 commands run wherever the shell is currently located.
 
 Use absolute model paths when starting the executable from another directory.

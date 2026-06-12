@@ -1,6 +1,6 @@
 # Contributing
 
-CogentLM is a polyglot monorepo. Keep contributions focused, documented, and
+Sipp is a polyglot monorepo. Keep contributions focused, documented, and
 validated with the narrowest useful commands.
 
 Before submitting issues or PRs, be ready to explain why the change matters and
@@ -53,7 +53,7 @@ For each issue or PR:
 For documentation-only changes:
 
 ```bash
-clm docs build
+sipp docs build
 cargo xtask test list
 cargo xtask test verify --target public-docs
 ```

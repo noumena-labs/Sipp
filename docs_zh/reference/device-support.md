@@ -1,6 +1,6 @@
 # 设备支持
 
-CogentLM 支持在多种设备、操作系统、浏览器和 GPU 加速器上运行。本页记录了受支持的配置、支持级别和已知限制。
+Sipp 支持在多种设备、操作系统、浏览器和 GPU 加速器上运行。本页记录了受支持的配置、支持级别和已知限制。
 
 ## 计算后端
 
@@ -17,8 +17,8 @@ CogentLM 支持在多种设备、操作系统、浏览器和 GPU 加速器上运
 运行时选择：
 
 * **CLI:** `--backend auto|cpu|cuda|metal|vulkan`
-* **Node.js:** `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal`
-* **Python:** `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal`
+* **Node.js:** `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal`
+* **Python:** `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal`
 * **Browser:** 模型加载选项中的 `backend: 'auto' | 'cpu' | 'webgpu'`
 
 若要自动选择后端，请将变量保持未设置状态。
@@ -35,7 +35,7 @@ CogentLM 支持在多种设备、操作系统、浏览器和 GPU 加速器上运
 
 ### 其他 llama.cpp 后端（尚未公开）
 
-内置的 llama.cpp 支持其他后端，但 CogentLM 尚未公开对应的特性标志。欢迎社区提交贡献。
+内置的 llama.cpp 支持其他后端，但 Sipp 尚未公开对应的特性标志。欢迎社区提交贡献。
 
 * SYCL (Intel oneAPI)
 * HIP / ROCm (AMD)
@@ -47,7 +47,7 @@ CogentLM 支持在多种设备、操作系统、浏览器和 GPU 加速器上运
 * ZenDNN (AMD)
 * RPC (远程后端)
 
-这些后端需要在内置 llama.cpp 编译时添加自定义 CMake 标志，无法直接通过 CogentLM 的标准构建或打包命令使用。
+这些后端需要在内置 llama.cpp 编译时添加自定义 CMake 标志，无法直接通过 Sipp 的标准构建或打包命令使用。
 
 ---
 
@@ -70,7 +70,7 @@ CogentLM 支持在多种设备、操作系统、浏览器和 GPU 加速器上运
 **脚注：**
 
 * ¹ WASM pthread 需要服务器返回 `Cross-Origin-Opener-Policy: same-origin` 和 `Cross-Origin-Embedder-Policy: require-corp`（或 `credentialless`）HTTP 响应头。详情见下文 [WASM 线程机制](#wasm-线程机制)。
-* ² CogentLM 的 WebGPU 后端需要 `shader-f16` WebGPU 特性。其可用性除了取决于浏览器版本外，还取决于 GPU 和驱动程序的支持。
+* ² Sipp 的 WebGPU 后端需要 `shader-f16` WebGPU 特性。其可用性除了取决于浏览器版本外，还取决于 GPU 和驱动程序的支持。
 * ³ Origin Private File System（源私有文件系统），用于缓存模型数据。需要安全上下文（HTTPS）。Firefox 在 111 版本之前需要手动开启 `dom.fs.enabled` 选项才能支持 OPFS。
 * ⁴ 此版本表示 `SharedArrayBuffer` 在包含跨源隔离响应头时开始可用。更早的版本可能具备此功能但没有响应头要求。
 * ⁵ Edge 从 79 版本开始改用 Chromium 引擎。基于 Chromium 的 Edge 自 79 版本开始支持 WASM 单线程（single-thread）和 Worker。旧版 EdgeHTML 引擎自 12 版本支持 Worker，自 16 版本支持 WASM。
@@ -104,12 +104,12 @@ CogentLM 支持在多种设备、操作系统、浏览器和 GPU 加速器上运
 
 ## WASM 线程机制
 
-CogentLM 提供了两种 WASM 运行时产物：
+Sipp 提供了两种 WASM 运行时产物：
 
 | 产物 | 线程数 | Token 流式传输 | 要求 |
 | --- | --- | --- | --- |
-| `cogentlm-wasm.js` (单线程) | 1 | `postMessage` | 无 |
-| `cogentlm-wasm-pthread.js` (pthread) | 最多 4 个⁷ | `SharedArrayBuffer` 环形缓冲区 | COOP + COEP 响应头、安全上下文 |
+| `sipp-wasm.js` (单线程) | 1 | `postMessage` | 无 |
+| `sipp-wasm-pthread.js` (pthread) | 最多 4 个⁷ | `SharedArrayBuffer` 环形缓冲区 | COOP + COEP 响应头、安全上下文 |
 
 > ⁷ 默认为 `min(4, navigator.hardwareConcurrency)`。可以通过模型加载选项中的 `runtime.context.n_threads` 覆盖此默认值。
 
@@ -157,7 +157,7 @@ function supportsWasmPthreads(): boolean {
 
 ### NVIDIA CUDA
 
-CogentLM 需要计算能力 7.5 或以上的 NVIDIA GPU。CUDA 13 移除了对 7.5 以下架构的支持。
+Sipp 需要计算能力 7.5 或以上的 NVIDIA GPU。CUDA 13 移除了对 7.5 以下架构的支持。
 
 | 架构 | 计算能力 | 目标 GPU |
 | --- | --- | --- |
@@ -187,7 +187,7 @@ Metal 仅限 macOS，Docker 容器内不可用。
 
 ### WebGPU (浏览器)
 
-几乎所有宿主浏览器支持的 WebGPU GPU 都可以工作，但 CogentLM 需要 `shader-f16` 特性才能启用 WebGPU 加速。常见配置如下：
+几乎所有宿主浏览器支持的 WebGPU GPU 都可以工作，但 Sipp 需要 `shader-f16` 特性才能启用 WebGPU 加速。常见配置如下：
 
 | GPU 系列 | Chrome (D3D12) | Chrome (Vulkan) | Firefox (wgpu) | Safari (Metal) |
 | --- | --- | --- | --- | --- |
@@ -204,10 +204,10 @@ Metal 仅限 macOS，Docker 容器内不可用。
 
 | 软件包 | 安装命令 | 状态 | 运行时 | 主要用途 |
 | --- | --- | --- | --- | --- |
-| 浏览器 (`cogentlm`) | `npm install cogentlm` | 已发布 (npm) | WASM / WebGPU | 浏览器本地 GGUF 推理、网关客户端 |
-| Node.js (`cogentlm-server`) | `npm install cogentlm-server` | 已发布 (npm) | N-API 原生 | 服务器进程、路由处理程序、后端服务 |
-| Python (`cogentlm`) | `pip install cogentlm` | 已发布 (PyPI) | PyO3 原生 | Python 服务、脚本、网关客户端 |
-| Rust (`cogentlm`) | `cargo add cogentlm` | 源码制品 | 纯 Rust 门面 | Rust 应用程序和服务 |
+| 浏览器 (`sipp`) | `npm install sipp` | 已发布 (npm) | WASM / WebGPU | 浏览器本地 GGUF 推理、网关客户端 |
+| Node.js (`sipp-server`) | `npm install sipp-server` | 已发布 (npm) | N-API 原生 | 服务器进程、路由处理程序、后端服务 |
+| Python (`sipp`) | `pip install sipp` | 已发布 (PyPI) | PyO3 原生 | Python 服务、脚本、网关客户端 |
+| Rust (`sipp`) | `cargo add sipp` | 源码制品 | 纯 Rust 门面 | Rust 应用程序和服务 |
 | 网关服务器 | 源码构建 | 仅限源码 | Axum 二进制文件 | 本地和提供商目标的 HTTP 网关 |
 | 网关 Docker | 从源码构建 Docker 镜像 | 仅限源码 | 容器 | 生产环境容器工作流 |
 | 网关工具包 | 源码制品 | 仅限源码 | Rust crate | 自定义网关应用 |
@@ -216,7 +216,7 @@ Metal 仅限 macOS，Docker 容器内不可用。
 
 ## 局限性与待办事项
 
-* **Rust crates.io 发布**：由于 `cogentlm-sys` 依赖于私有 llama.cpp 子模块，目前处于阻塞状态。仅发布了源码制品。
+* **Rust crates.io 发布**：由于 `sipp-sys` 依赖于私有 llama.cpp 子模块，目前处于阻塞状态。仅发布了源码制品。
 * **网关服务器**：尚未提供预编译的二进制文件或公共容器镜像。必须从源码构建。
 * **Windows Docker Vulkan**：暂不支持。在开启了 WSL2 的 Windows 上请改用 CUDA 或 CPU 配置文件。
 * **macOS Docker**：仅支持 CPU。Linux Docker 容器内无法运行 Metal。

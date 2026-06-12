@@ -1,6 +1,6 @@
-# CogentLM Agent Instructions
+# Sipp Agent Instructions
 
-Welcome! This is the primary context and guidance entry point for AI coding agents working in the CogentLM repository.
+Welcome! This is the primary context and guidance entry point for AI coding agents working in the Sipp repository.
 
 ## 1. Quick Navigation & Context
 
@@ -9,7 +9,7 @@ to the specialized context files in the [.agents/](.agents/README.md)
 directory:
 - **General Architecture:** Read [.agents/system/architecture.md](.agents/system/architecture.md) to understand the crate boundaries.
 - **Build Instructions:** Read [.agents/build/instructions.md](.agents/build/instructions.md) before executing build commands.
-- **Troubleshooting:** Start with [docs/clm/troubleshooting.md](docs/clm/troubleshooting.md) for setup and launcher issues.
+- **Troubleshooting:** Start with [docs/sipp/troubleshooting.md](docs/sipp/troubleshooting.md) for setup and launcher issues.
 
 ---
 

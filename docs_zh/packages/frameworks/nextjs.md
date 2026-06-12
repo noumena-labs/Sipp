@@ -1,26 +1,26 @@
 # Next.js
 
-Node.js 环境下运行的 App Router 路由处理器中，使用 `cogentlm-server`。客户端组件或纯浏览器模块中，改用 `cogentlm`。
+Node.js 环境下运行的 App Router 路由处理器中，使用 `sipp-server`。客户端组件或纯浏览器模块中，改用 `sipp`。
 
-Next.js App Router 默认将页面和布局视为服务端组件。只有模块需要访问浏览器 API、组件状态、事件监听器或浏览器本地的 CogentLM 引擎时，才在文件顶部添加 `'use client'`。
+Next.js App Router 默认将页面和布局视为服务端组件。只有模块需要访问浏览器 API、组件状态、事件监听器或浏览器本地的 Sipp 引擎时，才在文件顶部添加 `'use client'`。
 
 ## 兼容网关 Profile 路由
 
-通过路由处理器可有效防止提供商凭证泄露到客户端。引入 `cogentlm-server` 的路由文件，请确保声明 `export const runtime = 'nodejs';`。
+通过路由处理器可有效防止提供商凭证泄露到客户端。引入 `sipp-server` 的路由文件，请确保声明 `export const runtime = 'nodejs';`。
 
-要把某个路由作为浏览器的 `kind: 'gateway'` 端点使用，该路由必须兼容网关的 Profile 格式。可利用 `cogentlm-server` 提供的网关 Profile 助手解析请求体，返回标准 JSON 或 SSE 响应。路由内部可继续向直接提供商端点发起请求。
+要把某个路由作为浏览器的 `kind: 'gateway'` 端点使用，该路由必须兼容网关的 Profile 格式。可利用 `sipp-server` 提供的网关 Profile 助手解析请求体，返回标准 JSON 或 SSE 响应。路由内部可继续向直接提供商端点发起请求。
 
 代码示例中的 `OPENAI_API_KEY="<mock-openai-key>"` 仅为演示。实际部署时，请务必从服务器环境变量或密钥管理服务中读取密钥。
 
 ```ts
-// app/api/cogent/query/route.ts
+// app/api/sipp/query/route.ts
 import {
-  CogentClient,
+  SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'cogentlm-server';
+} from 'sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -35,7 +35,7 @@ function requiredEnv(name: string): string {
 export async function POST(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
-    const client = new CogentClient();
+    const client = new SippClient();
     const endpoint = await client.add('provider', {
       kind: 'provider',
       provider: 'openai',
@@ -68,8 +68,8 @@ export async function POST(request: Request): Promise<Response> {
 浏览器需要实时接收 Token 更新，同时服务器必须妥善保管提供商凭证时，使用路由处理器实现流式传输。
 
 ```ts
-// app/api/cogent/stream/route.ts
-import { CogentClient } from 'cogentlm-server';
+// app/api/sipp/stream/route.ts
+import { SippClient } from 'sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -89,7 +89,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'prompt is required' }, { status: 400 });
   }
 
-  const client = new CogentClient();
+  const client = new SippClient();
   const endpoint = await client.add('provider', {
     kind: 'provider',
     provider: 'openai',
@@ -135,13 +135,13 @@ export async function POST(request: Request): Promise<Response> {
 'use client';
 
 import { useState } from 'react';
-import { CogentClient } from 'cogentlm';
+import { SippClient } from 'sipp';
 
 export function LocalChat(): JSX.Element {
   const [text, setText] = useState('');
 
   async function run(prompt: string): Promise<void> {
-    const client = new CogentClient();
+    const client = new SippClient();
     try {
       const endpoint = await client.add('default', {
         kind: 'local',
@@ -169,14 +169,14 @@ export function LocalChat(): JSX.Element {
 
 ## 混合模式客户端组件
 
-你可以使用同一个 `CogentClient` 实例，同时注册一个浏览器本地端点和一个兼容网关 Profile 的同源路由端点。发起请求时，只需切换传入的端点引用即可，调用 `query` 的代码无需任何改动。
+你可以使用同一个 `SippClient` 实例，同时注册一个浏览器本地端点和一个兼容网关 Profile 的同源路由端点。发起请求时，只需切换传入的端点引用即可，调用 `query` 的代码无需任何改动。
 
 ```ts
 // app/hybrid-chat/HybridChat.tsx
 'use client';
 
 import { useState } from 'react';
-import { CogentClient, type EndpointRef } from 'cogentlm';
+import { SippClient, type EndpointRef } from 'sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
@@ -185,7 +185,7 @@ export function HybridChat(): JSX.Element {
   const [text, setText] = useState('');
 
   async function run(prompt: string): Promise<void> {
-    const client = new CogentClient();
+    const client = new SippClient();
     try {
       const localEndpoint = await client.add('browser-local', {
         kind: 'local',
@@ -195,7 +195,7 @@ export function HybridChat(): JSX.Element {
         kind: 'gateway',
         target: 'gpt-5-mini',
         baseUrl: window.location.origin,
-        routes: { query: '/api/cogent/query' },
+        routes: { query: '/api/sipp/query' },
         authentication: { kind: 'none' },
       });
       const endpoint: EndpointRef =
@@ -227,11 +227,11 @@ export function HybridChat(): JSX.Element {
 }
 ```
 
-浏览器端的网关描述符需要完整的 `http` 或 `https` 格式的 `baseUrl`。调用同源的 Next 路由时，使用 `window.location.origin`，并通过 `routes` 对象覆盖具体路径，例如 `routes: { query: '/api/cogent/query' }`。`target` 值会发送到服务端路由，用作提供商的模型标识符。
+浏览器端的网关描述符需要完整的 `http` 或 `https` 格式的 `baseUrl`。调用同源的 Next 路由时，使用 `window.location.origin`，并通过 `routes` 对象覆盖具体路径，例如 `routes: { query: '/api/sipp/query' }`。`target` 值会发送到服务端路由，用作提供商的模型标识符。
 
 ## 独立网关模式
 
-需要跨多个应用统一管理目标策略、共享凭证、托管本地模型、实施限流或采集监控指标时，部署独立的 CogentLM 网关。浏览器直接调用独立网关时，切勿将长效 Token 硬编码到客户端包中。最佳做法是通过 Next 路由向客户端颁发短期 Token，在客户端端点配置的 `valueProvider` 中获取并使用：
+需要跨多个应用统一管理目标策略、共享凭证、托管本地模型、实施限流或采集监控指标时，部署独立的 Sipp 网关。浏览器直接调用独立网关时，切勿将长效 Token 硬编码到客户端包中。最佳做法是通过 Next 路由向客户端颁发短期 Token，在客户端端点配置的 `valueProvider` 中获取并使用：
 
 ```ts
 const endpoint = await client.add('gateway', {
@@ -241,7 +241,7 @@ const endpoint = await client.add('gateway', {
   authentication: {
     kind: 'bearer',
     valueProvider: async () => {
-      const response = await fetch('/api/cogent/token', { method: 'POST' });
+      const response = await fetch('/api/sipp/token', { method: 'POST' });
       return await response.text();
     },
   },

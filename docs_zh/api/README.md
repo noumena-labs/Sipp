@@ -1,6 +1,6 @@
 # API 概述
 
-CogentLM 各语言包（Rust、Node.js、Python、浏览器）使用同一套面向端点的客户端模型。
+Sipp 各语言包（Rust、Node.js、Python、浏览器）使用同一套面向端点的客户端模型。
 
 核心流程：
 
@@ -10,9 +10,9 @@ CogentLM 各语言包（Rust、Node.js、Python、浏览器）使用同一套面
 
 无论本地运行、通过网关、直连服务商还是混合模式，应用代码的调用方式完全一致。
 
-## CogentClient使用方法
+## SippClient使用方法
 
-`CogentClient` 提供四个主要方法：
+`SippClient` 提供四个主要方法：
 
 | 方法 | 作用 |
 | ------- | ---------------------------------------------------------------------------- |
@@ -50,7 +50,7 @@ add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
 
 ### 网关端点
 
-网关端点通过 HTTP 将请求发送至远程 CogentLM 网关。网关进程负责管理服务商凭证、本地模型路径、访问策略、并发和监控指标。
+网关端点通过 HTTP 将请求发送至远程 Sipp 网关。网关进程负责管理服务商凭证、本地模型路径、访问策略、并发和监控指标。
 
 | 字段 | 类型 | 说明 |
 | ----------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -79,14 +79,14 @@ add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
 | `apiKey` | string（可选） | API 密钥。 |
 | `baseUrl` | string（可选） | 覆盖服务商的默认地址。 |
 
-服务端代码需要绕过 CogentLM 网关直接调用服务商 API 时使用服务商端点。
+服务端代码需要绕过 Sipp 网关直接调用服务商 API 时使用服务商端点。
 
 ---
 
 ## `query()` — 传原始提示词生成文本
 
 ```text
-query(request: CogentQueryRequest) -> CogentTextRun
+query(request: SippQueryRequest) -> SippTextRun
 ```
 
 `query` 将提示词字符串原样发送给目标端点，不应用聊天模板。
@@ -99,7 +99,7 @@ query(request: CogentQueryRequest) -> CogentTextRun
 | ----------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `endpoint` | `EndpointRef` | 目标端点。客户端只有一个本地端点支持该操作时可以省略。 |
 | `prompt` | string | 提示词文本。 |
-| `options` | `CogentTextOptions`（可选） | 通用生成选项：`maxTokens`、`temperature`、`topP`、`stop`。 |
+| `options` | `SippTextOptions`（可选） | 通用生成选项：`maxTokens`、`temperature`、`topP`、`stop`。 |
 | `local` | `LocalTextOptions`（可选） | 仅限本地的选项：`contextKey`、`grammar`、`jsonSchema`、采样覆盖、多模态输入。网关端点会拒绝。 |
 | `endpointOptions` | map（可选） | 透传给网关端点的自定义选项。 |
 | `providerOptions` | map（可选） | 透传给服务商适配器的自定义选项。网关端点会拒绝。 |
@@ -107,22 +107,22 @@ query(request: CogentQueryRequest) -> CogentTextRun
 
 ### 返回值
 
-`query` 返回 `CogentTextRun`。
+`query` 返回 `SippTextRun`。
 
 | 成员 | 类型 | 说明 |
 | ---------------- | ---------------- | ----------------------------------------------------------- |
-| `response` | Promise / Future | 生成完成后解析为 `CogentTextResponse`。 |
+| `response` | Promise / Future | 生成完成后解析为 `SippTextResponse`。 |
 | `tokens` | Async iterable | `emitTokens=true` 时异步产出 `TokenBatch`。 |
 | `cancel(reason)` | 方法 | 取消正在进行的生成。 |
 
-`CogentTextResponse` 包含生成的 `text`、结束原因 `finishReason`、Token 用量 `usage`，本地端点还会带 `localStats`。
+`SippTextResponse` 包含生成的 `text`、结束原因 `finishReason`、Token 用量 `usage`，本地端点还会带 `localStats`。
 
 ---
 
 ## `chat()` — 传消息列表生成文本
 
 ```text
-chat(request: CogentChatRequest) -> CogentTextRun
+chat(request: SippChatRequest) -> SippTextRun
 ```
 
 `chat` 将有序的角色/内容消息发送给目标端点，由端点处理消息渲染。
@@ -139,20 +139,20 @@ chat(request: CogentChatRequest) -> CogentTextRun
 | ------------ | --------------------- | ------------------------------------------ |
 | `endpoint` | `EndpointRef` | 目标端点。 |
 | `messages` | `{ role, content }[]` | 有序的对话轮次。 |
-| `options` | `CogentTextOptions` | 同 `query` 的生成选项。 |
+| `options` | `SippTextOptions` | 同 `query` 的生成选项。 |
 | `local` | `LocalTextOptions` | 同 `query` 的本地选项。 |
 | `emitTokens` | boolean | 同 `query` 的流式开关。 |
 
 ### 返回值
 
-`chat` 返回与 `query` 相同的 `CogentTextRun`。
+`chat` 返回与 `query` 相同的 `SippTextRun`。
 
 ---
 
 ## `embed()` — 生成嵌入向量
 
 ```text
-embed(request: CogentEmbedRequest) -> CogentEmbeddingRun
+embed(request: SippEmbedRequest) -> SippEmbeddingRun
 ```
 
 `embed` 将输入文本转换为嵌入向量。不支持生成选项，也不流式输出 Token。
@@ -169,24 +169,24 @@ embed(request: CogentEmbedRequest) -> CogentEmbeddingRun
 
 ### 返回值
 
-`embed` 返回 `CogentEmbeddingRun`。
+`embed` 返回 `SippEmbeddingRun`。
 
 | 成员 | 类型 | 说明 |
 | ---------------- | ---------------- | -------------------------------------------------------------- |
-| `response` | Promise / Future | 编码完成后解析为 `CogentEmbeddingResponse`。 |
+| `response` | Promise / Future | 编码完成后解析为 `SippEmbeddingResponse`。 |
 | `cancel(reason)` | 方法 | 取消正在进行的嵌入任务。 |
 
-`CogentEmbeddingResponse` 包含浮点数数组 `values`、可选的 Token `usage`、池化策略 `pooling` 和归一化标志 `normalized`。
+`SippEmbeddingResponse` 包含浮点数数组 `values`、可选的 Token `usage`、池化策略 `pooling` 和归一化标志 `normalized`。
 
 ---
 
 ## 网关两端的 API 是对称的
 
-同一套 `CogentClient` API 在网关两端均可使用。
+同一套 `SippClient` API 在网关两端均可使用。
 
 ### 服务端
 
-服务端进程创建 `CogentClient`，注册本地端点，将 HTTP 路由映射至 `query`、`chat`、`embed`。
+服务端进程创建 `SippClient`，注册本地端点，将 HTTP 路由映射至 `query`、`chat`、`embed`。
 
 ```text
 服务端：
@@ -200,7 +200,7 @@ embed(request: CogentEmbedRequest) -> CogentEmbeddingRun
 
 ### 客户端
 
-客户端进程创建 `CogentClient`，注册网关端点，调用 `query`、`chat`、`embed` 的方式与调用本地端点完全相同。
+客户端进程创建 `SippClient`，注册网关端点，调用 `query`、`chat`、`embed` 的方式与调用本地端点完全相同。
 
 ```text
 客户端：
@@ -248,7 +248,7 @@ flowchart LR
     subgraph CLIENT["客户端进程"]
         direction TB
         CApp["应用代码"]:::client_node
-        CClient["CogentClient<br/>add(...) -> EndpointRef<br/>query / chat / embed"]:::client_node
+        CClient["SippClient<br/>add(...) -> EndpointRef<br/>query / chat / embed"]:::client_node
         CApp --> CClient
 
         subgraph CSetup["端点配置"]
@@ -270,7 +270,7 @@ flowchart LR
     subgraph SERVER["服务端进程 / 网关服务器"]
         direction TB
         SGateway["网关服务器<br/>HTTP: /v1/query, /chat, /embed"]:::gateway_node
-        SClient["CogentClient (相同的客户端库)"]:::client_node
+        SClient["SippClient (相同的客户端库)"]:::client_node
         SGateway --> SClient
 
         subgraph SSetup["端点配置"]

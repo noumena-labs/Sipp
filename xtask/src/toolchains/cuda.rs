@@ -89,11 +89,11 @@ pub(crate) fn write_persisted_architectures(ctx: &BuildContext, arches: &str) ->
 // ---------------------------------------------------------------------------
 
 /// Resolves the CUDA architecture list together with its source for status
-/// reporting.  Honors `COGENTLM_CUDA_ARCHITECTURES` (env var, highest
+/// reporting.  Honors `SIPP_CUDA_ARCHITECTURES` (env var, highest
 /// priority), then the persisted config file written by `toolchain setup
 /// cuda`, and finally the built-in default.
 pub(crate) fn cuda_architectures_with_source(ctx: &BuildContext) -> (String, ArchSource) {
-    let from_env = env::var("COGENTLM_CUDA_ARCHITECTURES")
+    let from_env = env::var("SIPP_CUDA_ARCHITECTURES")
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -111,7 +111,7 @@ pub(crate) fn cuda_architectures_with_source(ctx: &BuildContext) -> (String, Arc
 
 /// Resolves the CUDA architecture list for xtask-driven CUDA builds.
 ///
-/// Checks `COGENTLM_CUDA_ARCHITECTURES` (env var), then the persisted config
+/// Checks `SIPP_CUDA_ARCHITECTURES` (env var), then the persisted config
 /// file written by `toolchain setup cuda`, and finally the portable cloud
 /// default.
 pub(crate) fn cuda_architectures(ctx: &BuildContext) -> String {
@@ -266,9 +266,9 @@ pub(crate) fn setup_cuda_architectures(ctx: &BuildContext) -> Result<()> {
     output::path("Config file", &cuda_config_path(ctx));
 
     let shell_hint = if cfg!(windows) {
-        format!("$env:COGENTLM_CUDA_ARCHITECTURES = \"{selected}\"")
+        format!("$env:SIPP_CUDA_ARCHITECTURES = \"{selected}\"")
     } else {
-        format!("export COGENTLM_CUDA_ARCHITECTURES=\"{selected}\"")
+        format!("export SIPP_CUDA_ARCHITECTURES=\"{selected}\"")
     };
     output::detail("Override per session", shell_hint);
 

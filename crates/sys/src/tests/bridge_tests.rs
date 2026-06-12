@@ -1,4 +1,4 @@
-//! Tests the `bridge` module in `cogentlm-sys`.
+//! Tests the `bridge` module in `sipp-sys`.
 //!
 //! Covers model-free CXX bridge behavior for native batch allocation,
 //! token storage, bounds handling, and logit flag helpers without loading a model.

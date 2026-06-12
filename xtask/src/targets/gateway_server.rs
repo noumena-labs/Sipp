@@ -24,7 +24,7 @@ mod gateway_server_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const GATEWAY_BINARY_NAME: &str = "cogentlm-gateway";
+const GATEWAY_BINARY_NAME: &str = "sipp-gateway";
 const BACKEND_DL_FEATURE: &str = "backend-dl";
 const ADMIN_UI_FINGERPRINT_FILE: &str = "admin-ui.sha256";
 
@@ -111,7 +111,7 @@ fn build_admin_ui(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
     let _dir = sh.push_dir(ctx.workspace_root());
     output::run_build_command(
         "Building gateway Admin Dashboard",
-        cmd!(sh, "bun run --filter cogentlm-gateway-admin-ui build"),
+        cmd!(sh, "bun run --filter sipp-gateway-admin-ui build"),
     )?;
     if !dist.join("index.html").is_file() {
         anyhow::bail!(
@@ -265,9 +265,9 @@ fn build_backend_variant(
 
     let mut cargo_cmd = cmd!(
         sh,
-        "cargo build --release --package cogentlm-gateway-server --target-dir {target_dir}"
+        "cargo build --release --package sipp-gateway-server --target-dir {target_dir}"
     )
-    .env("COGENTLM_SYS_CMAKE_OUT_DIR", &cmake_dir);
+    .env("SIPP_SYS_CMAKE_OUT_DIR", &cmake_dir);
     cargo_cmd = apply_toolchains(sh, ctx, cargo_cmd, Some(backend))?;
     cargo_cmd = cargo_cmd.arg("--features").arg(cargo_features(backend));
 
@@ -513,7 +513,7 @@ fn is_base_runtime_file(file_name: &str) -> bool {
                 | "llama-common-base.dll"
                 | "ggml.dll"
                 | "ggml-base.dll"
-                | "cogent_shim.dll"
+                | "sipp_shim.dll"
                 | "mtmd.dll"
                 | "cpp-httplib.dll"
         );
@@ -527,7 +527,7 @@ fn is_base_runtime_file(file_name: &str) -> bool {
             "libllama-common-base.",
             "libggml.",
             "libggml-base.",
-            "libcogent_shim.",
+            "libsipp_shim.",
             "libmtmd.",
             "libcpp-httplib.",
         ]
@@ -575,7 +575,7 @@ fn cargo_features(backend: &Backend) -> String {
 
 pub(crate) fn gateway_binary_file_name() -> &'static str {
     if cfg!(windows) {
-        "cogentlm-gateway.exe"
+        "sipp-gateway.exe"
     } else {
         GATEWAY_BINARY_NAME
     }

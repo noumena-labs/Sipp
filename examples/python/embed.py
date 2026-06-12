@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from cogentlm import (
+from sipp import (
     CacheRuntimeConfig,
-    CogentClient,
+    SippClient,
     ContextRuntimeConfig,
     LocalEmbedOptions,
     LocalModelDescriptor,
@@ -31,15 +31,15 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
     return NativeRuntimeConfig(
         placement=ModelPlacementConfig(gpu_layers=gpu_layers()),
         context=ContextRuntimeConfig(
-            n_ctx=int_env("COGENTLM_CONTEXT", DEFAULT_CONTEXT),
-            n_threads=int_env("COGENTLM_THREADS"),
-            n_threads_batch=int_env("COGENTLM_THREADS"),
+            n_ctx=int_env("SIPP_CONTEXT", DEFAULT_CONTEXT),
+            n_threads=int_env("SIPP_THREADS"),
+            n_threads_batch=int_env("SIPP_THREADS"),
             embeddings=embeddings,
             pooling="mean" if embeddings else None,
         ),
         sampling=SamplingRuntimeConfig(
-            temperature=float_env("COGENTLM_TEMPERATURE", DEFAULT_TEMPERATURE),
-            seed=int_env("COGENTLM_SEED", DEFAULT_SEED),
+            temperature=float_env("SIPP_TEMPERATURE", DEFAULT_TEMPERATURE),
+            seed=int_env("SIPP_SEED", DEFAULT_SEED),
         ),
         scheduler=SchedulerRuntimeConfig(
             continuous_batching=True,
@@ -52,10 +52,10 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
 
 
 def main() -> None:
-    model, input_text = read_local_args("embed", "CogentClient embedding example input.")
+    model, input_text = read_local_args("embed", "SippClient embedding example input.")
     set_llama_log_quiet(True)
 
-    client = CogentClient()
+    client = SippClient()
     client.add(
         "default",
         LocalModelDescriptor(model, runtime_config(embeddings=True)),

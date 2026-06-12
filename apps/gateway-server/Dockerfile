@@ -1,17 +1,17 @@
-ARG COGENTLM_GATEWAY_BUILDER_IMAGE=rust:bookworm
-ARG COGENTLM_GATEWAY_RUNTIME_IMAGE=debian:bookworm-slim
+ARG SIPP_GATEWAY_BUILDER_IMAGE=rust:bookworm
+ARG SIPP_GATEWAY_RUNTIME_IMAGE=debian:bookworm-slim
 
-FROM ${COGENTLM_GATEWAY_BUILDER_IMAGE} AS builder
+FROM ${SIPP_GATEWAY_BUILDER_IMAGE} AS builder
 
-ARG COGENTLM_GATEWAY_BACKEND
-ARG COGENTLM_GATEWAY_INSTALL_RUSTUP=0
-ARG COGENTLM_CUDA_ARCHITECTURES
+ARG SIPP_GATEWAY_BACKEND
+ARG SIPP_GATEWAY_INSTALL_RUSTUP=0
+ARG SIPP_CUDA_ARCHITECTURES
 
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CUDA_HOME=/usr/local/cuda
 ENV CUDA_PATH=/usr/local/cuda
-ENV COGENTLM_CUDA_ARCHITECTURES=${COGENTLM_CUDA_ARCHITECTURES}
+ENV SIPP_CUDA_ARCHITECTURES=${SIPP_CUDA_ARCHITECTURES}
 ENV PATH=/usr/local/cargo/bin:${PATH}
 
 RUN apt-get update \
@@ -26,7 +26,7 @@ RUN apt-get update \
         ninja-build \
         pkg-config \
         unzip \
-    && if [ "${COGENTLM_GATEWAY_INSTALL_RUSTUP}" = "1" ]; then \
+    && if [ "${SIPP_GATEWAY_INSTALL_RUSTUP}" = "1" ]; then \
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain stable; \
     fi \
@@ -39,27 +39,27 @@ RUN curl -fsSL https://bun.sh/install | bash
 
 WORKDIR /src
 COPY . .
-RUN test -n "${COGENTLM_GATEWAY_BACKEND}" \
-    || (echo "COGENTLM_GATEWAY_BACKEND build arg is required" >&2; exit 1) \
+RUN test -n "${SIPP_GATEWAY_BACKEND}" \
+    || (echo "SIPP_GATEWAY_BACKEND build arg is required" >&2; exit 1) \
     && cargo run --target-dir .build/xtask --package xtask -- \
-    build gateway-server --backend "${COGENTLM_GATEWAY_BACKEND}"
+    build gateway-server --backend "${SIPP_GATEWAY_BACKEND}"
 
-FROM ${COGENTLM_GATEWAY_RUNTIME_IMAGE}
+FROM ${SIPP_GATEWAY_RUNTIME_IMAGE}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl libgomp1 libvulkan1 mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin cogentlm \
+    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin sipp \
     && mkdir -p /workspace /models \
-    && chown -R cogentlm:cogentlm /workspace /models
+    && chown -R sipp:sipp /workspace /models
 
 COPY --from=builder /src/.build/artifacts/gateway-server/ /usr/local/bin/
 
-RUN echo "/usr/local/bin" > /etc/ld.so.conf.d/cogentlm-gateway.conf \
+RUN echo "/usr/local/bin" > /etc/ld.so.conf.d/sipp-gateway.conf \
     && ldconfig
 
 WORKDIR /workspace
 USER 10001:10001
 EXPOSE 8080 9090
-ENTRYPOINT ["cogentlm-gateway"]
-CMD ["serve", "--config", "/etc/cogentlm/gateway.toml"]
+ENTRYPOINT ["sipp-gateway"]
+CMD ["serve", "--config", "/etc/sipp/gateway.toml"]

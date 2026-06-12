@@ -1,4 +1,4 @@
-//! Tests the `build_support::ide` module in `cogentlm-sys`.
+//! Tests the `build_support::ide` module in `sipp-sys`.
 //!
 //! Covers compile database copying and fallback clangd flag generation using
 //! fake filesystem fixtures, without running CMake or native compilers.

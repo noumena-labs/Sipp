@@ -222,12 +222,12 @@ async function runBrowserProbe(options) {
     const page = await browser.newPage();
     page.setDefaultTimeout(options.timeoutMs);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: options.timeoutMs });
-    await page.waitForFunction(() => window.__cogentPlayground != null, null, {
+    await page.waitForFunction(() => window.__sippPlayground != null, null, {
       timeout: options.timeoutMs,
     });
     const result = await withTimeout(
       page.evaluate(async () => {
-        const api = window.__cogentPlayground;
+        const api = window.__sippPlayground;
         return {
           environment: await api.getEnvironment(),
           observability: api.getRuntimeObservability(),

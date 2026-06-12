@@ -4,7 +4,7 @@ use std::os::raw::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::{env, fs, ptr, slice};
 
-use cogentlm::backend::backend_observability_json;
+use sipp::backend::backend_observability_json;
 use serde_json::{json, Value};
 
 use crate::engine::{BrowserEngine, BrowserMediaInput, BrowserTextRequestArgs, ABI_VERSION};
@@ -19,7 +19,7 @@ const STATUS_FAILURE: i32 = -1;
 const STATUS_INVALID_ARGUMENTS: i32 = -2;
 const COMPLETED_REQUEST_STATUS_UNKNOWN: i32 = 4;
 const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_991.0;
-const LLAMA_CACHE_DIR: &str = "/tmp/cogentlm-llama-cache";
+const LLAMA_CACHE_DIR: &str = "/tmp/sipp-llama-cache";
 
 thread_local! {
     static CURRENT_ENGINE: RefCell<Option<Box<BrowserEngine>>> = RefCell::new(None);

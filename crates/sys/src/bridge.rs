@@ -1,7 +1,7 @@
-#[cxx::bridge(namespace = "cogentlm::sys")]
+#[cxx::bridge(namespace = "sipp::sys")]
 pub mod ffi {
     unsafe extern "C++" {
-        include!("cogent_cxx.h");
+        include!("sipp_cxx.h");
 
         type NativeRuntime;
         type NativeBatch;

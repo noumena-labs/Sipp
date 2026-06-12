@@ -1,4 +1,4 @@
-//! Tests the `cogentlm-sys` crate root public aliases.
+//! Tests the `sipp-sys` crate root public aliases.
 //!
 //! Covers ABI-sized token and sequence identifiers with deterministic,
 //! model-free assertions.

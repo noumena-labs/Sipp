@@ -151,7 +151,7 @@ export default function App(): ReactElement {
         <div className="brand">
           <Gauge aria-hidden="true" />
           <div>
-            <strong>CogentLM</strong>
+            <strong>Sipp</strong>
             <span>Gateway Admin</span>
           </div>
         </div>
@@ -240,7 +240,7 @@ function LoginPanel({
         <div className="brand auth-brand">
           <Gauge aria-hidden="true" />
           <div>
-            <strong>CogentLM</strong>
+            <strong>Sipp</strong>
             <span>Gateway Admin</span>
           </div>
         </div>

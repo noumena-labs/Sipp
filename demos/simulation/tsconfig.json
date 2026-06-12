@@ -8,14 +8,14 @@
     "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
-      "@noumena-labs/cogentlm": [
-        "../../.build/artifacts/npm/cogentlm/dist/types/index.d.ts"
+      "@noumena-labs/sipp": [
+        "../../.build/artifacts/npm/sipp/dist/types/index.d.ts"
       ],
-      "@noumena-labs/cogentlm/character": [
-        "../../.build/artifacts/npm/cogentlm/dist/types/character/index.d.ts"
+      "@noumena-labs/sipp/character": [
+        "../../.build/artifacts/npm/sipp/dist/types/character/index.d.ts"
       ],
-      "@noumena-labs/cogentlm/director": [
-        "../../.build/artifacts/npm/cogentlm/dist/types/orchestrator/index.d.ts"
+      "@noumena-labs/sipp/director": [
+        "../../.build/artifacts/npm/sipp/dist/types/orchestrator/index.d.ts"
       ]
     },
     "moduleResolution": "bundler",

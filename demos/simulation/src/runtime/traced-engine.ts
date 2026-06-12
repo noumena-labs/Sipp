@@ -4,19 +4,19 @@ import type {
   ChatInput,
   ChatMessage,
   ChatOptions,
-  CogentClient,
+  SippClient,
   GenerationResult,
   QueryInput,
   QueryOptions,
   TokenBatch,
-} from '@noumena-labs/cogentlm';
-import type { CharacterRuntimeClient } from '@noumena-labs/cogentlm/character';
-import type { DirectorRuntimeClient } from '@noumena-labs/cogentlm/director';
+} from '@noumena-labs/sipp';
+import type { CharacterRuntimeClient } from '@noumena-labs/sipp/character';
+import type { DirectorRuntimeClient } from '@noumena-labs/sipp/director';
 import type { BrainDefinition, BrainQueryType, BrainQueryStatus, BrainActivityStore } from './brain-activity-store.js';
 import type { SimulationBus } from './bus.js';
 
 export function createTracedBrainClient(
-  client: CogentClient,
+  client: SippClient,
   store: BrainActivityStore,
   bus: SimulationBus,
   brain: BrainDefinition
@@ -25,12 +25,12 @@ export function createTracedBrainClient(
 }
 
 class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient {
-  public currentLocal(): ReturnType<CogentClient['currentLocal']> {
+  public currentLocal(): ReturnType<SippClient['currentLocal']> {
     return this.client.currentLocal();
   }
 
   public constructor(
-    private readonly client: CogentClient,
+    private readonly client: SippClient,
     private readonly store: BrainActivityStore,
     private readonly bus: SimulationBus,
     private readonly brain: BrainDefinition

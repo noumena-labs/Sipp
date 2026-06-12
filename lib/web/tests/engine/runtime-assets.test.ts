@@ -77,10 +77,10 @@ test('resolveRuntimeUrls uses bundled runtime assets when no overrides are provi
 
 test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets', () => {
   assert.deepEqual(
-    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@noumena-labs_cogentlm.js?v=123'),
+    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@noumena-labs_sipp.js?v=123'),
     {
-      moduleUrl: 'https://app.test/node_modules/@noumena-labs/cogentlm/dist/wasm/cogentlm-wasm.js',
-      wasmUrl: 'https://app.test/node_modules/@noumena-labs/cogentlm/dist/wasm/cogentlm-wasm.wasm',
+      moduleUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm.js',
+      wasmUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm.wasm',
       threading: 'single-thread',
     }
   );
@@ -88,10 +88,10 @@ test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets
 
 test('getDefaultRuntimeUrls maps public Vite optimized deps back to package wasm assets', () => {
   assert.deepEqual(
-    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/cogentlm.js?v=123'),
+    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/sipp.js?v=123'),
     {
-      moduleUrl: 'https://app.test/node_modules/cogentlm/dist/wasm/cogentlm-wasm.js',
-      wasmUrl: 'https://app.test/node_modules/cogentlm/dist/wasm/cogentlm-wasm.wasm',
+      moduleUrl: 'https://app.test/node_modules/sipp/dist/wasm/sipp-wasm.js',
+      wasmUrl: 'https://app.test/node_modules/sipp/dist/wasm/sipp-wasm.wasm',
       threading: 'single-thread',
     }
   );
@@ -101,7 +101,7 @@ test('resolveOptimizedPackageAssetUrl returns null for normal module URLs', () =
   assert.equal(
     resolveOptimizedPackageAssetUrl(
       'dist/esm/worker/model-service-entry.js',
-      'https://app.test/node_modules/@noumena-labs/cogentlm/dist/esm/worker/model-service-client.js'
+      'https://app.test/node_modules/@noumena-labs/sipp/dist/esm/worker/model-service-client.js'
     ),
     null
   );
@@ -111,19 +111,19 @@ test('resolveOptimizedPackageAssetUrl maps Vite optimized deps back to package f
   assert.equal(
     resolveOptimizedPackageAssetUrl(
       'dist/esm/worker/model-service-entry.js',
-      'https://app.test/node_modules/.vite/deps/@noumena-labs_cogentlm.js?v=123'
+      'https://app.test/node_modules/.vite/deps/@noumena-labs_sipp.js?v=123'
     ),
-    'https://app.test/node_modules/@noumena-labs/cogentlm/dist/esm/worker/model-service-entry.js'
+    'https://app.test/node_modules/@noumena-labs/sipp/dist/esm/worker/model-service-entry.js'
   );
 });
 
 test('resolveOptimizedPackageAssetUrl preserves a Vite dev base path', () => {
   assert.equal(
     resolveOptimizedPackageAssetUrl(
-      '/dist/wasm/cogentlm-wasm.js',
-      'https://app.test/subapp/node_modules/.vite/deps/@noumena-labs_cogentlm.js?v=123'
+      '/dist/wasm/sipp-wasm.js',
+      'https://app.test/subapp/node_modules/.vite/deps/@noumena-labs_sipp.js?v=123'
     ),
-    'https://app.test/subapp/node_modules/@noumena-labs/cogentlm/dist/wasm/cogentlm-wasm.js'
+    'https://app.test/subapp/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm.js'
   );
 });
 
@@ -132,8 +132,8 @@ test('resolveRuntimeUrls defaults to the single-thread artifact when wasm pthrea
     assert.equal(supportsWasmPthreads(), true);
     assert.equal(resolveRuntimeThreadingMode({}), 'single-thread');
     const resolved = resolveRuntimeUrls({});
-    assert.match(resolved.moduleUrl, /cogentlm-wasm\.js$/);
-    assert.match(resolved.wasmUrl, /cogentlm-wasm\.wasm$/);
+    assert.match(resolved.moduleUrl, /sipp-wasm\.js$/);
+    assert.match(resolved.wasmUrl, /sipp-wasm\.wasm$/);
     assert.equal(resolved.threading, 'single-thread');
   });
 });
@@ -142,8 +142,8 @@ test('resolveRuntimeUrls selects the pthread artifact when explicitly requested'
   withWasmPthreadSupport(() => {
     assert.equal(resolveRuntimeThreadingMode({ wasmThreading: 'pthread' }), 'pthread');
     const resolved = resolveRuntimeUrls({ wasmThreading: 'pthread' });
-    assert.match(resolved.moduleUrl, /cogentlm-wasm-pthread\.js$/);
-    assert.match(resolved.wasmUrl, /cogentlm-wasm-pthread\.wasm$/);
+    assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
+    assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
     assert.equal(resolved.threading, 'pthread');
   });
 });
@@ -151,8 +151,8 @@ test('resolveRuntimeUrls selects the pthread artifact when explicitly requested'
 test('resolveRuntimeUrls honors the single-thread runtime preference', () => {
   withWasmPthreadSupport(() => {
     const resolved = resolveRuntimeUrls({ wasmThreading: 'single-thread' });
-    assert.match(resolved.moduleUrl, /cogentlm-wasm\.js$/);
-    assert.match(resolved.wasmUrl, /cogentlm-wasm\.wasm$/);
+    assert.match(resolved.moduleUrl, /sipp-wasm\.js$/);
+    assert.match(resolved.wasmUrl, /sipp-wasm\.wasm$/);
     assert.equal(resolved.threading, 'single-thread');
   });
 });

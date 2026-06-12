@@ -2,30 +2,30 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { cogentClientDistWatch } from '../cogentlm-dist-watch';
+import { sippClientDistWatch } from '../sipp-dist-watch';
 
 const proactiveUiAppDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentClientDistDir = path.resolve(
+const sippClientDistDir = path.resolve(
   proactiveUiAppDir,
-  '../../.build/artifacts/npm/cogentlm/dist/esm'
+  '../../.build/artifacts/npm/sipp/dist/esm'
 );
-const cogentClientEntry = path.join(cogentClientDistDir, 'index.js');
+const sippClientEntry = path.join(sippClientDistDir, 'index.js');
 const appOutDir = path.resolve(proactiveUiAppDir, '../../.build/artifacts/demos/proactive-ui');
 
 export default defineConfig({
-  plugins: [react(), cogentClientDistWatch()],
+  plugins: [react(), sippClientDistWatch()],
   build: {
     outDir: appOutDir,
     emptyOutDir: true,
   },
   resolve: {
     alias: {
-      '@noumena-labs/cogentlm': cogentClientEntry,
+      '@noumena-labs/sipp': sippClientEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm'],
+    exclude: ['@noumena-labs/sipp'],
   },
   server: {
     headers: {

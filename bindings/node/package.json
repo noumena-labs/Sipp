@@ -1,5 +1,5 @@
 {
-  "name": "cogentlm-napi-build",
+  "name": "sipp-napi-build",
   "private": true,
   "version": "0.0.0",
   "license": "Apache-2.0",
@@ -7,7 +7,7 @@
     "build": "cargo xtask build node --backend all"
   },
   "napi": {
-    "binaryName": "cogentlm_node",
+    "binaryName": "sipp_node",
     "targets": [
       "x86_64-apple-darwin",
       "aarch64-apple-darwin",

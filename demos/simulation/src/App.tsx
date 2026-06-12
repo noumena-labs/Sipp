@@ -3,7 +3,7 @@
 // App.tsx
 //
 // - Top-level simulation app. Wires:
-//     - a single shared CogentClient, loaded from the configured .gguf URL
+//     - a single shared SippClient, loaded from the configured .gguf URL
 //     - a DirectorRuntime from `director.json`
 //     - four CharacterRuntime-backed chooser adapters
 //     - an app-local SimulationRuntime that owns the world loop
@@ -13,9 +13,9 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { CogentClient } from '@noumena-labs/cogentlm';
-import { createCharacterFromConfigUrl } from '@noumena-labs/cogentlm/character';
-import { createDirectorFromConfigUrl } from '@noumena-labs/cogentlm/director';
+import { SippClient } from '@noumena-labs/sipp';
+import { createCharacterFromConfigUrl } from '@noumena-labs/sipp/character';
+import { createDirectorFromConfigUrl } from '@noumena-labs/sipp/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
 import { BrainTraceDrawer } from './components/BrainTraceDrawer';
 import { SimulationCanvas } from './components/SimulationCanvas';
@@ -53,7 +53,7 @@ import type {
 import type { HoveredSceneObject } from './scene/world-binding.js';
 
 interface LoadedHarness {
-  readonly client: CogentClient;
+  readonly client: SippClient;
   readonly runtime: SimulationRuntime;
   readonly scenario: ScenarioSeed;
 }
@@ -112,7 +112,7 @@ const TUTORIAL_STEPS: readonly TutorialStep[] = [
     target: null,
     placement: 'center',
     title: 'What this simulation is',
-    body: 'Banana Dash is the proof-of-concept tech demo utilizing CogentLM. Five local LLM-powered brains operate live in a shared environment with real-time decisions, arbitration, and observability. This is not a chatbot demo. It shows how local inference can power proactive systems that monitor context, adapt behavior, and react to information in real-time.',
+    body: 'Banana Dash is the proof-of-concept tech demo utilizing Sipp. Five local LLM-powered brains operate live in a shared environment with real-time decisions, arbitration, and observability. This is not a chatbot demo. It shows how local inference can power proactive systems that monitor context, adapt behavior, and react to information in real-time.',
   },
   {
     id: 'controls',
@@ -544,7 +544,7 @@ export default function App() {
       setBusy(true);
       setModelUrl(url);
       setRunning(false);
-      let nextClient: CogentClient | null = null;
+      let nextClient: SippClient | null = null;
       let nextRuntime: SimulationRuntime | null = null;
       try {
         if (harness) {
@@ -569,7 +569,7 @@ export default function App() {
         setActiveScenario(scenario);
         resetSimulationUi();
         setStatus('Initialising client');
-        nextClient = new CogentClient();
+        nextClient = new SippClient();
 
         setStatus('Downloading model');
         await nextClient.add('local', {

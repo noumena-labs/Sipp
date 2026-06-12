@@ -39,7 +39,7 @@ change.
   ```bash
   cargo xtask test unit suite rust-crates --package <crate_name>
   ```
-- Example: `cargo xtask test unit suite rust-crates --package cogentlm`
+- Example: `cargo xtask test unit suite rust-crates --package sipp`
 
 ### 3. Node.js Bindings And Package (`bindings/node/`, `lib/node/`)
 - Run deterministic Node package API tests:

@@ -17,7 +17,7 @@ mod cli_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 const TOP_LEVEL_HELP: &str = "\
-CogentLM's developer automation lives under focused command groups.
+Sipp's developer automation lives under focused command groups.
 
 Start with:
   ./setup.sh
@@ -43,7 +43,7 @@ Start with:
   cargo xtask setup";
 
 const BUILD_HELP: &str = "\
-Build CogentLM targets from the workspace root.
+Build Sipp targets from the workspace root.
 
 Examples:
   cargo xtask build all
@@ -141,7 +141,7 @@ Examples:
   cargo xtask run examples gateway python --case embed
   cargo xtask run examples gateway web
 
-The browser example lives under examples/web and mirrors the public CogentClient
+The browser example lives under examples/web and mirrors the public SippClient
 query, chat, embed, and gateway examples. Gateway commands start a real gateway
 process from examples/gateway-style configs. The `gateway` workflow starts the
 local gateway and a selected Rust, Node, Python, or web client in one terminal;
@@ -201,7 +201,7 @@ Run deterministic tests through explicit suite and group namespaces.
 
 Examples:
   cargo xtask test unit suite xtask
-  cargo xtask test unit suite rust-crates --package cogentlm
+  cargo xtask test unit suite rust-crates --package sipp
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test unit group whitebox
   cargo xtask test unit group interface
@@ -239,7 +239,7 @@ Examples:
   cargo xtask test list --group unit --layer interface --cases --search router --format json
   cargo xtask test unit group full
   cargo xtask test unit group whitebox
-  cargo xtask test unit suite rust-crates --package cogentlm
+  cargo xtask test unit suite rust-crates --package sipp
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test smoke suite example-node --backend cpu
   cargo xtask test smoke suite playground-browser
@@ -261,7 +261,7 @@ Run `cargo xtask test list` to see suite requirements.";
 /// Top-level xtask command-line arguments.
 #[derive(Parser)]
 #[command(name = "xtask")]
-#[command(about = "CogentLM developer automation")]
+#[command(about = "Sipp developer automation")]
 #[command(long_about = TOP_LEVEL_HELP)]
 #[command(after_long_help = "Run `cargo xtask <command> --help` for detailed guidance.")]
 #[command(arg_required_else_help = true)]
@@ -286,7 +286,7 @@ pub struct Cli {
 /// Top-level xtask command groups.
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Build CogentLM targets and language bindings.
+    /// Build Sipp targets and language bindings.
     #[command(long_about = BUILD_HELP)]
     #[command(after_long_help = BACKEND_HELP)]
     #[command(arg_required_else_help = true)]
@@ -364,9 +364,9 @@ readiness so developers can decide what they need for their target.")]
     #[command(after_long_help = BACKEND_HELP)]
     Doctor(DoctorArgs),
 
-    /// Guide first-time local setup and install the cached clm launcher.
+    /// Guide first-time local setup and install the cached sipp launcher.
     #[command(long_about = "\
-Guide first-time local setup for CogentLM.
+Guide first-time local setup for Sipp.
 
 Examples:
   ./setup.sh
@@ -376,9 +376,9 @@ Examples:
   cargo xtask setup --profile full --yes
   cargo xtask setup --profile bindings --no-downloads --no-splash
 
-Interactive setup shows a short COGENTLM splash, checks local readiness, asks
+Interactive setup shows a short SIPP splash, checks local readiness, asks
 before downloading toolchains or sample files, and can install the shorter
-`clm` launcher under .build/bin.")]
+`sipp` launcher under .build/bin.")]
     Setup(SetupArgs),
 
     /// Build and serve the documentation book.
@@ -479,7 +479,7 @@ Examples:
   cargo xtask build cli --backend all
 
 The CLI build uses llama.cpp dynamic backend loading. The staged artifact
-contains the cogentlm executable, base runtime libraries, and any selected
+contains the sipp executable, base runtime libraries, and any selected
 ggml backend plugins in .build/artifacts/cli.")]
     #[command(after_long_help = BACKEND_HELP)]
     Cli(BackendArgs),
@@ -496,7 +496,7 @@ Examples:
   cargo xtask build gateway-server --backend all
 
 The gateway-server build uses llama.cpp dynamic backend loading. The staged
-artifact contains cogentlm-gateway, base runtime libraries, and selected ggml
+artifact contains sipp-gateway, base runtime libraries, and selected ggml
 backend plugins in .build/artifacts/gateway-server.")]
     #[command(after_long_help = BACKEND_HELP)]
     GatewayServer(BackendArgs),
@@ -1412,7 +1412,7 @@ pub struct RunGatewayOpenAiServeArgs {
     pub bind: String,
 
     /// Environment variable containing the gateway bearer token.
-    #[arg(long, default_value = "COGENTLM_GATEWAY_TOKEN")]
+    #[arg(long, default_value = "SIPP_GATEWAY_TOKEN")]
     pub token_env: String,
 
     /// Environment variable containing the OpenAI API key.

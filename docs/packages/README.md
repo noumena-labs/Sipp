@@ -1,8 +1,8 @@
 # Using the Core Library
 
-CogentLM exposes one endpoint-oriented client model across all public package
+Sipp exposes one endpoint-oriented client model across all public package
 surfaces. See the [Library API Overview](../api) for the shared
-`CogentClient.add`, `query`, `chat`, and `embed` contracts, endpoint descriptor
+`SippClient.add`, `query`, `chat`, and `embed` contracts, endpoint descriptor
 reference, and gateway-client symmetry patterns.
 
 Most developers should start here instead of building from source.
@@ -12,10 +12,10 @@ Most developers should start here instead of building from source.
 | Surface | Install | Primary use |
 | --- | --- | --- |
 | [Library API Overview](../api) | — | Shared `add`, `query`, `chat`, and `embed` contracts across all surfaces. |
-| [Browser](browser.md) | `npm install cogentlm` | Browser-local GGUF inference, WebGPU/WASM runtime, and browser gateway clients. |
-| [Node.js](node.md) | `npm install cogentlm-server` | Node server processes, route handlers, and backend services. |
-| [Python](python.md) | `pip install cogentlm` | Python services, scripts, and gateway clients. |
-| [Rust](rust.md) | `cargo add cogentlm` | Rust applications and services. |
+| [Browser](browser.md) | `npm install sipp` | Browser-local GGUF inference, WebGPU/WASM runtime, and browser gateway clients. |
+| [Node.js](node.md) | `npm install sipp-server` | Node server processes, route handlers, and backend services. |
+| [Python](python.md) | `pip install sipp` | Python services, scripts, and gateway clients. |
+| [Rust](rust.md) | `cargo add sipp` | Rust applications and services. |
 | [Gateway Server](../gateway/server.md) | Source-built today | First-party HTTP gateway for local and provider targets. |
 | [Gateway Docker](../gateway/docker.md) | Docker from source | Local and production container workflows for the gateway server. |
 | [Gateway Toolkit](../gateway/toolkit.md) | Rust source artifact today | Rust toolkit for custom gateway applications. |

@@ -15,7 +15,7 @@ Open the printed local URL, load the default model, then press `Start`.
 
 ## What It Demonstrates
 
-- A shared `CogentClient` driving multiple local model-backed brains.
+- A shared `SippClient` driving multiple local model-backed brains.
 - Director config loading from `public/directors/courtyard/director.json`.
 - Runtime event tracing for agent and director decisions.
 - A deterministic simulation loop combined with model-authored choices.

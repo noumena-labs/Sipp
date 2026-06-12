@@ -45,8 +45,8 @@ build/
 /lib/node/build/
 /lib/web/dist/
 /lib/web/build/
-/lib/web/src/wasm/cogentlm-wasm*.js
-/lib/web/src/wasm/cogentlm-wasm*.wasm
+/lib/web/src/wasm/sipp-wasm*.js
+/lib/web/src/wasm/sipp-wasm*.wasm
 
 # =========================
 # Bindings & Cross-Compilation

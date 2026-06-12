@@ -94,7 +94,7 @@ pub(crate) fn apply_toolchains<'a>(
             };
             command = command.env("CUDACXX", nvcc_exe.display().to_string());
             command = command.env("CUDA_TOOLKIT_ROOT_DIR", cuda_path.display().to_string());
-            command = command.env("COGENTLM_CUDA_ARCHITECTURES", cuda_architectures(ctx));
+            command = command.env("SIPP_CUDA_ARCHITECTURES", cuda_architectures(ctx));
         }
         Some(Backend::Metal) => output::detail("Toolchain", "Metal"),
         Some(Backend::Cpu) | Some(Backend::All) | None => {

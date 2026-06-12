@@ -1,6 +1,6 @@
 # Runtime Options
 
-CogentLM keeps runtime configuration close to the endpoint that owns local
+Sipp keeps runtime configuration close to the endpoint that owns local
 inference. Request options stay on `query`, `chat`, or `embed` calls. Gateway
 and provider extensions use separate option buckets so applications can see
 which boundary receives each field.
@@ -9,7 +9,7 @@ which boundary receives each field.
 
 | Layer | Browser package | Node.js package | Purpose |
 | --- | --- | --- | --- |
-| Client options | `new CogentClient(options)` | Environment and process setup | Browser assets, workers, browser cache, and backend selection. |
+| Client options | `new SippClient(options)` | Environment and process setup | Browser assets, workers, browser cache, and backend selection. |
 | Local endpoint load options | `client.add(..., { kind: 'local', options })` | `client.add(..., { kind: 'local', config })` | Model source, backend preference, progress, and native runtime config. |
 | Text request options | `client.query(prompt, options)` | `client.query({ options })` | Output length, sampling shortcuts, streaming, cancellation, and stop strings. |
 | Local request options | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | Local-only prompt state, grammars, images, and embedding normalization. |
@@ -21,7 +21,7 @@ runtime config classes or structs.
 
 ## Browser Client Options
 
-Browser `CogentClientOptions` affect the WebAssembly runtime, worker transport,
+Browser `SippClientOptions` affect the WebAssembly runtime, worker transport,
 and browser storage. They do not select a model by themselves.
 
 | Option | Use |
@@ -39,7 +39,7 @@ isolation, and COOP/COEP headers. Use `single-thread` when the application
 cannot serve those headers.
 
 ```ts
-const client = new CogentClient({
+const client = new SippClient({
   executionMode: 'worker',
   wasmThreading: 'single-thread',
 });
@@ -75,8 +75,8 @@ const endpoint = await client.add('node-local', {
 ```
 
 Browser `backend` accepts `auto`, `cpu`, or `webgpu`. Native package backend
-selection is package-specific: Node.js uses `COGENTLM_NODE_BACKEND`, Python
-uses `COGENTLM_PYTHON_BACKEND`, and the CLI uses `--backend`.
+selection is package-specific: Node.js uses `SIPP_NODE_BACKEND`, Python
+uses `SIPP_PYTHON_BACKEND`, and the CLI uses `--backend`.
 
 ## Native Runtime Config
 
@@ -129,7 +129,7 @@ const run = client.chat({
 
 Provider options cannot override typed fields such as `model`, `messages`,
 `prompt`, `temperature`, or `topP`/`top_p`; set those through the typed request
-options where CogentLM exposes them.
+options where Sipp exposes them.
 
 ## Related Docs
 

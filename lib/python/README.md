@@ -1,6 +1,6 @@
-# CogentLM Python Package
+# Sipp Python Package
 
-`lib/python` is the Python package source for the public `cogentlm` package. It
+`lib/python` is the Python package source for the public `sipp` package. It
 loads the best available native backend and exposes descriptor classes for
 local GGUF models, gateway endpoints, and provider endpoints.
 
@@ -12,23 +12,23 @@ response and `.tokens()` for streamed text batches.
 From the repository root, after `source ./setup.sh`:
 
 ```bash
-clm build python --backend cpu && python examples/python/query.py <model.gguf> "Explain CogentLM."
+sipp build python --backend cpu && python examples/python/query.py <model.gguf> "Explain Sipp."
 ```
 
-`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+`sipp` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
 if the launcher is not active.
 
-Set `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
+Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 
 ## Local GGUF Query
 
 ```python
 import sys
 
-from cogentlm import (
+from sipp import (
     CacheRuntimeConfig,
-    CogentClient,
-    CogentTextOptions,
+    SippClient,
+    SippTextOptions,
     ContextRuntimeConfig,
     LocalModelDescriptor,
     LocalTextOptions,
@@ -38,7 +38,7 @@ from cogentlm import (
 )
 
 
-client = CogentClient()
+client = SippClient()
 endpoint = client.add(
     "default",
     LocalModelDescriptor(
@@ -55,16 +55,16 @@ endpoint = client.add(
     ),
 )
 run = client.query(
-    "Explain CogentLM in one sentence.",
+    "Explain Sipp in one sentence.",
     endpoint=endpoint,
-    options=CogentTextOptions(max_tokens=64),
+    options=SippTextOptions(max_tokens=64),
     local=LocalTextOptions(context_key="python-local"),
 )
 print(run.result()["text"])
 ```
 
 Gateway clients use `GatewayDescriptor` when a Python service or script calls a
-separate CogentLM gateway.
+separate Sipp gateway.
 
 ## Learn More
 

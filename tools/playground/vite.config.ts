@@ -2,18 +2,18 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import { cogentClientDistWatch } from '../../demos/cogentlm-dist-watch';
+import { sippClientDistWatch } from '../../demos/sipp-dist-watch';
 
 const playgroundAppDir = fileURLToPath(new URL('.', import.meta.url));
-const cogentClientDistDir = path.resolve(
+const sippClientDistDir = path.resolve(
   playgroundAppDir,
-  '../../.build/artifacts/npm/cogentlm/dist/esm'
+  '../../.build/artifacts/npm/sipp/dist/esm'
 );
-const cogentClientEntry = path.join(cogentClientDistDir, 'index.js');
+const sippClientEntry = path.join(sippClientDistDir, 'index.js');
 const appOutDir = path.resolve(playgroundAppDir, '../../.build/artifacts/tools/playground');
 
 export default defineConfig({
-  plugins: [react(), cogentClientDistWatch()],
+  plugins: [react(), sippClientDistWatch()],
   build: {
     outDir: appOutDir,
     emptyOutDir: true,
@@ -23,12 +23,12 @@ export default defineConfig({
       // Use the built workspace entry directly so Vite does not serve the package
       // through an immutable /node_modules dependency URL that can stay stale
       // across local package rebuilds.
-      '@noumena-labs/cogentlm': cogentClientEntry,
+      '@noumena-labs/sipp': sippClientEntry,
     },
     preserveSymlinks: true,
   },
   optimizeDeps: {
-    exclude: ['@noumena-labs/cogentlm'],
+    exclude: ['@noumena-labs/sipp'],
   },
   server: {
     headers: {

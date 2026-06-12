@@ -7,24 +7,24 @@ from pathlib import Path
 
 
 def test_package_import_exposes_public_runtime_helpers() -> None:
-    import cogentlm
+    import sipp
 
-    assert callable(cogentlm.backend_observability_json)
-    assert callable(cogentlm.set_llama_log_quiet)
-    assert cogentlm.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
-    assert hasattr(cogentlm.CogentClient, "add")
-    assert hasattr(cogentlm, "GatewayDescriptor")
-    assert not hasattr(cogentlm.CogentClient, "add_" + "local")
-    assert not hasattr(cogentlm.CogentClient, "add_http_endpoint")
+    assert callable(sipp.backend_observability_json)
+    assert callable(sipp.set_llama_log_quiet)
+    assert sipp.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
+    assert hasattr(sipp.SippClient, "add")
+    assert hasattr(sipp, "GatewayDescriptor")
+    assert not hasattr(sipp.SippClient, "add_" + "local")
+    assert not hasattr(sipp.SippClient, "add_http_endpoint")
 
 
 def test_invalid_backend_environment_is_rejected() -> None:
     env = os.environ.copy()
-    env["COGENTLM_PYTHON_BACKEND"] = "bogus"
-    env.pop("COGENTLM_PYTHON_NATIVE_LIBRARY_PATH", None)
+    env["SIPP_PYTHON_BACKEND"] = "bogus"
+    env.pop("SIPP_PYTHON_NATIVE_LIBRARY_PATH", None)
 
     result = subprocess.run(
-        [sys.executable, "-c", "import cogentlm"],
+        [sys.executable, "-c", "import sipp"],
         env=env,
         text=True,
         capture_output=True,
@@ -32,7 +32,7 @@ def test_invalid_backend_environment_is_rejected() -> None:
     )
 
     assert result.returncode != 0
-    assert "Invalid COGENTLM_PYTHON_BACKEND=bogus" in f"{result.stdout}\n{result.stderr}"
+    assert "Invalid SIPP_PYTHON_BACKEND=bogus" in f"{result.stdout}\n{result.stderr}"
 
 
 def test_package_loader_supports_explicit_fake_native_module(tmp_path: Path) -> None:
@@ -41,11 +41,11 @@ def test_package_loader_supports_explicit_fake_native_module(tmp_path: Path) -> 
         """
 class CacheRuntimeConfig: pass
 class ChatMessage: pass
-class CogentClient: pass
-class CogentEmbeddingRun: pass
-class CogentTextOptions: pass
-class CogentTextRun: pass
-class CogentTokenIterator: pass
+class SippClient: pass
+class SippEmbeddingRun: pass
+class SippTextOptions: pass
+class SippTextRun: pass
+class SippTokenIterator: pass
 class ContextRuntimeConfig: pass
 class EndpointRef: pass
 class GatewayDescriptor: pass
@@ -76,18 +76,18 @@ def set_llama_log_quiet(quiet):
     package_root = Path(__file__).resolve().parents[1] / "python"
     env = os.environ.copy()
     env["PYTHONPATH"] = str(package_root)
-    env["COGENTLM_PYTHON_NATIVE_LIBRARY_PATH"] = str(fake_native)
-    env.pop("COGENTLM_PYTHON_BACKEND", None)
+    env["SIPP_PYTHON_NATIVE_LIBRARY_PATH"] = str(fake_native)
+    env.pop("SIPP_PYTHON_BACKEND", None)
 
     result = subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "import cogentlm; "
-                "assert cogentlm.get_active_backend() == 'vulkan'; "
-                "assert cogentlm.DEFAULT_CONTEXT_KEY == 'default'; "
-                "assert callable(cogentlm.backend_observability_json); "
+                "import sipp; "
+                "assert sipp.get_active_backend() == 'vulkan'; "
+                "assert sipp.DEFAULT_CONTEXT_KEY == 'default'; "
+                "assert callable(sipp.backend_observability_json); "
                 "print('ok')"
             ),
         ],

@@ -1,4 +1,4 @@
-use cogentlm::lifecycle::{ClassifiedAsset, ModelError, PairingPlan, PairingResolver};
+use sipp::lifecycle::{ClassifiedAsset, ModelError, PairingPlan, PairingResolver};
 use serde::Serialize;
 
 use crate::ffi::serialize_json_response;

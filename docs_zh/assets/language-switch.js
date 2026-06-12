@@ -24,13 +24,13 @@
     }
 
     function mountLanguageSwitch() {
-        if (document.querySelector(".cogentlm-language-switch")) return;
+        if (document.querySelector(".sipp-language-switch")) return;
 
         const lang = currentLanguage();
         const target = targetHref();
 
         const link = document.createElement("a");
-        link.className = "icon-button cogentlm-language-switch";
+        link.className = "icon-button sipp-language-switch";
         link.href = target;
         link.title = lang === ZH ? "Switch to English" : "切换到中文";
         link.setAttribute("aria-label", link.title);

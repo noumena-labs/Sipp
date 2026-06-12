@@ -35,7 +35,7 @@ export interface OpfsSyncAccessHandle {
  */
 export class FileSystemStorage {
   private root: FileSystemDirectoryHandle | null = null;
-  private readonly dirName = 'cogent-models';
+  private readonly dirName = 'sipp-models';
 
   /**
    * Check if OPFS is supported in the current environment.
@@ -55,7 +55,7 @@ export class FileSystemStorage {
     try {
       const root = await navigator.storage.getDirectory();
       const handle = await root.getFileHandle(
-        `cogent-sync-access-probe-${Date.now().toString(36)}`,
+        `sipp-sync-access-probe-${Date.now().toString(36)}`,
         { create: true }
       );
       const createSyncAccessHandle = (handle as unknown as {

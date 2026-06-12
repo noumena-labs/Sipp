@@ -306,147 +306,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cogentlm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "cogentlm-sys",
- "cxx",
- "futures",
- "futures-channel",
- "futures-core",
- "futures-util",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
- "wiremock",
-]
-
-[[package]]
-name = "cogentlm-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "cogentlm",
- "serde_json",
-]
-
-[[package]]
-name = "cogentlm-gateway"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "cogentlm",
- "http",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "cogentlm-gateway-example"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "bytes",
- "clap",
- "cogentlm",
- "cogentlm-gateway",
- "futures-util",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "cogentlm-gateway-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "bytes",
- "clap",
- "cogentlm",
- "cogentlm-gateway",
- "futures-util",
- "http",
- "rand",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "wiremock",
-]
-
-[[package]]
-name = "cogentlm-napi"
-version = "0.1.0"
-dependencies = [
- "cogentlm",
- "futures",
- "napi",
- "napi-build",
- "napi-derive",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "cogentlm-py"
-version = "0.1.0"
-dependencies = [
- "cogentlm",
- "futures",
- "pyo3",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "cogentlm-rust-examples"
-version = "0.1.0"
-dependencies = [
- "cogentlm",
- "futures",
- "tokio",
-]
-
-[[package]]
-name = "cogentlm-sys"
-version = "0.1.0"
-dependencies = [
- "cc",
- "cmake",
- "cxx",
- "cxx-build",
-]
-
-[[package]]
-name = "cogentlm-wasm"
-version = "0.1.0"
-dependencies = [
- "cogentlm",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2078,6 +1937,147 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "sipp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "cxx",
+ "futures",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sipp-sys",
+ "thiserror 2.0.18",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
+name = "sipp-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "serde_json",
+ "sipp",
+]
+
+[[package]]
+name = "sipp-gateway"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http",
+ "serde",
+ "serde_json",
+ "sipp",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-gateway-example"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sipp",
+ "sipp-gateway",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-gateway-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "futures-util",
+ "http",
+ "rand",
+ "serde",
+ "serde_json",
+ "sipp",
+ "sipp-gateway",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
+name = "sipp-napi"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "serde",
+ "serde_json",
+ "sipp",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-py"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pyo3",
+ "serde",
+ "serde_json",
+ "sipp",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-rust-examples"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "sipp",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "cmake",
+ "cxx",
+ "cxx-build",
+]
+
+[[package]]
+name = "sipp-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "sipp",
 ]
 
 [[package]]

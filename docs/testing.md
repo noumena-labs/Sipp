@@ -1,6 +1,6 @@
 # Testing
 
-CogentLM tests are cataloged by `cargo xtask test list`. Use that command first
+Sipp tests are cataloged by `cargo xtask test list`. Use that command first
 when choosing a target or checking what CI runs.
 
 ## Commands
@@ -21,7 +21,7 @@ cargo xtask test unit group full
 cargo xtask test unit group whitebox
 cargo xtask test unit group interface
 cargo xtask test unit suite xtask
-cargo xtask test unit suite rust-crates --package cogentlm
+cargo xtask test unit suite rust-crates --package sipp
 cargo xtask test unit suite browser-package
 cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
@@ -54,7 +54,7 @@ Unit suite names expose suite-specific options, such as
 | `cargo xtask test unit suite rust-bindings` | Rust binding crate unit tests | `bindings/node`, `bindings/python`, `bindings/wasm` |
 | `cargo xtask test unit suite browser-package` | Browser package TypeScript tests | `lib/web/tests` |
 | `cargo xtask test unit suite demos` | Browser demo TypeScript tests | `demos` |
-| `cargo xtask test unit suite api` | Crate-level public API integration tests | `crates/cogentlm/tests` |
+| `cargo xtask test unit suite api` | Crate-level public API integration tests | `crates/sipp/tests` |
 | `cargo xtask test unit suite cli` | CLI black-box integration tests | `apps/cli/tests` |
 | `cargo xtask test unit suite node-package` | Deterministic Node package API tests | `lib/node`, `bindings/node` |
 | `cargo xtask test unit suite python-package` | Deterministic Python package API tests | `lib/python`, `bindings/python` |
@@ -103,7 +103,7 @@ Use `cargo xtask run examples serve browser` to manually serve browser examples.
 Use `cargo xtask run examples serve gateway-local --model <model.gguf>` to
 serve the minimal local gateway proxy. Provider-backed and production serving
 use `apps/gateway-server`; validate its configuration with
-`clm run gateway-server check --config <path>` and use raw Docker commands from
+`sipp run gateway-server check --config <path>` and use raw Docker commands from
 [Gateway Docker](gateway/docker.md) for container testing. Use
 [Gateway Testing](gateway/testing.md) for curl and Postman checks. Playground
 validation remains under `test smoke suite
@@ -120,7 +120,7 @@ and existing coverage artifacts.
 
 ## Package Locations
 
-- `lib/web` publishes `@noumena-labs/cogentlm` and public `cogentlm`.
-- `lib/node` publishes `@noumena-labs/cogentlm-server` and public `cogentlm-server`.
-- `lib/python` publishes Python `cogentlm`.
-- `crates/cogentlm` is the Rust crate used by Rust applications and examples.
+- `lib/web` publishes `@noumena-labs/sipp` and public `sipp`.
+- `lib/node` publishes `@noumena-labs/sipp-server` and public `sipp-server`.
+- `lib/python` publishes Python `sipp`.
+- `crates/sipp` is the Rust crate used by Rust applications and examples.

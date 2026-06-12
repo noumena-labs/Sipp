@@ -1,4 +1,4 @@
-import type { CogentClientOptions } from '../engine/browser-client.js';
+import type { SippClientOptions } from '../engine/browser-client.js';
 import {
   resolveOptimizedPackageAssetUrl,
   resolveRuntimeUrls,
@@ -65,7 +65,7 @@ export function getOptimizedDefaultWorkerUrl(importerUrl: string = import.meta.u
   return resolveOptimizedPackageAssetUrl('dist/esm/worker/model-service-entry.js', importerUrl);
 }
 
-function toWorkerRuntimeConfig(config: CogentClientOptions): WorkerRuntimeConfig {
+function toWorkerRuntimeConfig(config: SippClientOptions): WorkerRuntimeConfig {
   if (typeof config.moduleOptions?.locateFile === 'function') {
     throw new Error(
       'Worker mode does not support moduleOptions.locateFile. Provide explicit moduleUrl/wasmUrl instead.'
@@ -152,7 +152,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     }
   >();
 
-  constructor(private readonly config: CogentClientOptions = {}) {
+  constructor(private readonly config: SippClientOptions = {}) {
     this.workerConfig = toWorkerRuntimeConfig(config);
   }
 
@@ -310,7 +310,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.pendingTokenRecordsByNativeRequestId.clear();
     this.streamStatsByCallId.clear();
     for (const pending of this.pendingCalls.values()) {
-      pending.reject(new QueryError('ENGINE_CLOSED', 'CogentClient is closed.'));
+      pending.reject(new QueryError('ENGINE_CLOSED', 'SippClient is closed.'));
     }
     this.pendingCalls.clear();
 
@@ -330,7 +330,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
   private assertOpen(): void {
     if (this.closed) {
-      throw new QueryError('ENGINE_CLOSED', 'CogentClient is closed.');
+      throw new QueryError('ENGINE_CLOSED', 'SippClient is closed.');
     }
   }
 

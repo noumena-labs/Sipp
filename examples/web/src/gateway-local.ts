@@ -1,9 +1,9 @@
 import {
-  CogentClient,
+  SippClient,
   type BrowserTextRun,
   type EndpointRef,
   type NativeRuntimeConfig,
-} from '@noumena-labs/cogentlm';
+} from '@noumena-labs/sipp';
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
@@ -19,7 +19,7 @@ import {
 } from './common.js';
 
 const elements = renderGatewayLocalPage('Compare browser-local and gateway-local inference.');
-const localClient = new CogentClient();
+const localClient = new SippClient();
 let localModelLoaded = false;
 
 elements.loadForm.addEventListener('submit', async (event) => {
@@ -57,7 +57,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   const gateway = readGatewayConfig({ ...elements, output: elements.gatewayOutput });
   if (gateway == null) return;
 
-  const gatewayClient = new CogentClient();
+  const gatewayClient = new SippClient();
   try {
     const gatewayEndpoint = await gatewayClient.add(
       'gateway',
@@ -95,7 +95,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
 function runtimeConfig(): NativeRuntimeConfig {
   return {
-    context: { n_ctx: 2048 },
+    context: { n_ctx: 4096 },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },
     observability: { runtime_metrics: true },

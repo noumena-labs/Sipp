@@ -10,12 +10,12 @@ import {
   readLocalArgs,
 } from './_support.mjs';
 
-const { CogentClient, backendObservabilityJson, setLlamaLogQuiet } = native;
-const { model, input } = readLocalArgs('embed', 'CogentClient embedding example input.');
+const { SippClient, backendObservabilityJson, setLlamaLogQuiet } = native;
+const { model, input } = readLocalArgs('embed', 'SippClient embedding example input.');
 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
-const client = new CogentClient();
+const client = new SippClient();
 await client.add('default', {
   kind: 'local',
   modelPath: model,
@@ -39,15 +39,15 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
   return {
     placement: { gpu_layers: gpuLayers() },
     context: {
-      n_ctx: intEnv('COGENTLM_CONTEXT', DEFAULT_CONTEXT),
-      n_threads: intEnv('COGENTLM_THREADS'),
-      n_threads_batch: intEnv('COGENTLM_THREADS'),
+      n_ctx: intEnv('SIPP_CONTEXT', DEFAULT_CONTEXT),
+      n_threads: intEnv('SIPP_THREADS'),
+      n_threads_batch: intEnv('SIPP_THREADS'),
       embeddings,
       pooling: embeddings ? 'mean' : undefined,
     },
     sampling: {
-      temperature: numberEnv('COGENTLM_TEMPERATURE', DEFAULT_TEMPERATURE),
-      seed: intEnv('COGENTLM_SEED', DEFAULT_SEED),
+      temperature: numberEnv('SIPP_TEMPERATURE', DEFAULT_TEMPERATURE),
+      seed: intEnv('SIPP_SEED', DEFAULT_SEED),
     },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },

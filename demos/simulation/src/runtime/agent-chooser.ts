@@ -2,7 +2,7 @@ import type {
   CharacterRuntime,
   CharacterConfig,
   CharacterChooseResult,
-} from '@noumena-labs/cogentlm/character';
+} from '@noumena-labs/sipp/character';
 import { buildDecisionContext } from './decision-context.js';
 import type { AgentGoal, AgentPerception, DecisionContext } from './types.js';
 

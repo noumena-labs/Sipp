@@ -1,6 +1,6 @@
 # 测试
 
-CogentLM 的测试套件通过 `cargo xtask test list` 统一管理。需要查找测试目标或查看 CI 运行任务时，优先使用此命令。
+Sipp 的测试套件通过 `cargo xtask test list` 统一管理。需要查找测试目标或查看 CI 运行任务时，优先使用此命令。
 
 ## 命令
 
@@ -20,7 +20,7 @@ cargo xtask test unit group full
 cargo xtask test unit group whitebox
 cargo xtask test unit group interface
 cargo xtask test unit suite xtask
-cargo xtask test unit suite rust-crates --package cogentlm
+cargo xtask test unit suite rust-crates --package sipp
 cargo xtask test unit suite browser-package
 cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
@@ -51,7 +51,7 @@ cargo xtask test verify --changed
 | `cargo xtask test unit suite rust-bindings` | Rust 绑定 Crate 的单元测试 | `bindings/node`, `bindings/python`, `bindings/wasm` |
 | `cargo xtask test unit suite browser-package` | 浏览器包 TypeScript 测试 | `lib/web/tests` |
 | `cargo xtask test unit suite demos` | 浏览器端演示项目的 TypeScript 测试 | `demos` |
-| `cargo xtask test unit suite api` | 库级别公共 API 集成测试 | `crates/cogentlm/tests` |
+| `cargo xtask test unit suite api` | 库级别公共 API 集成测试 | `crates/sipp/tests` |
 | `cargo xtask test unit suite cli` | CLI 的黑盒集成测试 | `apps/cli/tests` |
 | `cargo xtask test unit suite node-package` | Node 库的确定性 API 测试 | `lib/node`, `bindings/node` |
 | `cargo xtask test unit suite python-package` | Python 库的确定性 API 测试 | `lib/python`, `bindings/python` |
@@ -94,7 +94,7 @@ cargo xtask test verify --changed
 
 手动启动浏览器端示例：`cargo xtask run examples serve browser`。
 
-启动极简版本地网关代理：`cargo xtask run examples serve gateway-local --model <model.gguf>`。如需验证完整网关服务和生产环境配置，使用 `apps/gateway-server`。运行 `clm run gateway-server check --config <path>` 校验网关配置。Docker 容器测试见[网关 Docker 指南](gateway/docker.md)，curl 和 Postman 的网络验证见[网关测试指南](gateway/testing.md)。Playground 环境由 `test smoke suite playground-browser` 负责验证。
+启动极简版本地网关代理：`cargo xtask run examples serve gateway-local --model <model.gguf>`。如需验证完整网关服务和生产环境配置，使用 `apps/gateway-server`。运行 `sipp run gateway-server check --config <path>` 校验网关配置。Docker 容器测试见[网关 Docker 指南](gateway/docker.md)，curl 和 Postman 的网络验证见[网关测试指南](gateway/testing.md)。Playground 环境由 `test smoke suite playground-browser` 负责验证。
 
 `test unit` 和 `test smoke` 执行完毕后会输出总结报告，保存到 `.build/test/run-report.json` 和 `.build/test/run-report.md`。支持覆盖率的单元测试套件还会将覆盖率数据写入 `.build/coverage/`。
 
@@ -102,7 +102,7 @@ cargo xtask test verify --changed
 
 ## 包路径说明
 
-- `lib/web` 构建并发布 `@noumena-labs/cogentlm` 及通用浏览器包 `cogentlm`。
-- `lib/node` 构建并发布 `@noumena-labs/cogentlm-server` 及通用 Node 服务端包 `cogentlm-server`。
-- `lib/python` 构建并发布 Python 包 `cogentlm`。
-- `crates/cogentlm` 提供 Rust 库 API，供外部 Rust 应用和示例使用。
+- `lib/web` 构建并发布 `@noumena-labs/sipp` 及通用浏览器包 `sipp`。
+- `lib/node` 构建并发布 `@noumena-labs/sipp-server` 及通用 Node 服务端包 `sipp-server`。
+- `lib/python` 构建并发布 Python 包 `sipp`。
+- `crates/sipp` 提供 Rust 库 API，供外部 Rust 应用和示例使用。

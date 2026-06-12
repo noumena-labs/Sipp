@@ -13,10 +13,10 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use bytes::Bytes;
-use cogentlm::core::TokenUsage;
-use cogentlm::gateway_core::{GatewayStreamEvent, Operation};
-use cogentlm::{CogentRequestContext, CogentTextResponseFuture, CogentTokenBatches};
-use cogentlm_gateway::{
+use sipp::core::TokenUsage;
+use sipp::gateway_core::{GatewayStreamEvent, Operation};
+use sipp::{SippRequestContext, SippTextResponseFuture, SippTokenBatches};
+use sipp_gateway::{
     request_context, request_id, AuthenticatedRequest, Authenticator, GatewayCodec,
     GatewayHttpError, GatewayRoutes, ProtocolCodec, ToolkitResult,
 };
@@ -218,7 +218,7 @@ async fn embed(
     let mut request = decoded.request;
     request.endpoint = Some(endpoint);
     let run = state.runtime.client.embed_with_context(
-        CogentRequestContext {
+        SippRequestContext {
             request_id: request_id.map(str::to_string),
         },
         request,
@@ -287,7 +287,7 @@ async fn text_handler(
             request.endpoint = Some(endpoint);
             request.emit_tokens = decoded.stream;
             let run = state.runtime.client.query_with_context(
-                CogentRequestContext {
+                SippRequestContext {
                     request_id: request_id.map(str::to_string),
                 },
                 request,
@@ -347,7 +347,7 @@ async fn text_handler(
             request.endpoint = Some(endpoint);
             request.emit_tokens = decoded.stream;
             let run = state.runtime.client.chat_with_context(
-                CogentRequestContext {
+                SippRequestContext {
                     request_id: request_id.map(str::to_string),
                 },
                 request,
@@ -469,14 +469,14 @@ fn caller_label(authenticated: &AuthenticatedRequest) -> Option<String> {
         .map(str::to_string)
 }
 
-fn resolve_endpoint(state: &PublicState, target: &str) -> ToolkitResult<cogentlm::EndpointRef> {
+fn resolve_endpoint(state: &PublicState, target: &str) -> ToolkitResult<sipp::EndpointRef> {
     state.runtime.targets.get(target).cloned().ok_or_else(|| {
         GatewayHttpError::new(StatusCode::NOT_FOUND, "resolution", "target not found")
     })
 }
 
 fn authorize(
-    context: &cogentlm::gateway_core::GatewayRequestContext,
+    context: &sipp::gateway_core::GatewayRequestContext,
     target: &str,
 ) -> ToolkitResult<()> {
     let allowed = context
@@ -516,7 +516,7 @@ fn stream_response(
     trace: RequestTrace,
     caller: Option<String>,
     target: Option<String>,
-    run: (CogentTokenBatches, CogentTextResponseFuture),
+    run: (SippTokenBatches, SippTextResponseFuture),
     permit: ConcurrencyPermit,
 ) -> Response<Body> {
     let response_request_id = trace.request_id.clone();
@@ -551,8 +551,8 @@ fn stream_response(
 }
 
 struct TextStreamState {
-    tokens: CogentTokenBatches,
-    response: Option<CogentTextResponseFuture>,
+    tokens: SippTokenBatches,
+    response: Option<SippTextResponseFuture>,
     pending: VecDeque<ToolkitResult<GatewayStreamEvent>>,
     terminal: bool,
     recorded: bool,
@@ -568,7 +568,7 @@ struct StreamTelemetry {
 }
 
 fn text_event_stream(
-    (tokens, response): (CogentTokenBatches, CogentTextResponseFuture),
+    (tokens, response): (SippTokenBatches, SippTextResponseFuture),
     permit: ConcurrencyPermit,
     telemetry: StreamTelemetry,
 ) -> impl Stream<Item = ToolkitResult<GatewayStreamEvent>> + Send {
@@ -609,7 +609,7 @@ fn text_event_stream(
 
 fn finish_text_stream(
     state: &mut TextStreamState,
-    response: cogentlm::CogentResult<cogentlm::CogentTextResponse>,
+    response: sipp::SippResult<sipp::SippTextResponse>,
 ) {
     state.terminal = true;
     state._permit.take();

@@ -1,5 +1,5 @@
 [package]
-name = "cogentlm-py"
+name = "sipp-py"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,14 +12,14 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["native"]
-native = ["cogentlm/native"]
-cuda = ["cogentlm/cuda"]
-metal = ["cogentlm/metal"]
-vulkan = ["cogentlm/vulkan"]
-openmp = ["cogentlm/openmp"]
+native = ["sipp/native"]
+cuda = ["sipp/cuda"]
+metal = ["sipp/metal"]
+vulkan = ["sipp/vulkan"]
+openmp = ["sipp/openmp"]
 
 [dependencies]
-cogentlm = { workspace = true, features = ["providers"] }
+sipp = { workspace = true, features = ["providers"] }
 futures.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py39", "extension-module"] }
 serde.workspace = true

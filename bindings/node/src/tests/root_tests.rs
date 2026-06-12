@@ -47,14 +47,14 @@ fn endpoint_ref_maps_closed_builtin_kinds() {
 
 #[test]
 fn query_request_maps_gateway_endpoint_options() {
-    let request = CogentQueryRequest {
+    let request = SippQueryRequest {
         request_id: Some("request-1".to_string()),
         endpoint: Some(EndpointRef {
             kind: "gateway".to_string(),
             id: "custom".to_string(),
         }),
         prompt: "hello".to_string(),
-        options: Some(CogentTextOptions {
+        options: Some(SippTextOptions {
             max_tokens: Some(8),
             temperature: Some(0.0),
             top_p: None,
@@ -127,7 +127,7 @@ fn gateway_endpoint_descriptor_maps_through_add_shape() {
 
 #[test]
 fn endpoint_options_must_be_json_objects() {
-    let request = CogentEmbedRequest {
+    let request = SippEmbedRequest {
         request_id: None,
         endpoint: None,
         input: "hello".to_string(),

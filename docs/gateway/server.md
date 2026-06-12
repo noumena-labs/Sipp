@@ -1,6 +1,6 @@
 # Gateway Server
 
-The CogentLM Gateway Server is the first-party HTTP application for teams that
+The Sipp Gateway Server is the first-party HTTP application for teams that
 want one inference boundary for local GGUF targets and provider-backed targets.
 It lives in `apps/gateway-server`.
 
@@ -13,7 +13,7 @@ container image, or `cargo install` target. Build it from the source checkout.
 
 ## Source Workflow
 
-Use `clm` for source checkout workflows. `clm` is the setup-installed launcher
+Use `sipp` for source checkout workflows. `sipp` is the setup-installed launcher
 for `cargo xtask`; when the launcher is unavailable, use `cargo xtask` with
 the same arguments.
 
@@ -23,21 +23,21 @@ cp apps/gateway-server/.env.example apps/gateway-server/.env
 set -a
 . apps/gateway-server/.env
 set +a
-clm run gateway-server check --config apps/gateway-server/config/local.toml --backend vulkan
-clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend vulkan
+sipp run gateway-server check --config apps/gateway-server/config/local.toml --backend vulkan
+sipp run gateway-server serve --config apps/gateway-server/config/local.toml --backend vulkan
 ```
 
 Before running real on-board inference tests, update the ignored local TOML
 with the token env names, admin password env name, and model path. Update only
 secret values in the secrets env file.
 
-`clm run gateway-server check` builds the staged gateway distribution for the
-selected backend, then runs `cogentlm-gateway check`. The binary `check`
+`sipp run gateway-server check` builds the staged gateway distribution for the
+selected backend, then runs `sipp-gateway check`. The binary `check`
 command parses and validates TOML only. It does not read bearer-token
 environment variables, load model files, contact providers, or bind ports.
 
-`clm run gateway-server serve` builds the staged gateway distribution, then
-runs the generated `cogentlm-gateway` executable from the workspace root. It
+`sipp run gateway-server serve` builds the staged gateway distribution, then
+runs the generated `sipp-gateway` executable from the workspace root. It
 reads secret environment variables named by TOML, loads targets, binds both
 listeners, and exits cleanly on Ctrl-C.
 
@@ -55,8 +55,8 @@ cp apps/gateway-server/.env.example apps/gateway-server/.env
 set -a
 . apps/gateway-server/.env
 set +a
-clm run gateway-server check --config apps/gateway-server/config/provider-only.toml --backend cpu
-clm run gateway-server serve --config apps/gateway-server/config/provider-only.toml --backend cpu
+sipp run gateway-server check --config apps/gateway-server/config/provider-only.toml --backend cpu
+sipp run gateway-server serve --config apps/gateway-server/config/provider-only.toml --backend cpu
 ```
 
 Use [Configuration](configuration.md) for Anthropic and OpenAI-compatible
@@ -64,9 +64,9 @@ target snippets.
 
 ## Generated Executable
 
-`clm build gateway-server --backend <backend>` stages a runnable distribution
+`sipp build gateway-server --backend <backend>` stages a runnable distribution
 in `.build/artifacts/gateway-server`. The directory contains the
-`cogentlm-gateway` executable, base runtime libraries, and selected GGML
+`sipp-gateway` executable, base runtime libraries, and selected GGML
 backend plugins. The build also compiles the React Admin Dashboard from
 `apps/gateway-server/admin-ui` and copies its Vite output to
 `.build/artifacts/gateway-server/admin-ui`. Keep the executable, dashboard
@@ -74,7 +74,7 @@ asset directory, and runtime libraries together.
 
 Direct execution must put the artifact directory on the dynamic loader path.
 The executable reads dashboard assets from `admin-ui` beside the binary unless
-`COGENTLM_GATEWAY_ADMIN_ASSETS_DIR` points at another Vite `dist` directory.
+`SIPP_GATEWAY_ADMIN_ASSETS_DIR` points at another Vite `dist` directory.
 
 Linux:
 
@@ -83,8 +83,8 @@ set -a
 . apps/gateway-server/.env
 set +a
 export LD_LIBRARY_PATH="$(pwd)/.build/artifacts/gateway-server${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-.build/artifacts/gateway-server/cogentlm-gateway check --config apps/gateway-server/config/local.toml
-.build/artifacts/gateway-server/cogentlm-gateway serve --config apps/gateway-server/config/local.toml
+.build/artifacts/gateway-server/sipp-gateway check --config apps/gateway-server/config/local.toml
+.build/artifacts/gateway-server/sipp-gateway serve --config apps/gateway-server/config/local.toml
 ```
 
 macOS:
@@ -94,8 +94,8 @@ set -a
 . apps/gateway-server/.env
 set +a
 export DYLD_LIBRARY_PATH="$(pwd)/.build/artifacts/gateway-server${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
-.build/artifacts/gateway-server/cogentlm-gateway check --config apps/gateway-server/config/local.toml
-.build/artifacts/gateway-server/cogentlm-gateway serve --config apps/gateway-server/config/local.toml
+.build/artifacts/gateway-server/sipp-gateway check --config apps/gateway-server/config/local.toml
+.build/artifacts/gateway-server/sipp-gateway serve --config apps/gateway-server/config/local.toml
 ```
 
 Windows PowerShell:
@@ -109,12 +109,12 @@ Get-Content apps\gateway-server\.env | ForEach-Object {
 }
 $dist = Join-Path (Get-Location) ".build\artifacts\gateway-server"
 $env:PATH = "$dist;$env:PATH"
-.\.build\artifacts\gateway-server\cogentlm-gateway.exe check --config apps\gateway-server\config\local.toml
-.\.build\artifacts\gateway-server\cogentlm-gateway.exe serve --config apps\gateway-server\config\local.toml
+.\.build\artifacts\gateway-server\sipp-gateway.exe check --config apps\gateway-server\config\local.toml
+.\.build\artifacts\gateway-server\sipp-gateway.exe serve --config apps\gateway-server\config\local.toml
 ```
 
 Relative `model` paths in TOML are resolved from the process working
-directory. The `clm run gateway-server ...` workflow runs from the workspace
+directory. The `sipp run gateway-server ...` workflow runs from the workspace
 root. When running the executable from another directory, use absolute model
 paths or start the process from the workspace root.
 
@@ -140,7 +140,7 @@ backends fail if that backend was not compiled or is unavailable.
 The Admin Dashboard password is read from the env var named by TOML:
 
 ```toml
-admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"
+admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"
 ```
 
 Keep the real value in a secrets env file or production secret manager.

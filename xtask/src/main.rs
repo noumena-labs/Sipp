@@ -81,7 +81,7 @@ fn command_summary(command: &Commands) -> String {
         Commands::Test { command } => test_summary(command),
         Commands::Toolchain { .. } => "Toolchain command".to_owned(),
         Commands::Doctor(_) => "Developer environment doctor".to_owned(),
-        Commands::Setup(_) => "CogentLM setup".to_owned(),
+        Commands::Setup(_) => "Sipp setup".to_owned(),
         Commands::Docs { command, .. } => docs_summary(command),
     }
 }

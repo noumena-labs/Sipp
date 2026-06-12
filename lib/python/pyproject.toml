@@ -3,9 +3,9 @@ requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
 
 [project]
-name = "cogentlm"
+name = "sipp"
 version = "0.1.0"
-description = "Native Python bindings for CogentLM"
+description = "Native Python bindings for Sipp"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 
@@ -13,7 +13,7 @@ license = { text = "Apache-2.0" }
 dev = ["maturin>=1.5,<2", "pytest>=8,<9", "pytest-cov>=7,<8"]
 
 [tool.maturin]
-module-name = "cogentlm._native"
+module-name = "sipp._native"
 manifest-path = "../../bindings/python/Cargo.toml"
 python-source = "python"
-include = [{ path = "cogentlm/binaries/*", format = "wheel" }]
+include = [{ path = "sipp/binaries/*", format = "wheel" }]

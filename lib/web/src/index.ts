@@ -1,7 +1,7 @@
-/** Browser runtime client for local and remote CogentLM inference. */
+/** Browser runtime client for local and remote Sipp inference. */
 export {
-  CogentClient,
-  type CogentClientOptions,
+  SippClient,
+  type SippClientOptions,
   type EngineModuleOptions,
 } from './engine/browser-client.js';
 /** Browser cache policy options used while staging GGUF assets. */

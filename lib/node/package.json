@@ -1,7 +1,7 @@
 {
-  "name": "@noumena-labs/cogentlm-server",
+  "name": "@noumena-labs/sipp-server",
   "version": "0.1.0",
-  "description": "Native Node.js server bindings for CogentLM",
+  "description": "Native Node.js server bindings for Sipp",
   "main": "router.js",
   "types": "router.d.ts",
   "exports": {
@@ -28,7 +28,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/noumena-labs/CogentLM.git",
+    "url": "git+https://github.com/noumena-labs/Sipp.git",
     "directory": "lib/node"
   },
   "publishConfig": {
@@ -36,7 +36,7 @@
     "access": "restricted"
   },
   "napi": {
-    "binaryName": "cogentlm_node",
+    "binaryName": "sipp_node",
     "targets": [
       "x86_64-apple-darwin",
       "aarch64-apple-darwin",

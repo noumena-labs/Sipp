@@ -15,8 +15,8 @@ use super::{
 #[test]
 fn shell_quote_escapes_single_quotes_and_normalizes_windows_drive_paths() {
     assert_eq!(shell_quote_str("a'b"), "'a'\"'\"'b'");
-    let quoted = shell_quote(Path::new("D:\\Cogent LM\\bin"));
-    assert_eq!(quoted, "'/d/Cogent LM/bin'");
+    let quoted = shell_quote(Path::new("D:\\Sipp LM\\bin"));
+    assert_eq!(quoted, "'/d/Sipp LM/bin'");
 }
 
 #[test]
@@ -31,19 +31,19 @@ fn powershell_and_cmd_quotes_escape_shell_specific_characters() {
 
 #[test]
 fn env_scripts_prepend_launcher_directory_once() {
-    let bin = Path::new("D:\\CogentLM\\.build\\bin");
+    let bin = Path::new("D:\\Sipp\\.build\\bin");
     let unix = unix_env_script(bin);
-    assert!(unix.contains("COGENTLM_BIN="));
+    assert!(unix.contains("SIPP_BIN="));
     assert!(unix.contains("export PATH="));
     assert!(!unix.contains("\r\n"));
 
     let powershell = powershell_env_script(bin);
-    assert!(powershell.contains("$CogentLmBin"));
+    assert!(powershell.contains("$SippBin"));
     assert!(powershell.contains("[System.IO.Path]::PathSeparator"));
 
     let cmd = cmd_env_script(Path::new("C:\\100%\\bin"));
     assert!(cmd.contains("C:\\100%%\\bin"));
-    assert!(cmd.contains("PATH=%COGENTLM_BIN%;%PATH%"));
+    assert!(cmd.contains("PATH=%SIPP_BIN%;%PATH%"));
 }
 
 #[test]

@@ -14,20 +14,20 @@ use axum::routing::{get, post};
 use axum::Router;
 use bytes::Bytes;
 use clap::Parser;
-use cogentlm::engine::{NativeRuntimeConfig, PoolingType};
-use cogentlm::gateway_core::{GatewayStreamEvent, Operation};
-use cogentlm::{
-    CogentClient, CogentRequestContext, CogentTextResponseFuture, CogentTokenBatches,
+use sipp::engine::{NativeRuntimeConfig, PoolingType};
+use sipp::gateway_core::{GatewayStreamEvent, Operation};
+use sipp::{
+    SippClient, SippRequestContext, SippTextResponseFuture, SippTokenBatches,
     EndpointDescriptor, EndpointRef,
 };
-use cogentlm_gateway::{request_id, GatewayCodec, GatewayHttpError, ProtocolCodec};
+use sipp_gateway::{request_id, GatewayCodec, GatewayHttpError, ProtocolCodec};
 use futures_util::future::{select, Either};
 use futures_util::{stream, Stream, StreamExt};
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
 
 #[derive(Debug, Parser)]
-#[command(name = "cogentlm-gateway-example")]
+#[command(name = "sipp-gateway-example")]
 #[command(about = "Run an explicit Axum gateway route example")]
 struct Cli {
     /// Local GGUF model to load.
@@ -41,7 +41,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let mut client = CogentClient::new();
+    let mut client = SippClient::new();
     let text_endpoint = client
         .add(
             "local-text",
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
 
 #[derive(Clone)]
 struct AppState {
-    client: Arc<CogentClient>,
+    client: Arc<SippClient>,
     text_endpoint: EndpointRef,
     embedding_endpoint: EndpointRef,
     next_request_id: Arc<AtomicU64>,
@@ -111,7 +111,7 @@ async fn query(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
     request.endpoint = Some(endpoint);
     request.emit_tokens = decoded.stream;
     let run = state.client.query_with_context(
-        CogentRequestContext {
+        SippRequestContext {
             request_id: Some(request_id.clone()),
         },
         request,
@@ -149,7 +149,7 @@ async fn chat(State(state): State<AppState>, headers: HeaderMap, body: Bytes) ->
     request.endpoint = Some(endpoint);
     request.emit_tokens = decoded.stream;
     let run = state.client.chat_with_context(
-        CogentRequestContext {
+        SippRequestContext {
             request_id: Some(request_id.clone()),
         },
         request,
@@ -186,7 +186,7 @@ async fn embed(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
     let mut request = decoded.request;
     request.endpoint = Some(endpoint);
     let run = state.client.embed_with_context(
-        CogentRequestContext {
+        SippRequestContext {
             request_id: Some(request_id.clone()),
         },
         request,
@@ -228,7 +228,7 @@ impl AppState {
 fn stream_response(
     state: &AppState,
     request_id: Option<&str>,
-    run: (CogentTokenBatches, CogentTextResponseFuture),
+    run: (SippTokenBatches, SippTextResponseFuture),
 ) -> Response<Body> {
     let stream = text_event_stream(run).map({
         let codec = state.codec;
@@ -251,14 +251,14 @@ fn stream_response(
 }
 
 struct TextStreamState {
-    tokens: CogentTokenBatches,
-    response: Option<CogentTextResponseFuture>,
+    tokens: SippTokenBatches,
+    response: Option<SippTextResponseFuture>,
     pending: VecDeque<Result<GatewayStreamEvent, GatewayHttpError>>,
     terminal: bool,
 }
 
 fn text_event_stream(
-    (tokens, response): (CogentTokenBatches, CogentTextResponseFuture),
+    (tokens, response): (SippTokenBatches, SippTextResponseFuture),
 ) -> impl Stream<Item = Result<GatewayStreamEvent, GatewayHttpError>> + Send {
     let state = TextStreamState {
         tokens,
@@ -294,7 +294,7 @@ fn text_event_stream(
 
 fn finish_text_stream(
     state: &mut TextStreamState,
-    response: cogentlm::CogentResult<cogentlm::CogentTextResponse>,
+    response: sipp::SippResult<sipp::SippTextResponse>,
 ) {
     state.terminal = true;
     match response {

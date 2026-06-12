@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/assets/cogentlm-logo-placeholder.svg" alt="CogentLM logo placeholder" width="160">
+  <img src="docs/assets/sipp-logo-placeholder.svg" alt="Sipp logo placeholder" width="160">
 </p>
 
-<h1 align="center">CogentLM</h1>
+<h1 align="center">Sipp</h1>
 
 <p align="center">
   Local and gateway-backed inference runtimes for browser, Node.js, Python,
@@ -10,15 +10,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/noumena-labs/CogentLM/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/noumena-labs/CogentLM/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/noumena-labs/CogentLM/actions/workflows/docs.yml"><img alt="Docs" src="https://github.com/noumena-labs/CogentLM/actions/workflows/docs.yml/badge.svg"></a>
-  <a href="https://github.com/noumena-labs/CogentLM/actions/workflows/coverage.yml"><img alt="Coverage" src="https://github.com/noumena-labs/CogentLM/actions/workflows/coverage.yml/badge.svg"></a>
-  <a href="https://github.com/noumena-labs/CogentLM/actions/workflows/release.yml"><img alt="Release" src="https://github.com/noumena-labs/CogentLM/actions/workflows/release.yml/badge.svg"></a>
+  <a href="https://github.com/noumena-labs/Sipp/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/noumena-labs/Sipp/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/noumena-labs/Sipp/actions/workflows/docs.yml"><img alt="Docs" src="https://github.com/noumena-labs/Sipp/actions/workflows/docs.yml/badge.svg"></a>
+  <a href="https://github.com/noumena-labs/Sipp/actions/workflows/coverage.yml"><img alt="Coverage" src="https://github.com/noumena-labs/Sipp/actions/workflows/coverage.yml/badge.svg"></a>
+  <a href="https://github.com/noumena-labs/Sipp/actions/workflows/release.yml"><img alt="Release" src="https://github.com/noumena-labs/Sipp/actions/workflows/release.yml/badge.svg"></a>
   <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue">
 </p>
 
 > [!WARNING]
-> CogentLM is under active development. Breaking changes are expected, so it
+> Sipp is under active development. Breaking changes are expected, so it
 > might not be suitable for production environments yet.
 > If you find issues, bugs, or missing features, please open a GitHub issue.
 
@@ -29,10 +29,10 @@ from this repository.
 
 | Surface | Install | Docs |
 | --- | --- | --- |
-| Browser | `npm install cogentlm` | [Browser package](docs/packages/browser.md) |
-| Node.js | `npm install cogentlm-server` | [Node.js package](docs/packages/node.md) |
-| Python | `pip install cogentlm` | [Python package](docs/packages/python.md) |
-| Rust | `cargo add cogentlm` | [Rust package](docs/packages/rust.md) |
+| Browser | `npm install sipp` | [Browser package](docs/packages/browser.md) |
+| Node.js | `npm install sipp-server` | [Node.js package](docs/packages/node.md) |
+| Python | `pip install sipp` | [Python package](docs/packages/python.md) |
+| Rust | `cargo add sipp` | [Rust package](docs/packages/rust.md) |
 | Gateway Server | Source-built today | [Gateway Server](docs/gateway/server.md) |
 | Gateway toolkit | Rust source artifact today | [Gateway toolkit](docs/gateway/toolkit.md) |
 
@@ -44,18 +44,18 @@ or `cargo install` target.
 ## Browser Quick Start
 
 ```bash
-npm install cogentlm
+npm install sipp
 ```
 
 ```js
-import { CogentClient } from 'cogentlm';
+import { SippClient } from 'sipp';
 
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
-  { role: 'user', content: 'Explain CogentLM in one sentence.' },
+  { role: 'user', content: 'Explain Sipp in one sentence.' },
 ];
 
-const client = new CogentClient();
+const client = new SippClient();
 const endpoint = await client.add('default', {
   kind: 'local',
   source: '/models/model.gguf',
@@ -70,14 +70,14 @@ await client.close();
 
 ## Gateway Quick Start
 
-Gateway clients use the same `CogentClient` API. The gateway owns model paths,
+Gateway clients use the same `SippClient` API. The gateway owns model paths,
 provider credentials, access policy, and metrics; clients only need the gateway
 URL, public target, and application-issued auth value.
 
 ```js
-import { CogentClient } from 'cogentlm';
+import { SippClient } from 'sipp';
 
-const client = new CogentClient();
+const client = new SippClient();
 const endpoint = await client.add('gateway', {
   kind: 'gateway',
   target: 'local',
@@ -104,14 +104,14 @@ await client.close();
 ## Documentation
 
 The full documentation lives in [docs](docs/README.md). From a source checkout,
-use `clm docs` to build or serve the book:
+use `sipp docs` to build or serve the book:
 
 ```bash
-clm docs build
-clm docs serve
+sipp docs build
+sipp docs serve
 ```
 
-`clm docs` installs the required mdBook tooling when missing and prepares the Mermaid assets used by the book.
+`sipp docs` installs the required mdBook tooling when missing and prepares the Mermaid assets used by the book.
 
 Start with:
 
@@ -129,21 +129,21 @@ tests. Bootstrap the repository from the workspace root:
 
 ```bash
 source ./setup.sh
-clm doctor
-clm test list
+sipp doctor
+sipp test list
 ```
 
-On Windows, use `.\setup.ps1` in PowerShell or `setup.cmd` in CMD. The `clm`
+On Windows, use `.\setup.ps1` in PowerShell or `setup.cmd` in CMD. The `sipp`
 launcher is installed under `.build/bin` and forwards to `cargo xtask`; use
 `cargo xtask ...` with the same arguments if the launcher is not active.
 
 Common source workflows:
 
 ```bash
-clm build wasm && clm run examples serve browser
-clm build node --backend cpu && node examples/node/query.mjs <model.gguf> "Explain CogentLM."
-clm build python --backend cpu && python examples/python/query.py <model.gguf> "Explain CogentLM."
-clm run demos serve chat
+sipp build wasm && sipp run examples serve browser
+sipp build node --backend cpu && node examples/node/query.mjs <model.gguf> "Explain Sipp."
+sipp build python --backend cpu && python examples/python/query.py <model.gguf> "Explain Sipp."
+sipp run demos serve chat
 ```
 
 See [Source Builds](docs/maintainers/source-builds.md),
@@ -151,7 +151,7 @@ See [Source Builds](docs/maintainers/source-builds.md),
 
 ## Repository Layout
 
-- [crates](crates/README.md): the published `cogentlm` and `cogentlm-sys` crates.
+- [crates](crates/README.md): the published `sipp` and `sipp-sys` crates.
 - [lib](lib/gateway/README.md): language package surfaces and gateway toolkit.
 - [bindings](bindings/README.md): Node, Python, and browser WASM bindings.
 - [apps](apps/README.md): first-party applications.
@@ -162,5 +162,5 @@ See [Source Builds](docs/maintainers/source-builds.md),
 
 ## License
 
-CogentLM is licensed under Apache-2.0. Vendored third-party components keep
+Sipp is licensed under Apache-2.0. Vendored third-party components keep
 their upstream licenses and documentation.

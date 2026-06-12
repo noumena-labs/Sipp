@@ -1,6 +1,6 @@
 # 网关工具包
 
-`cogentlm-gateway` 是无路由的 Rust HTTP 工具包，为希望通过自有服务器框架集成 CogentLM 推理服务的应用而设计。
+`sipp-gateway` 是无路由的 Rust HTTP 工具包，为希望通过自有服务器框架集成 Sipp 推理服务的应用而设计。
 
 该工具包提供编解码器、身份验证和可观测性 Trait、HTTP 错误辅助函数以及官方 JSON/SSE 规范。应用可完全控制套接字绑定、路由注册、配置加载和部署策略。
 
@@ -8,19 +8,19 @@
 
 ## 分发方式
 
-对应 Rust crate `cogentlm-gateway`。crates.io 仅发布 `cogentlm` 与 `cogentlm-sys` 两个 crate；工具包本身有意以源码形式分发。直接依赖源码的方式见[源码构建](../maintainers/source-builds.md)。
+对应 Rust crate `sipp-gateway`。crates.io 仅发布 `sipp` 与 `sipp-sys` 两个 crate；工具包本身有意以源码形式分发。直接依赖源码的方式见[源码构建](../maintainers/source-builds.md)。
 
 ## 适用场景
 
 - 为应用定制专有 HTTP 网关路由。
-- 将 HTTP 请求体转换为强类型 CogentLM 请求结构。
+- 将 HTTP 请求体转换为强类型 Sipp 请求结构。
 - 对 JSON 和 SSE 响应进行标准编码。
-- 保证与 CogentLM 客户端间采用官方一致的协议规范。
+- 保证与 Sipp 客户端间采用官方一致的协议规范。
 
 ## 极简处理器示例
 
 ```rust
-use cogentlm_gateway::{GatewayCodec, ProtocolCodec};
+use sipp_gateway::{GatewayCodec, ProtocolCodec};
 
 let codec = GatewayCodec;
 let mut decoded = codec.decode_query(&body)?;
@@ -29,7 +29,7 @@ let response = client.query(decoded.request).await?;
 let bytes = codec.encode_text(&decoded.target, &response)?;
 ```
 
-自定义网关应用需自行实现套接字管理、路由分发、鉴权、配置文件解析、目标策略、CORS、日志及默认部署配置。在 Node 框架中实现官方网关规范时，可使用 `cogentlm-server` 导出的配套辅助函数。
+自定义网关应用需自行实现套接字管理、路由分发、鉴权、配置文件解析、目标策略、CORS、日志及默认部署配置。在 Node 框架中实现官方网关规范时，可使用 `sipp-server` 导出的配套辅助函数。
 
 ## 职责边界
 

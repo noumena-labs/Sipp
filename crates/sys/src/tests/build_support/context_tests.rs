@@ -1,4 +1,4 @@
-//! Tests the `build_support::context` module in `cogentlm-sys`.
+//! Tests the `build_support::context` module in `sipp-sys`.
 //!
 //! Covers environment-derived build settings, backend tag selection, output
 //! paths, and vendored llama.cpp validation with deterministic fake paths.
@@ -24,9 +24,9 @@ const CONTEXT_ENV_VARS: &[(&str, Option<&str>)] = &[
     ("CARGO_FEATURE_PTHREAD", None),
     ("CUDA_PATH", None),
     ("CUDA_HOME", None),
-    ("COGENTLM_CUDA_ARCHITECTURES", None),
+    ("SIPP_CUDA_ARCHITECTURES", None),
     ("VULKAN_SDK", None),
-    ("COGENTLM_SYS_CMAKE_OUT_DIR", None),
+    ("SIPP_SYS_CMAKE_OUT_DIR", None),
 ];
 
 fn flags(backend_dl: bool, cuda: bool, metal: bool, vulkan: bool, openmp: bool) -> FeatureFlags {
@@ -118,9 +118,9 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
     let _env = EnvGuard::new(&[
         ("CUDA_PATH", Some("cuda-path")),
         ("CUDA_HOME", Some("cuda-home")),
-        ("COGENTLM_CUDA_ARCHITECTURES", Some(" 80;90 ")),
+        ("SIPP_CUDA_ARCHITECTURES", Some(" 80;90 ")),
         ("VULKAN_SDK", Some("vulkan-sdk")),
-        ("COGENTLM_SYS_CMAKE_OUT_DIR", Some(r"\\?\cmake-out")),
+        ("SIPP_SYS_CMAKE_OUT_DIR", Some(r"\\?\cmake-out")),
     ]);
 
     let env = BuildEnv::from_env();
@@ -135,9 +135,9 @@ fn build_env_falls_back_to_cuda_home() {
     let _env = EnvGuard::new(&[
         ("CUDA_PATH", None),
         ("CUDA_HOME", Some("cuda-home")),
-        ("COGENTLM_CUDA_ARCHITECTURES", None),
+        ("SIPP_CUDA_ARCHITECTURES", None),
         ("VULKAN_SDK", None),
-        ("COGENTLM_SYS_CMAKE_OUT_DIR", None),
+        ("SIPP_SYS_CMAKE_OUT_DIR", None),
     ]);
 
     let env = BuildEnv::from_env();
@@ -152,9 +152,9 @@ fn build_env_treats_blank_cuda_architectures_as_unset() {
     let _env = EnvGuard::new(&[
         ("CUDA_PATH", None),
         ("CUDA_HOME", None),
-        ("COGENTLM_CUDA_ARCHITECTURES", Some("   ")),
+        ("SIPP_CUDA_ARCHITECTURES", Some("   ")),
         ("VULKAN_SDK", None),
-        ("COGENTLM_SYS_CMAKE_OUT_DIR", None),
+        ("SIPP_SYS_CMAKE_OUT_DIR", None),
     ]);
 
     let env = BuildEnv::from_env();

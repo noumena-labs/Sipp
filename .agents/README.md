@@ -1,4 +1,4 @@
-# CogentLM Agent Context Hub
+# Sipp Agent Context Hub
 
 This directory contains specialized system blueprints, build workflows, and agent skills to help you complete tasks in this polyglot monorepo efficiently.
 

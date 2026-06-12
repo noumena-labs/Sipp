@@ -62,6 +62,8 @@ export interface ContextRuntimeConfig {
   yarn_attn_factor?: number;
   yarn_beta_fast?: number;
   yarn_beta_slow?: number;
+  embeddings?: boolean;
+  pooling?: PoolingType;
 }
 
 export interface LogitBiasConfig {

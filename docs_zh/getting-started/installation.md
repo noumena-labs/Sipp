@@ -6,10 +6,10 @@
 
 | 平台 | 安装命令 | 适用场景 |
 | --- | --- | --- |
-| 浏览器 | `npm install cogentlm` | 浏览器本地 GGUF 推理及网关客户端。 |
-| Node.js | `npm install cogentlm-server` | Node.js 本地推理及网关客户端。 |
-| Python | `pip install cogentlm` | Python 本地推理及网关客户端。 |
-| Rust | `cargo add cogentlm` | Rust 本地推理及网关客户端。 |
+| 浏览器 | `npm install sipp` | 浏览器本地 GGUF 推理及网关客户端。 |
+| Node.js | `npm install sipp-server` | Node.js 本地推理及网关客户端。 |
+| Python | `pip install sipp` | Python 本地推理及网关客户端。 |
+| Rust | `cargo add sipp` | Rust 本地推理及网关客户端。 |
 
 当前发布工作流会发布浏览器 npm 包、Node npm 包、Python Wheel 和 Rust 源码 Crate, 但尚未发布独立的 gateway-server 二进制文件、容器镜像或 `cargo install` 目标。在官方服务器制品发布前，部署网关服务请使用源码签出及 Dockerfile。
 
@@ -17,12 +17,12 @@
 
 - 本地推理需要兼容的 GGUF 模型文件或浏览器端提供的 GGUF 资源。
 - 浏览器本地推理需要支持 WebAssembly 的现代浏览器；WebGPU 加速取决于浏览器和设备支持。具体请查看 [设备支持](../references/device-support.md)。
-- Node 和 Python 原生包会自动从打包的原生制品中选择后端。如需强制指定 `cpu`、`vulkan`、`cuda` 或 `metal`，设置环境变量 `COGENTLM_NODE_BACKEND` 或 `COGENTLM_PYTHON_BACKEND`。
+- Node 和 Python 原生包会自动从打包的原生制品中选择后端。如需强制指定 `cpu`、`vulkan`、`cuda` 或 `metal`，设置环境变量 `SIPP_NODE_BACKEND` 或 `SIPP_PYTHON_BACKEND`。
 - 网关客户端只需要网关基础 URL、公共目标名称和应用专属的认证凭据。
 
 ## 后续步骤
 
-- [源码安装对应的 clm CLI](../clm/README.md)
+- [源码安装对应的 sipp CLI](../sipp/README.md)
 - [Browser 包](../packages/browser.md)
 - [Node.js 包](../packages/node.md)
 - [Python 包](../packages/python.md)

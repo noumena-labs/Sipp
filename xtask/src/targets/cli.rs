@@ -22,7 +22,7 @@ mod cli_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const CLI_BINARY_NAME: &str = "cogentlm";
+const CLI_BINARY_NAME: &str = "sipp";
 const BACKEND_DL_FEATURE: &str = "backend-dl";
 
 /// Builds a staged CLI distribution for the selected backend or backend set.
@@ -126,9 +126,9 @@ fn build_backend_variant(
 
     let mut cargo_cmd = cmd!(
         sh,
-        "cargo build --release --package cogentlm-cli --target-dir {target_dir}"
+        "cargo build --release --package sipp-cli --target-dir {target_dir}"
     )
-    .env("COGENTLM_SYS_CMAKE_OUT_DIR", &cmake_dir);
+    .env("SIPP_SYS_CMAKE_OUT_DIR", &cmake_dir);
     cargo_cmd = apply_toolchains(sh, ctx, cargo_cmd, Some(backend))?;
     cargo_cmd = cargo_cmd.arg("--features").arg(cargo_features(backend));
 
@@ -289,7 +289,7 @@ fn is_base_runtime_file(file_name: &str) -> bool {
                 | "llama-common-base.dll"
                 | "ggml.dll"
                 | "ggml-base.dll"
-                | "cogent_shim.dll"
+                | "sipp_shim.dll"
                 | "mtmd.dll"
                 | "cpp-httplib.dll"
         );
@@ -303,7 +303,7 @@ fn is_base_runtime_file(file_name: &str) -> bool {
             "libllama-common-base.",
             "libggml.",
             "libggml-base.",
-            "libcogent_shim.",
+            "libsipp_shim.",
             "libmtmd.",
             "libcpp-httplib.",
         ]
@@ -351,7 +351,7 @@ fn cargo_features(backend: &Backend) -> String {
 
 fn cli_binary_file_name() -> &'static str {
     if cfg!(windows) {
-        "cogentlm.exe"
+        "sipp.exe"
     } else {
         CLI_BINARY_NAME
     }

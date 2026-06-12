@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/cogentlm",
+    "crates/sipp",
     "crates/sys",
     "apps/cli",
     "apps/gateway-server",
@@ -17,7 +17,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/noumena-labs/CogentLM"
+repository = "https://github.com/noumena-labs/Sipp"
 version = "0.1.0"
 
 [workspace.dependencies]
@@ -27,9 +27,9 @@ clap = { version = "4.5", features = ["derive"] }
 cmake = "0.1"
 cxx = "1"
 cxx-build = "1"
-cogentlm = { path = "crates/cogentlm", version = "0.1.0", default-features = false }
-cogentlm-sys = { path = "crates/sys", version = "0.1.0" }
-cogentlm-gateway = { path = "lib/gateway", version = "0.1.0", default-features = false }
+sipp = { path = "crates/sipp", version = "0.1.0", default-features = false }
+sipp-sys = { path = "crates/sys", version = "0.1.0" }
+sipp-gateway = { path = "lib/gateway", version = "0.1.0", default-features = false }
 futures = "0.3"
 futures-channel = "0.3"
 futures-core = "0.3"

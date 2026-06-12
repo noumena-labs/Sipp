@@ -2,6 +2,6 @@
 /dist/
 /python/**/__pycache__/
 /python/**/*.py[cod]
-/python/cogentlm/_native.*
-/python/cogentlm/binaries/*
-!/python/cogentlm/binaries/.gitkeep
+/python/sipp/_native.*
+/python/sipp/binaries/*
+!/python/sipp/binaries/.gitkeep

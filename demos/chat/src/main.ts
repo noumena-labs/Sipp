@@ -1,11 +1,11 @@
 import {
-  CogentClient,
+  SippClient,
   QueryError,
   type BrowserTextRun,
   type ChatInput,
   type NativeRuntimeConfig,
   type WebGpuAdapterInfo,
-} from '@noumena-labs/cogentlm';
+} from '@noumena-labs/sipp';
 
 import {
   DEFAULT_GENERATION_SETTINGS,
@@ -28,7 +28,7 @@ const DEFAULT_RUNTIME: NativeRuntimeConfig = {
     gpu_layers: 'all',
   },
   context: {
-    n_ctx: 2048,
+    n_ctx: 4096,
     n_parallel: 1,
   },
   cache: {
@@ -58,7 +58,7 @@ interface PendingImage {
 type PickerMode = 'curated' | 'custom';
 type CustomSourceMode = 'url' | 'file';
 
-let client: CogentClient | null = null;
+let client: SippClient | null = null;
 let loadedModel: LoadedModel | null = null;
 let activeRun: BrowserTextRun | null = null;
 let activeRunCancelled = false;
@@ -296,7 +296,7 @@ async function loadSelectedModel(): Promise<void> {
   loadStatus.textContent = `Preparing ${resolved.name}...`;
   setModelStatus('loading', 'Loading model');
 
-  const nextClient = new CogentClient({ wasmThreading: 'pthread' });
+  const nextClient = new SippClient({ wasmThreading: 'pthread' });
   try {
     await nextClient.add('chat-model', {
       kind: 'local',

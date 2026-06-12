@@ -3,7 +3,7 @@ import { AssetStore, type BrowserCachePolicyOptions } from '../models/asset-stor
 import { createBrowserEmbeddingRun, createBrowserTextRun } from '../models/token-queue.js';
 import {
   QueryError,
-  type CogentClient as CogentClientShape,
+  type SippClient as SippClientShape,
   type BrowserEmbeddingRun,
   type BrowserTextRun,
   type ChatInput,
@@ -40,7 +40,7 @@ export interface EngineModuleOptions {
   [key: string]: unknown;
 }
 
-export interface CogentClientOptions {
+export interface SippClientOptions {
   moduleUrl?: string;
   wasmUrl?: string;
   pthreadModuleUrl?: string;
@@ -55,7 +55,7 @@ export interface CogentClientOptions {
   workerUrl?: string;
 }
 
-function shouldUseWorker(config: CogentClientOptions): boolean {
+function shouldUseWorker(config: SippClientOptions): boolean {
   if (config.executionMode === 'main-thread') {
     return false;
   }
@@ -73,7 +73,7 @@ function shouldUseWorker(config: CogentClientOptions): boolean {
 /**
  * Browser application client that owns one local model lifecycle service.
  */
-export class CogentClient implements CogentClientShape {
+export class SippClient implements SippClientShape {
   public readonly observability: EngineObservability;
   #service: ModelLifecycleService;
   #gatewayEndpoints = new GatewayEndpointRegistry();
@@ -81,7 +81,7 @@ export class CogentClient implements CogentClientShape {
   #localEndpoint: EndpointRef | null = null;
   #closed = false;
 
-  public constructor(options: CogentClientOptions = {}) {
+  public constructor(options: SippClientOptions = {}) {
     this.#service = shouldUseWorker(options)
       ? new WorkerModelServiceClient(options)
       : new ModelService(
@@ -239,7 +239,7 @@ export class CogentClient implements CogentClientShape {
 
   private assertOpen(): void {
     if (this.#closed) {
-      throw new QueryError('ENGINE_CLOSED', 'CogentClient is closed.');
+      throw new QueryError('ENGINE_CLOSED', 'SippClient is closed.');
     }
   }
 

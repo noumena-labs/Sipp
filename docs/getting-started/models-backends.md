@@ -1,6 +1,6 @@
 # Models And Backends
 
-CogentLM local inference uses GGUF model files. Text workflows need a text GGUF
+Sipp local inference uses GGUF model files. Text workflows need a text GGUF
 model, embedding workflows need a model that reports embedding support, and
 vision chat workflows need both a model GGUF and a projector GGUF.
 
@@ -28,13 +28,13 @@ Backend names are shared across build and runtime selection:
 
 Runtime selection is package-specific:
 
-- Node.js: `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal`
-- Python: `COGENTLM_PYTHON_BACKEND=cpu|vulkan|cuda|metal`
+- Node.js: `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal`
+- Python: `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal`
 - CLI: `--backend auto|cpu|cuda|metal|vulkan`
 
 Leave runtime backend variables unset for automatic selection.
 
-Maintainer builds can produce backend-specific artifacts with `clm` or
+Maintainer builds can produce backend-specific artifacts with `sipp` or
 `cargo xtask`; see [Source Builds](../maintainers/source-builds.md).
 
 For the full package/backend matrix and llama.cpp/ggml operation support

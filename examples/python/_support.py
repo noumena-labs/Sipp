@@ -6,7 +6,7 @@ import sys
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.8
-DEFAULT_CONTEXT = 2048
+DEFAULT_CONTEXT = 4096
 DEFAULT_SEED = 42
 
 
@@ -59,7 +59,7 @@ def float_env(name: str, default: float | None = None) -> float | None:
 
 
 def gpu_layers() -> str | dict[str, int] | None:
-    value = os.getenv("COGENTLM_GPU_LAYERS")
+    value = os.getenv("SIPP_GPU_LAYERS")
     if value in {"all", "auto"}:
         return value
     return None if value is None else {"count": int(value)}

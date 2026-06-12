@@ -1,9 +1,9 @@
 import {
-  CogentClient,
+  SippClient,
   type BrowserTextRun,
   type ChatMessage,
   type NativeRuntimeConfig,
-} from '@noumena-labs/cogentlm';
+} from '@noumena-labs/sipp';
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
@@ -17,8 +17,8 @@ import {
   write,
 } from './common.js';
 
-const elements = renderLocalPage('Local Chat', 'Explain the CogentClient API in one sentence.', true);
-const client = new CogentClient();
+const elements = renderLocalPage('Local Chat', 'Explain the SippClient API in one sentence.', true);
+const client = new SippClient();
 let modelLoaded = false;
 
 elements.loadForm.addEventListener('submit', async (event) => {
@@ -74,7 +74,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
 function runtimeConfig(): NativeRuntimeConfig {
   return {
-    context: { n_ctx: 2048 },
+    context: { n_ctx: 4096 },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },
     observability: { runtime_metrics: true },

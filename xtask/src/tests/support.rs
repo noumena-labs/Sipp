@@ -22,7 +22,7 @@ impl TempDir {
     pub(crate) fn new(label: &str) -> Self {
         let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
         let path = env::temp_dir().join(format!(
-            "cogentlm-xtask-{label}-{}-{id}",
+            "sipp-xtask-{label}-{}-{id}",
             std::process::id()
         ));
         if path.exists() {

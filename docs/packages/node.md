@@ -1,7 +1,7 @@
 # Node.js Package
 
-The Node.js package target is `cogentlm-server`. It exposes the native
-CogentLM client API to Node server processes, route handlers, and framework
+The Node.js package target is `sipp-server`. It exposes the native
+Sipp client API to Node server processes, route handlers, and framework
 server functions. Applications own framework routes, request validation, auth,
 and deployment policy.
 
@@ -11,11 +11,11 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 ## Install
 
 ```bash
-npm install cogentlm-server
+npm install sipp-server
 ```
 
 Use this package only in Node runtime code. Browser components should use
-[`cogentlm`](browser.md).
+[`sipp`](browser.md).
 
 ## Use It For
 
@@ -28,9 +28,9 @@ Use this package only in Node runtime code. Browser components should use
 ## Local GGUF Query
 
 ```ts
-import { CogentClient } from 'cogentlm-server';
+import { SippClient } from 'sipp-server';
 
-const client = new CogentClient();
+const client = new SippClient();
 const endpoint = await client.add('default', {
   kind: 'local',
   modelPath: process.argv[2],
@@ -45,7 +45,7 @@ const queryPrompt = [
   '<|system|>',
   'Answer concisely.',
   '<|user|>',
-  'Explain CogentLM in one sentence.',
+  'Explain Sipp in one sentence.',
   '<|assistant|>',
 ].join('\n');
 
@@ -66,7 +66,7 @@ const response = await run.response;
 console.log(streamed || response.text);
 ```
 
-Set `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
+Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 See [Runtime Options](../reference/runtime-options.md) for local runtime config
 groups and request option boundaries.
 
@@ -83,11 +83,11 @@ function requiredEnv(name: string): string {
 
 const endpoint = await client.add('gateway', {
   kind: 'gateway',
-  target: requiredEnv('COGENTLM_GATEWAY_TARGET'),
-  baseUrl: requiredEnv('COGENTLM_GATEWAY_URL'),
+  target: requiredEnv('SIPP_GATEWAY_TARGET'),
+  baseUrl: requiredEnv('SIPP_GATEWAY_URL'),
   authentication: {
     kind: 'bearer',
-    value: requiredEnv('COGENTLM_GATEWAY_TOKEN'),
+    value: requiredEnv('SIPP_GATEWAY_TOKEN'),
   },
 });
 const messages = [
@@ -151,12 +151,12 @@ request against a provider, a local endpoint, or a separate gateway.
 
 ```ts
 import {
-  CogentClient,
+  SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'cogentlm-server';
+} from 'sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -169,7 +169,7 @@ function requiredEnv(name: string): string {
 export async function handleQuery(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
-    const client = new CogentClient();
+    const client = new SippClient();
     const endpoint = await client.add('provider', {
       kind: 'provider',
       provider: 'openai',
@@ -195,7 +195,7 @@ finite embedding responses.
 
 ## Framework Routes
 
-Use `cogentlm-server` in server-only code such as Next.js App Router route
+Use `sipp-server` in server-only code such as Next.js App Router route
 handlers with `runtime = 'nodejs'`, TanStack Start server functions, Express
 routes, or background workers. Do not import it from browser bundles.
 

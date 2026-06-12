@@ -84,14 +84,14 @@ fn build_target(
     let _root_dir = sh.push_dir(root);
 
     let suffix = if use_pthreads { "-pthread" } else { "" };
-    let artifact_name = format!("cogentlm-wasm{}", suffix);
+    let artifact_name = format!("sipp-wasm{}", suffix);
     let js_file = format!("{}.js", artifact_name);
     let wasm_file = format!("{}.wasm", artifact_name);
     let cargo_target_dir = ctx.cargo_wasm_target_dir(use_pthreads);
     let rust_staticlib = cargo_target_dir
         .join("wasm32-unknown-emscripten")
         .join("release")
-        .join("libcogentlm_wasm.a");
+        .join("libsipp_wasm.a");
 
     let rustflags = if use_pthreads {
         "-C target-feature=+atomics,+bulk-memory,+mutable-globals"
@@ -100,17 +100,17 @@ fn build_target(
     };
     let cargo_cmd = if cfg!(windows) {
         format!(
-            "set RUSTFLAGS={rustflags}\r\ncargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir {}",
+            "set RUSTFLAGS={rustflags}\r\ncargo build --release --package sipp-wasm --target wasm32-unknown-emscripten --target-dir {}",
             ctx.command_path(&cargo_target_dir)
         )
     } else if rustflags.is_empty() {
         format!(
-            "cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir {}",
+            "cargo build --release --package sipp-wasm --target wasm32-unknown-emscripten --target-dir {}",
             ctx.command_path(&cargo_target_dir)
         )
     } else {
         format!(
-            "RUSTFLAGS='{rustflags}' cargo build --release --package cogentlm-wasm --target wasm32-unknown-emscripten --target-dir {}",
+            "RUSTFLAGS='{rustflags}' cargo build --release --package sipp-wasm --target wasm32-unknown-emscripten --target-dir {}",
             ctx.command_path(&cargo_target_dir)
         )
     };
@@ -160,8 +160,8 @@ fn build_target(
     )?;
     drop(_dir);
 
-    let compiled_js = build_dir.join("dist").join("CogentLM.js");
-    let compiled_wasm = build_dir.join("dist").join("CogentLM.wasm");
+    let compiled_js = build_dir.join("dist").join("Sipp.js");
+    let compiled_wasm = build_dir.join("dist").join("Sipp.wasm");
 
     let staged_js = npm_dist_wasm.join(&js_file);
     let staged_wasm = npm_dist_wasm.join(&wasm_file);

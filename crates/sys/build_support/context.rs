@@ -57,16 +57,16 @@ impl BuildContext {
         println!("cargo:rerun-if-changed=CMakeLists.txt");
         println!("cargo:rerun-if-changed=cmake/llama_mtmd_sources.cmake");
         println!("cargo:rerun-if-changed=src/bridge.rs");
-        println!("cargo:rerun-if-changed=native/llama_shim/cogent_shim.h");
-        println!("cargo:rerun-if-changed=native/llama_shim/cogent_shim.cpp");
-        println!("cargo:rerun-if-changed=native/cxx_bridge/cogent_cxx.h");
-        println!("cargo:rerun-if-changed=native/cxx_bridge/cogent_cxx.cpp");
+        println!("cargo:rerun-if-changed=native/llama_shim/sipp_shim.h");
+        println!("cargo:rerun-if-changed=native/llama_shim/sipp_shim.cpp");
+        println!("cargo:rerun-if-changed=native/cxx_bridge/sipp_cxx.h");
+        println!("cargo:rerun-if-changed=native/cxx_bridge/sipp_cxx.cpp");
         println!("cargo:rerun-if-env-changed=CUDA_PATH");
         println!("cargo:rerun-if-env-changed=CUDA_HOME");
         println!("cargo:rerun-if-env-changed=VULKAN_SDK");
         println!("cargo:rerun-if-env-changed=EMSDK");
-        println!("cargo:rerun-if-env-changed=COGENTLM_SYS_CMAKE_OUT_DIR");
-        println!("cargo:rerun-if-env-changed=COGENTLM_CUDA_ARCHITECTURES");
+        println!("cargo:rerun-if-env-changed=SIPP_SYS_CMAKE_OUT_DIR");
+        println!("cargo:rerun-if-env-changed=SIPP_CUDA_ARCHITECTURES");
     }
 
     pub(crate) fn workspace_build_dir(&self) -> PathBuf {
@@ -137,12 +137,12 @@ impl BuildEnv {
             cuda_path: env::var_os("CUDA_PATH")
                 .or_else(|| env::var_os("CUDA_HOME"))
                 .map(PathBuf::from),
-            cuda_architectures: env::var("COGENTLM_CUDA_ARCHITECTURES")
+            cuda_architectures: env::var("SIPP_CUDA_ARCHITECTURES")
                 .ok()
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
             vulkan_sdk: env::var_os("VULKAN_SDK").map(PathBuf::from),
-            cmake_out_dir: env::var("COGENTLM_SYS_CMAKE_OUT_DIR")
+            cmake_out_dir: env::var("SIPP_SYS_CMAKE_OUT_DIR")
                 .ok()
                 .map(sanitize_path),
         }

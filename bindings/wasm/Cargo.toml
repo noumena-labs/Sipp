@@ -1,5 +1,5 @@
 [package]
-name = "cogentlm-wasm"
+name = "sipp-wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,7 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-cogentlm.workspace = true
+sipp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

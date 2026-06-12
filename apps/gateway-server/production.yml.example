@@ -1,4 +1,4 @@
-name: cogentlm-gateway-production
+name: sipp-gateway-production
 
 x-gateway-common: &gateway-common
   env_file:
@@ -7,10 +7,10 @@ x-gateway-common: &gateway-common
   volumes:
     - type: bind
       source: ./production.toml
-      target: /etc/cogentlm/gateway.toml
+      target: /etc/sipp/gateway.toml
       read_only: true
     - type: bind
-      source: /opt/cogentlm/models
+      source: /opt/sipp/models
       target: /models
       read_only: true
   ports:
@@ -33,12 +33,12 @@ x-gateway-common: &gateway-common
 services:
   gateway-cpu:
     <<: *gateway-common
-    image: registry.example.com/cogentlm-gateway:latest-cpu
+    image: registry.example.com/sipp-gateway:latest-cpu
     profiles: ["cpu"]
 
   gateway-cuda:
     <<: *gateway-common
-    image: registry.example.com/cogentlm-gateway:latest-cuda
+    image: registry.example.com/sipp-gateway:latest-cuda
     profiles: ["cuda"]
     deploy:
       resources:
@@ -50,7 +50,7 @@ services:
 
   gateway-vulkan-linux:
     <<: *gateway-common
-    image: registry.example.com/cogentlm-gateway:latest-vulkan
+    image: registry.example.com/sipp-gateway:latest-vulkan
     profiles: ["vulkan-linux"]
     devices:
       - /dev/dri:/dev/dri

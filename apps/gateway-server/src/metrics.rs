@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
-use cogentlm::core::TokenUsage;
-use cogentlm::gateway_core::Operation;
+use sipp::core::TokenUsage;
+use sipp::gateway_core::Operation;
 use serde::Serialize;
 
 const TIMESERIES_BUCKET_SECONDS: u64 = 10;
@@ -97,18 +97,18 @@ impl GatewayMetrics {
             let name = operation_name(operation);
             let _ = writeln!(
                 output,
-                "cogentlm_gateway_requests_total{{operation=\"{name}\"}} {}",
+                "sipp_gateway_requests_total{{operation=\"{name}\"}} {}",
                 self.requests[index].load(Ordering::Relaxed)
             );
             let _ = writeln!(
                 output,
-                "cogentlm_gateway_errors_total{{operation=\"{name}\"}} {}",
+                "sipp_gateway_errors_total{{operation=\"{name}\"}} {}",
                 self.errors[index].load(Ordering::Relaxed)
             );
         }
         let _ = writeln!(
             output,
-            "cogentlm_gateway_active_requests {}",
+            "sipp_gateway_active_requests {}",
             self.active_requests.load(Ordering::Relaxed)
         );
         let state = self
@@ -117,28 +117,28 @@ impl GatewayMetrics {
             .map_err(|_| "dashboard metrics are unavailable")?;
         let _ = writeln!(
             output,
-            "cogentlm_gateway_rate_limit_hits_total {}",
+            "sipp_gateway_rate_limit_hits_total {}",
             state.rate_limit_hits
         );
         let _ = writeln!(
             output,
-            "cogentlm_gateway_blocklist_hits_total {}",
+            "sipp_gateway_blocklist_hits_total {}",
             state.blocklist_hits
         );
         let _ = writeln!(
             output,
-            "cogentlm_gateway_input_tokens_total {}",
+            "sipp_gateway_input_tokens_total {}",
             state.input_tokens
         );
         let _ = writeln!(
             output,
-            "cogentlm_gateway_output_tokens_total {}",
+            "sipp_gateway_output_tokens_total {}",
             state.output_tokens
         );
         for (class, count) in &state.status_classes {
             let _ = writeln!(
                 output,
-                "cogentlm_gateway_responses_total{{status_class=\"{class}\"}} {count}"
+                "sipp_gateway_responses_total{{status_class=\"{class}\"}} {count}"
             );
         }
         Ok(output)

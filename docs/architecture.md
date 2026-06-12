@@ -1,13 +1,13 @@
 # Architecture
 
-CogentLM separates inference primitives from protocol and deployment policy.
+Sipp separates inference primitives from protocol and deployment policy.
 The public package surfaces compose lower-level crates without moving HTTP
 routes, serialized wire formats, or deployment defaults into core inference
 layers.
 
 ## Published Crates
 
-- `crates/cogentlm`: the public `cogentlm` Rust library. Former foundational
+- `crates/sipp`: the public `sipp` Rust library. Former foundational
   crates continue as module folders:
   - `core`: low-level shared types.
   - `shard`: GGUF cache planning and split-file utilities.
@@ -19,7 +19,7 @@ layers.
     adapters.
   - `gateway_core` (feature `gateway`): protocol-neutral gateway execution
     traits and pipeline ordering.
-- `crates/sys`: the `cogentlm-sys` crate — unsafe FFI bindings, native
+- `crates/sys`: the `sipp-sys` crate — unsafe FFI bindings, native
   llama.cpp shims, and the vendored `llama.cpp/` source tree.
 
 ## Public Libraries

@@ -1,9 +1,9 @@
-import type { CogentClientOptions } from './browser-client.js';
+import type { SippClientOptions } from './browser-client.js';
 import { currentLocationOrigin, resolveUrl } from '../utils/url.js';
 
 const VITE_OPTIMIZED_DEPS_SEGMENT = '/node_modules/.vite/deps/';
-const INTERNAL_PACKAGE_ROOT = 'node_modules/@noumena-labs/cogentlm';
-const PUBLIC_PACKAGE_ROOT = 'node_modules/cogentlm';
+const INTERNAL_PACKAGE_ROOT = 'node_modules/@noumena-labs/sipp';
+const PUBLIC_PACKAGE_ROOT = 'node_modules/sipp';
 
 export interface RuntimeUrls {
   moduleUrl: string;
@@ -58,10 +58,10 @@ export function resolveOptimizedPackageAssetUrl(
 
 function packageRootForOptimizedDependency(optimizedPath: string): string | null {
   const fileName = optimizedPath.split('/')[0] ?? '';
-  if (fileName.startsWith('@noumena-labs_cogentlm')) {
+  if (fileName.startsWith('@noumena-labs_sipp')) {
     return INTERNAL_PACKAGE_ROOT;
   }
-  if (fileName.startsWith('cogentlm')) {
+  if (fileName.startsWith('sipp')) {
     return PUBLIC_PACKAGE_ROOT;
   }
   return null;
@@ -82,7 +82,7 @@ export function supportsWasmPthreads(): boolean {
 
 export function resolveRuntimeThreadingMode(
   config: Pick<
-    CogentClientOptions,
+    SippClientOptions,
     'moduleUrl' | 'wasmUrl' | 'pthreadModuleUrl' | 'pthreadWasmUrl' | 'wasmThreading'
   >
 ): WasmThreadingMode {
@@ -123,7 +123,7 @@ function getDefaultRuntimeUrlsForThreading(
     'dist/esm/engine/runtime-assets.js',
     importerUrl
   );
-  const artifactPrefix = threading === 'pthread' ? 'cogentlm-wasm-pthread' : 'cogentlm-wasm';
+  const artifactPrefix = threading === 'pthread' ? 'sipp-wasm-pthread' : 'sipp-wasm';
 
   const urls = optimizedRuntimeAssetsUrl == null
     ? {
@@ -141,7 +141,7 @@ function getDefaultRuntimeUrlsForThreading(
   };
 }
 
-function resolveTrustedOrigins(configuredOrigins: CogentClientOptions['trustedOrigins']): Set<string> {
+function resolveTrustedOrigins(configuredOrigins: SippClientOptions['trustedOrigins']): Set<string> {
   if (configuredOrigins != null && configuredOrigins.length > 0) {
     const allowed = new Set<string>();
     for (const originValue of configuredOrigins) {
@@ -156,7 +156,7 @@ function resolveTrustedOrigins(configuredOrigins: CogentClientOptions['trustedOr
 
 export function resolveRuntimeUrls(
   config: Pick<
-    CogentClientOptions,
+    SippClientOptions,
     | 'moduleUrl'
     | 'wasmUrl'
     | 'pthreadModuleUrl'
@@ -172,13 +172,13 @@ export function resolveRuntimeUrls(
 
   if ((configuredModuleUrl == null) !== (configuredWasmUrl == null)) {
     throw new Error(
-      'Both "moduleUrl" and "wasmUrl" must be provided when overriding CogentClient runtime assets.'
+      'Both "moduleUrl" and "wasmUrl" must be provided when overriding SippClient runtime assets.'
     );
   }
 
   if ((configuredPthreadModuleUrl == null) !== (configuredPthreadWasmUrl == null)) {
     throw new Error(
-      'Both "pthreadModuleUrl" and "pthreadWasmUrl" must be provided when overriding CogentClient pthread runtime assets.'
+      'Both "pthreadModuleUrl" and "pthreadWasmUrl" must be provided when overriding SippClient pthread runtime assets.'
     );
   }
 

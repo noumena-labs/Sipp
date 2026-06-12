@@ -2,7 +2,7 @@
 
 This Axum example shows the canonical gateway composition pattern:
 
-- Create a `CogentClient`.
+- Create a `SippClient`.
 - Register endpoints with `client.add(...)`.
 - Define Axum routes in application code.
 - Decode request bodies with `GatewayCodec`.
@@ -10,7 +10,7 @@ This Axum example shows the canonical gateway composition pattern:
   `client.embed()`.
 - Encode JSON or SSE responses explicitly.
 
-The example exposes `/v1/query`, `/v1/chat`, and `/v1/embed`. CogentLM does
+The example exposes `/v1/query`, `/v1/chat`, and `/v1/embed`. Sipp does
 not own those routes; they are ordinary application handlers.
 
 ## Run

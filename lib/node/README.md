@@ -1,12 +1,12 @@
-# CogentLM Server for Node.js
+# Sipp Server for Node.js
 
-`lib/node` is the Node.js package source for the public `cogentlm-server`
-package. It exposes CogentLM's native client API to Node server processes for
+`lib/node` is the Node.js package source for the public `sipp-server`
+package. It exposes Sipp's native client API to Node server processes for
 local GGUF inference, gateway-backed inference, provider descriptors, and token
 streaming.
 
 Source builds use the workspace manifest in this directory. Public docs use the
-`cogentlm-server` package target. Applications own framework routes and call
+`sipp-server` package target. Applications own framework routes and call
 `client.query()`, `client.chat()`, or `client.embed()` inside those routes.
 
 ## Source Checkout
@@ -14,20 +14,20 @@ Source builds use the workspace manifest in this directory. Public docs use the
 From the repository root, after `source ./setup.sh`:
 
 ```bash
-clm build node --backend cpu && node examples/node/query.mjs <model.gguf> "Explain CogentLM."
+sipp build node --backend cpu && node examples/node/query.mjs <model.gguf> "Explain Sipp."
 ```
 
-`clm` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
+`sipp` forwards to `cargo xtask`; use `cargo xtask ...` with the same arguments
 if the launcher is not active.
 
-Set `COGENTLM_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
+Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 
 ## Local GGUF Query
 
 ```ts
-import { CogentClient } from 'cogentlm-server';
+import { SippClient } from 'sipp-server';
 
-const client = new CogentClient();
+const client = new SippClient();
 await client.add('default', {
   kind: 'local',
   modelPath: process.argv[2],
@@ -40,7 +40,7 @@ await client.add('default', {
 });
 
 const run = client.query({
-  prompt: 'Explain CogentLM in one sentence.',
+  prompt: 'Explain Sipp in one sentence.',
   emitTokens: true,
   options: { maxTokens: 64, temperature: 0.7 },
   local: { contextKey: 'node-local' },
@@ -56,7 +56,7 @@ await client.close();
 ```
 
 Gateway clients use `kind: 'gateway'` descriptors when a Node process calls a
-separate CogentLM gateway.
+separate Sipp gateway.
 
 ## Gateway Profile Helpers
 
@@ -65,24 +65,24 @@ first-party gateway endpoint for browser `kind: 'gateway'` clients:
 
 ```ts
 import {
-  CogentClient,
+  SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'cogentlm-server';
+} from 'sipp-server';
 
 export async function handleQuery(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
-    const client = new CogentClient();
+    const client = new SippClient();
     const endpoint = await client.add('gateway', {
       kind: 'gateway',
       target: decoded.target,
-      baseUrl: process.env.COGENTLM_GATEWAY_URL!,
+      baseUrl: process.env.SIPP_GATEWAY_URL!,
       authentication: {
         kind: 'bearer',
-        value: process.env.COGENTLM_GATEWAY_TOKEN!,
+        value: process.env.SIPP_GATEWAY_TOKEN!,
       },
     });
     const run = client.query({ ...decoded.request, endpoint });
@@ -100,7 +100,7 @@ export async function handleQuery(request: Request): Promise<Response> {
 
 `decodeGatewayChatBody()`, `decodeGatewayEmbedBody()`,
 `gatewayTextResponseBody()`, and `gatewayEmbeddingResponseBody()` mirror the
-first-party gateway JSON profile used by CogentLM clients.
+first-party gateway JSON profile used by Sipp clients.
 
 ## Learn More
 

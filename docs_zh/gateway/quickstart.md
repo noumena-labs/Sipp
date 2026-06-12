@@ -13,7 +13,7 @@ cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/loca
 
 - 将本地目标的 `model` 指向工作区根目录可见的 GGUF 文件。
 - 保持本地源绑定在 `127.0.0.1`。
-- 除非修改了 `.env` 中的密钥名称，否则保留 `admin_password_env = "COGENTLM_GATEWAY_ADMIN_PASSWORD"`。
+- 除非修改了 `.env` 中的密钥名称，否则保留 `admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"`。
 
 加载密钥并启动：
 
@@ -21,8 +21,8 @@ cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/loca
 set -a
 . apps/gateway-server/.env
 set +a
-clm run gateway-server check --config apps/gateway-server/config/local.toml --backend vulkan
-clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend vulkan
+sipp run gateway-server check --config apps/gateway-server/config/local.toml --backend vulkan
+sipp run gateway-server serve --config apps/gateway-server/config/local.toml --backend vulkan
 ```
 
 NVIDIA 主机将后端设为 `cuda`，macOS 主机设为 `metal`。
@@ -40,8 +40,8 @@ cp apps/gateway-server/config/provider-only.toml.example apps/gateway-server/con
 set -a
 . apps/gateway-server/.env
 set +a
-clm run gateway-server check --config apps/gateway-server/config/provider-only.toml --backend cpu
-clm run gateway-server serve --config apps/gateway-server/config/provider-only.toml --backend cpu
+sipp run gateway-server check --config apps/gateway-server/config/provider-only.toml --backend cpu
+sipp run gateway-server serve --config apps/gateway-server/config/provider-only.toml --backend cpu
 ```
 
 在检出的纯服务商示例中，请求目标设为 `openai-chat`。
@@ -73,11 +73,11 @@ export GATEWAY_MANAGEMENT_URL="http://127.0.0.1:9090"
 
 curl --fail --silent "$GATEWAY_MANAGEMENT_URL/readyz"
 curl -sS "$GATEWAY_URL/v1/query" \
-  -H "Authorization: Bearer $COGENTLM_GATEWAY_TOKEN" \
+  -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model":"local","prompt":"Explain gateway inference.","max_tokens":64}'
 ```
 
 纯服务商示例使用 `"model":"openai-chat"`。
 
-打开 `http://127.0.0.1:9090/admin`，用 `COGENTLM_GATEWAY_ADMIN_PASSWORD` 的值登录。
+打开 `http://127.0.0.1:9090/admin`，用 `SIPP_GATEWAY_ADMIN_PASSWORD` 的值登录。

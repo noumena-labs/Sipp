@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
-use cogentlm::gateway_core::{GatewayError, GatewayErrorKind, GatewayRequestContext};
-use cogentlm::{
-    CogentChatRequest, CogentEmbedRequest, CogentEmbeddingResponse, CogentQueryRequest,
-    CogentTextResponse,
+use sipp::gateway_core::{GatewayError, GatewayErrorKind, GatewayRequestContext};
+use sipp::{
+    SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippQueryRequest,
+    SippTextResponse,
 };
 use http::{HeaderMap, StatusCode};
 use thiserror::Error;
@@ -32,23 +32,23 @@ pub struct AuthenticatedRequest {
 /// Decode and encode an application wire protocol.
 pub trait ProtocolCodec: Send + Sync {
     /// Decode a query request.
-    fn decode_query(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<CogentQueryRequest>>;
+    fn decode_query(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<SippQueryRequest>>;
     /// Decode a chat request.
-    fn decode_chat(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<CogentChatRequest>>;
+    fn decode_chat(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<SippChatRequest>>;
     /// Decode an embedding request.
-    fn decode_embed(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<CogentEmbedRequest>>;
+    fn decode_embed(&self, body: &[u8]) -> ToolkitResult<DecodedRequest<SippEmbedRequest>>;
     /// Encode a finite text response.
-    fn encode_text(&self, target: &str, response: &CogentTextResponse) -> ToolkitResult<Bytes>;
+    fn encode_text(&self, target: &str, response: &SippTextResponse) -> ToolkitResult<Bytes>;
     /// Encode a finite embedding response.
     fn encode_embedding(
         &self,
         target: &str,
-        response: &CogentEmbeddingResponse,
+        response: &SippEmbeddingResponse,
     ) -> ToolkitResult<Bytes>;
     /// Encode a streaming event.
     fn encode_stream_event(
         &self,
-        event: &cogentlm::gateway_core::GatewayStreamEvent,
+        event: &sipp::gateway_core::GatewayStreamEvent,
     ) -> ToolkitResult<Bytes>;
     /// Encode an error after a streaming response has started.
     fn encode_stream_error(&self, error: &GatewayHttpError) -> Bytes;

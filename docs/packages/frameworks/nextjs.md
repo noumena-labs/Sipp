@@ -1,20 +1,20 @@
 # Next.js
 
-Use `cogentlm-server` in App Router route handlers that run in the Node.js
-runtime. Use `cogentlm` only in Client Components or browser-only modules.
+Use `sipp-server` in App Router route handlers that run in the Node.js
+runtime. Use `sipp` only in Client Components or browser-only modules.
 
 Next.js App Router pages and layouts are Server Components by default. Add
 `'use client'` only to modules that need browser APIs, state, event handlers,
-or browser-local CogentLM runtime access.
+or browser-local Sipp runtime access.
 
 ## Profile-Compatible Provider Route
 
 Route handlers are a good place to keep provider credentials off the client.
-Set `runtime = 'nodejs'` for routes that import `cogentlm-server`.
+Set `runtime = 'nodejs'` for routes that import `sipp-server`.
 
 Routes that are registered from a browser `kind: 'gateway'` endpoint must speak
 the first-party gateway profile. Use the gateway profile helpers from
-`cogentlm-server` to decode the incoming body and format JSON or SSE
+`sipp-server` to decode the incoming body and format JSON or SSE
 responses. The route can still execute the request against a direct provider
 endpoint.
 
@@ -22,14 +22,14 @@ Use `OPENAI_API_KEY="<mock-openai-key>"` as a placeholder in examples. In a
 real deployment, keep the key in your server environment or secret manager.
 
 ```ts
-// app/api/cogent/query/route.ts
+// app/api/sipp/query/route.ts
 import {
-  CogentClient,
+  SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'cogentlm-server';
+} from 'sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -44,7 +44,7 @@ function requiredEnv(name: string): string {
 export async function POST(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
-    const client = new CogentClient();
+    const client = new SippClient();
     const endpoint = await client.add('provider', {
       kind: 'provider',
       provider: 'openai',
@@ -84,8 +84,8 @@ Use a route handler when the browser should receive token updates but the
 server should keep the provider credential.
 
 ```ts
-// app/api/cogent/stream/route.ts
-import { CogentClient } from 'cogentlm-server';
+// app/api/sipp/stream/route.ts
+import { SippClient } from 'sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -105,7 +105,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: 'prompt is required' }, { status: 400 });
   }
 
-  const client = new CogentClient();
+  const client = new SippClient();
   const endpoint = await client.add('provider', {
     kind: 'provider',
     provider: 'openai',
@@ -152,13 +152,13 @@ Component boundary.
 'use client';
 
 import { useState } from 'react';
-import { CogentClient } from 'cogentlm';
+import { SippClient } from 'sipp';
 
 export function LocalChat(): JSX.Element {
   const [text, setText] = useState('');
 
   async function run(prompt: string): Promise<void> {
-    const client = new CogentClient();
+    const client = new SippClient();
     try {
       const endpoint = await client.add('default', {
         kind: 'local',
@@ -189,7 +189,7 @@ with cross-origin isolation headers that enable `SharedArrayBuffer`.
 
 ## Hybrid Client Component
 
-Use one browser `CogentClient` to register a browser-local endpoint and a
+Use one browser `SippClient` to register a browser-local endpoint and a
 same-origin provider route that speaks the gateway profile. Select the endpoint
 reference at request time; the `query` call stays the same.
 
@@ -198,7 +198,7 @@ reference at request time; the `query` call stays the same.
 'use client';
 
 import { useState } from 'react';
-import { CogentClient, type EndpointRef } from 'cogentlm';
+import { SippClient, type EndpointRef } from 'sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
@@ -207,7 +207,7 @@ export function HybridChat(): JSX.Element {
   const [text, setText] = useState('');
 
   async function run(prompt: string): Promise<void> {
-    const client = new CogentClient();
+    const client = new SippClient();
     try {
       const localEndpoint = await client.add('browser-local', {
         kind: 'local',
@@ -217,7 +217,7 @@ export function HybridChat(): JSX.Element {
         kind: 'gateway',
         target: 'gpt-5-mini',
         baseUrl: window.location.origin,
-        routes: { query: '/api/cogent/query' },
+        routes: { query: '/api/sipp/query' },
         authentication: { kind: 'none' },
       });
       const endpoint: EndpointRef =
@@ -251,12 +251,12 @@ export function HybridChat(): JSX.Element {
 
 Browser gateway descriptors require an absolute `http` or `https` `baseUrl`.
 For same-origin Next routes, use `window.location.origin` and set route
-overrides such as `routes: { query: '/api/cogent/query' }`. The `target`
+overrides such as `routes: { query: '/api/sipp/query' }`. The `target`
 value becomes the provider model in the server route above.
 
 ## Separate Gateway Pattern
 
-Use a separate CogentLM gateway when you want central target policy, shared
+Use a separate Sipp gateway when you want central target policy, shared
 provider credentials, local model hosting, rate controls, or metrics across
 multiple applications. For direct browser-to-gateway calls, do not embed a
 long-lived gateway token in the client bundle. Have a Next route issue a
@@ -270,7 +270,7 @@ const endpoint = await client.add('gateway', {
   authentication: {
     kind: 'bearer',
     valueProvider: async () => {
-      const response = await fetch('/api/cogent/token', { method: 'POST' });
+      const response = await fetch('/api/sipp/token', { method: 'POST' });
       return await response.text();
     },
   },

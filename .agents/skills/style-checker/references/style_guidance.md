@@ -1,6 +1,6 @@
-# CogentLM Style Guidance
+# Sipp Style Guidance
 
-This document defines coding conventions, architectural boundaries, and contribution standards for the CogentLM polyglot monorepo.
+This document defines coding conventions, architectural boundaries, and contribution standards for the Sipp polyglot monorepo.
 
 Agents and developers must follow these rules when generating code, reviewing changes, or submitting pull requests. The goal is to keep the codebase safe, maintainable, idiomatic in each language, and friendly to open-source contributors.
 
@@ -10,7 +10,7 @@ Agents and developers must follow these rules when generating code, reviewing ch
 * Keep changes small, focused, and reviewable.
 * Match existing local conventions before introducing new patterns.
 * Use the language's established community style as the default when this guide
-  does not state a stricter CogentLM rule.
+  does not state a stricter Sipp rule.
 * Treat public APIs, exported types, CLI flags, config formats, and serialized data as compatibility surfaces.
 * Keep configuration and build/deployment files explicit and human-managed.
   Do not generate or synthesize Docker Compose YAML, TOML, env files, CI YAML,
@@ -34,13 +34,13 @@ Rust code should follow the default Rust style described by the official
 `rustfmt` defaults treated as the mechanical formatter of record. Public Rust
 APIs should also follow the documentation expectations from the
 [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/documentation.html)
-unless a local CogentLM rule below is stricter.
+unless a local Sipp rule below is stricter.
 
 ### 1. Error Handling
 
 #### Libraries
 
-For library crates and modules such as `crates/cogentlm` (including its `core`, `shard`, engine, `client`, `providers`, and `gateway_core` module folders), `lib/gateway`, and similar reusable code:
+For library crates and modules such as `crates/sipp` (including its `core`, `shard`, engine, `client`, `providers`, and `gateway_core` module folders), `lib/gateway`, and similar reusable code:
 
 * Do not use `anyhow::Result` in library APIs.
 * Define a crate-local custom error enum using `thiserror::Error`.
@@ -119,7 +119,7 @@ For binaries and developer tooling such as `apps/cli`, `xtask`, examples, and on
 Example:
 
 ```rust
-//! Core inference primitives for CogentLM.
+//! Core inference primitives for Sipp.
 //!
 //! This crate contains model-agnostic types shared by the runtime,
 //! engine, and language bindings.
@@ -259,7 +259,7 @@ Example:
 
 ```ts
 /**
- * Creates an AgentRuntime backed by a local CogentLM engine instance.
+ * Creates an AgentRuntime backed by a local Sipp engine instance.
  */
 export function createRuntime(options: RuntimeOptions): AgentRuntime {
   // ...
@@ -480,7 +480,7 @@ Use the package manager and task runner already used by the affected workspace.
 
 The repository is organized by responsibility:
 
-* `crates/`: The published `cogentlm` and `cogentlm-sys` crates.
+* `crates/`: The published `sipp` and `sipp-sys` crates.
 * `bindings/`: FFI and language bindings such as Node, Python, and WASM.
 * `apps/`: First-party applications such as the Rust CLI.
 * `demos/`: Browser demos using the public browser package.

@@ -1,6 +1,6 @@
 #[cfg(test)]
-use cogentlm::shard::inspect_gguf_metadata;
-use cogentlm::shard::{detect_model_from_gguf_bytes, GgufError};
+use sipp::shard::inspect_gguf_metadata;
+use sipp::shard::{detect_model_from_gguf_bytes, GgufError};
 use serde::Serialize;
 
 use crate::ffi::serialize_json_response;

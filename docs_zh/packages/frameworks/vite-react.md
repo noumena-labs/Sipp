@@ -1,28 +1,28 @@
 # React 与 Vite
 
-React 和 Vite 是 `cogentlm` 浏览器包的基础集成环境。本指南介绍 Vite 配置方法、本地开发 HTTP 头设置、运行时资源覆写机制以及浏览器示例。
+React 和 Vite 是 `sipp` 浏览器包的基础集成环境。本指南介绍 Vite 配置方法、本地开发 HTTP 头设置、运行时资源覆写机制以及浏览器示例。
 
 要全面了解本地推理选项的配置，请参阅[本地推理](../../guides/local-inference.md)和[运行时选项](../../reference/runtime-options.md)。
 
 ## 安装
 
 ```bash
-npm install cogentlm
+npm install sipp
 ```
 
 ## 浏览器本地推理
 
-仅在浏览器端代码中使用 `cogentlm`。本地端点的 `source` 可以是应用服务器提供的模型 URL、用户上传的 `File` 对象、已缓存的模型 ID，或者是分块下载的数据源。
+仅在浏览器端代码中使用 `sipp`。本地端点的 `source` 可以是应用服务器提供的模型 URL、用户上传的 `File` 对象、已缓存的模型 ID，或者是分块下载的数据源。
 
 ```ts
 import { useState } from 'react';
-import { CogentClient } from 'cogentlm';
+import { SippClient } from 'sipp';
 
 export function LocalQuery(): JSX.Element {
   const [text, setText] = useState('');
 
   async function run(): Promise<void> {
-    const client = new CogentClient();
+    const client = new SippClient();
     try {
       const endpoint = await client.add('default', {
         kind: 'local',
@@ -34,7 +34,7 @@ export function LocalQuery(): JSX.Element {
           },
         },
       });
-      const response = await client.query('Explain CogentLM.', {
+      const response = await client.query('Explain Sipp.', {
         endpoint,
         maxTokens: 64,
       }).response;
@@ -82,14 +82,14 @@ export default defineConfig({
 
 ## 运行时资源覆盖
 
-浏览器包在运行时会自动解析内置的 Emscripten JavaScript 和 WASM 资源地址。大多数 Vite 应用直接使用 `new CogentClient()` 即可，无需手动修改资源路径。
+浏览器包在运行时会自动解析内置的 Emscripten JavaScript 和 WASM 资源地址。大多数 Vite 应用直接使用 `new SippClient()` 即可，无需手动修改资源路径。
 
 只有当打包工具或部署流程改变了资源存放位置时，才需要覆盖运行时资源 URL：
 
 ```ts
-const client = new CogentClient({
-  moduleUrl: '/assets/cogentlm-wasm.js',
-  wasmUrl: '/assets/cogentlm-wasm.wasm',
+const client = new SippClient({
+  moduleUrl: '/assets/sipp-wasm.js',
+  wasmUrl: '/assets/sipp-wasm.wasm',
 });
 ```
 
@@ -99,14 +99,14 @@ const client = new CogentClient({
 
 应用可以直接提供模型文件的 URL，也可以让用户选取本地的 `.gguf` 文件。浏览器支持时，运行时会模型数据存储到 OPFS 中。首次下载或导入文件后，后续加载直接读取本地缓存。
 
-通过 `CogentClient` 上的 `browserCache` 选项调整浏览器缓存策略，或通过本地端点描述符的 `options.runtime` 调整本地运行时行为。详情见[浏览器缓存](../../guides/browser-caching.md)和[运行时选项](../../reference/runtime-options.md)。
+通过 `SippClient` 上的 `browserCache` 选项调整浏览器缓存策略，或通过本地端点描述符的 `options.runtime` 调整本地运行时行为。详情见[浏览器缓存](../../guides/browser-caching.md)和[运行时选项](../../reference/runtime-options.md)。
 
 ## 官方示例
 
 从源码仓库构建时，启动本地服务运行浏览器示例：
 
 ```bash
-clm run examples serve browser
+sipp run examples serve browser
 ```
 
 访问终端输出的 URL 并打开以下页面：

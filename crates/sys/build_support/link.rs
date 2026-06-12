@@ -49,7 +49,7 @@ fn library_search_dirs(dst: &Path, lib_dir: &Path) -> Vec<PathBuf> {
 
 fn link_cmake_libraries(context: &BuildContext, search_dirs: &[PathBuf]) {
     let mut core_libraries = vec![
-        "cogent_shim",
+        "sipp_shim",
         "mtmd",
         "llama-common",
         "llama-common-base",

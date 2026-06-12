@@ -1,6 +1,6 @@
 # React And Vite
 
-React and Vite are the baseline browser integration for the `cogentlm`
+React and Vite are the baseline browser integration for the `sipp`
 package. Use this guide for Vite-specific setup, local development headers,
 runtime asset overrides, and the source browser examples.
 
@@ -11,24 +11,24 @@ For the full local inference option map, see
 ## Install
 
 ```bash
-npm install cogentlm
+npm install sipp
 ```
 
 ## Browser Local Query
 
-Use `cogentlm` only in browser code. A local endpoint `source` can be a model
+Use `sipp` only in browser code. A local endpoint `source` can be a model
 URL served by the app, a user-provided `File`, an installed model id, or shard
 sources.
 
 ```ts
 import { useState } from 'react';
-import { CogentClient } from 'cogentlm';
+import { SippClient } from 'sipp';
 
 export function LocalQuery(): JSX.Element {
   const [text, setText] = useState('');
 
   async function run(): Promise<void> {
-    const client = new CogentClient();
+    const client = new SippClient();
     try {
       const endpoint = await client.add('default', {
         kind: 'local',
@@ -40,7 +40,7 @@ export function LocalQuery(): JSX.Element {
           },
         },
       });
-      const response = await client.query('Explain CogentLM.', {
+      const response = await client.query('Explain Sipp.', {
         endpoint,
         maxTokens: 64,
       }).response;
@@ -94,16 +94,16 @@ Use `executionMode: 'main-thread'` only for debugging or constrained hosts.
 ## Runtime Asset Overrides
 
 The browser package resolves its packaged Emscripten JavaScript and WASM assets
-at runtime. Most Vite apps can use `new CogentClient()` without asset
+at runtime. Most Vite apps can use `new SippClient()` without asset
 overrides.
 
 Override runtime asset URLs only when your bundler or deployment moves package
 assets:
 
 ```ts
-const client = new CogentClient({
-  moduleUrl: '/assets/cogentlm-wasm.js',
-  wasmUrl: '/assets/cogentlm-wasm.wasm',
+const client = new SippClient({
+  moduleUrl: '/assets/sipp-wasm.js',
+  wasmUrl: '/assets/sipp-wasm.wasm',
 });
 ```
 
@@ -116,7 +116,7 @@ Serve model URLs from the application or let users select local `.gguf` files.
 The browser runtime stores model data through OPFS where available, so repeated
 loads can stay local after the first import or fetch.
 
-Tune browser storage with `browserCache` on `CogentClient` and tune local
+Tune browser storage with `browserCache` on `SippClient` and tune local
 runtime behavior with `options.runtime` on the local endpoint descriptor. See
 [Browser Caching](../../guides/browser-caching.md) and
 [Runtime Options](../../reference/runtime-options.md).
@@ -126,7 +126,7 @@ runtime behavior with `options.runtime` on the local endpoint descriptor. See
 Serve the source examples when working from a checkout:
 
 ```bash
-clm run examples serve browser
+sipp run examples serve browser
 ```
 
 Then open the printed URL and use:

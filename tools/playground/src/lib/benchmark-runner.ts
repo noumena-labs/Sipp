@@ -1,9 +1,9 @@
 import {
-  type CogentClient,
+  type SippClient,
   type ModelLoadOptions,
   type ModelSource,
   type TokenBatch,
-} from '@noumena-labs/cogentlm';
+} from '@noumena-labs/sipp';
 import type {
   BenchmarkOperation,
   BenchmarkRun,
@@ -76,7 +76,7 @@ function cloneRuntimeObservation(
 }
 
 function observeContextKeyCompletion(
-  targetClient: CogentClient,
+  targetClient: SippClient,
   contextKey: string
 ): {
   promise: Promise<RequestObservability | null>;
@@ -116,7 +116,7 @@ function formatEmbeddingPreview(values: readonly number[]): string {
 }
 
 export async function runObservedRequest(
-  targetClient: CogentClient,
+  targetClient: SippClient,
   prompt: string,
   options: {
     operation: BenchmarkOperation;
@@ -381,7 +381,7 @@ function repeatedPromptCacheSource(
 }
 
 export async function runPromptGroup(
-  targetClient: CogentClient,
+  targetClient: SippClient,
   operation: BenchmarkOperation,
   groupLabel: string,
   prompt: string,
@@ -432,7 +432,7 @@ export async function runPromptGroup(
 }
 
 export async function runScenarioBenchmark(
-  targetClient: CogentClient,
+  targetClient: SippClient,
   operation: BenchmarkOperation,
   scenario: ScenarioDefinition,
   modelSource: ModelSource,
@@ -559,12 +559,12 @@ export async function captureBrowserMemorySnapshot(
   return snapshot;
 }
 
-export function supportsConcurrentQueryApi(targetClient: CogentClient | null): boolean {
+export function supportsConcurrentQueryApi(targetClient: SippClient | null): boolean {
   return targetClient != null;
 }
 
 export async function runMixedLoadBenchmark(
-  targetClient: CogentClient,
+  targetClient: SippClient,
   operation: Exclude<BenchmarkOperation, 'embed'>,
   definition: import('./types').MixedLoadDefinition,
   modelSource: ModelSource,

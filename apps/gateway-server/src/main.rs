@@ -3,15 +3,15 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use cogentlm::backend::set_llama_log_quiet;
-use cogentlm_gateway_server::{
+use sipp::backend::set_llama_log_quiet;
+use sipp_gateway_server::{
     config::GatewayServerConfig, http::GatewayHttpService, metrics::GatewayMetrics,
 };
 use tokio::sync::oneshot;
 
 #[derive(Debug, Parser)]
-#[command(name = "cogentlm-gateway")]
-#[command(about = "Run the first-party CogentLM gateway application")]
+#[command(name = "sipp-gateway")]
+#[command(about = "Run the first-party Sipp gateway application")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -128,7 +128,7 @@ fn init_tracing() {
 }
 
 fn admin_assets_dir() -> anyhow::Result<PathBuf> {
-    if let Some(path) = std::env::var_os("COGENTLM_GATEWAY_ADMIN_ASSETS_DIR") {
+    if let Some(path) = std::env::var_os("SIPP_GATEWAY_ADMIN_ASSETS_DIR") {
         return Ok(PathBuf::from(path));
     }
 

@@ -6,7 +6,7 @@ pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
     let mut config = Config::new(&context.manifest_dir);
     config
         .profile("Release")
-        .define("COGENTLM_LLAMA_CPP_DIR", context.llama_dir.as_os_str())
+        .define("SIPP_LLAMA_CPP_DIR", context.llama_dir.as_os_str())
         .define("CMAKE_INSTALL_LIBDIR", "lib")
         .define("BUILD_SHARED_LIBS", cmake_bool(context.features.backend_dl))
         .define("GGML_BACKEND_DL", cmake_bool(context.features.backend_dl))

@@ -1,18 +1,18 @@
-//! Tests the `main` module in `cogentlm-cli`.
+//! Tests the `main` module in `sipp-cli`.
 //!
 //! Covers CLI parsing, configuration mapping, stats rendering, and command behavior without running model-backed inference unless marked as an external smoke test.
 
 use clap::Parser;
-use cogentlm::engine::GpuLayerConfig;
-use cogentlm::lifecycle::{BackendPreference, StatsMode};
-use cogentlm::runtime::metrics::RuntimeObservabilityMetrics;
+use sipp::engine::GpuLayerConfig;
+use sipp::lifecycle::{BackendPreference, StatsMode};
+use sipp::runtime::metrics::RuntimeObservabilityMetrics;
 
 use super::*;
 
 #[test]
 fn gpu_layers_accepts_negative_llama_all_layers_value() {
     let args = Args::parse_from([
-        "cogentlm",
+        "sipp",
         "model.gguf",
         "prompt",
         "--chat",
@@ -25,7 +25,7 @@ fn gpu_layers_accepts_negative_llama_all_layers_value() {
 
 #[test]
 fn stats_accepts_basic_mode() {
-    let args = Args::parse_from(["cogentlm", "model.gguf", "prompt", "--stats", "basic"]);
+    let args = Args::parse_from(["sipp", "model.gguf", "prompt", "--stats", "basic"]);
 
     assert_eq!(args.stats, super::CliStatsMode::Basic);
 }
@@ -33,10 +33,10 @@ fn stats_accepts_basic_mode() {
 #[test]
 fn invalid_backend_and_stats_modes_are_rejected_by_clap() {
     assert!(
-        Args::try_parse_from(["cogentlm", "model.gguf", "prompt", "--backend", "bogus"]).is_err()
+        Args::try_parse_from(["sipp", "model.gguf", "prompt", "--backend", "bogus"]).is_err()
     );
     assert!(
-        Args::try_parse_from(["cogentlm", "model.gguf", "prompt", "--stats", "verbose"]).is_err()
+        Args::try_parse_from(["sipp", "model.gguf", "prompt", "--stats", "verbose"]).is_err()
     );
 }
 
@@ -60,7 +60,7 @@ fn backend_and_stats_modes_map_to_lifecycle_preferences() {
 #[test]
 fn runtime_config_from_args_clamps_sizes_and_forces_greedy_top_k() {
     let args = Args::parse_from([
-        "cogentlm",
+        "sipp",
         "model.gguf",
         "prompt",
         "--ctx-size",
@@ -95,7 +95,7 @@ fn runtime_config_from_args_clamps_sizes_and_forces_greedy_top_k() {
 
 #[test]
 fn runtime_config_omits_default_sentinel_seed() {
-    let args = Args::parse_from(["cogentlm", "model.gguf", "prompt"]);
+    let args = Args::parse_from(["sipp", "model.gguf", "prompt"]);
 
     let config = runtime_config_from_args(&args);
 

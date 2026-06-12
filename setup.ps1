@@ -7,9 +7,9 @@ $Root = if ($PSScriptRoot) {
 }
 
 $Target = Join-Path $Root ".build\xtask\debug\xtask.exe"
-$Stamp = Join-Path $Root ".build\xtask\clm.stamp"
+$Stamp = Join-Path $Root ".build\xtask\sipp.stamp"
 $BinDir = Join-Path $Root ".build\bin"
-$EnvScript = Join-Path $BinDir "cogentlm-env.ps1"
+$EnvScript = Join-Path $BinDir "sipp-env.ps1"
 
 $SourceRoots = @(
   (Join-Path $Root "xtask\src"),
@@ -48,10 +48,10 @@ if ($NeedsBuild) {
     cargo build --target-dir .build/xtask --package xtask --quiet
     if ($LASTEXITCODE -ne 0) {
       $BuildExitCode = $LASTEXITCODE
-      if ($env:COGENTLM_SETUP_CHILD -eq "1") {
+      if ($env:SIPP_SETUP_CHILD -eq "1") {
         exit $BuildExitCode
       }
-      throw "CogentLM setup bootstrap failed with exit code $BuildExitCode"
+      throw "Sipp setup bootstrap failed with exit code $BuildExitCode"
     }
     New-Item -ItemType Directory -Force -Path (Split-Path $Stamp) | Out-Null
     Set-Content -Path $Stamp -Value "built $(Get-Date -Format o)"
@@ -74,12 +74,12 @@ $SetupExitCode = $LASTEXITCODE
 if ((Test-Path $EnvScript) -and ($SetupExitCode -eq 0)) {
   . $EnvScript
   Write-Host ""
-  Write-Host "clm is active in this PowerShell session."
+  Write-Host "sipp is active in this PowerShell session."
 }
 
 if ($SetupExitCode -ne 0) {
-  if ($env:COGENTLM_SETUP_CHILD -eq "1") {
+  if ($env:SIPP_SETUP_CHILD -eq "1") {
     exit $SetupExitCode
   }
-  throw "CogentLM setup failed with exit code $SetupExitCode"
+  throw "Sipp setup failed with exit code $SetupExitCode"
 }

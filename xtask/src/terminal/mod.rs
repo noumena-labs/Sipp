@@ -1600,7 +1600,7 @@ impl InlineRenderer {
 
     fn render_header(&self, rows: &mut [RenderedRow]) {
         let elapsed = elapsed(self.started_at.elapsed());
-        let title = format!(" COGENTLM | {} | {}", self.command_label, elapsed);
+        let title = format!(" SIPP | {} | {}", self.command_label, elapsed);
         self.put_line(rows, 0, &title, Color::Cyan, true);
         self.put_line(
             rows,

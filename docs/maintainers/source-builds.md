@@ -1,6 +1,6 @@
 # Source Builds
 
-Use the source checkout when developing CogentLM itself, validating package
+Use the source checkout when developing Sipp itself, validating package
 artifacts, running examples, or deploying the gateway server before a public
 server artifact exists.
 
@@ -10,47 +10,47 @@ From the repository root:
 
 ```bash
 source ./setup.sh
-clm doctor
-clm test list
+sipp doctor
+sipp test list
 ```
 
 On Windows, run `.\setup.ps1` from PowerShell or `setup.cmd` from CMD. After
-setup, `clm` is a repo-local alias for `cargo xtask`; use `cargo xtask ...`
+setup, `sipp` is a repo-local alias for `cargo xtask`; use `cargo xtask ...`
 with the same arguments if the launcher is not active.
 
 ## Build Targets
 
 Use the xtask orchestrator instead of direct build commands when compiling
-CogentLM targets. It manages native dependencies, backend toolchains, and
+Sipp targets. It manages native dependencies, backend toolchains, and
 package staging.
 
 ```bash
-clm build core
-clm build node --backend cpu
-clm build python --backend cpu
-clm build gateway-server --backend cpu
-clm build wasm
-clm build all
+sipp build core
+sipp build node --backend cpu
+sipp build python --backend cpu
+sipp build gateway-server --backend cpu
+sipp build wasm
+sipp build all
 ```
 
 Use `--backend vulkan`, `--backend cuda`, `--backend metal`, or
 `--backend all` where a native package target supports those backends.
 
 CUDA builds compile a portable cloud GPU architecture list by default. Set
-`COGENTLM_CUDA_ARCHITECTURES` (semicolon-separated CMake entries, for example
+`SIPP_CUDA_ARCHITECTURES` (semicolon-separated CMake entries, for example
 `80` for A100 only) before building to narrow the list for faster local
 builds. See [docs/gateway/docker.md](../gateway/docker.md) for the full list
 and rationale.
 
 ## Examples And Demos
 
-Run browser examples and demos through `clm`. These commands start Vite dev
+Run browser examples and demos through `sipp`. These commands start Vite dev
 servers and do not accept native backend flags:
 
 ```bash
-clm run examples serve browser
-clm run demos serve avatar
-clm run demos serve simulation
+sipp run examples serve browser
+sipp run demos serve avatar
+sipp run demos serve simulation
 ```
 
 ## Gateway Hello World Examples
@@ -64,9 +64,9 @@ Use `--case query|chat|embed` to choose the client case. Use
 specific native backend.
 
 ```bash
-clm run examples gateway rust --case query
-clm run examples gateway node --case chat
-clm run examples gateway python --case embed --backend vulkan
+sipp run examples gateway rust --case query
+sipp run examples gateway node --case chat
+sipp run examples gateway python --case embed --backend vulkan
 ```
 
 ## Playground
@@ -76,13 +76,13 @@ inference, vision model setup, GGUF loading, runtime observability, and
 repeatable browser runtime smoke checks.
 
 ```bash
-clm run tools serve playground
+sipp run tools serve playground
 ```
 
 ## Gateway Server
 
 The release workflow does not yet publish a standalone gateway-server binary or
-container image. Use `clm` for source checkout checks and raw Docker commands
+container image. Use `sipp` for source checkout checks and raw Docker commands
 for container deployment. The canonical source guide is
 [Gateway Server](../gateway/server.md); Docker deployment is covered in
 [Gateway Docker](../gateway/docker.md).
@@ -93,8 +93,8 @@ cp apps/gateway-server/.env.example apps/gateway-server/.env
 set -a
 . apps/gateway-server/.env
 set +a
-clm run gateway-server check --config apps/gateway-server/config/local.toml --backend cpu
-clm run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
+sipp run gateway-server check --config apps/gateway-server/config/local.toml --backend cpu
+sipp run gateway-server serve --config apps/gateway-server/config/local.toml --backend cpu
 ```
 
 The copied local config expects a local GGUF model under `.build/models` and a
@@ -108,8 +108,8 @@ Use the narrowest relevant target from [Testing](../testing.md). Common
 entry points are:
 
 ```bash
-clm test list
-clm test unit group full
-clm test smoke group examples --backend cpu
-clm test verify --target public-docs
+sipp test list
+sipp test unit group full
+sipp test smoke group examples --backend cpu
+sipp test verify --target public-docs
 ```

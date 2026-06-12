@@ -1,6 +1,6 @@
-# CogentLM Build Instructions
+# Sipp Build Instructions
 
-The CogentLM repository uses a custom Rust-based build orchestrator pattern called `xtask`. Do NOT use standard `cargo build` for anything other than basic Rust checks; always use the `xtask` orchestrator to build the project, as it automatically manages C++ dependencies, downloads toolchains (Vulkan SDK, Emscripten, Ninja), and injects the correct environment variables.
+The Sipp repository uses a custom Rust-based build orchestrator pattern called `xtask`. Do NOT use standard `cargo build` for anything other than basic Rust checks; always use the `xtask` orchestrator to build the project, as it automatically manages C++ dependencies, downloads toolchains (Vulkan SDK, Emscripten, Ninja), and injects the correct environment variables.
 
 ## Build Commands
 

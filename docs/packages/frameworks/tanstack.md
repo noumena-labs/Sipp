@@ -1,11 +1,11 @@
 # TanStack
 
-TanStack apps usually need two CogentLM patterns:
+TanStack apps usually need two Sipp patterns:
 
-- TanStack Start server functions for server-only CogentLM work, provider
+- TanStack Start server functions for server-only Sipp work, provider
   credentials, local model paths, gateway tokens, and typed app RPC.
 - TanStack Start server routes when browser code should register the route as
-  a `kind: 'gateway'` endpoint through the CogentLM browser package.
+  a `kind: 'gateway'` endpoint through the Sipp browser package.
 - TanStack Query for client-side final responses that can be cached or
   refetched by query key.
 
@@ -16,16 +16,16 @@ they arrive.
 ## TanStack Start Server Function
 
 Server functions run on the server and can be called from loaders, components,
-hooks, or other server functions. Keep `cogentlm-server`, provider
+hooks, or other server functions. Keep `sipp-server`, provider
 credentials, and gateway tokens in server-only functions.
 
 Use `OPENAI_API_KEY="<mock-openai-key>"` as a placeholder in examples. In a
 real deployment, keep the key in your server environment or secret manager.
 
 ```ts
-// src/server/cogent.ts
+// src/server/sipp.ts
 import { createServerFn } from '@tanstack/react-start';
-import { CogentClient } from 'cogentlm-server';
+import { SippClient } from 'sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -35,10 +35,10 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-export const queryCogent = createServerFn({ method: 'POST' })
+export const querySipp = createServerFn({ method: 'POST' })
   .inputValidator((data: { prompt: string }) => data)
   .handler(async ({ data }) => {
-    const client = new CogentClient();
+    const client = new SippClient();
     const endpoint = await client.add('provider', {
       kind: 'provider',
       provider: 'openai',
@@ -73,15 +73,15 @@ decode the browser request and format JSON or SSE responses. The route can
 then execute the request against a direct provider endpoint.
 
 ```ts
-// src/routes/api/cogent/query.ts
+// src/routes/api/sipp/query.ts
 import { createFileRoute } from '@tanstack/react-router';
 import {
-  CogentClient,
+  SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'cogentlm-server';
+} from 'sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -91,13 +91,13 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-export const Route = createFileRoute('/api/cogent/query')({
+export const Route = createFileRoute('/api/sipp/query')({
   server: {
     handlers: {
       POST: async ({ request }) => {
         try {
           const decoded = decodeGatewayQueryBody(await request.json());
-          const client = new CogentClient();
+          const client = new SippClient();
           const endpoint = await client.add('provider', {
             kind: 'provider',
             provider: 'openai',
@@ -128,7 +128,7 @@ This route uses the browser profile field `model` as the provider model and
 keeps the provider credential on the server. Add application auth or model
 allowlists before exposing the route to users.
 
-Use a separate CogentLM gateway when you want central target policy, shared
+Use a separate Sipp gateway when you want central target policy, shared
 provider credentials, local model hosting, rate controls, or metrics across
 multiple applications.
 
@@ -139,12 +139,12 @@ behavior.
 
 ```ts
 import { useQuery } from '@tanstack/react-query';
-import { queryCogent } from '../server/cogent';
+import { querySipp } from '../server/sipp';
 
 export function Answer({ prompt }: { readonly prompt: string }): JSX.Element {
   const result = useQuery({
-    queryKey: ['cogent-query', prompt],
-    queryFn: () => queryCogent({ data: { prompt } }),
+    queryKey: ['sipp-query', prompt],
+    queryFn: () => querySipp({ data: { prompt } }),
     enabled: prompt.trim() !== '',
   });
 
@@ -170,7 +170,7 @@ export function StreamingAnswer(): JSX.Element {
 
   async function run(prompt: string): Promise<void> {
     setText('');
-    const response = await fetch('/api/cogent/stream', {
+    const response = await fetch('/api/sipp/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt }),
@@ -198,19 +198,19 @@ export function StreamingAnswer(): JSX.Element {
 
 ## Browser Package
 
-Use browser `cogentlm` from components that run in the browser. That includes
+Use browser `sipp` from components that run in the browser. That includes
 browser-local GGUF inference and gateway endpoints with short-lived tokens or
 same-origin server routes.
 
 ```ts
 import { useState } from 'react';
-import { CogentClient } from 'cogentlm';
+import { SippClient } from 'sipp';
 
 export function LocalAnswer(): JSX.Element {
   const [text, setText] = useState('');
 
   async function run(prompt: string): Promise<void> {
-    const client = new CogentClient();
+    const client = new SippClient();
     try {
       const endpoint = await client.add('browser-local', {
         kind: 'local',
@@ -234,18 +234,18 @@ export function LocalAnswer(): JSX.Element {
 }
 ```
 
-Do not import `cogentlm-server` from browser modules.
+Do not import `sipp-server` from browser modules.
 
 ## Browser Hybrid Endpoints
 
 Register browser-local and same-origin gateway endpoints on one browser
-`CogentClient`, then choose the endpoint reference for each request. The
+`SippClient`, then choose the endpoint reference for each request. The
 same-origin route can execute against a provider while still speaking the
 gateway profile to the browser client.
 
 ```ts
 import { useState } from 'react';
-import { CogentClient, type EndpointRef } from 'cogentlm';
+import { SippClient, type EndpointRef } from 'sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
@@ -254,7 +254,7 @@ export function HybridAnswer(): JSX.Element {
   const [text, setText] = useState('');
 
   async function run(prompt: string): Promise<void> {
-    const client = new CogentClient();
+    const client = new SippClient();
     try {
       const localEndpoint = await client.add('browser-local', {
         kind: 'local',
@@ -264,7 +264,7 @@ export function HybridAnswer(): JSX.Element {
         kind: 'gateway',
         target: 'gpt-5-mini',
         baseUrl: window.location.origin,
-        routes: { query: '/api/cogent/query' },
+        routes: { query: '/api/sipp/query' },
         authentication: { kind: 'none' },
       });
       const endpoint: EndpointRef =
@@ -298,7 +298,7 @@ export function HybridAnswer(): JSX.Element {
 
 Browser gateway descriptors need an absolute `http` or `https` `baseUrl`.
 Same-origin TanStack routes should use `window.location.origin` and route
-overrides such as `routes: { query: '/api/cogent/query' }`. The `target`
+overrides such as `routes: { query: '/api/sipp/query' }`. The `target`
 value becomes the provider model in the server route above.
 
 ## References

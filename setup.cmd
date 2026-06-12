@@ -4,18 +4,18 @@ setlocal
 set "ROOT=%~dp0"
 set "ROOT=%ROOT:~0,-1%"
 
-set "COGENTLM_SETUP_CHILD=1"
+set "SIPP_SETUP_CHILD=1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\setup.ps1" %*
 set "SETUP_EXIT=%ERRORLEVEL%"
 
-endlocal & set "SETUP_EXIT=%SETUP_EXIT%" & set "COGENTLM_BIN=%ROOT%\.build\bin"
+endlocal & set "SETUP_EXIT=%SETUP_EXIT%" & set "SIPP_BIN=%ROOT%\.build\bin"
 
 if "%SETUP_EXIT%"=="0" (
-  if exist "%COGENTLM_BIN%\clm.cmd" (
-    echo ;%PATH%; | find /I ";%COGENTLM_BIN%;" >nul
-    if errorlevel 1 set "PATH=%COGENTLM_BIN%;%PATH%"
+  if exist "%SIPP_BIN%\sipp.cmd" (
+    echo ;%PATH%; | find /I ";%SIPP_BIN%;" >nul
+    if errorlevel 1 set "PATH=%SIPP_BIN%;%PATH%"
     echo.
-    echo clm is active in this CMD session.
+    echo sipp is active in this CMD session.
   )
 )
 

@@ -3,14 +3,14 @@
 use std::env;
 use std::path::PathBuf;
 
-use cogentlm::{CogentEmbeddingResponse, CogentTextResponse};
+use sipp::{SippEmbeddingResponse, SippTextResponse};
 
 pub type ExampleResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 pub const DEFAULT_MAX_TOKENS: u32 = 2048;
 pub const DEFAULT_TEMPERATURE: f32 = 0.7;
 pub const DEFAULT_TOP_P: f32 = 0.8;
-pub const DEFAULT_CONTEXT: i32 = 2048;
+pub const DEFAULT_CONTEXT: i32 = 4096;
 pub const DEFAULT_SEED: u32 = 42;
 
 pub struct LocalArgs {
@@ -47,19 +47,19 @@ pub fn vision_args(default_input: &'static str) -> ExampleResult<VisionArgs> {
     let mut args = env::args().skip(1);
     let model_path = args.next().ok_or_else(|| {
         usage_error(
-            "usage: cargo run -p cogentlm-rust-examples --bin vision_chat -- \
+            "usage: cargo run -p sipp-rust-examples --bin vision_chat -- \
          <model.gguf> <projector.gguf> <image> [input]",
         )
     })?;
     let projector_path = args.next().ok_or_else(|| {
         usage_error(
-            "usage: cargo run -p cogentlm-rust-examples --bin vision_chat -- \
+            "usage: cargo run -p sipp-rust-examples --bin vision_chat -- \
          <model.gguf> <projector.gguf> <image> [input]",
         )
     })?;
     let image_path = args.next().ok_or_else(|| {
         usage_error(
-            "usage: cargo run -p cogentlm-rust-examples --bin vision_chat -- \
+            "usage: cargo run -p sipp-rust-examples --bin vision_chat -- \
          <model.gguf> <projector.gguf> <image> [input]",
         )
     })?;
@@ -109,7 +109,7 @@ where
     env::var(name).ok().and_then(|value| value.parse().ok())
 }
 
-pub fn print_text(response: CogentTextResponse) {
+pub fn print_text(response: SippTextResponse) {
     println!("endpoint={:?}", response.endpoint);
     println!("finish_reason={}", response.finish_reason.as_str());
     println!("text={}", response.text.trim());
@@ -125,7 +125,7 @@ pub fn print_text(response: CogentTextResponse) {
     }
 }
 
-pub fn print_embedding(response: CogentEmbeddingResponse) {
+pub fn print_embedding(response: SippEmbeddingResponse) {
     let preview = response
         .values
         .iter()
@@ -149,12 +149,12 @@ fn defaulted_input(input: String, default_input: &'static str) -> String {
 }
 
 fn local_usage(command: &'static str) -> String {
-    format!("usage: cargo run -p cogentlm-rust-examples --bin {command} -- <model.gguf> [input]")
+    format!("usage: cargo run -p sipp-rust-examples --bin {command} -- <model.gguf> [input]")
 }
 
 fn gateway_usage(command: &'static str) -> String {
     format!(
-        "usage: cargo run -p cogentlm-rust-examples --features gateway --bin {command} -- \
+        "usage: cargo run -p sipp-rust-examples --features gateway --bin {command} -- \
          <model.gguf> <gateway-target> [input]"
     )
 }

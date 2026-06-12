@@ -1,4 +1,4 @@
-//! Tests the `build_support::link` module in `cogentlm-sys`.
+//! Tests the `build_support::link` module in `sipp-sys`.
 //!
 //! Covers deterministic library search and archive/shared-library detection
 //! with fake filesystem fixtures, without invoking the linker.

@@ -18,7 +18,7 @@ const DOCS_BUILD_DIR: &str = "book";
 const ZH_DOCS_BUILD_DIR: &str = "book/zh";
 const DOCS_SERVE_URL: &str = "http://localhost:3000";
 
-const COGENTLM_CSS: &str = r#":root {
+const SIPP_CSS: &str = r#":root {
     --content-max-width: 900px;
 }
 
@@ -164,7 +164,7 @@ fn apply_language_env<'a>(cmd: Cmd<'a>, lang: DocsLanguage) -> Cmd<'a> {
         return cmd
             .env("MDBOOK_BOOK__SRC", "docs_zh")
             .env("MDBOOK_BOOK__LANGUAGE", DocsLanguage::Zh.as_str())
-            .env("MDBOOK_BOOK__TITLE", "CogentLM 中文文档")
+            .env("MDBOOK_BOOK__TITLE", "Sipp 中文文档")
             .env("MDBOOK_BUILD__BUILD_DIR", ZH_DOCS_BUILD_DIR);
     }
 
@@ -245,7 +245,7 @@ fn ensure_deps(sh: &Shell) -> Result<()> {
 }
 
 /// Write the xtask-owned theme assets and extract `mermaid.min.js` into
-/// `theme/` (workspace root). `cogentlm.css` and `mermaid-init.js` are
+/// `theme/` (workspace root). `sipp.css` and `mermaid-init.js` are
 /// rewritten every run so edits to the constants in this file reach existing
 /// checkouts; `mermaid.min.js` is extracted from the `mdbook-mermaid` crate
 /// using a temporary book directory when missing.
@@ -257,8 +257,8 @@ fn ensure_theme_assets(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     fs::create_dir_all(&theme_dir)
         .with_context(|| format!("failed to create {}", theme_dir.display()))?;
 
-    let css_path = theme_dir.join("cogentlm.css");
-    fs::write(&css_path, COGENTLM_CSS)
+    let css_path = theme_dir.join("sipp.css");
+    fs::write(&css_path, SIPP_CSS)
         .with_context(|| format!("failed to write {}", css_path.display()))?;
     output::path("Written", &css_path);
 

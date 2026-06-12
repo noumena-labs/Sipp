@@ -38,7 +38,7 @@ mod run_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 const LLAMA_BACKEND_OPS_TARGET: &str = "test-backend-ops";
-const GATEWAY_RUN_TOKEN_ENV: &str = "COGENTLM_GATEWAY_TOKEN";
+const GATEWAY_RUN_TOKEN_ENV: &str = "SIPP_GATEWAY_TOKEN";
 const GATEWAY_RUN_START_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Runs a developer workflow.
@@ -400,7 +400,7 @@ fn run_rust_gateway_example_client(
     let bin = rust_gateway_example_bin(args.common.case);
     let gateway_url = gateway_url(&args.common.bind);
     let _dir = sh.push_dir(ctx.workspace_root());
-    let mut client_cmd = cmd!(sh, "cargo run -p cogentlm-rust-examples")
+    let mut client_cmd = cmd!(sh, "cargo run -p sipp-rust-examples")
         .arg("--features")
         .arg("gateway")
         .arg("--bin")
@@ -409,10 +409,10 @@ fn run_rust_gateway_example_client(
         .arg(&model)
         .arg(target)
         .arg(&args.prompt)
-        .env("COGENTLM_GATEWAY_URL", gateway_url)
+        .env("SIPP_GATEWAY_URL", gateway_url)
         .env(GATEWAY_RUN_TOKEN_ENV, &args.common.token)
-        .env("COGENTLM_MAX_TOKENS", args.max_tokens.to_string())
-        .env("COGENTLM_TEMPERATURE", format_temperature(args.temperature));
+        .env("SIPP_MAX_TOKENS", args.max_tokens.to_string())
+        .env("SIPP_TEMPERATURE", format_temperature(args.temperature));
     client_cmd = apply_toolchains(sh, ctx, client_cmd, None)?;
     output::run_long_command(format!("Running Rust gateway example: {bin}"), client_cmd)
         .with_context(|| format!("Rust gateway example failed: {bin}"))
@@ -445,11 +445,11 @@ fn run_node_gateway_example_client(
         .arg(&model)
         .arg(target)
         .arg(&args.prompt)
-        .env("COGENTLM_NODE_BACKEND", "cpu")
-        .env("COGENTLM_GATEWAY_URL", gateway_url)
+        .env("SIPP_NODE_BACKEND", "cpu")
+        .env("SIPP_GATEWAY_URL", gateway_url)
         .env(GATEWAY_RUN_TOKEN_ENV, &args.common.token)
-        .env("COGENTLM_MAX_TOKENS", args.max_tokens.to_string())
-        .env("COGENTLM_TEMPERATURE", format_temperature(args.temperature));
+        .env("SIPP_MAX_TOKENS", args.max_tokens.to_string())
+        .env("SIPP_TEMPERATURE", format_temperature(args.temperature));
     client_cmd = apply_toolchains(sh, ctx, client_cmd, Some(&Backend::Cpu))?;
     output::run_long_command(
         format!("Running Node gateway example: {script}"),
@@ -486,11 +486,11 @@ fn run_python_gateway_example_client(
         .arg(&model)
         .arg(target)
         .arg(&args.prompt)
-        .env("COGENTLM_PYTHON_BACKEND", "cpu")
-        .env("COGENTLM_GATEWAY_URL", gateway_url)
+        .env("SIPP_PYTHON_BACKEND", "cpu")
+        .env("SIPP_GATEWAY_URL", gateway_url)
         .env(GATEWAY_RUN_TOKEN_ENV, &args.common.token)
-        .env("COGENTLM_MAX_TOKENS", args.max_tokens.to_string())
-        .env("COGENTLM_TEMPERATURE", format_temperature(args.temperature));
+        .env("SIPP_MAX_TOKENS", args.max_tokens.to_string())
+        .env("SIPP_TEMPERATURE", format_temperature(args.temperature));
     client_cmd = apply_toolchains(sh, ctx, client_cmd, Some(&Backend::Cpu))?;
     output::run_long_command(
         format!("Running Python gateway example: {script}"),
@@ -642,7 +642,7 @@ fn run_production_gateway_server(
     }
 
     let _dir = sh.push_dir(ctx.workspace_root());
-    let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway-server -- serve");
+    let mut gateway_cmd = cmd!(sh, "cargo run -p sipp-gateway-server -- serve");
     if *backend != Backend::Cpu {
         gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
     }
@@ -662,7 +662,7 @@ fn run_local_gateway_server(
 ) -> Result<()> {
     validate_gateway_example_backend(backend)?;
     let _dir = sh.push_dir(ctx.workspace_root());
-    let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway-example");
+    let mut gateway_cmd = cmd!(sh, "cargo run -p sipp-gateway-example");
     if *backend != Backend::Cpu {
         gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
     }
@@ -773,7 +773,7 @@ impl ManagedGatewayProcess {
         output::path("Gateway log", &log_path);
 
         let _dir = sh.push_dir(ctx.workspace_root());
-        let mut gateway_cmd = cmd!(sh, "cargo run -p cogentlm-gateway-example");
+        let mut gateway_cmd = cmd!(sh, "cargo run -p sipp-gateway-example");
         if *backend != Backend::Cpu {
             gateway_cmd = gateway_cmd.arg("--features").arg(backend.as_str());
         }

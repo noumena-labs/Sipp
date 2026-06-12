@@ -4,7 +4,7 @@ Local inference runs a GGUF model inside the current browser, Node.js, Python,
 Rust, or CLI process. The application owns model selection, runtime lifecycle,
 resource cleanup, and the request options that should be exposed to users.
 
-Register a local endpoint with `CogentClient.add`, keep the returned endpoint
+Register a local endpoint with `SippClient.add`, keep the returned endpoint
 reference, and pass that reference to `query`, `chat`, or `embed`.
 
 ## Endpoint Flow
@@ -40,7 +40,7 @@ when running from a checkout.
 Keep option layers separate:
 
 - Browser client options such as `executionMode`, `wasmThreading`, runtime
-  asset URLs, and `browserCache` belong on `new CogentClient(...)`.
+  asset URLs, and `browserCache` belong on `new SippClient(...)`.
 - Local endpoint load options choose the model source, browser backend
   preference, progress callbacks, and `NativeRuntimeConfig`.
 - Runtime config groups such as `context`, `sampling`, `scheduler`, `cache`,

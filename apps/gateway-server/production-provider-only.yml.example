@@ -1,15 +1,15 @@
-name: cogentlm-gateway-provider-production
+name: sipp-gateway-provider-production
 
 services:
   gateway:
-    image: registry.example.com/cogentlm-gateway:provider-cpu
+    image: registry.example.com/sipp-gateway:provider-cpu
     env_file:
       - path: ./.env
         required: true
     volumes:
       - type: bind
         source: ./provider-only.toml
-        target: /etc/cogentlm/gateway.toml
+        target: /etc/sipp/gateway.toml
         read_only: true
     ports:
       - "8080:8080"
