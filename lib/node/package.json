@@ -16,7 +16,6 @@
     "index.d.ts",
     "gateway-profile.js",
     "LICENSE",
-    "native",
     "README.md",
     "router.d.ts",
     "router.js"

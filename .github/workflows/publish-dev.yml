@@ -1,4 +1,4 @@
-name: Publish cogentlm dev packages
+name: Publish sipp dev packages
 
 on:
   workflow_dispatch:
@@ -24,62 +24,119 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
-  group: publish-cogentlm-dev-${{ github.ref }}
+  group: publish-sipp-dev-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CUDA_VERSION: "13.3"
+  CUDA_PACKAGE_SUFFIX: "13-3"
+  CUDA_WINDOWS_INSTALLER_URL: https://developer.download.nvidia.com/compute/cuda/13.3.0/local_installers/cuda_13.3.0_windows.exe
+  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  SIPP_MAX_GLIBC: "2.35"
+  SIPP_MAX_WHEEL_MB: "100"
+
 jobs:
-  publish-dev:
-    name: Generate and publish development packages
-    runs-on: ubuntu-latest
-    env:
-      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+  prepare-dev:
+    name: Prepare dev version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      dist_tag: ${{ steps.dev.outputs.dist_tag }}
+      python_version: ${{ steps.dev.outputs.python_version }}
+      tag: ${{ steps.dev.outputs.tag }}
+      version: ${{ steps.dev.outputs.version }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
         with:
           submodules: false
 
-      - name: Check out private llama.cpp submodule
-        env:
-          LLAMA_CPP_INTERNAL_DEPLOY_KEY: ${{ secrets.LLAMA_CPP_INTERNAL_DEPLOY_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${LLAMA_CPP_INTERNAL_DEPLOY_KEY:-}" ]; then
-            echo "::error::Set LLAMA_CPP_INTERNAL_DEPLOY_KEY to a read-only deploy key for noumena-labs/llama.cpp."
-            exit 1
-          fi
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$LLAMA_CPP_INTERNAL_DEPLOY_KEY" > ~/.ssh/llama_cpp_internal
-          chmod 600 ~/.ssh/llama_cpp_internal
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule sync --recursive
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule update --init --recursive
-
       - name: Determine dev version
         id: dev
+        shell: bash
         run: |
           set -euo pipefail
-          NPM_VERSION="$(node <<'NODE'
-          const pkg = require('./lib/web/package.json');
-          const match = pkg.version.match(/^(\d+)\.(\d+)\.(\d+)/);
-          if (!match) throw new Error(`Unsupported version format: ${pkg.version}`);
-          console.log(`${match[1]}.${match[2]}.${Number(match[3]) + 1}-dev.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`);
+          IFS='|' read -r NPM_VERSION PYTHON_VERSION DEV_TAG < <(node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          function readJsonVersion(path) {
+            return JSON.parse(readFileSync(path, 'utf8')).version;
+          }
+
+          const cargo = readFileSync('Cargo.toml', 'utf8');
+          const cargoWorkspace = cargo.match(/^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m)?.[1];
+          const cargoSipp = cargo.match(/^sipp = \{ path = "crates\/sipp", version = "([^"]+)"/m)?.[1];
+          const cargoSys = cargo.match(/^sipp-sys = \{ path = "crates\/sys", version = "([^"]+)"/m)?.[1];
+          const cargoGateway = cargo.match(/^sipp-gateway = \{ path = "lib\/gateway", version = "([^"]+)"/m)?.[1];
+          const pyproject = readFileSync('lib/python/pyproject.toml', 'utf8');
+          const python = pyproject.match(/^version = "([^"]+)"/m)?.[1];
+          const versions = {
+            cargoGateway,
+            cargoSipp,
+            cargoSys,
+            cargoWorkspace,
+            node: readJsonVersion('lib/node/package.json'),
+            python,
+            web: readJsonVersion('lib/web/package.json'),
+          };
+          const missing = Object.entries(versions)
+            .filter(([, value]) => value == null)
+            .map(([name]) => name);
+          if (missing.length > 0) {
+            throw new Error(`Missing version field(s): ${missing.join(', ')}`);
+          }
+
+          const unique = [...new Set(Object.values(versions))];
+          if (unique.length !== 1) {
+            throw new Error(`Release versions are not aligned: ${JSON.stringify(versions)}`);
+          }
+
+          const match = unique[0].match(/^(\d+)\.(\d+)\.(\d+)$/);
+          if (!match) {
+            throw new Error(`Dev builds must start from a stable x.y.z version, got ${unique[0]}`);
+          }
+
+          const npmVersion = `${match[1]}.${match[2]}.${Number(match[3]) + 1}-dev.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`;
+          // PEP 440 dev segments cannot be dotted, so pack run number and attempt
+          // into one collision-free integer (attempts never reach 100).
+          const dev = Number(process.env.GITHUB_RUN_NUMBER) * 100 + Number(process.env.GITHUB_RUN_ATTEMPT);
+          const pythonVersion = `${match[1]}.${match[2]}.${Number(match[3]) + 1}.dev${dev}`;
+          const tag = `sipp-dev-v${npmVersion}`;
+          console.error(`Base version ${unique[0]} -> npm/cargo ${npmVersion}, python ${pythonVersion}, tag ${tag}`);
+          console.log(`${npmVersion}|${pythonVersion}|${tag}`);
           NODE
           )"
-          PYTHON_VERSION="$(node <<'NODE'
-          const pkg = require('./lib/web/package.json');
-          const match = pkg.version.match(/^(\d+)\.(\d+)\.(\d+)/);
-          if (!match) throw new Error(`Unsupported version format: ${pkg.version}`);
-          console.log(`${match[1]}.${match[2]}.${Number(match[3]) + 1}.dev${process.env.GITHUB_RUN_NUMBER}${process.env.GITHUB_RUN_ATTEMPT}`);
-          NODE
-          )"
+          level="error"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            level="warning"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$DEV_TAG" > /dev/null 2>&1; then
+            echo "::${level}::Dev tag $DEV_TAG already exists."
+            if [ "${{ inputs.dry_run }}" != "true" ]; then
+              exit 1
+            fi
+          fi
+          latest_dev_tag="$(git ls-remote --tags --refs origin 'sipp-dev-v*' | awk -F/ '{ print $NF }' | sort -V | tail -1 || true)"
+          echo "Latest remote Sipp dev tag: ${latest_dev_tag:-none}"
           echo "version=$NPM_VERSION" >> "$GITHUB_OUTPUT"
           echo "python_version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$DEV_TAG" >> "$GITHUB_OUTPUT"
           echo "dist_tag=dev" >> "$GITHUB_OUTPUT"
+
+  gate:
+    name: Dev publish gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    needs: prepare-dev
+    env:
+      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -102,143 +159,587 @@ jobs:
       - name: Set up CMake and Ninja
         uses: lukka/get-cmake@latest
 
-      - name: Set up Emscripten
-        uses: emscripten-core/setup-emsdk@v16
+      - name: Cache hermetic build toolchains
+        uses: actions/cache@v4
+        with:
+          path: .build/toolchain
+          key: sipp-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
 
       - name: Install JavaScript workspace dependencies
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun install --frozen-lockfile
 
       - name: Apply dev package versions
-        env:
-          DEV_VERSION: ${{ steps.dev.outputs.version }}
-          PYTHON_DEV_VERSION: ${{ steps.dev.outputs.python_version }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs';
-          const jsonFiles = ['lib/web/package.json', 'lib/node/package.json'];
-          for (const path of jsonFiles) {
-            const pkg = JSON.parse(readFileSync(path, 'utf8'));
-            pkg.version = process.env.DEV_VERSION;
-            writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
-          }
-          const pyprojectPath = 'lib/python/pyproject.toml';
-          const pyproject = readFileSync(pyprojectPath, 'utf8').replace(
-            /^version = ".*"$/m,
-            `version = "${process.env.PYTHON_DEV_VERSION}"`
-          );
-          writeFileSync(pyprojectPath, pyproject);
-          NODE
+        uses: ./.github/actions/apply-dev-versions
+        with:
+          npm-version: ${{ needs.prepare-dev.outputs.version }}
+          python-version: ${{ needs.prepare-dev.outputs.python_version }}
 
       - name: Run fast dev publish gate
         run: cargo xtask --plain test unit group full
 
+  web-npm:
+    name: Build web npm package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    needs:
+      - gate
+      - prepare-dev
+    if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@noumena-labs"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.3.11
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Cache hermetic build toolchains
+        uses: actions/cache@v4
+        with:
+          path: .build/toolchain
+          key: sipp-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+
+      - name: Install JavaScript workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Apply dev package versions
+        uses: ./.github/actions/apply-dev-versions
+        with:
+          npm-version: ${{ needs.prepare-dev.outputs.version }}
+          python-version: ${{ needs.prepare-dev.outputs.python_version }}
+
       - name: Configure GitHub Packages authentication
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' || inputs.package == 'node-npm' }}
+        shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+          if [ -z "${PACKAGE_TOKEN:-}" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::warning::PACKAGE_PUBLISH_TOKEN is not set; continuing because this is a dry run."
+              exit 0
+            fi
             echo "::error::Set PACKAGE_PUBLISH_TOKEN to a token with write:packages scope."
             exit 1
           fi
-          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
+          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$PACKAGE_TOKEN" > "$RUNNER_TEMP/npmrc"
           echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
 
       - name: Build staged web package
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         run: cargo xtask --plain build wasm
 
+      - name: Run web package import smoke
+        run: |
+          node --input-type=module <<'NODE'
+          const pkg = await import('./.build/artifacts/npm/sipp/dist/esm/index.js');
+          if (typeof pkg.SippClient !== 'function') {
+            throw new Error('SippClient export is missing from the staged package.');
+          }
+          NODE
+
       - name: Upload web npm artifact
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: cogentlm-web-npm-dev
-          path: .build/artifacts/npm/cogentlm
+          name: sipp-web-npm-dev
+          path: .build/artifacts/npm/sipp
 
       - name: Validate web GitHub Packages publish
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         env:
-          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
-        working-directory: .build/artifacts/npm/cogentlm
+          DIST_TAG: ${{ needs.prepare-dev.outputs.dist_tag }}
+        working-directory: .build/artifacts/npm/sipp
         run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$DIST_TAG"
 
       - name: Publish web package to GitHub Packages
-        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'web-npm') }}
+        if: ${{ inputs.dry_run == false }}
         env:
-          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
-        working-directory: .build/artifacts/npm/cogentlm
+          DIST_TAG: ${{ needs.prepare-dev.outputs.dist_tag }}
+        working-directory: .build/artifacts/npm/sipp
         run: npm publish --registry https://npm.pkg.github.com --tag "$DIST_TAG"
 
-      - name: Build Node server package
+  native:
+    name: Build native ${{ matrix.id }} packages
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    needs:
+      - gate
+      - prepare-dev
+    if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python' || inputs.package == 'rust' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            os: ubuntu-24.04
+            backends: cpu,vulkan,cuda
+            cuda: true
+          - id: windows-x64
+            os: windows-2022
+            backends: cpu,vulkan,cuda
+            cuda: true
+          - id: macos-x64
+            os: macos-15-intel
+            backends: cpu,metal
+            cuda: false
+          - id: macos-arm64
+            os: macos-14
+            backends: cpu,metal
+            cuda: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@noumena-labs"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.3.11
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Cache hermetic build toolchains
+        uses: actions/cache@v4
+        with:
+          path: .build/toolchain
+          key: sipp-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+
+      - name: Install Linux CUDA 13.3 compiler and development libraries
+        if: ${{ runner.os == 'Linux' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y "cuda-compiler-${CUDA_PACKAGE_SUFFIX}" "cuda-libraries-dev-${CUDA_PACKAGE_SUFFIX}"
+          {
+            echo "CUDA_HOME=/usr/local/cuda-${CUDA_VERSION}"
+            echo "CUDA_PATH=/usr/local/cuda-${CUDA_VERSION}"
+            echo "LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION}/lib64:/usr/local/cuda-${CUDA_VERSION}/lib64/stubs:${LIBRARY_PATH:-}"
+            echo "LD_LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION}/lib64:/usr/local/cuda-${CUDA_VERSION}/lib64/stubs:${LD_LIBRARY_PATH:-}"
+          } >> "$GITHUB_ENV"
+          echo "/usr/local/cuda-${CUDA_VERSION}/bin" >> "$GITHUB_PATH"
+          "/usr/local/cuda-${CUDA_VERSION}/bin/nvcc" --version
+
+      - name: Install Windows CUDA 13.3 compiler and development libraries
+        if: ${{ runner.os == 'Windows' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Join-Path $env:RUNNER_TEMP "cuda_13.3.0_windows.exe"
+          Invoke-WebRequest -Uri $env:CUDA_WINDOWS_INSTALLER_URL -OutFile $installer
+          $packages = @(
+            "crt_13.3",
+            "cublas_13.3",
+            "cublas_dev_13.3",
+            "cudart_13.3",
+            "nvcc_13.3",
+            "nvfatbin_13.3",
+            "nvjitlink_13.3",
+            "nvml_dev_13.3",
+            "nvptxcompiler_13.3",
+            "nvrtc_13.3",
+            "nvrtc_dev_13.3",
+            "nvtx_13.3",
+            "nvvm_13.3",
+            "thrust_13.3",
+            "visual_studio_integration_13.3"
+          )
+          $process = Start-Process -FilePath $installer -ArgumentList (@("-s") + $packages) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "CUDA installer failed with exit code $($process.ExitCode)"
+          }
+          $cudaPath = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v$env:CUDA_VERSION"
+          "CUDA_HOME=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CUDA_PATH=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$cudaPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & "$cudaPath\bin\nvcc.exe" --version
+
+      - name: Install JavaScript workspace dependencies
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        run: bun install --frozen-lockfile
+
+      - name: Apply dev package versions
+        uses: ./.github/actions/apply-dev-versions
+        with:
+          npm-version: ${{ needs.prepare-dev.outputs.version }}
+          python-version: ${{ needs.prepare-dev.outputs.python_version }}
+
+      - name: Print backend plan
+        shell: bash
+        run: |
+          echo "OS package set: ${{ matrix.id }}"
+          echo "Native backends: ${{ matrix.backends }}"
+
+      - name: Build Node native artifacts
         if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
         run: cargo xtask --plain build node --backend all
 
-      - name: Stage Node server package
+      - name: Require Node backend artifacts
         if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        working-directory: lib/node
-        run: bun run build:stage
+        shell: bash
+        env:
+          BACKENDS: ${{ matrix.backends }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          missing=0
+          IFS=',' read -ra backends <<< "$BACKENDS"
+          for backend in "${backends[@]}"; do
+            artifacts=(.build/artifacts/node/sipp_node_"$backend".*.node)
+            if [ "${#artifacts[@]}" -eq 0 ]; then
+              echo "::error::Native build completed without a $backend Node artifact. xtask treats non-CPU backends as best-effort, so the failure was only a warning there."
+              missing=1
+            else
+              printf 'Found %s Node artifact: %s\n' "$backend" "${artifacts[@]}"
+            fi
+          done
+          exit "$missing"
 
-      - name: Upload Node npm artifact
+      - name: Run Node binding smoke tests
+        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        run: cargo xtask --plain test unit suite node-package --backend cpu
+
+      - name: Upload Node native artifacts
         if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: cogentlm-server-npm-dev
-          path: .build/artifacts/npm/cogentlm-server
-
-      - name: Validate Node GitHub Packages publish
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        env:
-          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
-        working-directory: .build/artifacts/npm/cogentlm-server
-        run: npm publish --dry-run --registry https://npm.pkg.github.com --tag "$DIST_TAG"
-
-      - name: Publish Node package to GitHub Packages
-        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'node-npm') }}
-        env:
-          DIST_TAG: ${{ steps.dev.outputs.dist_tag }}
-        working-directory: .build/artifacts/npm/cogentlm-server
-        run: npm publish --registry https://npm.pkg.github.com --tag "$DIST_TAG"
+          name: sipp-node-native-dev-${{ matrix.id }}
+          path: .build/artifacts/node/sipp_node_*.node
 
       - name: Build Python wheel
         if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
         run: cargo xtask --plain build python --backend all
 
+      - name: Require staged wheel backends
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        shell: bash
+        env:
+          BACKENDS: ${{ matrix.backends }}
+        run: |
+          set -euo pipefail
+          uv_exe=".build/toolchain/uv/uv"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            uv_exe=".build/toolchain/uv/uv.exe"
+          fi
+          "$uv_exe" run python - <<'PY'
+          import glob
+          import os
+          import sys
+          import zipfile
+
+          backends = [backend.strip() for backend in os.environ["BACKENDS"].split(",") if backend.strip()]
+          wheels = glob.glob(".build/artifacts/python/*.whl")
+          if len(wheels) != 1:
+              raise SystemExit(f"expected exactly one wheel, found {len(wheels)}")
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              names = wheel.namelist()
+          missing = [
+              backend
+              for backend in backends
+              if not any(name.startswith(f"sipp/binaries/_native_{backend}") for name in names)
+          ]
+          if missing:
+              raise SystemExit(
+                  "Python wheel is missing staged backends: "
+                  + ", ".join(missing)
+                  + " (xtask treats non-CPU backends as best-effort, so the failure was only a warning there)"
+              )
+          print(f"Found all required backends in {wheels[0]}: {', '.join(backends)}", file=sys.stderr)
+          PY
+
       - name: Validate Python wheel metadata
         if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        run: .build/toolchain/uv/uv tool run twine check .build/artifacts/python/*.whl
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv_exe=".build/toolchain/uv/uv"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            uv_exe=".build/toolchain/uv/uv.exe"
+          fi
+          "$uv_exe" tool run twine check .build/artifacts/python/*.whl
+
+      - name: Report PyPI wheel size budget
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for wheel in .build/artifacts/python/*.whl; do
+            size_mb=$(( $(wc -c < "$wheel") / 1024 / 1024 ))
+            if [ "$size_mb" -ge "$SIPP_MAX_WHEEL_MB" ]; then
+              echo "::warning::$(basename "$wheel") is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. The release workflow will block on this; request a PyPI file-size increase, trim CUDA architectures, or move GPU backends out of the base wheel."
+            else
+              echo "$(basename "$wheel") is ${size_mb} MiB (limit ${SIPP_MAX_WHEEL_MB} MiB)"
+            fi
+          done
+
+      - name: Run wheel install and import smoke
+        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv_exe=".build/toolchain/uv/uv"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            uv_exe=".build/toolchain/uv/uv.exe"
+          fi
+          for wheel in .build/artifacts/python/*.whl; do
+            SIPP_PYTHON_BACKEND=cpu "$uv_exe" run --no-project --python 3.12 --with "$wheel" \
+              python -c "import sipp; backend = sipp.get_active_backend(); assert backend == 'cpu', backend; print(f'Imported sipp from wheel with backend={backend}')"
+          done
 
       - name: Upload Python wheel artifact
         if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: cogentlm-python-wheels-dev
+          name: sipp-python-wheels-dev-${{ matrix.id }}
           path: .build/artifacts/python/*.whl
 
-      - name: Package Rust facade source artifact
+      - name: Audit Linux native artifacts
+        if: ${{ runner.os == 'Linux' && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
+        uses: ./.github/actions/audit-linux-native-artifacts
+        with:
+          max-glibc: ${{ env.SIPP_MAX_GLIBC }}
+          enforce: "false"
+
+      - name: Build Rust core on host
         if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
+        run: cargo xtask --plain build core
+
+  node-npm:
+    name: Assemble Node npm packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs:
+      - native
+      - prepare-dev
+    if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@noumena-labs"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.3.11
+
+      - name: Install JavaScript workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Apply dev package versions
+        uses: ./.github/actions/apply-dev-versions
+        with:
+          npm-version: ${{ needs.prepare-dev.outputs.version }}
+          python-version: ${{ needs.prepare-dev.outputs.python_version }}
+
+      - name: Download Node native artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: sipp-node-native-dev-*
+          path: .build/artifacts/node
+          merge-multiple: true
+
+      - name: Stage Node server packages
+        working-directory: lib/node
+        run: bun run build:stage
+
+      - name: Install staged packages and require router
+        shell: bash
         run: |
+          set -euo pipefail
+          wrapper_dir=.build/artifacts/npm/sipp-server
+          platform_dir=.build/artifacts/npm/sipp-server-linux-x64-gnu
+          if [ ! -d "$platform_dir" ]; then
+            echo "::error::Staged linux-x64-gnu platform package is missing."
+            exit 1
+          fi
+          package_name="$(node -p "require('./$wrapper_dir/package.json').name")"
+          smoke_dir="$RUNNER_TEMP/sipp-npm-smoke"
+          rm -rf "$smoke_dir"
+          mkdir -p "$smoke_dir"
+          wrapper_tgz="$(npm pack "./$wrapper_dir" --pack-destination "$smoke_dir" --json | jq -r '.[0].filename')"
+          platform_tgz="$(npm pack "./$platform_dir" --pack-destination "$smoke_dir" --json | jq -r '.[0].filename')"
+          cd "$smoke_dir"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund --omit=optional "./$platform_tgz" "./$wrapper_tgz"
+          SMOKE_PACKAGE_NAME="$package_name" SIPP_NODE_BACKEND=cpu node -e '
+            const wrapper = require(process.env.SMOKE_PACKAGE_NAME);
+            const backend = wrapper.getActiveBackend();
+            if (backend !== "cpu") {
+              throw new Error(`expected cpu backend from staged packages, got ${backend}`);
+            }
+            console.log(`Loaded ${process.env.SMOKE_PACKAGE_NAME} from staged tarballs with backend=${backend}`);
+          '
+
+      - name: Configure GitHub Packages authentication
+        shell: bash
+        env:
+          PACKAGE_TOKEN: ${{ secrets.PACKAGE_PUBLISH_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PACKAGE_TOKEN:-}" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::warning::PACKAGE_PUBLISH_TOKEN is not set; continuing because this is a dry run."
+              exit 0
+            fi
+            echo "::error::Set PACKAGE_PUBLISH_TOKEN to a token with write:packages scope."
+            exit 1
+          fi
+          printf "@noumena-labs:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n" "$PACKAGE_TOKEN" > "$RUNNER_TEMP/npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
+
+      - name: Upload Node npm artifacts
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: sipp-server-npm-dev
+          path: |
+            .build/artifacts/npm/sipp-server
+            .build/artifacts/npm/sipp-server-*
+
+      - name: Validate Node GitHub Packages publish
+        shell: bash
+        env:
+          DIST_TAG: ${{ needs.prepare-dev.outputs.dist_tag }}
+        run: |
+          set -euo pipefail
+          for package_dir in .build/artifacts/npm/sipp-server-* .build/artifacts/npm/sipp-server; do
+            [ -d "$package_dir" ] || continue
+            npm publish "$package_dir" --dry-run --registry https://npm.pkg.github.com --tag "$DIST_TAG"
+          done
+
+      - name: Publish Node packages to GitHub Packages
+        if: ${{ inputs.dry_run == false }}
+        shell: bash
+        env:
+          DIST_TAG: ${{ needs.prepare-dev.outputs.dist_tag }}
+        run: |
+          set -euo pipefail
+          for package_dir in .build/artifacts/npm/sipp-server-* .build/artifacts/npm/sipp-server; do
+            [ -d "$package_dir" ] || continue
+            npm publish "$package_dir" --registry https://npm.pkg.github.com --tag "$DIST_TAG"
+          done
+
+  rust-source:
+    name: Package Rust source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs:
+      - native
+      - prepare-dev
+    if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          # Keep the submodule out so the tarball stays facade-only; vendored
+          # llama.cpp ships only after sign-off.
+          submodules: false
+
+      - name: Apply dev package versions
+        uses: ./.github/actions/apply-dev-versions
+        with:
+          npm-version: ${{ needs.prepare-dev.outputs.version }}
+          python-version: ${{ needs.prepare-dev.outputs.python_version }}
+
+      - name: Package Rust facade source artifact
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p .build/artifacts/rust
-          tar -czf .build/artifacts/rust/cogentlm-rust-source-dev-${{ github.run_number }}.${{ github.run_attempt }}.tar.gz \
+          tar -czf .build/artifacts/rust/sipp-rust-source-dev-${{ github.run_number }}.${{ github.run_attempt }}.tar.gz \
             Cargo.toml \
             Cargo.lock \
             README.md \
             LICENSE \
-            lib/rust \
-            crates/core \
-            crates/shard \
+            crates/sipp \
             crates/sys \
-            crates/engine \
-            crates/remote \
-            crates/gateway \
-            crates/gateway-providers \
-            crates/client
+            lib/gateway
 
       - name: Upload Rust crate artifact
-        if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: cogentlm-rust-source-dev
+          name: sipp-rust-source-dev
           path: .build/artifacts/rust/*.tar.gz
+
+  tag-dev:
+    name: Tag dev build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs:
+      - prepare-dev
+      - web-npm
+      - native
+      - node-npm
+      - rust-source
+    if: ${{ inputs.dry_run == false && inputs.package == 'all' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: false
+
+      - name: Tag dev version
+        shell: bash
+        env:
+          DEV_TAG: ${{ needs.prepare-dev.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$DEV_TAG" > /dev/null 2>&1; then
+            echo "::error::Dev tag $DEV_TAG already exists."
+            exit 1
+          fi
+          git tag "$DEV_TAG"
+          git push origin "$DEV_TAG"
+          echo "Tagged $GITHUB_SHA as $DEV_TAG" >> "$GITHUB_STEP_SUMMARY"

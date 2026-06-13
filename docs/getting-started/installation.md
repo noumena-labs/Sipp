@@ -26,9 +26,11 @@ added.
   asset.
 - Browser-local inference needs a modern browser with WebAssembly support;
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
-- Node and Python native packages select a backend from packaged native
-  artifacts. Use `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you
-  need to force `cpu`, `vulkan`, `cuda`, or `metal`.
+- Node installs use `sipp-server`; npm resolves the matching optional
+  platform binary package automatically. Python installs use `sipp`; pip
+  resolves the matching platform wheel automatically. Use `SIPP_NODE_BACKEND`
+  or `SIPP_PYTHON_BACKEND` when you need to force `cpu`, `vulkan`, `cuda`, or
+  `metal`.
 - Gateway clients need only the gateway base URL, public target name, and
   application-owned authentication value.
 
