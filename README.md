@@ -182,6 +182,16 @@ await client.close();
 
 Sipp includes native integration blueprints to handle Server-Sent Events (SSE) streaming, serverless route orchestration, and client hydration patterns out of the box.
 
+- [Next.js](docs/packages/frameworks/nextjs.md): App Router route handlers,
+  Client Components, gateway proxies, and streaming.
+- [TanStack](docs/packages/frameworks/tanstack.md): TanStack Start server
+  functions and TanStack Query patterns.
+- [React And Vite](docs/packages/frameworks/vite-react.md): Browser package
+  setup, WASM assets, OPFS model loading, and gateway examples.
+
+  
+## Documentation
+
 The full documentation lives in [docs](docs/README.md). From a source checkout, use the `sipp docs` CLI tool utility to build or serve the book resource:
 
 ```bash
