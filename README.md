@@ -3,9 +3,13 @@
   <img src="docs/assets/sipp_logo_no_text.svg" alt="Sipp Logo" width="200">
 </p>
 
-<p align="center" style="font-size: 50px;">
-  <strong>Sipp</strong>
-</p>
+<div id="user-content-toc" align="center">
+  <ul style="list-style: none;">
+    <summary>
+      <h1>Sipp</h1>
+    </summary>
+  </ul>
+</div>
 
 <p align="center">
   <strong>Serious AI infrastructure. Packaged simply.</strong>
