@@ -16,6 +16,7 @@ workflow live in the maintainer section.
 
 ## Start Here
 
+- [Roadmap](roadmap.md) outlines the engineering milestones, memory architectures, and long-term vision.
 - [Installation](getting-started/installation.md) lists the published package
   install commands.
 - [Quickstarts](getting-started/quickstarts.md) shows short Browser, Node.js,
