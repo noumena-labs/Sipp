@@ -107,7 +107,7 @@ jobs:
           console.error(`Base version ${unique[0]} -> npm/cargo ${npmVersion}, python ${pythonVersion}, tag ${tag}`);
           console.log(`${npmVersion}|${pythonVersion}|${tag}`);
           NODE
-          )"
+          )
           level="error"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             level="warning"
