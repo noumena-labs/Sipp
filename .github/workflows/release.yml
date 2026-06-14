@@ -81,56 +81,18 @@ jobs:
         with:
           submodules: false
 
-      - name: Check release version and tag
+      - name: Resolve aligned version
+        id: resolve
+        uses: ./.github/actions/resolve-version
+
+      - name: Check release tag
         id: versions
         shell: bash
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           set -euo pipefail
-          IFS='|' read -r VERSION RELEASE_TAG < <(node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-
-          function readJsonVersion(path) {
-            return JSON.parse(readFileSync(path, 'utf8')).version;
-          }
-
-          const cargo = readFileSync('Cargo.toml', 'utf8');
-          const cargoWorkspace = cargo.match(/^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m)?.[1];
-          const cargoSipp = cargo.match(/^sipp = \{ path = "crates\/sipp", version = "([^"]+)"/m)?.[1];
-          const cargoSys = cargo.match(/^sipp-sys = \{ path = "crates\/sys", version = "([^"]+)"/m)?.[1];
-          const cargoGateway = cargo.match(/^sipp-gateway = \{ path = "lib\/gateway", version = "([^"]+)"/m)?.[1];
-          const pyproject = readFileSync('lib/python/pyproject.toml', 'utf8');
-          const python = pyproject.match(/^version = "([^"]+)"/m)?.[1];
-          const versions = {
-            cargoGateway,
-            cargoSipp,
-            cargoSys,
-            cargoWorkspace,
-            node: readJsonVersion('lib/node/package.json'),
-            python,
-            web: readJsonVersion('lib/web/package.json'),
-          };
-          const missing = Object.entries(versions)
-            .filter(([, value]) => value == null)
-            .map(([name]) => name);
-          if (missing.length > 0) {
-            throw new Error(`Missing version field(s): ${missing.join(', ')}`);
-          }
-
-          const unique = [...new Set(Object.values(versions))];
-          if (unique.length !== 1) {
-            throw new Error(`Release versions are not aligned: ${JSON.stringify(versions)}`);
-          }
-
-          const version = unique[0];
-          if (!/^\d+\.\d+\.\d+$/.test(version)) {
-            throw new Error(`Release version must be stable x.y.z, got ${version}`);
-          }
-
-          const tag = `sipp-v${version}`;
-          console.error(`Release version ${version}, tag ${tag}`);
-          console.log(`${version}|${tag}`);
-          NODE
-          )"
+          RELEASE_TAG="sipp-v$VERSION"
           level="error"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             level="warning"
@@ -232,13 +194,45 @@ jobs:
           bun-version: 1.3.11
 
       - name: Set up CMake and Ninja
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Set up compiler cache
+        if: ${{ runner.os != 'Windows' }}
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: release-gate
+          max-size: 3G
+
+      - name: Cache Cargo and native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-release-gate-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-release-gate-${{ runner.os }}-
 
       - name: Cache hermetic build toolchains
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.5
         with:
-          path: .build/toolchain
-          key: sipp-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          path: |
+            .build/toolchain
+            .build/uv-cache
+          key: sipp-toolchain-release-gate-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          restore-keys: |
+            sipp-toolchain-release-gate-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache sample models
+        uses: actions/cache@v5.0.5
+        with:
+          path: .build/models
+          key: sample-models-release-gate-${{ runner.os }}-${{ hashFiles('xtask/src/sample_model.rs') }}
+          restore-keys: |
+            sample-models-release-gate-${{ runner.os }}-
 
       - name: Install JavaScript workspace dependencies
         run: bun install --frozen-lockfile
@@ -280,13 +274,37 @@ jobs:
           bun-version: 1.3.11
 
       - name: Set up CMake and Ninja
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Set up compiler cache
+        if: ${{ runner.os != 'Windows' }}
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: release-web
+          max-size: 3G
+
+      - name: Cache Cargo and native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-release-web-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-release-web-${{ runner.os }}-
 
       - name: Cache hermetic build toolchains
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.5
         with:
-          path: .build/toolchain
-          key: sipp-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          path: |
+            .build/toolchain
+            .build/uv-cache
+          key: sipp-toolchain-release-web-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          restore-keys: |
+            sipp-toolchain-release-web-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install JavaScript workspace dependencies
         run: bun install --frozen-lockfile
@@ -327,266 +345,18 @@ jobs:
         working-directory: .build/artifacts/npm/sipp
         run: npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
 
-      - name: Publish web package to npm
-        if: ${{ inputs.dry_run == false }}
-        env:
-          NPM_TAG: ${{ inputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: .build/artifacts/npm/sipp
-        run: npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
-
   native:
-    name: Build native ${{ matrix.id }} packages
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 300
+    name: Build native packages
     needs: gate
     if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python' || inputs.package == 'rust' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - id: linux-x64
-            os: ubuntu-24.04
-            backends: cpu,vulkan,cuda
-            cuda: true
-          - id: windows-x64
-            os: windows-2022
-            backends: cpu,vulkan,cuda
-            cuda: true
-          - id: macos-x64
-            os: macos-15-intel
-            backends: cpu,metal
-            cuda: false
-          - id: macos-arm64
-            os: macos-14
-            backends: cpu,metal
-            cuda: false
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6.0.2
-        with:
-          submodules: recursive
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rust-src
-
-      - name: Set up Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2.2.0
-        with:
-          bun-version: 1.3.11
-
-      - name: Set up CMake and Ninja
-        uses: lukka/get-cmake@latest
-
-      - name: Cache hermetic build toolchains
-        uses: actions/cache@v4
-        with:
-          path: .build/toolchain
-          key: sipp-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
-
-      - name: Install Linux CUDA 13.3 compiler and development libraries
-        if: ${{ runner.os == 'Linux' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          sudo apt-get install -y "cuda-compiler-${CUDA_PACKAGE_SUFFIX}" "cuda-libraries-dev-${CUDA_PACKAGE_SUFFIX}"
-          {
-            echo "CUDA_HOME=/usr/local/cuda-${CUDA_VERSION}"
-            echo "CUDA_PATH=/usr/local/cuda-${CUDA_VERSION}"
-            echo "LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION}/lib64:/usr/local/cuda-${CUDA_VERSION}/lib64/stubs:${LIBRARY_PATH:-}"
-            echo "LD_LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION}/lib64:/usr/local/cuda-${CUDA_VERSION}/lib64/stubs:${LD_LIBRARY_PATH:-}"
-          } >> "$GITHUB_ENV"
-          echo "/usr/local/cuda-${CUDA_VERSION}/bin" >> "$GITHUB_PATH"
-          "/usr/local/cuda-${CUDA_VERSION}/bin/nvcc" --version
-
-      - name: Install Windows CUDA 13.3 compiler and development libraries
-        if: ${{ runner.os == 'Windows' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $installer = Join-Path $env:RUNNER_TEMP "cuda_13.3.0_windows.exe"
-          Invoke-WebRequest -Uri $env:CUDA_WINDOWS_INSTALLER_URL -OutFile $installer
-          $packages = @(
-            "crt_13.3",
-            "cublas_13.3",
-            "cublas_dev_13.3",
-            "cudart_13.3",
-            "nvcc_13.3",
-            "nvfatbin_13.3",
-            "nvjitlink_13.3",
-            "nvml_dev_13.3",
-            "nvptxcompiler_13.3",
-            "nvrtc_13.3",
-            "nvrtc_dev_13.3",
-            "nvtx_13.3",
-            "nvvm_13.3",
-            "thrust_13.3",
-            "visual_studio_integration_13.3"
-          )
-          $process = Start-Process -FilePath $installer -ArgumentList (@("-s") + $packages) -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            throw "CUDA installer failed with exit code $($process.ExitCode)"
-          }
-          $cudaPath = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v$env:CUDA_VERSION"
-          "CUDA_HOME=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CUDA_PATH=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "$cudaPath\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          & "$cudaPath\bin\nvcc.exe" --version
-
-      - name: Install JavaScript workspace dependencies
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        run: bun install --frozen-lockfile
-
-      - name: Print backend plan
-        shell: bash
-        run: |
-          echo "OS package set: ${{ matrix.id }}"
-          echo "Native backends: ${{ matrix.backends }}"
-
-      - name: Build Node native artifacts
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        run: cargo xtask --plain build node --backend all
-
-      - name: Require Node backend artifacts
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        shell: bash
-        env:
-          BACKENDS: ${{ matrix.backends }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          missing=0
-          IFS=',' read -ra backends <<< "$BACKENDS"
-          for backend in "${backends[@]}"; do
-            artifacts=(.build/artifacts/node/sipp_node_"$backend".*.node)
-            if [ "${#artifacts[@]}" -eq 0 ]; then
-              echo "::error::Native build completed without a $backend Node artifact. xtask treats non-CPU backends as best-effort, so the failure was only a warning there."
-              missing=1
-            else
-              printf 'Found %s Node artifact: %s\n' "$backend" "${artifacts[@]}"
-            fi
-          done
-          exit "$missing"
-
-      - name: Run Node binding smoke tests
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        run: cargo xtask --plain test unit suite node-package --backend cpu
-
-      - name: Upload Node native artifacts
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        uses: actions/upload-artifact@v6.0.0
-        with:
-          name: sipp-node-native-${{ matrix.id }}
-          path: .build/artifacts/node/sipp_node_*.node
-
-      - name: Build Python wheel
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        run: cargo xtask --plain build python --backend all
-
-      - name: Require staged wheel backends
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        shell: bash
-        env:
-          BACKENDS: ${{ matrix.backends }}
-        run: |
-          set -euo pipefail
-          uv_exe=".build/toolchain/uv/uv"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            uv_exe=".build/toolchain/uv/uv.exe"
-          fi
-          "$uv_exe" run python - <<'PY'
-          import glob
-          import os
-          import sys
-          import zipfile
-
-          backends = [backend.strip() for backend in os.environ["BACKENDS"].split(",") if backend.strip()]
-          wheels = glob.glob(".build/artifacts/python/*.whl")
-          if len(wheels) != 1:
-              raise SystemExit(f"expected exactly one wheel, found {len(wheels)}")
-          with zipfile.ZipFile(wheels[0]) as wheel:
-              names = wheel.namelist()
-          missing = [
-              backend
-              for backend in backends
-              if not any(name.startswith(f"sipp/binaries/_native_{backend}") for name in names)
-          ]
-          if missing:
-              raise SystemExit(
-                  "Python wheel is missing staged backends: "
-                  + ", ".join(missing)
-                  + " (xtask treats non-CPU backends as best-effort, so the failure was only a warning there)"
-              )
-          print(f"Found all required backends in {wheels[0]}: {', '.join(backends)}", file=sys.stderr)
-          PY
-
-      - name: Validate Python wheel metadata
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          uv_exe=".build/toolchain/uv/uv"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            uv_exe=".build/toolchain/uv/uv.exe"
-          fi
-          "$uv_exe" tool run twine check .build/artifacts/python/*.whl
-
-      - name: Enforce PyPI wheel size limit
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for wheel in .build/artifacts/python/*.whl; do
-            size_mb=$(( $(wc -c < "$wheel") / 1024 / 1024 ))
-            if [ "$size_mb" -ge "$SIPP_MAX_WHEEL_MB" ]; then
-              echo "::error::$(basename "$wheel") is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. Request a PyPI file-size increase, trim CUDA architectures, or move GPU backends out of the base wheel before releasing."
-              exit 1
-            fi
-            echo "$(basename "$wheel") is ${size_mb} MiB (limit ${SIPP_MAX_WHEEL_MB} MiB)"
-          done
-
-      - name: Run wheel install and import smoke
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          uv_exe=".build/toolchain/uv/uv"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            uv_exe=".build/toolchain/uv/uv.exe"
-          fi
-          for wheel in .build/artifacts/python/*.whl; do
-            SIPP_PYTHON_BACKEND=cpu "$uv_exe" run --no-project --python 3.12 --with "$wheel" \
-              python -c "import sipp; backend = sipp.get_active_backend(); assert backend == 'cpu', backend; print(f'Imported sipp from wheel with backend={backend}')"
-          done
-
-      - name: Upload Python wheel artifact
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        uses: actions/upload-artifact@v6.0.0
-        with:
-          name: sipp-python-wheels-${{ matrix.id }}
-          path: .build/artifacts/python/*.whl
-
-      - name: Audit Linux native artifacts
-        if: ${{ runner.os == 'Linux' && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
-        uses: ./.github/actions/audit-linux-native-artifacts
-        with:
-          max-glibc: ${{ env.SIPP_MAX_GLIBC }}
-          enforce: "true"
-
-      - name: Build Rust core on host
-        if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
-        run: cargo xtask --plain build core
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/build-native.yml
+    with:
+      package: ${{ inputs.package }}
+      node-registry: https://registry.npmjs.org
+      enforce: true
 
   node-npm:
     name: Assemble Node npm packages
@@ -677,28 +447,12 @@ jobs:
             npm publish "$package_dir" --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
           done
 
-      - name: Publish Node packages to npm
-        if: ${{ inputs.dry_run == false }}
-        shell: bash
-        env:
-          NPM_TAG: ${{ inputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          for package_dir in .build/artifacts/npm/sipp-server-* .build/artifacts/npm/sipp-server; do
-            [ -d "$package_dir" ] || continue
-            npm publish "$package_dir" --registry https://registry.npmjs.org --tag "$NPM_TAG"
-          done
-
   python:
-    name: Publish Python wheels
+    name: Combine Python wheels
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: native
     if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - name: Download Python wheel artifacts
         uses: actions/download-artifact@v8
@@ -712,12 +466,6 @@ jobs:
         with:
           name: sipp-python-wheels
           path: .build/artifacts/python/*.whl
-
-      - name: Publish Python package to PyPI
-        if: ${{ inputs.dry_run == false }}
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: .build/artifacts/python
 
   rust-source:
     name: Package Rust source
@@ -753,8 +501,10 @@ jobs:
           name: sipp-rust-source
           path: .build/artifacts/rust/*.tar.gz
 
+  # Tag and cut the GitHub Release *before* anything is pushed to a public
+  # registry, so a published package always has a corresponding tag/Release.
   tag-release:
-    name: Tag release
+    name: Tag release and cut GitHub Release
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs:
@@ -772,6 +522,18 @@ jobs:
         with:
           submodules: false
 
+      - name: Download Python wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-python-wheels
+          path: .build/release-assets
+
+      - name: Download Rust source tarball
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-rust-source
+          path: .build/release-assets
+
       - name: Tag published version
         shell: bash
         env:
@@ -785,3 +547,97 @@ jobs:
           git tag "$RELEASE_TAG"
           git push origin "$RELEASE_TAG"
           echo "Tagged $GITHUB_SHA as $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          name: ${{ needs.preflight.outputs.tag }}
+          generate_release_notes: true
+          files: .build/release-assets/**
+
+  publish-web:
+    name: Publish web package to npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs:
+      - web-npm
+      - tag-release
+    # always() tolerates tag-release being skipped on partial-package publishes
+    # (e.g. package == web-npm), which deliberately do not cut a tag.
+    if: ${{ always() && inputs.dry_run == false && needs.web-npm.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download web npm artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-web-npm
+          path: .build/artifacts/npm/sipp
+
+      - name: Publish web package to npm
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: .build/artifacts/npm/sipp
+        run: npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
+
+  publish-node:
+    name: Publish Node packages to npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs:
+      - node-npm
+      - tag-release
+    if: ${{ always() && inputs.dry_run == false && needs.node-npm.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download Node npm artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-server-npm
+          path: .build/artifacts/npm
+
+      - name: Publish Node packages to npm
+        shell: bash
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for package_dir in .build/artifacts/npm/sipp-server-* .build/artifacts/npm/sipp-server; do
+            [ -d "$package_dir" ] || continue
+            npm publish "$package_dir" --registry https://registry.npmjs.org --tag "$NPM_TAG"
+          done
+
+  publish-python:
+    name: Publish Python package to PyPI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs:
+      - python
+      - tag-release
+    if: ${{ always() && inputs.dry_run == false && needs.python.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download combined Python wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-python-wheels
+          path: .build/artifacts/python
+
+      - name: Publish Python package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: .build/artifacts/python

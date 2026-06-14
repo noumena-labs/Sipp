@@ -1,0 +1,81 @@
+name: Audit Linux native artifacts
+description: >-
+  Checks the maximum glibc symbol version required by built Linux artifacts
+  against a distribution baseline and reports dynamic CUDA library
+  dependencies that end-user machines would have to provide.
+inputs:
+  max-glibc:
+    description: Highest acceptable glibc symbol version (for example 2.35)
+    required: true
+  enforce:
+    description: Fail when the glibc baseline is exceeded (true) or warn only (false)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Audit glibc floor and CUDA linkage
+      shell: bash
+      env:
+        MAX_GLIBC: ${{ inputs.max-glibc }}
+        ENFORCE: ${{ inputs.enforce }}
+      run: |
+        set -euo pipefail
+
+        audit_files=()
+        for artifact in .build/artifacts/node/sipp_node_*.node; do
+          [ -f "$artifact" ] && audit_files+=("$artifact")
+        done
+
+        wheel_dir="$RUNNER_TEMP/sipp-wheel-audit"
+        for wheel in .build/artifacts/python/*.whl; do
+          [ -f "$wheel" ] || continue
+          rm -rf "$wheel_dir"
+          mkdir -p "$wheel_dir"
+          python3 -m zipfile -e "$wheel" "$wheel_dir"
+          while IFS= read -r lib; do
+            audit_files+=("$lib")
+          done < <(find "$wheel_dir" -name '*.so' -o -name '*.so.*')
+        done
+
+        if [ "${#audit_files[@]}" -eq 0 ]; then
+          echo "No Linux native artifacts found to audit."
+          exit 0
+        fi
+
+        level="error"
+        if [ "$ENFORCE" != "true" ]; then
+          level="warning"
+        fi
+
+        {
+          echo "### Linux native artifact audit"
+          echo ""
+          echo "| Artifact | Max required glibc | Dynamic CUDA libraries |"
+          echo "| --- | --- | --- |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        exceeded=0
+        for file in "${audit_files[@]}"; do
+          name="$(basename "$file")"
+          max_required="$(objdump -T "$file" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1 || true)"
+          max_required="${max_required:-none}"
+          cuda_needed="$(objdump -p "$file" 2>/dev/null | awk '/NEEDED/ { print $2 }' | grep -Ei 'cuda|cublas|nvrtc|nvjitlink' | paste -sd ' ' - || true)"
+          cuda_needed="${cuda_needed:-none}"
+          echo "| $name | $max_required | $cuda_needed |" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$max_required" != "none" ]; then
+            newest="$(printf '%s\n%s\n' "$max_required" "$MAX_GLIBC" | sort -V | tail -1)"
+            if [ "$newest" != "$MAX_GLIBC" ]; then
+              echo "::${level}::$name requires glibc $max_required, above the $MAX_GLIBC baseline. Distros such as Ubuntu 22.04, Debian 12, and RHEL 9 cannot load it; build inside a manylinux-style image, or raise SIPP_MAX_GLIBC to accept the narrower support window."
+              exceeded=1
+            fi
+          fi
+
+          if [ "$cuda_needed" != "none" ]; then
+            echo "::warning::$name dynamically links $cuda_needed. Machines without a local CUDA toolkit cannot load this backend (the loaders fall back silently); bundle the redistributable libraries or link them statically."
+          fi
+        done
+
+        if [ "$exceeded" -eq 1 ] && [ "$ENFORCE" = "true" ]; then
+          exit 1
+        fi
