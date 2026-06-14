@@ -180,7 +180,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-emscripten
-          components: rust-src
+          components: rust-src, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Set up Node
         uses: actions/setup-node@v6.4.0
@@ -260,7 +265,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-emscripten
-          components: rust-src
+          components: rust-src, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
       - name: Set up Node
         uses: actions/setup-node@v6.4.0
