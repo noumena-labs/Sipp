@@ -187,6 +187,17 @@ jobs:
       - name: Run fast dev publish gate
         run: cargo xtask --plain test unit group full
 
+      - name: Upload test logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: dev-gate-test-logs
+          path: |
+            .build/logs
+            .build/test/run-report.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   web-npm:
     name: Build web npm package
     runs-on: ubuntu-24.04

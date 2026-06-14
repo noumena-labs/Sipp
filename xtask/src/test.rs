@@ -884,7 +884,12 @@ fn run_rust_coverage_targets(
                 RustTestKind::Package => {}
             }
         }
-        let lcov_cmd = apply_toolchains(sh, ctx, lcov_cmd, None)?;
+        // `-C instrument-coverage` inflates stack frames, so libtest's default
+        // 2 MiB per-test-thread stack overflows some async tests under coverage
+        // on Linux (the binary SIGSEGVs mid-run while every test still passes).
+        // Give the test threads headroom; this is a ceiling, not an allocation.
+        let lcov_cmd =
+            apply_toolchains(sh, ctx, lcov_cmd, None)?.env("RUST_MIN_STACK", "33554432");
         output::run_test_command(
             format!("Running {} Rust coverage tests", target.label()),
             lcov_cmd,
