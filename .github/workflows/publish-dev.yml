@@ -56,58 +56,58 @@ jobs:
       - name: Determine dev version
         id: dev
         shell: bash
+        env:
+          DEV_VERSION_SCRIPT: |
+            import { readFileSync } from 'node:fs';
+
+            function readJsonVersion(path) {
+              return JSON.parse(readFileSync(path, 'utf8')).version;
+            }
+
+            const cargo = readFileSync('Cargo.toml', 'utf8');
+            const cargoWorkspace = cargo.match(/^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m)?.[1];
+            const cargoSipp = cargo.match(/^sipp = \{ path = "crates\/sipp", version = "([^"]+)"/m)?.[1];
+            const cargoSys = cargo.match(/^sipp-sys = \{ path = "crates\/sys", version = "([^"]+)"/m)?.[1];
+            const cargoGateway = cargo.match(/^sipp-gateway = \{ path = "lib\/gateway", version = "([^"]+)"/m)?.[1];
+            const pyproject = readFileSync('lib/python/pyproject.toml', 'utf8');
+            const python = pyproject.match(/^version = "([^"]+)"/m)?.[1];
+            const versions = {
+              cargoGateway,
+              cargoSipp,
+              cargoSys,
+              cargoWorkspace,
+              node: readJsonVersion('lib/node/package.json'),
+              python,
+              web: readJsonVersion('lib/web/package.json'),
+            };
+            const missing = Object.entries(versions)
+              .filter(([, value]) => value == null)
+              .map(([name]) => name);
+            if (missing.length > 0) {
+              throw new Error(`Missing version field(s): ${missing.join(', ')}`);
+
+            const unique = [...new Set(Object.values(versions))];
+            if (unique.length !== 1) {
+              throw new Error(`Release versions are not aligned: ${JSON.stringify(versions)}`);
+            }
+
+            const match = unique[0].match(/^(\d+)\.(\d+)\.(\d+)$/);
+            if (!match) {
+              throw new Error(`Dev builds must start from a stable x.y.z version, got ${unique[0]}`);
+            }
+
+            const npmVersion = `${match[1]}.${match[2]}.${Number(match[3]) + 1}-dev.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`;
+            // PEP 440 dev segments cannot be dotted, so pack run number and attempt
+            // into one collision-free integer (attempts never reach 100).
+            const dev = Number(process.env.GITHUB_RUN_NUMBER) * 100 + Number(process.env.GITHUB_RUN_ATTEMPT);
+            const pythonVersion = `${match[1]}.${match[2]}.${Number(match[3]) + 1}.dev${dev}`;
+            const tag = `sipp-dev-v${npmVersion}`;
+            console.error(`Base version ${unique[0]} -> npm/cargo ${npmVersion}, python ${pythonVersion}, tag ${tag}`);
+            console.log(`${npmVersion}|${pythonVersion}|${tag}`);
         run: |
           set -euo pipefail
-          IFS='|' read -r NPM_VERSION PYTHON_VERSION DEV_TAG < <(node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-
-          function readJsonVersion(path) {
-            return JSON.parse(readFileSync(path, 'utf8')).version;
-          }
-
-          const cargo = readFileSync('Cargo.toml', 'utf8');
-          const cargoWorkspace = cargo.match(/^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m)?.[1];
-          const cargoSipp = cargo.match(/^sipp = \{ path = "crates\/sipp", version = "([^"]+)"/m)?.[1];
-          const cargoSys = cargo.match(/^sipp-sys = \{ path = "crates\/sys", version = "([^"]+)"/m)?.[1];
-          const cargoGateway = cargo.match(/^sipp-gateway = \{ path = "lib\/gateway", version = "([^"]+)"/m)?.[1];
-          const pyproject = readFileSync('lib/python/pyproject.toml', 'utf8');
-          const python = pyproject.match(/^version = "([^"]+)"/m)?.[1];
-          const versions = {
-            cargoGateway,
-            cargoSipp,
-            cargoSys,
-            cargoWorkspace,
-            node: readJsonVersion('lib/node/package.json'),
-            python,
-            web: readJsonVersion('lib/web/package.json'),
-          };
-          const missing = Object.entries(versions)
-            .filter(([, value]) => value == null)
-            .map(([name]) => name);
-          if (missing.length > 0) {
-            throw new Error(`Missing version field(s): ${missing.join(', ')}`);
-          }
-
-          const unique = [...new Set(Object.values(versions))];
-          if (unique.length !== 1) {
-            throw new Error(`Release versions are not aligned: ${JSON.stringify(versions)}`);
-          }
-
-          const match = unique[0].match(/^(\d+)\.(\d+)\.(\d+)$/);
-          if (!match) {
-            throw new Error(`Dev builds must start from a stable x.y.z version, got ${unique[0]}`);
-          }
-
-          const npmVersion = `${match[1]}.${match[2]}.${Number(match[3]) + 1}-dev.${process.env.GITHUB_RUN_NUMBER}.${process.env.GITHUB_RUN_ATTEMPT}`;
-          // PEP 440 dev segments cannot be dotted, so pack run number and attempt
-          // into one collision-free integer (attempts never reach 100).
-          const dev = Number(process.env.GITHUB_RUN_NUMBER) * 100 + Number(process.env.GITHUB_RUN_ATTEMPT);
-          const pythonVersion = `${match[1]}.${match[2]}.${Number(match[3]) + 1}.dev${dev}`;
-          const tag = `sipp-dev-v${npmVersion}`;
-          console.error(`Base version ${unique[0]} -> npm/cargo ${npmVersion}, python ${pythonVersion}, tag ${tag}`);
-          console.log(`${npmVersion}|${pythonVersion}|${tag}`);
-          NODE
-          )
+          dev_versions="$(node --input-type=module --eval "$DEV_VERSION_SCRIPT")"
+          IFS='|' read -r NPM_VERSION PYTHON_VERSION DEV_TAG <<< "$dev_versions"
           level="error"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             level="warning"
