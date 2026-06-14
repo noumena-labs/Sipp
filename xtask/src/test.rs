@@ -63,9 +63,9 @@ const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
 ];
 const XTASK_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::package("xtask")];
 const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[
-    RustTestTarget::package("sipp-napi"),
-    RustTestTarget::package("sipp-py"),
-    RustTestTarget::package("sipp-wasm"),
+    RustTestTarget::lib("sipp-napi"),
+    RustTestTarget::lib("sipp-py"),
+    RustTestTarget::lib("sipp-wasm"),
 ];
 const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] =
     &[RustTestTarget::test("sipp", "public_api")];
