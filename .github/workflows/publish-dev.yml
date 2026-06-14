@@ -85,6 +85,7 @@ jobs:
               .map(([name]) => name);
             if (missing.length > 0) {
               throw new Error(`Missing version field(s): ${missing.join(', ')}`);
+            }
 
             const unique = [...new Set(Object.values(versions))];
             if (unique.length !== 1) {
