@@ -10,14 +10,23 @@ pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
         .define("CMAKE_INSTALL_LIBDIR", "lib")
         .define("BUILD_SHARED_LIBS", cmake_bool(context.features.backend_dl))
         .define("GGML_BACKEND_DL", cmake_bool(context.features.backend_dl))
+        // ggml defaults GGML_NATIVE=ON, which bakes in `-march=native` (the
+        // build host's full ISA, including AVX-512). Binaries built that way
+        // SIGILL when run on a narrower CPU — across heterogeneous CI runners,
+        // and on end-user machines for distributed core/CLI/gateway artifacts.
+        // Force it OFF so ggml targets a portable baseline: on x86 that is
+        // SSE4.2/AVX/AVX2/BMI2/FMA/F16C (no AVX-512); other arches fall back to
+        // their mandatory baseline. The DL build layers runtime variant
+        // dispatch on top (below).
+        .define("GGML_NATIVE", "OFF")
         .define("LLAMA_BUILD_EXAMPLES", "OFF")
         .define("LLAMA_BUILD_SERVER", "OFF")
         .define("LLAMA_BUILD_TESTS", "OFF");
 
     if context.features.backend_dl {
-        config
-            .define("GGML_NATIVE", "OFF")
-            .define("GGML_CPU_ALL_VARIANTS", "ON");
+        // GGML_CPU_ALL_VARIANTS requires GGML_BACKEND_DL: it builds every CPU
+        // variant and selects one at load time.
+        config.define("GGML_CPU_ALL_VARIANTS", "ON");
     }
 
     config.out_dir(
