@@ -166,7 +166,7 @@ jobs:
           restore-keys: |
             sipp-toolchain-build-native-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Install Linux CUDA 13.3 compiler and development libraries
+      - name: Install Linux CUDA 13.3 and Vulkan development libraries
         if: ${{ runner.os == 'Linux' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
         shell: bash
         run: |
@@ -174,7 +174,7 @@ jobs:
           curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
-          sudo apt-get install -y "cuda-compiler-${CUDA_PACKAGE_SUFFIX}" "cuda-libraries-dev-${CUDA_PACKAGE_SUFFIX}"
+          sudo apt-get install -y "cuda-compiler-${CUDA_PACKAGE_SUFFIX}" "cuda-libraries-dev-${CUDA_PACKAGE_SUFFIX}" libvulkan-dev
           {
             echo "CUDA_HOME=/usr/local/cuda-${CUDA_VERSION}"
             echo "CUDA_PATH=/usr/local/cuda-${CUDA_VERSION}"

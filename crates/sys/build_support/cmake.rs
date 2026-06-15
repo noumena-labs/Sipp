@@ -2,6 +2,18 @@ use crate::build_support::{context::BuildContext, targets};
 use cmake::Config;
 use std::path::{Path, PathBuf};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+#[path = "../src/tests/build_support/cmake_tests.rs"]
+mod cmake_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
     let mut config = Config::new(&context.manifest_dir);
     config
@@ -75,6 +87,9 @@ fn vulkan_loader_library(vulkan_sdk: &Path) -> Option<PathBuf> {
         vulkan_sdk.join("lib/libvulkan.so.1"),
         vulkan_sdk.join("lib/libvulkan.dylib"),
         vulkan_sdk.join("Lib/vulkan-1.lib"),
+        PathBuf::from("/usr/lib/x86_64-linux-gnu/libvulkan.so"),
+        PathBuf::from("/usr/lib64/libvulkan.so"),
+        PathBuf::from("/usr/lib/libvulkan.so"),
     ]
     .into_iter()
     .find(|path| path.exists())
