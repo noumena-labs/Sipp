@@ -330,7 +330,7 @@ jobs:
       artifact-suffix: "-dev"
       enforce: false
       cuda-architectures: "86-real"
-      release-lto: thin
+      release-lto: "false"
       release-codegen-units: "16"
       artifact-retention-days: 7
 

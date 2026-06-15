@@ -394,6 +394,15 @@ jobs:
         if: ${{ inputs.package == 'all' && matrix.id == 'linux-x64' }}
         run: cargo xtask --plain build core
 
+      - name: Upload native build logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: native-build-logs${{ inputs.artifact-suffix }}-${{ matrix.id }}
+          path: .build/logs
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
   rust-core:
     name: Build Rust core
     if: ${{ inputs.package == 'rust' }}
@@ -446,3 +455,12 @@ jobs:
 
       - name: Build Rust core on host
         run: cargo xtask --plain build core
+
+      - name: Upload native build logs on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: native-build-logs${{ inputs.artifact-suffix }}-rust-core
+          path: .build/logs
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
