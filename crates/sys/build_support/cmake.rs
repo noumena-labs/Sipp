@@ -20,6 +20,7 @@ pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
         .profile("Release")
         .define("SIPP_LLAMA_CPP_DIR", context.llama_dir.as_os_str())
         .define("CMAKE_INSTALL_LIBDIR", "lib")
+        .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
         .define("BUILD_SHARED_LIBS", cmake_bool(context.features.backend_dl))
         .define("GGML_BACKEND_DL", cmake_bool(context.features.backend_dl))
         // ggml defaults GGML_NATIVE=ON, which bakes in `-march=native` (the

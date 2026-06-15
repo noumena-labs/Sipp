@@ -75,3 +75,8 @@ fn macos_deployment_target_supports_filesystem_floor() {
         "11.0"
     );
 }
+
+#[test]
+fn unix_cuda_flags_compile_position_independent_objects() {
+    assert!(super::unix::cuda_cmake_flags().contains("-fPIC"));
+}
