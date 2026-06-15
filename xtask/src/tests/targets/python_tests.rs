@@ -9,8 +9,8 @@ use crate::test_support::{EnvGuard, TempDir};
 use crate::utils::BuildContext;
 
 use super::{
-    backend_distribution_name, backend_label, backend_package_project_dir, backends_to_build,
-    find_wheel_artifact_for_distribution, prepare_dist_dir, python_project_dir,
+    backend_auditwheel_mode, backend_distribution_name, backend_label, backend_package_project_dir,
+    backends_to_build, find_wheel_artifact_for_distribution, prepare_dist_dir, python_project_dir,
     require_all_backends, wheel_matches_distribution,
 };
 
@@ -60,6 +60,29 @@ fn backend_package_names_match_python_packaging_conventions() {
         backend_distribution_name(&Backend::Cuda),
         "sipp-backend-cuda"
     );
+}
+
+#[test]
+fn gpu_backend_wheels_default_to_strict_auditwheel_policy() {
+    let _env = EnvGuard::new(&[("SIPP_PYTHON_GPU_AUDITWHEEL", None)]);
+
+    assert_eq!(backend_auditwheel_mode(&Backend::Cuda), None);
+    assert_eq!(backend_auditwheel_mode(&Backend::Vulkan), None);
+    assert_eq!(backend_auditwheel_mode(&Backend::Cpu), None);
+}
+
+#[test]
+fn linux_gpu_backend_wheels_can_warn_about_external_driver_libraries() {
+    let _env = EnvGuard::new(&[("SIPP_PYTHON_GPU_AUDITWHEEL", Some("warn"))]);
+
+    if cfg!(target_os = "linux") {
+        assert_eq!(backend_auditwheel_mode(&Backend::Cuda), Some("warn"));
+        assert_eq!(backend_auditwheel_mode(&Backend::Vulkan), Some("warn"));
+    } else {
+        assert_eq!(backend_auditwheel_mode(&Backend::Cuda), None);
+        assert_eq!(backend_auditwheel_mode(&Backend::Vulkan), None);
+    }
+    assert_eq!(backend_auditwheel_mode(&Backend::Cpu), None);
 }
 
 #[test]

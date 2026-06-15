@@ -250,6 +250,10 @@ fn build_backend_package_wheel(
 
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, Some(backend))?;
     maturin_cmd = maturin_cmd.arg("--features").arg(feature);
+    if let Some(auditwheel) = backend_auditwheel_mode(backend) {
+        output::detail("Auditwheel policy", auditwheel);
+        maturin_cmd = maturin_cmd.arg("--auditwheel").arg(auditwheel);
+    }
 
     output::run_build_command(
         format!("Building Python {feature} backend wheel"),
@@ -294,6 +298,28 @@ fn backends_to_build() -> Vec<Backend> {
 
 fn backend_distribution_name(backend: &Backend) -> String {
     format!("{PYTHON_BACKEND_PACKAGE_PREFIX}-{}", backend.as_str())
+}
+
+// Dev Linux GPU backend wheels may depend on host driver/runtime stacks.
+// Maturin's repair mode tries to copy every DT_NEEDED library and fails on
+// driver-only libraries such as libcuda.so.1, so dev builds can keep the audit
+// visible without repairing. Release builds leave this unset and stay strict.
+fn backend_auditwheel_mode(backend: &Backend) -> Option<&'static str> {
+    if cfg!(target_os = "linux")
+        && matches!(backend, Backend::Cuda | Backend::Vulkan)
+        && gpu_auditwheel_warn_enabled()
+    {
+        Some("warn")
+    } else {
+        None
+    }
+}
+
+fn gpu_auditwheel_warn_enabled() -> bool {
+    matches!(
+        env::var("SIPP_PYTHON_GPU_AUDITWHEEL").as_deref(),
+        Ok("warn")
+    )
 }
 
 fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
