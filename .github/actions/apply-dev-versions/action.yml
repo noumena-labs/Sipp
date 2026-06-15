@@ -28,11 +28,24 @@ runs:
           writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
         }
         const pyprojectPath = 'lib/python/pyproject.toml';
-        const pyproject = readFileSync(pyprojectPath, 'utf8').replace(
-          /^version = ".*"$/m,
-          `version = "${process.env.PYTHON_DEV_VERSION}"`
-        );
+        const pyproject = readFileSync(pyprojectPath, 'utf8')
+          .replace(
+            /^version = ".*"$/m,
+            `version = "${process.env.PYTHON_DEV_VERSION}"`
+          )
+          .replace(
+            /(sipp-backend-(?:cuda|metal|vulkan)==)[^";\s]+/g,
+            `$1${process.env.PYTHON_DEV_VERSION}`
+          );
         writeFileSync(pyprojectPath, pyproject);
+        for (const backend of ['cuda', 'metal', 'vulkan']) {
+          const backendPyprojectPath = `lib/python/backends/${backend}/pyproject.toml`;
+          const backendPyproject = readFileSync(backendPyprojectPath, 'utf8').replace(
+            /^version = ".*"$/m,
+            `version = "${process.env.PYTHON_DEV_VERSION}"`
+          );
+          writeFileSync(backendPyprojectPath, backendPyproject);
+        }
 
         const cargoPath = 'Cargo.toml';
         const cargo = readFileSync(cargoPath, 'utf8')

@@ -12,6 +12,15 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 pip install sipp
 ```
 
+The default wheel includes the CPU backend. Install GPU backends as extras:
+
+```bash
+pip install "sipp[cuda]"
+pip install "sipp[vulkan]"
+pip install "sipp[metal]"
+pip install "sipp[all]"
+```
+
 ## Use It For
 
 - Python applications that need local GGUF inference.
@@ -72,7 +81,7 @@ run = client.query(
 print(run.result()["text"])
 ```
 
-Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native
+Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose an installed native
 backend. See [Runtime Options](../reference/runtime-options.md) for local
 runtime config groups and request option boundaries.
 

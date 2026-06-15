@@ -418,8 +418,9 @@ Build every target family in sequence:
 
 This command does not build every backend variant. Use
 `cargo xtask build node --backend all` or
-`cargo xtask build python --backend all` or
-`cargo xtask build cli --backend all` when you need fat native artifacts.")]
+`cargo xtask build python --backend all` when you need publishable Python
+backend wheels, or `cargo xtask build cli --backend all` when you need fat CLI
+native artifacts.")]
     All,
 
     /// Build the native Rust workspace crates.
@@ -448,8 +449,8 @@ Examples:
   cargo xtask build python --backend vulkan
   cargo xtask build python --backend all
 
-The default backend is CPU. `--backend all` builds host-supported native
-variants and packages them into a backend-fat wheel.")]
+The default backend is CPU. `--backend all` builds the CPU-capable `sipp`
+wheel plus host-supported `sipp-backend-*` wheels for optional GPU extras.")]
     #[command(after_long_help = BACKEND_HELP)]
     Python(BackendArgs),
 
@@ -623,6 +624,10 @@ pub struct TestListArgs {
 /// Options for deterministic unit test workflows.
 #[derive(Args)]
 pub struct TestUnitArgs {
+    /// Run tests without collecting coverage artifacts.
+    #[arg(long)]
+    pub no_coverage: bool,
+
     /// Unit namespace to run.
     #[command(subcommand)]
     pub command: TestUnitCommands,

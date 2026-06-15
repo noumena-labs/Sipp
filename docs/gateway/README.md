@@ -29,7 +29,7 @@ routes.
 | Understand package boundaries | [Architecture](architecture.md) |
 | Debug common failures | [Troubleshooting](troubleshooting.md) |
 
-The current release workflow publishes browser npm, Node npm, Python wheel,
+The current release workflow publishes browser npm, Node npm, Python wheels,
 and Rust source artifacts. It does not yet publish a standalone gateway-server
 binary, public container image, or `cargo install` target. Build the
 first-party server from the source checkout or with the provided Dockerfile.

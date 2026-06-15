@@ -94,7 +94,7 @@ const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
     "lib/node/router.js",
     "lib/node/router.d.ts",
 ];
-const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["lib/python/python/sipp"];
+const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["lib/python/python/sipp", "lib/python/backends"];
 const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/rust/src"];
 const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "lib/node"];
@@ -368,6 +368,7 @@ fn run_unit(sh: &Shell, ctx: &BuildContext, args: &TestUnitArgs) -> Result<()> {
 
     let options = SuiteRunOptions {
         backend: selection.backend,
+        coverage: !args.no_coverage,
         model: None,
         offline: false,
         package: selection.package.as_deref(),
@@ -413,6 +414,7 @@ fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()>
     };
     let options = SuiteRunOptions {
         backend: selection.backend,
+        coverage: false,
         model: selection.model.as_deref(),
         offline: selection.offline,
         package: None,
@@ -458,15 +460,21 @@ fn run_selected_suites(
         let duration_ms = started_at.elapsed().as_millis();
         match result {
             Ok(outcome) => {
-                if suite.coverage {
+                if options.coverage && suite.coverage {
                     completed_coverage_suites.push(*suite);
                     write_coverage_summary(
                         &ctx.build_root().join("coverage"),
                         coverage_report_areas(&completed_coverage_suites),
                     )?;
                 }
-                let suite_report =
-                    SuiteReport::passed(ctx, suite, duration_ms, outcome.counts, outcome.cases);
+                let suite_report = SuiteReport::passed(
+                    ctx,
+                    suite,
+                    duration_ms,
+                    outcome.counts,
+                    outcome.cases,
+                    options.coverage,
+                );
                 print_suite_report(&suite_report);
                 report.suites.push(suite_report);
                 report.finish("passed");
@@ -476,12 +484,21 @@ fn run_selected_suites(
                 let message = format!("{error:#}");
                 let cases = failed_suite_cases(ctx, suite, options, &error);
                 let counts = case_counts(&cases);
-                let suite_report =
-                    SuiteReport::failed(ctx, suite, duration_ms, message, counts, cases);
+                let suite_report = SuiteReport::failed(
+                    ctx,
+                    suite,
+                    duration_ms,
+                    message,
+                    counts,
+                    cases,
+                    options.coverage,
+                );
                 print_suite_report(&suite_report);
                 report.suites.push(suite_report);
                 for remaining in suites.iter().skip(index + 1) {
-                    report.suites.push(SuiteReport::not_run(ctx, remaining));
+                    report
+                        .suites
+                        .push(SuiteReport::not_run(ctx, remaining, options.coverage));
                 }
                 report.finish("failed");
                 write_run_report(ctx, &report)?;
@@ -513,12 +530,16 @@ fn run_suite(
             } else {
                 None
             };
-            run_rust_target_tests(sh, ctx, targets, package, coverage_state)
+            run_rust_target_tests(sh, ctx, targets, package, options.coverage, coverage_state)
         }
         SuiteRunner::PackageTs => run_package_ts_tests(sh, ctx),
         SuiteRunner::DemoTs => run_demo_ts_tests(sh, ctx),
-        SuiteRunner::NodePackage => run_node_package_tests(sh, ctx, &options.backend),
-        SuiteRunner::PythonPackage => run_python_package_tests(sh, ctx, &options.backend),
+        SuiteRunner::NodePackage => {
+            run_node_package_tests(sh, ctx, &options.backend, options.coverage)
+        }
+        SuiteRunner::PythonPackage => {
+            run_python_package_tests(sh, ctx, &options.backend, options.coverage)
+        }
         SuiteRunner::CliSmoke => run_cli_model_smoke(sh, ctx, options),
         SuiteRunner::RustSmoke => run_rust_model_smoke(sh, ctx, options),
         SuiteRunner::NodeSmoke => run_node_model_smoke(sh, ctx, options),
@@ -838,11 +859,45 @@ fn run_rust_target_tests(
     ctx: &BuildContext,
     targets: &[RustTestTarget],
     package: Option<&str>,
+    coverage_enabled: bool,
     coverage_state: &mut RunCoverageState,
 ) -> Result<()> {
     output::phase("Rust tests");
     let targets = filtered_rust_targets(targets, package)?;
-    run_rust_coverage_targets(sh, ctx, &targets, coverage_state)
+    if coverage_enabled {
+        run_rust_coverage_targets(sh, ctx, &targets, coverage_state)
+    } else {
+        run_rust_plain_targets(sh, ctx, &targets)
+    }
+}
+
+fn run_rust_plain_targets(
+    sh: &Shell,
+    ctx: &BuildContext,
+    targets: &[RustTestTarget],
+) -> Result<()> {
+    let _dir = sh.push_dir(ctx.workspace_root());
+    for target in targets {
+        let package = target.package;
+        let mut test_cmd = cmd!(sh, "cargo test -p {package}");
+        if let Some(test_kind) = target.kind {
+            match test_kind {
+                RustTestKind::Lib => {
+                    test_cmd = test_cmd.arg("--lib");
+                }
+                RustTestKind::Bin(binary) => {
+                    test_cmd = test_cmd.arg("--bin").arg(binary);
+                }
+                RustTestKind::Test(test_name) => {
+                    test_cmd = test_cmd.arg("--test").arg(test_name);
+                }
+                RustTestKind::Package => {}
+            }
+        }
+        let test_cmd = apply_toolchains(sh, ctx, test_cmd, None)?;
+        output::run_test_command(format!("Running {} Rust tests", target.label()), test_cmd)?;
+    }
+    Ok(())
 }
 
 fn run_rust_coverage_targets(
@@ -951,7 +1006,12 @@ fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     Ok(())
 }
 
-fn run_node_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> Result<()> {
+fn run_node_package_tests(
+    sh: &Shell,
+    ctx: &BuildContext,
+    backend: &Backend,
+    coverage_enabled: bool,
+) -> Result<()> {
     output::phase("Interface Node package tests");
     targets::node::build(sh, ctx, Some(backend))?;
 
@@ -967,20 +1027,34 @@ fn run_node_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> 
             TestSuiteId::NodePackage,
             &format!("node-{}.tap", backend.as_str()),
         );
-        output::run_test_command(
-            format!("Running Node.js package tests ({})", backend.as_str()),
+        let mut test_cmd = if coverage_enabled {
             cmd!(
                 sh,
                 "bunx c8 --reporter=lcov --reports-dir {coverage_dir} node --test --test-reporter=tap --test-reporter-destination {report_path} tests/router.test.mjs"
             )
-                .env("SIPP_NODE_BACKEND", backend.as_str())
-                .env("SIPP_NODE_TEST_BACKEND", backend.as_str()),
+        } else {
+            cmd!(
+                sh,
+                "node --test --test-reporter=tap --test-reporter-destination {report_path} tests/router.test.mjs"
+            )
+        };
+        test_cmd = test_cmd
+            .env("SIPP_NODE_BACKEND", backend.as_str())
+            .env("SIPP_NODE_TEST_BACKEND", backend.as_str());
+        output::run_test_command(
+            format!("Running Node.js package tests ({})", backend.as_str()),
+            test_cmd,
         )?;
     }
     Ok(())
 }
 
-fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> Result<()> {
+fn run_python_package_tests(
+    sh: &Shell,
+    ctx: &BuildContext,
+    backend: &Backend,
+    coverage_enabled: bool,
+) -> Result<()> {
     if *backend == Backend::All {
         anyhow::bail!(
             "python-package requires a concrete backend; choose cpu, vulkan, cuda, or metal"
@@ -1000,16 +1074,17 @@ fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -
         ),
     )?;
     let python_exe = python_venv_exe(&venv_dir);
-    output::run_build_command(
-        "Installing Python test wheel",
-        apply_uv_env(
-            ctx,
-            cmd!(
-                sh,
-                "{uv_exe} pip install --python {python_exe} --force-reinstall {wheel} pytest pytest-cov"
-            ),
+    let mut install_cmd = apply_uv_env(
+        ctx,
+        cmd!(
+            sh,
+            "{uv_exe} pip install --python {python_exe} --force-reinstall {wheel} pytest"
         ),
-    )?;
+    );
+    if coverage_enabled {
+        install_cmd = install_cmd.arg("pytest-cov");
+    }
+    output::run_build_command("Installing Python test wheel", install_cmd)?;
 
     let python_tests = ctx.python_package_project_dir().join("tests");
     let coverage_dir = ctx.build_root().join("coverage").join("python");
@@ -1018,13 +1093,18 @@ fn run_python_package_tests(sh: &Shell, ctx: &BuildContext, backend: &Backend) -
     let python_cobertura = coverage_dir.join("cobertura.xml");
     let python_html = coverage_dir.join("html");
     let junit_path = suite_case_report_file(ctx, TestSuiteId::PythonPackage, "pytest.xml");
-    output::run_test_command(
-        "Running Python package pytest suite",
+    let pytest_cmd = if coverage_enabled {
         cmd!(
             sh,
             "{python_exe} -m pytest {python_tests} --junitxml={junit_path} --cov=sipp --cov-report=lcov:{python_lcov} --cov-report=xml:{python_cobertura} --cov-report=html:{python_html}"
-        ),
-    )
+        )
+    } else {
+        cmd!(
+            sh,
+            "{python_exe} -m pytest {python_tests} --junitxml={junit_path}"
+        )
+    };
+    output::run_test_command("Running Python package pytest suite", pytest_cmd)
 }
 
 fn run_cli_model_smoke(
@@ -3891,7 +3971,15 @@ fn xml_unescape(value: &str) -> String {
         .replace("&amp;", "&")
 }
 
-fn coverage_artifacts_for_suite(ctx: &BuildContext, suite: &TestSuite) -> Vec<String> {
+fn coverage_artifacts_for_suite(
+    ctx: &BuildContext,
+    suite: &TestSuite,
+    coverage_enabled: bool,
+) -> Vec<String> {
+    if !coverage_enabled {
+        return Vec::new();
+    }
+
     let coverage_root = ctx.build_root().join("coverage");
     let artifacts = match suite.runner {
         SuiteRunner::RustTargets(_) => vec![
@@ -4214,6 +4302,7 @@ impl SmokeSelection {
 
 struct SuiteRunOptions<'a> {
     backend: Backend,
+    coverage: bool,
     model: Option<&'a Path>,
     offline: bool,
     package: Option<&'a str>,
@@ -4569,6 +4658,7 @@ impl SuiteReport {
         duration_ms: u128,
         counts: Option<TestCounts>,
         cases: Vec<TestCaseReport>,
+        coverage_enabled: bool,
     ) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
@@ -4576,12 +4666,14 @@ impl SuiteReport {
             layer: suite.layer.map(|layer| layer.as_str()).map(str::to_owned),
             status: "passed".to_owned(),
             duration_ms: Some(duration_millis(duration_ms)),
-            coverage_status: if suite.coverage {
+            coverage_status: if suite.coverage && coverage_enabled {
                 "written".to_owned()
+            } else if suite.coverage {
+                "disabled".to_owned()
             } else {
                 "not_applicable".to_owned()
             },
-            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite, coverage_enabled),
             counts,
             cases,
             error: None,
@@ -4595,6 +4687,7 @@ impl SuiteReport {
         error: String,
         counts: Option<TestCounts>,
         cases: Vec<TestCaseReport>,
+        coverage_enabled: bool,
     ) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
@@ -4602,31 +4695,35 @@ impl SuiteReport {
             layer: suite.layer.map(|layer| layer.as_str()).map(str::to_owned),
             status: "failed".to_owned(),
             duration_ms: Some(duration_millis(duration_ms)),
-            coverage_status: if suite.coverage {
+            coverage_status: if suite.coverage && coverage_enabled {
                 "failed".to_owned()
+            } else if suite.coverage {
+                "disabled".to_owned()
             } else {
                 "not_applicable".to_owned()
             },
-            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite, coverage_enabled),
             counts,
             cases,
             error: Some(error),
         }
     }
 
-    fn not_run(ctx: &BuildContext, suite: &TestSuite) -> Self {
+    fn not_run(ctx: &BuildContext, suite: &TestSuite, coverage_enabled: bool) -> Self {
         Self {
             id: suite.id.as_str().to_owned(),
             group: suite.group.as_str().to_owned(),
             layer: suite.layer.map(|layer| layer.as_str()).map(str::to_owned),
             status: "not_run".to_owned(),
             duration_ms: None,
-            coverage_status: if suite.coverage {
+            coverage_status: if suite.coverage && coverage_enabled {
                 "not_run".to_owned()
+            } else if suite.coverage {
+                "disabled".to_owned()
             } else {
                 "not_applicable".to_owned()
             },
-            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite),
+            coverage_artifacts: coverage_artifacts_for_suite(ctx, suite, coverage_enabled),
             counts: None,
             cases: Vec::new(),
             error: None,

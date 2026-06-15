@@ -1,12 +1,11 @@
 """Python package facade for Sipp native inference bindings.
 
-The module loads the best available staged native backend, exposes the PyO3
-classes used to configure and call Sipp, and reports which backend was
-selected for the current process.
+The module loads the best available installed native backend, exposes the PyO3
+classes used to configure and call Sipp, and reports which backend was selected
+for the current process.
 """
 
 import importlib
-import importlib.machinery
 import importlib.util
 import json
 import os
@@ -16,7 +15,11 @@ from typing import Optional
 
 _DLL_DIRECTORIES = []
 _NATIVE_MODULE_NAME = f"{__name__}._native"
-_BACKEND_BINARY_DIR = Path(__file__).resolve().parent / "binaries"
+_BACKEND_MODULES = {
+    "cuda": "sipp_backend_cuda._native",
+    "metal": "sipp_backend_metal._native",
+    "vulkan": "sipp_backend_vulkan._native",
+}
 _VALID_BACKENDS = {"auto", "cpu", "cuda", "metal", "vulkan"}
 _ACTIVE_BACKEND = "unknown"
 
@@ -59,30 +62,6 @@ def _requested_backends() -> list[str]:
         )
 
     return _auto_backends_for_host() if requested == "auto" else [requested]
-
-
-def _is_python_extension(path: Path) -> bool:
-    return path.suffix in {".pyd", ".so"}
-
-
-def _backend_binary_path(backend: str) -> Optional[Path]:
-    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
-        path = _BACKEND_BINARY_DIR / f"_native_{backend}{suffix}"
-        if path.is_file():
-            return path
-
-    for path in sorted(_BACKEND_BINARY_DIR.glob(f"_native_{backend}*")):
-        if path.is_file() and _is_python_extension(path):
-            return path
-
-    return None
-
-
-def _has_staged_backend_binaries() -> bool:
-    return any(
-        path.is_file() and _is_python_extension(path)
-        for path in _BACKEND_BINARY_DIR.glob("_native_*")
-    )
 
 
 def _load_extension_from_path(path: Path) -> object:
@@ -201,40 +180,75 @@ def _load_direct_native_module() -> object:
     return module
 
 
-def _load_native_module() -> object:
+def _is_missing_backend_package(error: ModuleNotFoundError, backend: str) -> bool:
+    package_name = f"sipp_backend_{backend}"
+    return error.name in {package_name, f"{package_name}._native"}
+
+
+def _load_backend_package(backend: str) -> Optional[object]:
     global _ACTIVE_BACKEND
 
+    module_name = _BACKEND_MODULES[backend]
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as error:
+        if _is_missing_backend_package(error, backend):
+            return None
+        raise
+
+    _assert_backend_usable(module, backend)
+    _ACTIVE_BACKEND = backend
+    return module
+
+
+def _load_explicit_backend(backend: str) -> object:
+    global _ACTIVE_BACKEND
+
+    if backend == "cpu":
+        return _load_direct_native_module()
+
+    module = _load_backend_package(backend)
+    if module is not None:
+        return module
+
+    try:
+        module = importlib.import_module(_NATIVE_MODULE_NAME)
+        _assert_backend_usable(module, backend)
+        _ACTIVE_BACKEND = backend
+        return module
+    except Exception as error:
+        raise RuntimeError(
+            f"{backend} backend is not installed or usable. "
+            f'Install it with: pip install "sipp[{backend}]"'
+        ) from error
+
+
+def _load_native_module() -> object:
     explicit = _load_explicit_native_library()
     if explicit is not None:
         return explicit
 
     requested = os.environ.get("SIPP_PYTHON_BACKEND", "auto").lower()
-    requested_is_explicit = requested != "auto"
-    has_staged_binaries = _has_staged_backend_binaries()
+    requested_backends = _requested_backends()
+    if requested != "auto":
+        return _load_explicit_backend(requested_backends[0])
+
     errors: list[tuple[str, BaseException]] = []
-    for backend in _requested_backends():
-        path = _backend_binary_path(backend)
-        if path is None:
-            if requested_is_explicit and has_staged_binaries:
-                errors.append(
-                    (
-                        backend,
-                        FileNotFoundError(f"staged {backend} backend binary was not found"),
-                    )
-                )
+    for backend in requested_backends:
+        if backend == "cpu":
             continue
 
         try:
-            module = _load_extension_from_path(path)
-            _assert_backend_usable(module, backend)
-            _ACTIVE_BACKEND = backend
-            return module
+            module = _load_backend_package(backend)
+            if module is not None:
+                return module
         except Exception as error:
             errors.append((backend, error))
-            sys.modules.pop(_NATIVE_MODULE_NAME, None)
 
-    if not errors:
+    try:
         return _load_direct_native_module()
+    except Exception as error:
+        errors.append(("cpu", error))
 
     detail = "\n".join(f"{backend}: {error}" for backend, error in errors)
     raise RuntimeError(

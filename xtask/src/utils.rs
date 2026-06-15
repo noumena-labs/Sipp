@@ -76,7 +76,7 @@ impl BuildContext {
     }
 
     pub(crate) fn cargo_node_target_dir(&self, backend: &Backend) -> PathBuf {
-        self.cargo_build_root().join("node").join(backend.as_str())
+        self.cargo_binding_target_dir(backend)
     }
 
     pub(crate) fn cargo_cli_target_dir(&self, backend: &Backend) -> PathBuf {
@@ -90,9 +90,14 @@ impl BuildContext {
     }
 
     pub(crate) fn cargo_python_target_dir(&self, backend: Option<&Backend>) -> PathBuf {
+        let backend = backend.copied().unwrap_or(Backend::Cpu);
+        self.cargo_binding_target_dir(&backend)
+    }
+
+    fn cargo_binding_target_dir(&self, backend: &Backend) -> PathBuf {
         self.cargo_build_root()
-            .join("python")
-            .join(Self::backend_build_tag(backend))
+            .join("bindings")
+            .join(backend.as_str())
     }
 
     pub(crate) fn cargo_wasm_target_dir(&self, use_pthreads: bool) -> PathBuf {
@@ -362,6 +367,7 @@ impl BuildContext {
         self.toolchain_dir().join("vulkan")
     }
 
+    #[cfg(test)]
     pub(crate) fn backend_build_tag(backend: Option<&Backend>) -> &'static str {
         backend.map(Backend::as_str).unwrap_or("cpu")
     }

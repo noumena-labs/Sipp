@@ -31,6 +31,17 @@ runs:
         const cargoBindingDto = cargo.match(/^sipp-binding-dto = \{ path = "lib\/binding-dto", version = "([^"]+)"/m)?.[1];
         const pyproject = readFileSync('lib/python/pyproject.toml', 'utf8');
         const python = pyproject.match(/^version = "([^"]+)"/m)?.[1];
+        const pythonBackendExtras = [...pyproject.matchAll(/sipp-backend-(?:cuda|metal|vulkan)==([^";\s]+)/g)]
+          .map((match) => match[1]);
+        const pythonBackendPackages = Object.fromEntries(
+          ['cuda', 'metal', 'vulkan'].map((backend) => {
+            const backendPyproject = readFileSync(`lib/python/backends/${backend}/pyproject.toml`, 'utf8');
+            return [
+              `pythonBackendPackage${backend}`,
+              backendPyproject.match(/^version = "([^"]+)"/m)?.[1],
+            ];
+          })
+        );
         const versions = {
           cargoBindingDto,
           cargoGateway,
@@ -39,8 +50,12 @@ runs:
           cargoWorkspace,
           node: readJsonVersion('lib/node/package.json'),
           python,
+          ...pythonBackendPackages,
           web: readJsonVersion('lib/web/package.json'),
         };
+        for (const [index, extraVersion] of pythonBackendExtras.entries()) {
+          versions[`pythonBackendExtra${index}`] = extraVersion;
+        }
         const missing = Object.entries(versions)
           .filter(([, value]) => value == null)
           .map(([name]) => name);

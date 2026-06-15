@@ -4,10 +4,12 @@
 //! fixture directories instead of running Bun or napi-rs.
 
 use crate::cli::Backend;
-use crate::test_support::TempDir;
+use crate::test_support::{EnvGuard, TempDir};
 use crate::utils::BuildContext;
 
-use super::{backend_label, backends_to_build, find_artifact, prepare_dist_dir};
+use super::{
+    backend_label, backends_to_build, find_artifact, prepare_dist_dir, require_all_backends,
+};
 
 #[test]
 fn backend_expansion_uses_default_specific_and_host_all_modes() {
@@ -41,6 +43,20 @@ fn artifact_discovery_returns_first_node_file_only() {
         find_artifact(&temp.join("staging")).unwrap(),
         Some(artifact)
     );
+}
+
+#[test]
+fn strict_backend_policy_requires_exact_env_value() {
+    let _env = EnvGuard::new(&[("SIPP_REQUIRE_ALL_BACKENDS", None)]);
+    assert!(!require_all_backends());
+    drop(_env);
+
+    let _env = EnvGuard::new(&[("SIPP_REQUIRE_ALL_BACKENDS", Some("true"))]);
+    assert!(!require_all_backends());
+    drop(_env);
+
+    let _env = EnvGuard::new(&[("SIPP_REQUIRE_ALL_BACKENDS", Some("1"))]);
+    assert!(require_all_backends());
 }
 
 #[test]

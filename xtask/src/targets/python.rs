@@ -6,6 +6,7 @@ use crate::toolchains::env::apply_toolchains;
 use crate::toolchains::python::apply_uv_env;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use xshell::{cmd, Shell};
@@ -23,8 +24,7 @@ mod python_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 const PYTHON_PACKAGE_NAME: &str = "sipp";
-const PYTHON_NATIVE_MODULE_NAME: &str = "_native";
-const PYTHON_BACKEND_BINARY_DIR: &str = "binaries";
+const PYTHON_BACKEND_PACKAGE_PREFIX: &str = "sipp-backend";
 
 /// Builds the Python bindings for the selected backend.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {
@@ -32,7 +32,6 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
     output::detail("Backend request", backend_label(backend));
     output::path("Python package workspace", &python_project_dir(ctx));
     output::path("PyO3 binding crate", &ctx.bindings_python_dir());
-    output::path("Backend binary directory", &backend_binary_dir(ctx));
 
     let uv_exe = crate::toolchains::python::setup_uv(sh, ctx)?;
 
@@ -42,7 +41,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
     )?;
 
     if matches!(backend, Some(Backend::All)) {
-        return build_fat_wheel(sh, ctx, &uv_exe);
+        return build_package_wheels(sh, ctx, &uv_exe);
     }
 
     build_develop(sh, ctx, backend, &uv_exe)
@@ -69,9 +68,6 @@ fn build_develop(
     } else {
         output::success("Using existing Python virtual environment");
     }
-
-    let binary_dir = backend_binary_dir(ctx);
-    prepare_backend_binary_dir(sh, &binary_dir)?;
 
     let target_dir = ctx.cargo_python_target_dir(backend);
     sh.create_dir(&target_dir)?;
@@ -105,15 +101,9 @@ fn build_develop(
     Ok(())
 }
 
-fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> {
+fn build_package_wheels(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> {
     let started_at = Instant::now();
-    output::phase("Python backend-fat wheel");
-
-    let python_dir = python_project_dir(ctx);
-    let _dir = sh.push_dir(&python_dir);
-
-    let binary_dir = backend_binary_dir(ctx);
-    prepare_backend_binary_dir(sh, &binary_dir)?;
+    output::phase("Python package wheel set");
 
     let dist_dir = ctx.python_artifacts_dir();
     prepare_dist_dir(sh, &dist_dir)?;
@@ -129,8 +119,8 @@ fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> 
     let mut skipped = Vec::new();
 
     for backend in backends_to_build {
-        let optional = backend != Backend::Cpu;
-        match build_backend_variant(sh, ctx, &binary_dir, &backend, uv_exe) {
+        let optional = backend != Backend::Cpu && !require_all_backends();
+        match build_package_wheel(sh, ctx, &dist_dir, &backend, uv_exe) {
             Ok(path) => {
                 output::artifact(&path);
                 built.push(backend);
@@ -146,7 +136,48 @@ fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> 
         }
     }
 
-    let target_dir = ctx.cargo_python_target_dir(None);
+    output::success(format!(
+        "Python package wheel set complete in {}",
+        output::elapsed(started_at.elapsed())
+    ));
+    output::detail("Built wheels", output::backend_list(&built));
+
+    if !skipped.is_empty() {
+        output::detail("Skipped optional variants", output::backend_list(&skipped));
+    }
+
+    Ok(())
+}
+
+fn build_package_wheel(
+    sh: &Shell,
+    ctx: &BuildContext,
+    dist_dir: &Path,
+    backend: &Backend,
+    uv_exe: &Path,
+) -> Result<PathBuf> {
+    if matches!(backend, Backend::All) {
+        anyhow::bail!("Backend::All cannot be built as a single Python variant");
+    }
+
+    if *backend == Backend::Cpu {
+        return build_sipp_wheel(sh, ctx, dist_dir, uv_exe);
+    }
+
+    build_backend_package_wheel(sh, ctx, dist_dir, backend, uv_exe)
+}
+
+fn build_sipp_wheel(
+    sh: &Shell,
+    ctx: &BuildContext,
+    dist_dir: &Path,
+    uv_exe: &Path,
+) -> Result<PathBuf> {
+    output::phase("Python package: SIPP");
+
+    let python_dir = python_project_dir(ctx);
+    let _dir = sh.push_dir(&python_dir);
+    let target_dir = ctx.cargo_python_target_dir(Some(&Backend::Cpu));
     sh.create_dir(&target_dir)?;
     output::path("Cargo target dir", &target_dir);
 
@@ -159,112 +190,86 @@ fn build_fat_wheel(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> 
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
-    maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, None)?;
-    output::run_build_command("Packaging backend-fat Python wheel", maturin_cmd)
-        .context("failed to build Python backend-fat wheel")?;
+    maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, Some(&Backend::Cpu))?;
+    output::run_build_command("Building Python sipp wheel", maturin_cmd)
+        .context("failed to build Python sipp wheel")?;
 
-    output::success(format!(
-        "Python backend-fat wheel complete in {}",
-        output::elapsed(started_at.elapsed())
-    ));
-    output::detail("Built variants", output::backend_list(&built));
-
-    if !skipped.is_empty() {
-        output::detail("Skipped optional variants", output::backend_list(&skipped));
-    }
-
-    Ok(())
+    find_wheel_artifact_for_distribution(dist_dir, PYTHON_PACKAGE_NAME)?.with_context(|| {
+        format!(
+            "maturin did not produce a {PYTHON_PACKAGE_NAME} wheel artifact in {}",
+            dist_dir.display()
+        )
+    })
 }
 
-fn build_backend_variant(
+fn build_backend_package_wheel(
     sh: &Shell,
     ctx: &BuildContext,
-    binary_dir: &Path,
+    dist_dir: &Path,
     backend: &Backend,
     uv_exe: &Path,
 ) -> Result<PathBuf> {
-    if matches!(backend, Backend::All) {
-        anyhow::bail!("Backend::All cannot be built as a single Python variant");
-    }
-
     let feature = backend.as_str();
-    output::phase(&format!("Python backend: {}", feature.to_uppercase()));
+    let distribution = backend_distribution_name(backend);
+    output::phase(&format!(
+        "Python backend package: {}",
+        distribution.to_uppercase()
+    ));
 
-    let staging_dir = ctx.tmp_dir().join("python").join("wheels").join(feature);
-    if staging_dir.exists() {
-        output::step(format!(
-            "Removing stale Python staging directory {}",
-            staging_dir.display()
-        ));
-        sh.remove_path(&staging_dir)?;
+    let project_dir = backend_package_project_dir(ctx, backend);
+    if !project_dir.exists() {
+        anyhow::bail!(
+            "Python backend package project is missing: {}",
+            project_dir.display()
+        );
     }
-    sh.create_dir(&staging_dir)?;
+    let wheel_dir = ctx
+        .tmp_dir()
+        .join("python")
+        .join("backend-wheels")
+        .join(feature);
+    if wheel_dir.exists() {
+        sh.remove_path(&wheel_dir)?;
+    }
+    sh.create_dir(&wheel_dir)?;
 
     let target_dir = ctx.cargo_python_target_dir(Some(backend));
     sh.create_dir(&target_dir)?;
     output::path("Cargo target dir", &target_dir);
-    output::path("Staging directory", &staging_dir);
+    output::path("Backend package workspace", &project_dir);
 
+    let _dir = sh.push_dir(&project_dir);
     let mut maturin_cmd = apply_uv_env(
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run maturin build --release --out {staging_dir}"
+            "{uv_exe} tool run maturin build --release --out {wheel_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, Some(backend))?;
-
-    if *backend != Backend::Cpu {
-        maturin_cmd = maturin_cmd.arg("--features").arg(feature);
-    }
-
-    output::run_build_command(format!("Compiling Python {feature} backend"), maturin_cmd)
-        .with_context(|| format!("failed to build Python {feature} backend"))?;
-
-    let wheel = find_wheel_artifact(&staging_dir)?.with_context(|| {
-        format!(
-            "maturin did not produce a wheel artifact in {}",
-            staging_dir.display()
-        )
-    })?;
-
-    let extracted_dir = ctx.tmp_dir().join("python").join("extracted").join(feature);
-    if extracted_dir.exists() {
-        sh.remove_path(&extracted_dir)?;
-    }
-    sh.create_dir(&extracted_dir)?;
+    maturin_cmd = maturin_cmd.arg("--features").arg(feature);
 
     output::run_build_command(
-        format!("Extracting Python {feature} wheel"),
-        apply_uv_env(
-            ctx,
-            cmd!(
-                sh,
-                "{uv_exe} run python -m zipfile -e {wheel} {extracted_dir}"
-            ),
-        ),
+        format!("Building Python {feature} backend wheel"),
+        maturin_cmd,
     )
-    .with_context(|| format!("failed to extract {}", wheel.display()))?;
+    .with_context(|| format!("failed to build Python {feature} backend"))?;
 
-    let native = find_native_extension(&extracted_dir)?.with_context(|| {
-        format!("wheel did not contain {PYTHON_PACKAGE_NAME}/{PYTHON_NATIVE_MODULE_NAME} extension")
-    })?;
-    let native_file_name = native
-        .file_name()
-        .and_then(|name| name.to_str())
-        .with_context(|| format!("invalid native extension path {}", native.display()))?;
-    let native_suffix = native_file_name
-        .strip_prefix(PYTHON_NATIVE_MODULE_NAME)
-        .with_context(|| format!("unexpected native extension name: {native_file_name}"))?;
-    let dest = binary_dir.join(format!(
-        "{PYTHON_NATIVE_MODULE_NAME}_{feature}{native_suffix}"
-    ));
-
-    sh.copy_file(&native, &dest)?;
-    sh.remove_path(&staging_dir)?;
-    sh.remove_path(&extracted_dir)?;
+    let wheel =
+        find_wheel_artifact_for_distribution(&wheel_dir, &distribution)?.with_context(|| {
+            format!(
+                "maturin did not produce a {distribution} wheel artifact in {}",
+                wheel_dir.display()
+            )
+        })?;
+    let dest = dist_dir.join(
+        wheel
+            .file_name()
+            .with_context(|| format!("invalid wheel path {}", wheel.display()))?,
+    );
+    sh.copy_file(&wheel, &dest)?;
 
     Ok(dest)
 }
@@ -273,14 +278,10 @@ fn python_project_dir(ctx: &BuildContext) -> PathBuf {
     ctx.python_package_project_dir()
 }
 
-fn python_package_dir(ctx: &BuildContext) -> PathBuf {
+fn backend_package_project_dir(ctx: &BuildContext, backend: &Backend) -> PathBuf {
     python_project_dir(ctx)
-        .join("python")
-        .join(PYTHON_PACKAGE_NAME)
-}
-
-fn backend_binary_dir(ctx: &BuildContext) -> PathBuf {
-    python_package_dir(ctx).join(PYTHON_BACKEND_BINARY_DIR)
+        .join("backends")
+        .join(backend.as_str())
 }
 
 fn backends_to_build() -> Vec<Backend> {
@@ -291,20 +292,8 @@ fn backends_to_build() -> Vec<Backend> {
     }
 }
 
-fn prepare_backend_binary_dir(sh: &Shell, dir: &Path) -> Result<()> {
-    sh.create_dir(dir)?;
-
-    for entry in
-        std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?
-    {
-        let path = entry?.path();
-        if path.file_name().and_then(|name| name.to_str()) == Some(".gitkeep") {
-            continue;
-        }
-        sh.remove_path(path)?;
-    }
-
-    Ok(())
+fn backend_distribution_name(backend: &Backend) -> String {
+    format!("{PYTHON_BACKEND_PACKAGE_PREFIX}-{}", backend.as_str())
 }
 
 fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
@@ -317,7 +306,7 @@ fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if file_name.starts_with("sipp-")
+        if (file_name.starts_with("sipp-") || file_name.starts_with("sipp_backend_"))
             && path.extension().and_then(|ext| ext.to_str()) == Some("whl")
         {
             sh.remove_path(path)?;
@@ -327,44 +316,32 @@ fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn find_wheel_artifact(dir: &Path) -> Result<Option<PathBuf>> {
+fn find_wheel_artifact_for_distribution(dir: &Path, distribution: &str) -> Result<Option<PathBuf>> {
     for entry in
         std::fs::read_dir(dir).with_context(|| format!("failed to read {}", dir.display()))?
     {
         let path = entry?.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("whl") {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("whl")
+            && wheel_matches_distribution(&path, distribution)
+        {
             return Ok(Some(path));
         }
     }
     Ok(None)
 }
 
-fn find_native_extension(dir: &Path) -> Result<Option<PathBuf>> {
-    let package_dir = dir.join(PYTHON_PACKAGE_NAME);
-    for entry in std::fs::read_dir(&package_dir)
-        .with_context(|| format!("failed to read {}", package_dir.display()))?
-    {
-        let path = entry?.path();
-        if !path.is_file() || !is_python_extension(&path) {
-            continue;
-        }
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if file_name.starts_with(PYTHON_NATIVE_MODULE_NAME) {
-            return Ok(Some(path));
-        }
-    }
-    Ok(None)
-}
-
-fn is_python_extension(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|extension| extension.to_str()),
-        Some("pyd" | "so")
-    )
+fn wheel_matches_distribution(path: &Path, distribution: &str) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let normalized = distribution.replace('-', "_");
+    file_name.starts_with(&format!("{normalized}-"))
 }
 
 fn backend_label(backend: Option<&Backend>) -> &'static str {
     backend.map(Backend::as_str).unwrap_or("cpu (default)")
+}
+
+fn require_all_backends() -> bool {
+    matches!(env::var("SIPP_REQUIRE_ALL_BACKENDS").as_deref(), Ok("1"))
 }

@@ -6,6 +6,42 @@ import sys
 from pathlib import Path
 
 
+def _fake_native_module_source(observability: str) -> str:
+    return f'''
+class CacheRuntimeConfig: pass
+class ChatMessage: pass
+class SippClient: pass
+class SippEmbeddingRun: pass
+class SippTextOptions: pass
+class SippTextRun: pass
+class SippTokenIterator: pass
+class ContextRuntimeConfig: pass
+class EndpointRef: pass
+class GatewayDescriptor: pass
+class LocalEmbedOptions: pass
+class LocalModelDescriptor: pass
+class LocalTextOptions: pass
+class ModelPlacementConfig: pass
+class MultimodalRuntimeConfig: pass
+class NativeRuntimeConfig: pass
+class ObservabilityRuntimeConfig: pass
+class ProviderDescriptor: pass
+class ProviderError(Exception): pass
+class EndpointError(Exception): pass
+class ResidencyRuntimeConfig: pass
+class SamplingRuntimeConfig: pass
+class SchedulerPolicyConfig: pass
+class SchedulerRuntimeConfig: pass
+class UnsupportedOperationError(Exception): pass
+DEFAULT_CONTEXT_KEY = "default"
+DEFAULT_MAX_TOKENS = 128
+def backend_observability_json(include_details):
+    return {observability!r}
+def set_llama_log_quiet(quiet):
+    return None
+'''
+
+
 def test_package_import_exposes_public_runtime_helpers() -> None:
     import sipp
 
@@ -38,39 +74,7 @@ def test_invalid_backend_environment_is_rejected() -> None:
 def test_package_loader_supports_explicit_fake_native_module(tmp_path: Path) -> None:
     fake_native = tmp_path / "fake_native.py"
     fake_native.write_text(
-        """
-class CacheRuntimeConfig: pass
-class ChatMessage: pass
-class SippClient: pass
-class SippEmbeddingRun: pass
-class SippTextOptions: pass
-class SippTextRun: pass
-class SippTokenIterator: pass
-class ContextRuntimeConfig: pass
-class EndpointRef: pass
-class GatewayDescriptor: pass
-class LocalEmbedOptions: pass
-class LocalModelDescriptor: pass
-class LocalTextOptions: pass
-class ModelPlacementConfig: pass
-class MultimodalRuntimeConfig: pass
-class NativeRuntimeConfig: pass
-class ObservabilityRuntimeConfig: pass
-class ProviderDescriptor: pass
-class ProviderError(Exception): pass
-class EndpointError(Exception): pass
-class ResidencyRuntimeConfig: pass
-class SamplingRuntimeConfig: pass
-class SchedulerPolicyConfig: pass
-class SchedulerRuntimeConfig: pass
-class UnsupportedOperationError(Exception): pass
-DEFAULT_CONTEXT_KEY = "default"
-DEFAULT_MAX_TOKENS = 128
-def backend_observability_json(include_details):
-    return '{"compiled":{"vulkan":true}}'
-def set_llama_log_quiet(quiet):
-    return None
-""",
+        _fake_native_module_source('{"compiled":{"vulkan":true}}'),
         encoding="utf-8",
     )
     package_root = Path(__file__).resolve().parents[1] / "python"
@@ -88,6 +92,45 @@ def set_llama_log_quiet(quiet):
                 "assert sipp.get_active_backend() == 'vulkan'; "
                 "assert sipp.DEFAULT_CONTEXT_KEY == 'default'; "
                 "assert callable(sipp.backend_observability_json); "
+                "print('ok')"
+            ),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    assert "ok" in result.stdout
+
+
+def test_package_loader_supports_installed_backend_package(tmp_path: Path) -> None:
+    backend_package = tmp_path / "sipp_backend_vulkan"
+    backend_package.mkdir()
+    (backend_package / "__init__.py").write_text("", encoding="utf-8")
+    (backend_package / "_native.py").write_text(
+        _fake_native_module_source(
+            '{"compiled":{"vulkan":true},'
+            '"gpuOffloadSupported":true,'
+            '"availableBackends":[{"name":"vulkan"}]}'
+        ),
+        encoding="utf-8",
+    )
+    package_root = Path(__file__).resolve().parents[1] / "python"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join([str(tmp_path), str(package_root)])
+    env["SIPP_PYTHON_BACKEND"] = "vulkan"
+    env.pop("SIPP_PYTHON_NATIVE_LIBRARY_PATH", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sipp; "
+                "assert sipp.get_active_backend() == 'vulkan'; "
+                "assert sipp.DEFAULT_MAX_TOKENS == 128; "
                 "print('ok')"
             ),
         ],

@@ -19,6 +19,9 @@ sipp build python --backend cpu && python examples/python/query.py <model.gguf> 
 if the launcher is not active.
 
 Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
+Published wheels install the CPU-capable `sipp` package by default. GPU
+backends are optional extras, for example `pip install "sipp[cuda]"` or
+`pip install "sipp[vulkan]"`.
 
 ## Local GGUF Query
 

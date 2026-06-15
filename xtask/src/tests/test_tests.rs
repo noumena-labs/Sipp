@@ -290,6 +290,7 @@ fn old_flag_based_test_commands_are_rejected_by_clap() {
 #[test]
 fn unit_group_selection_expands_expected_suites() {
     let selection = selected_unit_suites(&TestUnitArgs {
+        no_coverage: false,
         command: TestUnitCommands::Group(TestUnitGroupArgs {
             target: TestUnitGroupTarget::Interface,
         }),
@@ -314,6 +315,7 @@ fn unit_group_selection_expands_expected_suites() {
 #[test]
 fn full_unit_group_selects_every_unit_suite() {
     let selection = selected_unit_suites(&TestUnitArgs {
+        no_coverage: false,
         command: TestUnitCommands::Group(TestUnitGroupArgs {
             target: TestUnitGroupTarget::Full,
         }),
@@ -332,6 +334,7 @@ fn full_unit_group_selects_every_unit_suite() {
 #[test]
 fn unit_suite_selection_selects_one_suite() {
     let selection = selected_unit_suites(&TestUnitArgs {
+        no_coverage: false,
         command: TestUnitCommands::Suite(TestUnitSuiteArgs {
             target: TestUnitSuiteTarget::RustCrates(crate::cli::TestUnitRustArgs {
                 package: Some("sipp-sys".to_owned()),
@@ -489,6 +492,7 @@ fn run_report_serializes_suite_status_and_coverage_artifacts() {
             status: CaseStatus::Passed,
             error: None,
         }],
+        true,
     ));
     report.finish("passed");
 
@@ -516,6 +520,25 @@ fn run_report_serializes_suite_status_and_coverage_artifacts() {
 }
 
 #[test]
+fn run_report_marks_disabled_coverage_without_artifacts() {
+    let ctx = BuildContext::new().unwrap();
+    let suite = suite_by_id(TestSuiteId::Xtask).unwrap();
+
+    let report = SuiteReport::passed(
+        &ctx,
+        suite,
+        1,
+        Some(TestCounts::passed(1)),
+        Vec::new(),
+        false,
+    );
+    let value = report.as_json();
+
+    assert_eq!(value["coverage"]["status"], "disabled");
+    assert_eq!(value["coverage"]["artifacts"], serde_json::json!([]));
+}
+
+#[test]
 fn run_report_summarizes_failed_and_unknown_suite_counts() {
     let ctx = BuildContext::new().unwrap();
     let passed = suite_by_id(TestSuiteId::Xtask).unwrap();
@@ -529,6 +552,7 @@ fn run_report_summarizes_failed_and_unknown_suite_counts() {
         10,
         Some(TestCounts::passed(3)),
         Vec::new(),
+        true,
     ));
     report.suites.push(SuiteReport::failed(
         &ctx,
@@ -543,8 +567,11 @@ fn run_report_summarizes_failed_and_unknown_suite_counts() {
             status: CaseStatus::Failed,
             error: Some("bad | value\nnext".to_owned()),
         }],
+        true,
     ));
-    report.suites.push(SuiteReport::not_run(&ctx, not_run));
+    report
+        .suites
+        .push(SuiteReport::not_run(&ctx, not_run, true));
     report.finish("failed");
 
     let value = report.as_json(&ctx);
