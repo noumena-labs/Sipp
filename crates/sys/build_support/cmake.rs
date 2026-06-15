@@ -1,6 +1,6 @@
 use crate::build_support::{context::BuildContext, targets};
 use cmake::Config;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
     let mut config = Config::new(&context.manifest_dir);
@@ -50,9 +50,34 @@ pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
 
     define_bool_feature(&mut config, "GGML_METAL", context.features.metal);
     define_bool_feature(&mut config, "GGML_VULKAN", context.features.vulkan);
+    if context.features.vulkan {
+        apply_vulkan_cmake_overrides(context, &mut config);
+    }
     define_bool_feature(&mut config, "GGML_OPENMP", context.features.openmp);
 
     config.build()
+}
+
+fn apply_vulkan_cmake_overrides(context: &BuildContext, config: &mut Config) {
+    let Some(vulkan_sdk) = &context.env_vars.vulkan_sdk else {
+        return;
+    };
+
+    config.define("Vulkan_ROOT", vulkan_sdk.as_os_str());
+    if let Some(loader) = vulkan_loader_library(vulkan_sdk) {
+        config.define("Vulkan_LIBRARY", loader.as_os_str());
+    }
+}
+
+fn vulkan_loader_library(vulkan_sdk: &Path) -> Option<PathBuf> {
+    [
+        vulkan_sdk.join("lib/libvulkan.so"),
+        vulkan_sdk.join("lib/libvulkan.so.1"),
+        vulkan_sdk.join("lib/libvulkan.dylib"),
+        vulkan_sdk.join("Lib/vulkan-1.lib"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
 }
 
 fn define_bool_feature(config: &mut Config, cmake_name: &str, enabled: bool) {

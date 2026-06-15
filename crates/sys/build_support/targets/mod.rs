@@ -48,6 +48,9 @@ pub(crate) fn apply_host_cmake_overrides(context: &BuildContext, config: &mut Co
     if context.host_is_windows {
         windows::apply_host_cmake_overrides(context, config);
     }
+    if context.target_kind == TargetKind::Macos {
+        macos::apply_cmake_overrides(context, config);
+    }
 }
 
 pub(crate) fn apply_cuda_cmake_overrides(context: &BuildContext, config: &mut Config) {

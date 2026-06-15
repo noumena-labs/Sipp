@@ -46,6 +46,11 @@ pub(crate) fn apply_toolchains<'a>(
         path_additions.push(uv_dir.display().to_string());
     }
 
+    if let Some(deployment_target) = macos_deployment_target() {
+        output::detail("macOS deployment target", deployment_target);
+        command = command.env("MACOSX_DEPLOYMENT_TARGET", deployment_target);
+    }
+
     match backend {
         Some(Backend::Vulkan) => {
             output::detail("Toolchain", "Vulkan");
@@ -121,5 +126,17 @@ fn path_separator() -> &'static str {
         ";"
     } else {
         ":"
+    }
+}
+
+fn macos_deployment_target() -> Option<&'static str> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+
+    if cfg!(target_arch = "aarch64") {
+        Some("11.0")
+    } else {
+        Some("10.15")
     }
 }

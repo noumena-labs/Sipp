@@ -2,8 +2,10 @@
 
 use crate::output;
 use crate::utils::BuildContext;
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use xshell::{cmd, Shell};
 
 pub(crate) const VULKAN_VERSION: &str = "1.4.350.0";
@@ -76,5 +78,67 @@ pub(crate) fn setup_vulkan(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
         output::success(format!("Using Vulkan SDK at {}", vulkan_dir.display()));
     }
 
+    ensure_linux_loader_symlink(&vulkan_dir)?;
+
     Ok(vulkan_dir)
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_linux_loader_symlink(vulkan_dir: &Path) -> Result<()> {
+    let lib_dir = vulkan_dir.join(VULKAN_VERSION).join("x86_64").join("lib");
+    let link_path = lib_dir.join("libvulkan.so");
+    if link_path.exists() {
+        return Ok(());
+    }
+
+    let Some(target_path) = linux_loader_target(&lib_dir)? else {
+        return Ok(());
+    };
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        target_path
+            .file_name()
+            .with_context(|| format!("invalid Vulkan loader path {}", target_path.display()))?,
+        &link_path,
+    )
+    .with_context(|| {
+        format!(
+            "failed to create Vulkan loader symlink {} -> {}",
+            link_path.display(),
+            target_path.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_linux_loader_symlink(_vulkan_dir: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_loader_target(lib_dir: &Path) -> Result<Option<PathBuf>> {
+    let preferred = lib_dir.join("libvulkan.so.1");
+    if preferred.exists() {
+        return Ok(Some(preferred));
+    }
+
+    let mut candidates = Vec::new();
+    if lib_dir.exists() {
+        for entry in std::fs::read_dir(lib_dir)
+            .with_context(|| format!("failed to read Vulkan SDK lib dir {}", lib_dir.display()))?
+        {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if name.starts_with("libvulkan.so.") {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    Ok(candidates.into_iter().next())
 }
