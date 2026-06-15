@@ -1,8 +1,8 @@
 name: Resolve aligned package version
 description: >-
-  Reads the workspace manifests (Cargo workspace + sipp path deps, the Python
-  pyproject, and the web/node package.json files), asserts every version field
-  is identical, requires a stable x.y.z value, and emits it as `version`.
+  Reads the workspace manifests (Cargo workspace + internal path deps, the
+  Python pyproject, and the web/node package.json files), asserts every version
+  field is identical, requires a stable x.y.z value, and emits it as `version`.
   Callers derive their own release tag or dev version from this base.
 outputs:
   version:
@@ -28,9 +28,11 @@ runs:
         const cargoSipp = cargo.match(/^sipp = \{ path = "crates\/sipp", version = "([^"]+)"/m)?.[1];
         const cargoSys = cargo.match(/^sipp-sys = \{ path = "crates\/sys", version = "([^"]+)"/m)?.[1];
         const cargoGateway = cargo.match(/^sipp-gateway = \{ path = "lib\/gateway", version = "([^"]+)"/m)?.[1];
+        const cargoBindingDto = cargo.match(/^sipp-binding-dto = \{ path = "lib\/binding-dto", version = "([^"]+)"/m)?.[1];
         const pyproject = readFileSync('lib/python/pyproject.toml', 'utf8');
         const python = pyproject.match(/^version = "([^"]+)"/m)?.[1];
         const versions = {
+          cargoBindingDto,
           cargoGateway,
           cargoSipp,
           cargoSys,

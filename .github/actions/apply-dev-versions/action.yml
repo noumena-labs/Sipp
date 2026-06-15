@@ -4,7 +4,7 @@ description: >-
   Python pyproject so staged artifacts carry the dev channel version.
 inputs:
   npm-version:
-    description: Dev version for lib/web and lib/node package.json files
+    description: Dev SemVer version for Cargo and JavaScript package manifests
     required: true
   python-version:
     description: PEP 440 dev version for lib/python/pyproject.toml
