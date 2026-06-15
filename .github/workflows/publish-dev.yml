@@ -511,7 +511,8 @@ jobs:
             LICENSE \
             crates/sipp \
             crates/sys \
-            lib/gateway
+            lib/gateway \
+            lib/binding-dto
 
       - name: Upload Rust crate artifact
         uses: actions/upload-artifact@v6.0.0

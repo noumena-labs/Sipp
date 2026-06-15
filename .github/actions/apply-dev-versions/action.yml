@@ -51,6 +51,10 @@ runs:
           .replace(
             /(sipp-gateway = \{ path = "lib\/gateway", version = )".*"/,
             `$1"${process.env.DEV_VERSION}"`
+          )
+          .replace(
+            /(sipp-binding-dto = \{ path = "lib\/binding-dto", version = )".*"/,
+            `$1"${process.env.DEV_VERSION}"`
           );
         writeFileSync(cargoPath, cargo);
         NODE
