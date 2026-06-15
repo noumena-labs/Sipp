@@ -1,7 +1,7 @@
 use thiserror::Error;
 
-use crate::client::SippCancellationReason;
 use crate::client::EndpointRef;
+use crate::client::SippCancellationReason;
 #[cfg(feature = "providers")]
 use crate::providers::{ProviderError, ProviderErrorKind};
 

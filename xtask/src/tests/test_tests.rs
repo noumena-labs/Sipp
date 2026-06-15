@@ -32,8 +32,8 @@ use super::{
     validate_package_filter, validate_suite_backends, CaseDiscoverer, CaseStatus,
     CoverageSummaries, LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase,
     TestCaseReport, TestCounts, TestGroup, VerifyCheckReport, VerifyReport,
-    NODE_GENERATION_SMOKE_SCRIPTS, PYTHON_GENERATION_SMOKE_SCRIPTS, RUST_CRATE_TEST_TARGETS,
-    RUST_BINDING_TEST_TARGETS, RUST_GENERATION_SMOKE_EXAMPLES, TEST_SUITES,
+    NODE_GENERATION_SMOKE_SCRIPTS, PYTHON_GENERATION_SMOKE_SCRIPTS, RUST_BINDING_TEST_TARGETS,
+    RUST_CRATE_TEST_TARGETS, RUST_GENERATION_SMOKE_EXAMPLES, TEST_SUITES,
 };
 
 #[test]
@@ -827,17 +827,12 @@ fn filtered_rust_targets_reject_unknown_packages() {
 }
 
 #[test]
-fn rust_binding_targets_run_library_unit_tests_only() {
+fn rust_binding_targets_cover_only_host_free_wasm() {
     assert_eq!(
         RUST_BINDING_TEST_TARGETS,
-        &[
-            RustTestTarget::lib("sipp-napi"),
-            RustTestTarget::lib("sipp-py"),
-            RustTestTarget::lib("sipp-wasm"),
-        ]
+        &[RustTestTarget::lib("sipp-wasm")]
     );
 }
-
 
 #[test]
 fn search_filter_matches_suite_metadata_and_cases() {

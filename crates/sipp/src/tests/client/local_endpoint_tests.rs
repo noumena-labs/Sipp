@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use super::*;
-use crate::client::{SippTextOptions, LocalEmbedOptions, LocalTextOptions};
+use crate::client::{LocalEmbedOptions, LocalTextOptions, SippTextOptions};
 use crate::core::{ChatMessage, ChatRole, FinishReason};
 use crate::engine::{
     ChatRequest, EmbedRequest, EmbeddingResult, GenerationResult, PoolingType, QueryRequest,

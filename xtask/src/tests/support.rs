@@ -21,10 +21,7 @@ pub(crate) struct TempDir {
 impl TempDir {
     pub(crate) fn new(label: &str) -> Self {
         let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let path = env::temp_dir().join(format!(
-            "sipp-xtask-{label}-{}-{id}",
-            std::process::id()
-        ));
+        let path = env::temp_dir().join(format!("sipp-xtask-{label}-{}-{id}", std::process::id()));
         if path.exists() {
             fs::remove_dir_all(&path).expect("remove stale temp dir");
         }

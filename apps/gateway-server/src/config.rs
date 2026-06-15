@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
+use serde::Deserialize;
 use sipp::engine::NativeRuntimeConfig;
 #[cfg(test)]
 use sipp::lifecycle::BackendCapabilities;
@@ -12,12 +13,10 @@ use sipp::lifecycle::{
     BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
 };
 use sipp::{
-    AnthropicProviderConfig, SippClient, EndpointDescriptor, EndpointRef,
-    OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig,
-    ProviderEndpointConfig, ProviderSecret,
+    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, OpenAiCompatibleProviderConfig,
+    OpenAiProviderConfig, ProviderAuthConfig, ProviderEndpointConfig, ProviderSecret, SippClient,
 };
 use sipp_gateway::GatewayRoutes;
-use serde::Deserialize;
 
 /// Standalone application configuration.
 #[derive(Clone, Deserialize)]

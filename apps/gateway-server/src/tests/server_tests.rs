@@ -16,8 +16,8 @@ use axum::http::{
 use sipp::engine::{GpuLayerConfig, NativeRuntimeConfig};
 use sipp::lifecycle::{BackendCapabilities, StatsMode};
 use sipp::{
-    SippClient, EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes,
-    GatewayTimeoutPolicy,
+    EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes,
+    GatewayTimeoutPolicy, SippClient,
 };
 use tower::ServiceExt;
 use wiremock::matchers::{method, path};

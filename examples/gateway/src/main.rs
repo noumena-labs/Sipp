@@ -14,15 +14,15 @@ use axum::routing::{get, post};
 use axum::Router;
 use bytes::Bytes;
 use clap::Parser;
+use futures_util::future::{select, Either};
+use futures_util::{stream, Stream, StreamExt};
 use sipp::engine::{NativeRuntimeConfig, PoolingType};
 use sipp::gateway_core::{GatewayStreamEvent, Operation};
 use sipp::{
-    SippClient, SippRequestContext, SippTextResponseFuture, SippTokenBatches,
-    EndpointDescriptor, EndpointRef,
+    EndpointDescriptor, EndpointRef, SippClient, SippRequestContext, SippTextResponseFuture,
+    SippTokenBatches,
 };
 use sipp_gateway::{request_id, GatewayCodec, GatewayHttpError, ProtocolCodec};
-use futures_util::future::{select, Either};
-use futures_util::{stream, Stream, StreamExt};
 
 const INDEX_HTML: &str = include_str!("../assets/index.html");
 

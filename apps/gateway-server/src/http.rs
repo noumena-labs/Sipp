@@ -13,6 +13,8 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use bytes::Bytes;
+use futures_util::future::{select, Either};
+use futures_util::{stream, Stream, StreamExt};
 use sipp::core::TokenUsage;
 use sipp::gateway_core::{GatewayStreamEvent, Operation};
 use sipp::{SippRequestContext, SippTextResponseFuture, SippTokenBatches};
@@ -20,8 +22,6 @@ use sipp_gateway::{
     request_context, request_id, AuthenticatedRequest, Authenticator, GatewayCodec,
     GatewayHttpError, GatewayRoutes, ProtocolCodec, ToolkitResult,
 };
-use futures_util::future::{select, Either};
-use futures_util::{stream, Stream, StreamExt};
 use tower_http::cors::CorsLayer;
 
 use crate::admin::{self, AdminDashboardState, AdminDashboardView};

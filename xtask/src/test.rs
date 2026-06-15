@@ -58,15 +58,17 @@ const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
     RustTestTarget::lib("sipp"),
     RustTestTarget::lib("sipp-sys"),
     RustTestTarget::lib("sipp-gateway"),
+    RustTestTarget::lib("sipp-binding-dto"),
     RustTestTarget::package("sipp-gateway-server"),
     RustTestTarget::bin("sipp-cli", "sipp"),
 ];
 const XTASK_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::package("xtask")];
-const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[
-    RustTestTarget::lib("sipp-napi"),
-    RustTestTarget::lib("sipp-py"),
-    RustTestTarget::lib("sipp-wasm"),
-];
+// The Node and Python binding crates have no native coverage targets: their
+// host-registration constructors abort a standalone test binary at startup
+// (no Node/Python runtime). Their conversion logic lives in sipp-binding-dto
+// (tested above); the node-package/python-package suites exercise them through
+// their real hosts. sipp-wasm is a plain staticlib and runs natively.
+const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::lib("sipp-wasm")];
 const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] =
     &[RustTestTarget::test("sipp", "public_api")];
 const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
@@ -77,15 +79,11 @@ const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
     "crates/sipp/src",
     "crates/sys/src",
     "lib/gateway/src",
+    "lib/binding-dto/src",
     "apps/gateway-server/src",
     "apps/cli/src",
 ];
-const RUST_BINDING_SOURCE_ROOTS: &[&str] = &[
-    "bindings/node/src",
-    "bindings/python/src",
-    "bindings/wasm/src",
-    "bindings/wasm/native",
-];
+const RUST_BINDING_SOURCE_ROOTS: &[&str] = &["bindings/wasm/src", "bindings/wasm/native"];
 const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["lib/web/src"];
 const DEMO_TS_SOURCE_ROOTS: &[&str] = &["demos"];
 const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &["crates/sipp/src"];
@@ -888,8 +886,7 @@ fn run_rust_coverage_targets(
         // 2 MiB per-test-thread stack overflows some async tests under coverage
         // on Linux (the binary SIGSEGVs mid-run while every test still passes).
         // Give the test threads headroom; this is a ceiling, not an allocation.
-        let lcov_cmd =
-            apply_toolchains(sh, ctx, lcov_cmd, None)?.env("RUST_MIN_STACK", "33554432");
+        let lcov_cmd = apply_toolchains(sh, ctx, lcov_cmd, None)?.env("RUST_MIN_STACK", "33554432");
         output::run_test_command(
             format!("Running {} Rust coverage tests", target.label()),
             lcov_cmd,
@@ -1234,10 +1231,7 @@ fn run_rust_generation_smoke(
             .arg(model)
             .arg(options.prompt)
             .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
-            .env(
-                "SIPP_TEMPERATURE",
-                format_temperature(options.temperature),
-            );
+            .env("SIPP_TEMPERATURE", format_temperature(options.temperature));
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
         output::run_test_command(
             format!("Running Rust {} smoke: {example}", options.backend.as_str()),
@@ -1269,10 +1263,7 @@ fn run_node_generation_smoke(
             .arg(options.prompt)
             .env("SIPP_NODE_BACKEND", options.backend.as_str())
             .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
-            .env(
-                "SIPP_TEMPERATURE",
-                format_temperature(options.temperature),
-            );
+            .env("SIPP_TEMPERATURE", format_temperature(options.temperature));
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
         output::run_test_command(
             format!(
@@ -1335,10 +1326,7 @@ fn run_python_generation_smoke(
             .arg(options.prompt)
             .env("SIPP_PYTHON_BACKEND", options.backend.as_str())
             .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
-            .env(
-                "SIPP_TEMPERATURE",
-                format_temperature(options.temperature),
-            );
+            .env("SIPP_TEMPERATURE", format_temperature(options.temperature));
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&options.backend))?;
         output::run_test_command(
             format!(
@@ -1406,10 +1394,7 @@ fn run_rust_gateway_smoke(
             .env("SIPP_GATEWAY_URL", gateway_smoke_url())
             .env("SIPP_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
             .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
-            .env(
-                "SIPP_TEMPERATURE",
-                format_temperature(options.temperature),
-            );
+            .env("SIPP_TEMPERATURE", format_temperature(options.temperature));
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, None)?;
         output::run_test_command(format!("Running Rust gateway smoke: {example}"), smoke_cmd)
             .with_context(|| format!("Rust gateway smoke failed: {example}"))?;
@@ -1441,10 +1426,7 @@ fn run_node_gateway_smoke(
             .env("SIPP_GATEWAY_URL", gateway_smoke_url())
             .env("SIPP_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
             .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
-            .env(
-                "SIPP_TEMPERATURE",
-                format_temperature(options.temperature),
-            );
+            .env("SIPP_TEMPERATURE", format_temperature(options.temperature));
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&Backend::Cpu))?;
         output::run_test_command(format!("Running Node gateway smoke: {script}"), smoke_cmd)
             .with_context(|| format!("Node gateway smoke failed: {script}"))?;
@@ -1496,10 +1478,7 @@ fn run_python_gateway_smoke(
             .env("SIPP_GATEWAY_URL", gateway_smoke_url())
             .env("SIPP_GATEWAY_TOKEN", GATEWAY_SMOKE_TOKEN)
             .env("SIPP_MAX_TOKENS", options.max_tokens.to_string())
-            .env(
-                "SIPP_TEMPERATURE",
-                format_temperature(options.temperature),
-            );
+            .env("SIPP_TEMPERATURE", format_temperature(options.temperature));
         smoke_cmd = apply_toolchains(sh, ctx, smoke_cmd, Some(&Backend::Cpu))?;
         output::run_test_command(format!("Running Python gateway smoke: {script}"), smoke_cmd)
             .with_context(|| format!("Python gateway smoke failed: {script}"))?;
@@ -3388,11 +3367,8 @@ fn node_test_backends(ctx: &BuildContext, backend: &Backend) -> Result<Vec<Backe
 }
 
 fn node_backend_artifact(ctx: &BuildContext, backend: &Backend, triplet: &str) -> PathBuf {
-    ctx.node_artifacts_dir().join(format!(
-        "sipp_node_{}.{}.node",
-        backend.as_str(),
-        triplet
-    ))
+    ctx.node_artifacts_dir()
+        .join(format!("sipp_node_{}.{}.node", backend.as_str(), triplet))
 }
 
 fn node_platform_triplet() -> Result<&'static str> {
@@ -3575,6 +3551,7 @@ fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
         "sipp" => &["crates", "sipp"],
         "sipp-sys" => &["crates", "sys"],
         "sipp-gateway" => &["lib", "gateway"],
+        "sipp-binding-dto" => &["lib", "binding-dto"],
         "sipp-gateway-server" => &["apps", "gateway-server"],
         "sipp-cli" => &["apps", "cli"],
         "xtask" => &["xtask"],

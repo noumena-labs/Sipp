@@ -1,9 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use crate::client::{
-    SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippEmbeddingRun,
-    SippQueryRequest, SippResponseMetadata, SippTextResponse, SippTextRun,
-    SippTokenBatches, EndpointRef,
+    EndpointRef, SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippEmbeddingRun,
+    SippQueryRequest, SippResponseMetadata, SippTextResponse, SippTextRun, SippTokenBatches,
 };
 use crate::core::{FinishReason, TokenBatch, TokenEmissionStats};
 use futures_util::{stream, StreamExt};
@@ -211,11 +210,7 @@ struct Executor {
 }
 
 impl GatewayExecutor for Executor {
-    fn query(
-        &self,
-        _context: &GatewayRequestContext,
-        _request: SippQueryRequest,
-    ) -> SippTextRun {
+    fn query(&self, _context: &GatewayRequestContext, _request: SippQueryRequest) -> SippTextRun {
         self.events.lock().expect("events").push("execute");
         let batch = TokenBatch {
             request_id: "request".to_string(),
@@ -264,11 +259,7 @@ impl GatewayExecutor for Executor {
 struct PendingExecutor;
 
 impl GatewayExecutor for PendingExecutor {
-    fn query(
-        &self,
-        _context: &GatewayRequestContext,
-        _request: SippQueryRequest,
-    ) -> SippTextRun {
+    fn query(&self, _context: &GatewayRequestContext, _request: SippQueryRequest) -> SippTextRun {
         SippTextRun::from_response(Box::pin(futures_util::future::pending()))
     }
 

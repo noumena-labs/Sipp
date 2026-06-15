@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::engine::{
-    protocol::EngineStatus, ChatRequest, SippEngine, EmbedRequest, EngineEmbeddingRun,
-    EngineEventReceiver, EngineTextRun, QueryRequest,
+    protocol::EngineStatus, ChatRequest, EmbedRequest, EngineEmbeddingRun, EngineEventReceiver,
+    EngineTextRun, QueryRequest, SippEngine,
 };
 
 use super::backend_policy::BackendPolicy;

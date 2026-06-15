@@ -6,7 +6,7 @@
 
 use sipp::{
     engine::ContextRuntimeConfig, lifecycle::BackendPreference,
-    runtime::request::GenerateResponseStatus, SippClient, NativeRuntimeConfig,
+    runtime::request::GenerateResponseStatus, NativeRuntimeConfig, SippClient,
 };
 
 #[test]

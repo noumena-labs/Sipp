@@ -8,24 +8,26 @@ use std::{
     collections::{BTreeMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
+use futures::executor::block_on;
+use futures::StreamExt;
+use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::prelude::*;
+use pyo3::types::{PyAny, PyBool, PyDict, PyFloat, PyList, PyLong, PyString, PyTuple};
 use sipp::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
 };
 use sipp::core::TokenUsage;
-use sipp::engine::protocol::{CacheSource, RequestStats};
+use sipp::engine::protocol::RequestStats;
 use sipp::engine::{
-    ChatMessage, ChatRole, FlashAttentionMode, GpuLayerConfig, KvCacheType, KvReuseMode, LogitBias,
-    ModelPlacementConfig, MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
-    ResidencyRuntimeConfig, RopeScaling, SamplerStage, SamplingRuntimeConfig,
-    SchedulerRuntimeConfig, SplitMode, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+    ChatMessage, ModelPlacementConfig, NativeRuntimeConfig, SamplingRuntimeConfig,
+    SchedulerRuntimeConfig, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
-use sipp::runtime::config::{SchedulerPolicyConfig, SchedulerPolicyMode};
 use sipp::{
-    AnthropicProviderConfig as CoreAnthropicProviderConfig, SippChatRequest as ClientChatRequest,
+    EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
+    ProviderEndpointError as CoreProviderEndpointError, SippChatRequest as ClientChatRequest,
     SippClient as CoreSippClient, SippEmbedRequest as ClientEmbedRequest,
     SippEmbeddingResponse as ClientEmbeddingResponse,
     SippEmbeddingResponseFuture as ClientEmbeddingResponseFuture,
@@ -33,27 +35,8 @@ use sipp::{
     SippQueryRequest as ClientQueryRequest, SippTextOptions as ClientTextOptions,
     SippTextResponse as ClientTextResponse, SippTextResponseFuture as ClientTextResponseFuture,
     SippTextRun as CoreClientTextRun, SippTokenBatches as ClientTokenBatches,
-    EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
-    GatewayAuthentication as CoreGatewayAuthentication,
-    GatewayEndpointConfig as CoreGatewayEndpointConfig, GatewayRoutes as CoreGatewayRoutes,
-    GatewaySecret as CoreGatewaySecret, GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy,
-    LocalEmbedOptions as ClientLocalEmbedOptions, LocalTextOptions as ClientLocalTextOptions,
-    OpenAiCompatibleProviderConfig as CoreOpenAiCompatibleProviderConfig,
-    OpenAiProviderConfig as CoreOpenAiProviderConfig, ProviderAuthConfig as CoreProviderAuthConfig,
-    ProviderEndpointConfig as CoreProviderEndpointConfig,
-    ProviderEndpointError as CoreProviderEndpointError, ProviderSecret as CoreProviderSecret,
 };
-use futures::executor::block_on;
-use futures::StreamExt;
-use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::pyclass::PyClass;
-use pyo3::types::{PyAny, PyBool, PyDict, PyFloat, PyList, PyLong, PyString, PyTuple};
-use serde::de::DeserializeOwned;
-
-#[cfg(test)]
-#[path = "tests/root_tests.rs"]
-mod root_tests;
+use sipp_binding_dto as dto;
 
 pyo3::create_exception!(
     _native,
@@ -76,21 +59,11 @@ type PySharedClientTextResponse = Arc<Mutex<Option<ClientTextResponseFuture>>>;
 type PySharedClientEmbeddingResponse = Arc<Mutex<Option<ClientEmbeddingResponseFuture>>>;
 type PySharedClientTokenBatches = Arc<Mutex<Option<ClientTokenBatches>>>;
 
-fn py_core_or_default<T, U>(py: Python<'_>, value: Option<Py<T>>, map: impl FnOnce(&T) -> U) -> U
-where
-    T: PyClass,
-    U: Default,
-{
-    value
-        .map(|value| map(&value.borrow(py)))
-        .unwrap_or_default()
-}
-
 /// Sampling controls used by local text generation.
 #[pyclass(name = "SamplingRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PySamplingRuntimeConfig {
-    core: SamplingRuntimeConfig,
+    dto: dto::SamplingRuntimeConfig,
 }
 
 #[pymethods]
@@ -164,62 +137,55 @@ impl PySamplingRuntimeConfig {
         preserved_tokens: Option<Vec<i32>>,
         backend_sampling: bool,
     ) -> PyResult<Self> {
-        if seed.is_some_and(|value| value < 0 || value > u32::MAX as i64) {
-            return Err(PyValueError::new_err(
-                "seed must fit in an unsigned 32-bit integer",
-            ));
-        }
-        let samplers = samplers
-            .unwrap_or_default()
-            .iter()
-            .map(|stage| parse_sampler_stage(stage))
-            .collect::<PyResult<Vec<_>>>()?;
-        let logit_bias = logit_bias
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(token, bias)| LogitBias { token, bias })
-            .collect();
-        Ok(Self {
-            core: SamplingRuntimeConfig {
-                samplers,
-                seed: seed.map(|value| value as u32),
-                top_k,
-                top_p,
-                min_p,
-                typical_p,
-                xtc_probability,
-                xtc_threshold,
-                top_n_sigma,
-                temperature,
-                dynatemp_range,
-                dynatemp_exponent,
-                repeat_last_n,
-                repeat_penalty,
-                frequency_penalty,
-                presence_penalty,
-                dry_multiplier,
-                dry_base,
-                dry_allowed_length,
-                dry_penalty_last_n,
-                dry_sequence_breakers: dry_sequence_breakers.unwrap_or_default(),
-                mirostat,
-                mirostat_tau,
-                mirostat_eta,
-                min_keep,
-                n_probs,
-                logit_bias,
-                ignore_eos,
-                grammar_lazy,
-                preserved_tokens: preserved_tokens.unwrap_or_default(),
-                backend_sampling,
-            },
-        })
+        let dto = dto::SamplingRuntimeConfig {
+            samplers,
+            seed,
+            top_k,
+            top_p: top_p.map(f64::from),
+            min_p: min_p.map(f64::from),
+            typical_p: typical_p.map(f64::from),
+            xtc_probability: xtc_probability.map(f64::from),
+            xtc_threshold: xtc_threshold.map(f64::from),
+            top_n_sigma: top_n_sigma.map(f64::from),
+            temperature: temperature.map(f64::from),
+            dynatemp_range: dynatemp_range.map(f64::from),
+            dynatemp_exponent: dynatemp_exponent.map(f64::from),
+            repeat_last_n,
+            repeat_penalty: repeat_penalty.map(f64::from),
+            frequency_penalty: frequency_penalty.map(f64::from),
+            presence_penalty: presence_penalty.map(f64::from),
+            dry_multiplier: dry_multiplier.map(f64::from),
+            dry_base: dry_base.map(f64::from),
+            dry_allowed_length,
+            dry_penalty_last_n,
+            dry_sequence_breakers,
+            mirostat,
+            mirostat_tau: mirostat_tau.map(f64::from),
+            mirostat_eta: mirostat_eta.map(f64::from),
+            min_keep,
+            n_probs,
+            logit_bias: logit_bias.map(|biases| {
+                biases
+                    .into_iter()
+                    .map(|(token, bias)| dto::LogitBiasConfig {
+                        token,
+                        bias: f64::from(bias),
+                    })
+                    .collect()
+            }),
+            ignore_eos: Some(ignore_eos),
+            grammar_lazy: Some(grammar_lazy),
+            preserved_tokens,
+            backend_sampling: Some(backend_sampling),
+        };
+        SamplingRuntimeConfig::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
 impl PySamplingRuntimeConfig {
-    fn to_core(&self) -> SamplingRuntimeConfig {
-        self.core.clone()
+    fn to_dto(&self) -> dto::SamplingRuntimeConfig {
+        self.dto.clone()
     }
 }
 
@@ -227,7 +193,7 @@ impl PySamplingRuntimeConfig {
 #[pyclass(name = "ModelPlacementConfig")]
 #[derive(Debug, Clone)]
 struct PyModelPlacementConfig {
-    core: ModelPlacementConfig,
+    dto: dto::ModelPlacementConfig,
 }
 
 #[pymethods]
@@ -265,25 +231,24 @@ impl PyModelPlacementConfig {
         no_extra_bufts: Option<bool>,
         no_host: Option<bool>,
     ) -> PyResult<Self> {
-        let mut core = ModelPlacementConfig::default();
-        assign_if_some(&mut core.devices, devices);
-        if let Some(gpu_layers) = gpu_layers {
-            core.gpu_layers = parse_gpu_layers_value(gpu_layers)?;
-        }
-        if let Some(split_mode) = split_mode {
-            core.split_mode = parse_split_mode(&split_mode)?;
-        }
-        core.main_gpu = main_gpu;
-        assign_if_some(&mut core.tensor_split, tensor_split);
-        assign_if_some(&mut core.use_mmap, use_mmap);
-        assign_if_some(&mut core.use_mlock, use_mlock);
-        assign_if_some(&mut core.fit_params, fit_params);
-        core.fit_params_min_ctx = fit_params_min_ctx;
-        assign_if_some(&mut core.fit_params_target_bytes, fit_params_target_bytes);
-        assign_if_some(&mut core.check_tensors, check_tensors);
-        assign_if_some(&mut core.no_extra_bufts, no_extra_bufts);
-        assign_if_some(&mut core.no_host, no_host);
-        Ok(Self { core })
+        let dto = dto::ModelPlacementConfig {
+            devices,
+            gpu_layers: gpu_layers.map(py_gpu_layers).transpose()?,
+            split_mode,
+            main_gpu,
+            tensor_split: tensor_split.map(|values| values.into_iter().map(f64::from).collect()),
+            use_mmap,
+            use_mlock,
+            fit_params,
+            fit_params_min_ctx,
+            fit_params_target_bytes: fit_params_target_bytes
+                .map(|values| values.into_iter().map(|value| value as f64).collect()),
+            check_tensors,
+            no_extra_bufts,
+            no_host,
+        };
+        ModelPlacementConfig::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
@@ -291,7 +256,7 @@ impl PyModelPlacementConfig {
 #[pyclass(name = "ContextRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyContextRuntimeConfig {
-    core: sipp::engine::ContextRuntimeConfig,
+    dto: dto::ContextRuntimeConfig,
 }
 
 #[pymethods]
@@ -351,57 +316,44 @@ impl PyContextRuntimeConfig {
         embeddings: Option<bool>,
         pooling: Option<String>,
     ) -> PyResult<Self> {
-        let mut core = sipp::engine::ContextRuntimeConfig {
+        let dto = dto::ContextRuntimeConfig {
             n_ctx,
             n_batch,
             n_ubatch,
             n_parallel,
             n_threads,
             n_threads_batch,
+            flash_attention,
             kv_unified,
-            rope_freq_base,
-            rope_freq_scale,
+            cache_type_k,
+            cache_type_v,
+            offload_kqv,
+            op_offload,
+            swa_full,
+            warmup,
+            rope_scaling,
+            rope_freq_base: rope_freq_base.map(f64::from),
+            rope_freq_scale: rope_freq_scale.map(f64::from),
             yarn_orig_ctx,
-            yarn_ext_factor,
-            yarn_attn_factor,
-            yarn_beta_fast,
-            yarn_beta_slow,
+            yarn_ext_factor: yarn_ext_factor.map(f64::from),
+            yarn_attn_factor: yarn_attn_factor.map(f64::from),
+            yarn_beta_fast: yarn_beta_fast.map(f64::from),
+            yarn_beta_slow: yarn_beta_slow.map(f64::from),
             embeddings,
-            ..Default::default()
+            pooling: pooling
+                .map(|value| dto::PoolingType::try_from(value.as_str()).map_err(convert_error))
+                .transpose()?,
         };
-        if let Some(value) = flash_attention {
-            core.flash_attention = parse_flash_attention(&value)?;
-        }
-        if let Some(value) = cache_type_k {
-            core.cache_type_k = parse_kv_cache_type(&value)?;
-        }
-        if let Some(value) = cache_type_v {
-            core.cache_type_v = parse_kv_cache_type(&value)?;
-        }
-        assign_if_some(&mut core.offload_kqv, offload_kqv);
-        assign_if_some(&mut core.op_offload, op_offload);
-        assign_if_some(&mut core.swa_full, swa_full);
-        assign_if_some(&mut core.warmup, warmup);
-        if let Some(value) = rope_scaling {
-            core.rope_scaling = Some(parse_rope_scaling(&value)?);
-        }
-        if let Some(value) = pooling {
-            core.pooling = Some(parse_pooling_type(&value)?);
-        }
-        Ok(Self { core })
+        sipp::engine::ContextRuntimeConfig::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
-}
-
-fn parse_pooling_type(value: &str) -> PyResult<sipp::engine::PoolingType> {
-    sipp::engine::PoolingType::from_name(value)
-        .ok_or_else(|| PyValueError::new_err(format!("unknown pooling type: {value}")))
 }
 
 /// Scheduler policy knobs for latency, balance, or throughput behavior.
 #[pyclass(name = "SchedulerPolicyConfig")]
 #[derive(Debug, Clone)]
 struct PySchedulerPolicyConfig {
-    core: SchedulerPolicyConfig,
+    dto: dto::SchedulerPolicyConfig,
 }
 
 #[pymethods]
@@ -418,16 +370,13 @@ impl PySchedulerPolicyConfig {
         decode_token_reserve: Option<i32>,
         enable_adaptive_prefill_chunking: Option<bool>,
     ) -> PyResult<Self> {
-        let mut core = SchedulerPolicyConfig::default();
-        if let Some(value) = mode {
-            core.mode = parse_scheduler_policy(&value)?;
-        }
-        assign_if_some(&mut core.decode_token_reserve, decode_token_reserve);
-        assign_if_some(
-            &mut core.enable_adaptive_prefill_chunking,
+        let dto = dto::SchedulerPolicyConfig {
+            mode,
+            decode_token_reserve,
             enable_adaptive_prefill_chunking,
-        );
-        Ok(Self { core })
+        };
+        sipp::runtime::config::SchedulerPolicyConfig::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
@@ -435,7 +384,7 @@ impl PySchedulerPolicyConfig {
 #[pyclass(name = "SchedulerRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PySchedulerRuntimeConfig {
-    core: SchedulerRuntimeConfig,
+    dto: dto::SchedulerRuntimeConfig,
 }
 
 #[pymethods]
@@ -457,15 +406,16 @@ impl PySchedulerRuntimeConfig {
         max_running_requests: Option<i32>,
         max_queued_requests: Option<i32>,
     ) -> PyResult<Self> {
-        let mut core = SchedulerRuntimeConfig::default();
-        assign_if_some(&mut core.continuous_batching, continuous_batching);
-        if let Some(value) = policy {
-            core.policy = value.borrow(py).core;
-        }
-        assign_if_some(&mut core.prefill_chunk_size, prefill_chunk_size);
-        core.max_running_requests = max_running_requests;
-        core.max_queued_requests = max_queued_requests;
-        Ok(Self { core })
+        let dto = dto::SchedulerRuntimeConfig {
+            continuous_batching,
+            policy: policy.as_ref().map(|value| value.borrow(py).dto.clone()),
+            prefill_chunk_size,
+            max_running_requests,
+            max_queued_requests,
+            ..Default::default()
+        };
+        SchedulerRuntimeConfig::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
@@ -473,7 +423,7 @@ impl PySchedulerRuntimeConfig {
 #[pyclass(name = "CacheRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyCacheRuntimeConfig {
-    core: sipp::engine::CacheRuntimeConfig,
+    dto: dto::CacheRuntimeConfig,
 }
 
 #[pymethods]
@@ -495,15 +445,15 @@ impl PyCacheRuntimeConfig {
         max_snapshot_entries: Option<i32>,
         max_snapshot_bytes: Option<usize>,
     ) -> PyResult<Self> {
-        let mut core = sipp::engine::CacheRuntimeConfig::default();
-        if let Some(value) = mode {
-            core.mode = parse_kv_reuse_mode(&value)?;
-        }
-        assign_if_some(&mut core.retained_prefix_tokens, retained_prefix_tokens);
-        assign_if_some(&mut core.snapshot_interval_tokens, snapshot_interval_tokens);
-        assign_if_some(&mut core.max_snapshot_entries, max_snapshot_entries);
-        assign_if_some(&mut core.max_snapshot_bytes, max_snapshot_bytes);
-        Ok(Self { core })
+        let dto = dto::CacheRuntimeConfig {
+            mode,
+            retained_prefix_tokens,
+            snapshot_interval_tokens,
+            max_snapshot_entries,
+            max_snapshot_bytes: max_snapshot_bytes.map(|value| value as f64),
+        };
+        sipp::engine::CacheRuntimeConfig::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
@@ -511,7 +461,7 @@ impl PyCacheRuntimeConfig {
 #[pyclass(name = "MultimodalRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyMultimodalRuntimeConfig {
-    core: MultimodalRuntimeConfig,
+    dto: dto::MultimodalRuntimeConfig,
 }
 
 #[pymethods]
@@ -525,7 +475,7 @@ impl PyMultimodalRuntimeConfig {
         image_max_tokens: Option<i32>,
     ) -> Self {
         Self {
-            core: MultimodalRuntimeConfig {
+            dto: dto::MultimodalRuntimeConfig {
                 projector_path,
                 use_gpu,
                 image_min_tokens,
@@ -539,7 +489,7 @@ impl PyMultimodalRuntimeConfig {
 #[pyclass(name = "ResidencyRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyResidencyRuntimeConfig {
-    core: ResidencyRuntimeConfig,
+    dto: dto::ResidencyRuntimeConfig,
 }
 
 #[pymethods]
@@ -558,21 +508,15 @@ impl PyResidencyRuntimeConfig {
         require_gpu_lease: Option<bool>,
         gpu_memory_safety_margin_bytes: Option<u64>,
     ) -> Self {
-        let mut core = ResidencyRuntimeConfig::default();
-        assign_if_some(
-            &mut core.max_gpu_models_per_device,
-            max_gpu_models_per_device,
-        );
-        assign_if_some(
-            &mut core.allow_cpu_models_while_gpu_loaded,
-            allow_cpu_models_while_gpu_loaded,
-        );
-        assign_if_some(&mut core.require_gpu_lease, require_gpu_lease);
-        assign_if_some(
-            &mut core.gpu_memory_safety_margin_bytes,
-            gpu_memory_safety_margin_bytes,
-        );
-        Self { core }
+        Self {
+            dto: dto::ResidencyRuntimeConfig {
+                max_gpu_models_per_device: max_gpu_models_per_device.map(|value| value as f64),
+                allow_cpu_models_while_gpu_loaded,
+                require_gpu_lease,
+                gpu_memory_safety_margin_bytes: gpu_memory_safety_margin_bytes
+                    .map(|value| value as f64),
+            },
+        }
     }
 }
 
@@ -580,7 +524,7 @@ impl PyResidencyRuntimeConfig {
 #[pyclass(name = "ObservabilityRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyObservabilityRuntimeConfig {
-    core: ObservabilityRuntimeConfig,
+    dto: dto::ObservabilityRuntimeConfig,
 }
 
 #[pymethods]
@@ -589,9 +533,9 @@ impl PyObservabilityRuntimeConfig {
     #[pyo3(signature = (*, runtime_metrics = false, backend_profiling = false))]
     fn new(runtime_metrics: bool, backend_profiling: bool) -> Self {
         Self {
-            core: ObservabilityRuntimeConfig {
-                runtime_metrics,
-                backend_profiling,
+            dto: dto::ObservabilityRuntimeConfig {
+                runtime_metrics: Some(runtime_metrics),
+                backend_profiling: Some(backend_profiling),
             },
         }
     }
@@ -601,7 +545,7 @@ impl PyObservabilityRuntimeConfig {
 #[pyclass(name = "NativeRuntimeConfig")]
 #[derive(Debug, Clone)]
 struct PyNativeRuntimeConfig {
-    core: NativeRuntimeConfig,
+    dto: dto::NativeRuntimeConfig,
 }
 
 #[pymethods]
@@ -629,25 +573,29 @@ impl PyNativeRuntimeConfig {
         multimodal: Option<Py<PyMultimodalRuntimeConfig>>,
         residency: Option<Py<PyResidencyRuntimeConfig>>,
         observability: Option<Py<PyObservabilityRuntimeConfig>>,
-    ) -> Self {
-        Self {
-            core: NativeRuntimeConfig {
-                placement: py_core_or_default(py, placement, |value| value.core.clone()),
-                context: py_core_or_default(py, context, |value| value.core.clone()),
-                sampling: py_core_or_default(py, sampling, PySamplingRuntimeConfig::to_core),
-                scheduler: py_core_or_default(py, scheduler, |value| value.core.clone()),
-                cache: py_core_or_default(py, cache, |value| value.core.clone()),
-                multimodal: py_core_or_default(py, multimodal, |value| value.core.clone()),
-                residency: py_core_or_default(py, residency, |value| value.core.clone()),
-                observability: py_core_or_default(py, observability, |value| value.core),
-            },
-        }
+    ) -> PyResult<Self> {
+        let dto = dto::NativeRuntimeConfig {
+            placement: placement.as_ref().map(|value| value.borrow(py).dto.clone()),
+            context: context.as_ref().map(|value| value.borrow(py).dto.clone()),
+            sampling: sampling.as_ref().map(|value| value.borrow(py).to_dto()),
+            scheduler: scheduler.as_ref().map(|value| value.borrow(py).dto.clone()),
+            cache: cache.as_ref().map(|value| value.borrow(py).dto.clone()),
+            multimodal: multimodal
+                .as_ref()
+                .map(|value| value.borrow(py).dto.clone()),
+            residency: residency.as_ref().map(|value| value.borrow(py).dto.clone()),
+            observability: observability
+                .as_ref()
+                .map(|value| value.borrow(py).dto.clone()),
+        };
+        NativeRuntimeConfig::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
 impl PyNativeRuntimeConfig {
-    fn to_core(&self) -> NativeRuntimeConfig {
-        self.core.clone()
+    fn to_dto(&self) -> dto::NativeRuntimeConfig {
+        self.dto.clone()
     }
 }
 
@@ -665,17 +613,21 @@ struct PyChatMessage {
 impl PyChatMessage {
     #[new]
     fn new(role: String, content: String) -> PyResult<Self> {
-        parse_chat_role(&role)?;
+        let dto = dto::ChatMessage {
+            role: role.clone(),
+            content: content.clone(),
+        };
+        ChatMessage::try_from(&dto).map_err(convert_error)?;
         Ok(Self { role, content })
     }
 }
 
 impl PyChatMessage {
-    fn to_core(&self) -> PyResult<ChatMessage> {
-        Ok(ChatMessage {
-            role: parse_chat_role(&self.role)?,
+    fn to_dto(&self) -> dto::ChatMessage {
+        dto::ChatMessage {
+            role: self.role.clone(),
             content: self.content.clone(),
-        })
+        }
     }
 }
 
@@ -683,7 +635,7 @@ impl PyChatMessage {
 #[pyclass(name = "EndpointRef")]
 #[derive(Clone)]
 struct PyEndpointRef {
-    core: CoreEndpointRef,
+    dto: dto::EndpointRef,
 }
 
 #[pymethods]
@@ -691,37 +643,42 @@ impl PyEndpointRef {
     #[staticmethod]
     fn local(id: String) -> Self {
         Self {
-            core: CoreEndpointRef::Local { id },
+            dto: dto::EndpointRef {
+                kind: "local".to_string(),
+                id,
+            },
         }
     }
 
     #[staticmethod]
     fn gateway(id: String) -> Self {
         Self {
-            core: CoreEndpointRef::Gateway { id },
+            dto: dto::EndpointRef {
+                kind: "gateway".to_string(),
+                id,
+            },
         }
     }
 
     #[staticmethod]
     fn provider(id: String) -> Self {
         Self {
-            core: CoreEndpointRef::Provider { id },
+            dto: dto::EndpointRef {
+                kind: "provider".to_string(),
+                id,
+            },
         }
     }
 
     #[getter]
     fn kind(&self) -> &str {
-        match &self.core {
-            CoreEndpointRef::Local { .. } => "local",
-            CoreEndpointRef::Gateway { .. } => "gateway",
-            CoreEndpointRef::Provider { .. } => "provider",
-        }
+        &self.dto.kind
     }
 }
 
 impl PyEndpointRef {
-    fn to_core(&self) -> CoreEndpointRef {
-        self.core.clone()
+    fn to_dto(&self) -> dto::EndpointRef {
+        self.dto.clone()
     }
 }
 
@@ -729,7 +686,7 @@ impl PyEndpointRef {
 #[pyclass(name = "SippTextOptions")]
 #[derive(Clone)]
 struct PySippTextOptions {
-    core: ClientTextOptions,
+    dto: dto::SippTextOptions,
 }
 
 #[pymethods]
@@ -742,20 +699,20 @@ impl PySippTextOptions {
         top_p: Option<f32>,
         stop: Option<Vec<String>>,
     ) -> PyResult<Self> {
-        Ok(Self {
-            core: ClientTextOptions {
-                max_tokens,
-                temperature: py_optional_finite_f32(temperature, "temperature")?,
-                top_p: py_optional_finite_f32(top_p, "top_p")?,
-                stop: stop.unwrap_or_default(),
-            },
-        })
+        let dto = dto::SippTextOptions {
+            max_tokens,
+            temperature: temperature.map(f64::from),
+            top_p: top_p.map(f64::from),
+            stop,
+        };
+        ClientTextOptions::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
 impl PySippTextOptions {
-    fn to_core(&self) -> ClientTextOptions {
-        self.core.clone()
+    fn to_dto(&self) -> dto::SippTextOptions {
+        self.dto.clone()
     }
 }
 
@@ -763,7 +720,7 @@ impl PySippTextOptions {
 #[pyclass(name = "LocalTextOptions")]
 #[derive(Clone)]
 struct PyLocalTextOptions {
-    core: ClientLocalTextOptions,
+    dto: dto::LocalTextOptions,
 }
 
 #[pymethods]
@@ -777,22 +734,21 @@ impl PyLocalTextOptions {
         json_schema: Option<String>,
         sampling: Option<Py<PySamplingRuntimeConfig>>,
         media: Option<Vec<Vec<u8>>>,
-    ) -> Self {
-        Self {
-            core: ClientLocalTextOptions {
-                context_key,
-                grammar,
-                json_schema,
-                sampling: sampling.as_ref().map(|config| config.borrow(py).to_core()),
-                media: media.unwrap_or_default(),
-            },
-        }
+    ) -> PyResult<Self> {
+        let dto = dto::LocalTextOptions {
+            context_key,
+            grammar,
+            json_schema,
+            sampling: sampling.as_ref().map(|config| config.borrow(py).to_dto()),
+            media: media.unwrap_or_default(),
+        };
+        Ok(Self { dto })
     }
 }
 
 impl PyLocalTextOptions {
-    fn to_core(&self) -> ClientLocalTextOptions {
-        self.core.clone()
+    fn to_dto(&self) -> dto::LocalTextOptions {
+        self.dto.clone()
     }
 }
 
@@ -800,7 +756,7 @@ impl PyLocalTextOptions {
 #[pyclass(name = "LocalEmbedOptions")]
 #[derive(Clone)]
 struct PyLocalEmbedOptions {
-    core: ClientLocalEmbedOptions,
+    dto: dto::LocalEmbedOptions,
 }
 
 #[pymethods]
@@ -809,7 +765,7 @@ impl PyLocalEmbedOptions {
     #[pyo3(signature = (*, context_key = None, normalize = None))]
     fn new(context_key: Option<String>, normalize: Option<bool>) -> Self {
         Self {
-            core: ClientLocalEmbedOptions {
+            dto: dto::LocalEmbedOptions {
                 context_key,
                 normalize,
             },
@@ -818,8 +774,8 @@ impl PyLocalEmbedOptions {
 }
 
 impl PyLocalEmbedOptions {
-    fn to_core(&self) -> ClientLocalEmbedOptions {
-        self.core.clone()
+    fn to_dto(&self) -> dto::LocalEmbedOptions {
+        self.dto.clone()
     }
 }
 
@@ -827,7 +783,7 @@ impl PyLocalEmbedOptions {
 #[pyclass(name = "GatewayDescriptor")]
 #[derive(Clone)]
 struct PyGatewayDescriptor {
-    core: CoreGatewayEndpointConfig,
+    dto: dto::EndpointDescriptor,
 }
 
 #[pymethods]
@@ -849,62 +805,27 @@ impl PyGatewayDescriptor {
         embed_route: Option<String>,
         protocol_options: Option<PyObject>,
     ) -> PyResult<Self> {
-        if timeout_ms == Some(0) {
-            return Err(PyValueError::new_err(
-                "timeout_ms must be a positive integer",
-            ));
-        }
-        let authentication = match authentication_kind {
-            "none" => CoreGatewayAuthentication::None,
-            "bearer" => CoreGatewayAuthentication::Bearer(CoreGatewaySecret::new(
-                authentication_value.ok_or_else(|| {
-                    PyValueError::new_err("authentication_value is required for bearer auth")
-                })?,
-            )),
-            "header" => CoreGatewayAuthentication::Header {
-                name: authentication_header.ok_or_else(|| {
-                    PyValueError::new_err("authentication_header is required for header auth")
-                })?,
-                value: CoreGatewaySecret::new(authentication_value.ok_or_else(|| {
-                    PyValueError::new_err("authentication_value is required for header auth")
-                })?),
-            },
-            _ => {
-                return Err(PyValueError::new_err(
-                    "authentication_kind must be none, bearer, or header",
-                ));
-            }
+        let dto = dto::EndpointDescriptor {
+            kind: "gateway".to_string(),
+            target: Some(target),
+            base_url: Some(base_url),
+            authentication: Some(dto::GatewayAuthentication {
+                kind: authentication_kind.to_string(),
+                value: authentication_value,
+                header_name: authentication_header,
+            }),
+            static_headers: static_headers.map(py_static_headers),
+            timeout_ms,
+            query_route,
+            chat_route,
+            embed_route,
+            protocol_options: protocol_options
+                .map(|value| py_to_json(value.bind(py)))
+                .transpose()?,
+            ..dto::EndpointDescriptor::default()
         };
-        let mut routes = CoreGatewayRoutes::default();
-        assign_if_some(&mut routes.query, query_route);
-        assign_if_some(&mut routes.chat, chat_route);
-        assign_if_some(&mut routes.embed, embed_route);
-        let timeout = Duration::from_millis(timeout_ms.unwrap_or(60_000));
-        Ok(Self {
-            core: CoreGatewayEndpointConfig {
-                target,
-                base_url,
-                routes,
-                authentication,
-                static_headers: static_headers.unwrap_or_default(),
-                timeouts: CoreGatewayTimeoutPolicy {
-                    connect: timeout,
-                    request: timeout,
-                    read: timeout,
-                },
-                protocol_options: py_json_options_or_empty(
-                    py,
-                    protocol_options,
-                    "protocol_options",
-                )?,
-            },
-        })
-    }
-}
-
-impl PyGatewayDescriptor {
-    fn to_core(&self) -> CoreEndpointDescriptor {
-        CoreEndpointDescriptor::gateway(self.core.clone())
+        CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
@@ -912,25 +833,26 @@ impl PyGatewayDescriptor {
 #[pyclass(name = "LocalModelDescriptor")]
 #[derive(Clone)]
 struct PyLocalModelDescriptor {
-    model_path: PathBuf,
-    config: NativeRuntimeConfig,
+    dto: dto::EndpointDescriptor,
 }
 
 #[pymethods]
 impl PyLocalModelDescriptor {
     #[new]
     #[pyo3(signature = (model_path, config = None))]
-    fn new(py: Python<'_>, model_path: PathBuf, config: Option<Py<PyNativeRuntimeConfig>>) -> Self {
-        Self {
-            model_path,
-            config: py_core_or_default(py, config, PyNativeRuntimeConfig::to_core),
-        }
-    }
-}
-
-impl PyLocalModelDescriptor {
-    fn to_core(&self) -> CoreEndpointDescriptor {
-        CoreEndpointDescriptor::local(self.model_path.clone(), self.config.clone())
+    fn new(
+        py: Python<'_>,
+        model_path: PathBuf,
+        config: Option<Py<PyNativeRuntimeConfig>>,
+    ) -> PyResult<Self> {
+        let dto = dto::EndpointDescriptor {
+            kind: "local".to_string(),
+            model_path: Some(model_path.to_string_lossy().into_owned()),
+            config: config.map(|value| value.borrow(py).to_dto()),
+            ..dto::EndpointDescriptor::default()
+        };
+        CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
@@ -938,7 +860,7 @@ impl PyLocalModelDescriptor {
 #[pyclass(name = "ProviderDescriptor")]
 #[derive(Clone)]
 struct PyProviderDescriptor {
-    core: CoreProviderEndpointConfig,
+    dto: dto::EndpointDescriptor,
 }
 
 #[pymethods]
@@ -957,84 +879,21 @@ impl PyProviderDescriptor {
         auth_header_value: Option<String>,
         static_headers: Option<Vec<(String, String)>>,
     ) -> PyResult<Self> {
-        if timeout_ms == Some(0) {
-            return Err(PyValueError::new_err(
-                "ProviderDescriptor.timeout_ms must be a positive integer",
-            ));
-        }
-        let timeout = timeout_ms.map(Duration::from_millis);
-        let core = match provider.as_str() {
-            "openai" => {
-                if version.is_some()
-                    || auth_header_name.is_some()
-                    || auth_header_value.is_some()
-                    || static_headers.is_some()
-                {
-                    return Err(PyValueError::new_err(
-                        "version, auth_header_name, auth_header_value, and static_headers are not valid for OpenAI provider descriptors",
-                    ));
-                }
-                CoreProviderEndpointConfig::OpenAi(CoreOpenAiProviderConfig {
-                    model,
-                    api_key: provider_secret(api_key, "api_key")?,
-                    base_url,
-                    timeout,
-                })
-            }
-            "anthropic" => {
-                if auth_header_name.is_some()
-                    || auth_header_value.is_some()
-                    || static_headers.is_some()
-                {
-                    return Err(PyValueError::new_err(
-                        "auth_header_name, auth_header_value, and static_headers are not valid for Anthropic provider descriptors",
-                    ));
-                }
-                CoreProviderEndpointConfig::Anthropic(CoreAnthropicProviderConfig {
-                    model,
-                    api_key: provider_secret(api_key, "api_key")?,
-                    base_url,
-                    version,
-                    timeout,
-                })
-            }
-            "openai_compatible" | "openai-compatible" => {
-                if version.is_some() {
-                    return Err(PyValueError::new_err(
-                        "version is not valid for OpenAI-compatible provider descriptors",
-                    ));
-                }
-                let base_url = base_url.ok_or_else(|| {
-                    PyValueError::new_err(
-                        "base_url is required for OpenAI-compatible provider descriptors",
-                    )
-                })?;
-                CoreProviderEndpointConfig::OpenAiCompatible(CoreOpenAiCompatibleProviderConfig {
-                    model,
-                    base_url,
-                    auth: provider_auth(api_key, auth_header_name, auth_header_value)?,
-                    static_headers: static_headers
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|(name, value)| (name, CoreProviderSecret::new(value)))
-                        .collect(),
-                    correlation_header: None,
-                    timeout,
-                })
-            }
-            _ => {
-                return Err(PyValueError::new_err(
-                    "provider must be one of: openai, anthropic, openai_compatible",
-                ));
-            }
+        let dto = dto::EndpointDescriptor {
+            kind: "provider".to_string(),
+            provider: Some(provider),
+            model: Some(model),
+            api_key,
+            base_url,
+            timeout_ms,
+            version,
+            auth_header_name,
+            auth_header_value,
+            static_headers: static_headers.map(py_static_headers),
+            ..dto::EndpointDescriptor::default()
         };
-        Ok(Self { core })
-    }
-}
-
-impl PyProviderDescriptor {
-    fn to_core(&self) -> CoreEndpointDescriptor {
-        CoreEndpointDescriptor::provider(self.core.clone())
+        CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { dto })
     }
 }
 
@@ -1065,7 +924,9 @@ impl PySippClient {
                 block_on(client.add(id, descriptor))
             })
             .map_err(to_py_client_error)?;
-        Ok(PyEndpointRef { core: endpoint })
+        Ok(PyEndpointRef {
+            dto: endpoint_ref_to_dto(endpoint),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1081,17 +942,23 @@ impl PySippClient {
         provider_options: Option<PyObject>,
         emit_tokens: bool,
     ) -> PyResult<PySippTextRun> {
-        let request = ClientQueryRequest {
+        let request = dto::SippQueryRequest {
+            request_id: None,
             endpoint: endpoint
                 .as_ref()
-                .map(|endpoint| endpoint.borrow(py).to_core()),
+                .map(|endpoint| endpoint.borrow(py).to_dto()),
             prompt,
-            options: py_core_or_default(py, options, PySippTextOptions::to_core),
-            local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
-            endpoint_options: py_endpoint_options_or_empty(py, endpoint_options)?,
-            provider_options: py_provider_options_or_empty(py, provider_options)?,
-            emit_tokens,
+            options: options.as_ref().map(|value| value.borrow(py).to_dto()),
+            local: local.as_ref().map(|value| value.borrow(py).to_dto()),
+            endpoint_options: endpoint_options
+                .map(|value| py_to_json(value.bind(py)))
+                .transpose()?,
+            provider_options: provider_options
+                .map(|value| py_to_json(value.bind(py)))
+                .transpose()?,
+            emit_tokens: Some(emit_tokens),
         };
+        let request = ClientQueryRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
@@ -1113,17 +980,26 @@ impl PySippClient {
         provider_options: Option<PyObject>,
         emit_tokens: bool,
     ) -> PyResult<PySippTextRun> {
-        let request = ClientChatRequest {
+        let request = dto::SippChatRequest {
+            request_id: None,
             endpoint: endpoint
                 .as_ref()
-                .map(|endpoint| endpoint.borrow(py).to_core()),
-            messages: chat_messages_to_core(py, messages)?,
-            options: py_core_or_default(py, options, PySippTextOptions::to_core),
-            local: py_core_or_default(py, local, PyLocalTextOptions::to_core),
-            endpoint_options: py_endpoint_options_or_empty(py, endpoint_options)?,
-            provider_options: py_provider_options_or_empty(py, provider_options)?,
-            emit_tokens,
+                .map(|endpoint| endpoint.borrow(py).to_dto()),
+            messages: messages
+                .iter()
+                .map(|message| message.borrow(py).to_dto())
+                .collect(),
+            options: options.as_ref().map(|value| value.borrow(py).to_dto()),
+            local: local.as_ref().map(|value| value.borrow(py).to_dto()),
+            endpoint_options: endpoint_options
+                .map(|value| py_to_json(value.bind(py)))
+                .transpose()?,
+            provider_options: provider_options
+                .map(|value| py_to_json(value.bind(py)))
+                .transpose()?,
+            emit_tokens: Some(emit_tokens),
         };
+        let request = ClientChatRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
@@ -1142,15 +1018,21 @@ impl PySippClient {
         endpoint_options: Option<PyObject>,
         provider_options: Option<PyObject>,
     ) -> PyResult<PySippEmbeddingRun> {
-        let request = ClientEmbedRequest {
+        let request = dto::SippEmbedRequest {
+            request_id: None,
             endpoint: endpoint
                 .as_ref()
-                .map(|endpoint| endpoint.borrow(py).to_core()),
+                .map(|endpoint| endpoint.borrow(py).to_dto()),
             input,
-            local: py_core_or_default(py, local, PyLocalEmbedOptions::to_core),
-            endpoint_options: py_endpoint_options_or_empty(py, endpoint_options)?,
-            provider_options: py_provider_options_or_empty(py, provider_options)?,
+            local: local.as_ref().map(|value| value.borrow(py).to_dto()),
+            endpoint_options: endpoint_options
+                .map(|value| py_to_json(value.bind(py)))
+                .transpose()?,
+            provider_options: provider_options
+                .map(|value| py_to_json(value.bind(py)))
+                .transpose()?,
         };
+        let request = ClientEmbedRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
@@ -1317,88 +1199,31 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn py_endpoint_options_or_empty(
-    py: Python<'_>,
-    value: Option<PyObject>,
-) -> PyResult<serde_json::Map<String, serde_json::Value>> {
-    py_json_options_or_empty(py, value, "endpoint_options")
-}
-
-fn py_provider_options_or_empty(
-    py: Python<'_>,
-    value: Option<PyObject>,
-) -> PyResult<serde_json::Map<String, serde_json::Value>> {
-    py_json_options_or_empty(py, value, "provider_options")
-}
-
-fn py_json_options_or_empty(
-    py: Python<'_>,
-    value: Option<PyObject>,
-    name: &'static str,
-) -> PyResult<serde_json::Map<String, serde_json::Value>> {
-    match value {
-        Some(value) => match py_to_json(value.bind(py))? {
-            serde_json::Value::Object(options) => Ok(options),
-            _ => Err(PyTypeError::new_err(format!(
-                "{name} must be a JSON object"
-            ))),
-        },
-        None => Ok(serde_json::Map::new()),
-    }
-}
-
 fn py_endpoint_descriptor_to_core(
     py: Python<'_>,
     descriptor: PyObject,
 ) -> PyResult<CoreEndpointDescriptor> {
     let descriptor = descriptor.bind(py);
     if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyLocalModelDescriptor>>() {
-        return Ok(descriptor.to_core());
+        return CoreEndpointDescriptor::try_from(&descriptor.dto).map_err(convert_error);
     }
     if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyProviderDescriptor>>() {
-        return Ok(descriptor.to_core());
+        return CoreEndpointDescriptor::try_from(&descriptor.dto).map_err(convert_error);
     }
     if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyGatewayDescriptor>>() {
-        return Ok(descriptor.to_core());
+        return CoreEndpointDescriptor::try_from(&descriptor.dto).map_err(convert_error);
     }
     Err(PyTypeError::new_err(
         "descriptor must be LocalModelDescriptor, ProviderDescriptor, or GatewayDescriptor",
     ))
 }
 
-fn provider_secret(value: Option<String>, name: &'static str) -> PyResult<CoreProviderSecret> {
-    value
-        .map(CoreProviderSecret::new)
-        .ok_or_else(|| PyValueError::new_err(format!("{name} is required")))
-}
-
-fn provider_auth(
-    api_key: Option<String>,
-    auth_header_name: Option<String>,
-    auth_header_value: Option<String>,
-) -> PyResult<CoreProviderAuthConfig> {
-    match (api_key, auth_header_name, auth_header_value) {
-        (Some(key), None, None) => Ok(CoreProviderAuthConfig::Bearer(CoreProviderSecret::new(key))),
-        (None, Some(name), Some(value)) => Ok(CoreProviderAuthConfig::Header {
-            name,
-            value: CoreProviderSecret::new(value),
-        }),
-        _ => Err(PyValueError::new_err(
-            "OpenAI-compatible provider requires either api_key or auth_header_name/auth_header_value",
-        )),
-    }
-}
-
-fn chat_messages_to_core(
-    py: Python<'_>,
-    messages: Vec<Py<PyChatMessage>>,
-) -> PyResult<Vec<ChatMessage>> {
-    if messages.is_empty() {
-        return Err(PyValueError::new_err("chat messages must not be empty"));
-    }
-    messages
-        .iter()
-        .map(|message| message.borrow(py).to_core())
+fn py_static_headers(
+    headers: impl IntoIterator<Item = (String, String)>,
+) -> Vec<dto::ProviderStaticHeader> {
+    headers
+        .into_iter()
+        .map(|(name, value)| dto::ProviderStaticHeader { name, value })
         .collect()
 }
 
@@ -1529,27 +1354,17 @@ fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {
 
 fn endpoint_ref_to_dict(py: Python<'_>, endpoint: CoreEndpointRef) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
-    match endpoint {
-        CoreEndpointRef::Local { id } => {
-            dict.set_item("kind", "local")?;
-            dict.set_item("id", id)?;
-        }
-        CoreEndpointRef::Gateway { id } => {
-            dict.set_item("kind", "gateway")?;
-            dict.set_item("id", id)?;
-        }
-        CoreEndpointRef::Provider { id } => {
-            dict.set_item("kind", "provider")?;
-            dict.set_item("id", id)?;
-        }
-    }
+    let endpoint = endpoint_ref_to_dto(endpoint);
+    dict.set_item("kind", endpoint.kind)?;
+    dict.set_item("id", endpoint.id)?;
     Ok(dict.into_py(py))
 }
 
-fn sipp_text_response_to_dict(
-    py: Python<'_>,
-    response: ClientTextResponse,
-) -> PyResult<Py<PyAny>> {
+fn endpoint_ref_to_dto(endpoint: CoreEndpointRef) -> dto::EndpointRef {
+    dto::EndpointRef::from(endpoint)
+}
+
+fn sipp_text_response_to_dict(py: Python<'_>, response: ClientTextResponse) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     dict.set_item("endpoint", endpoint_ref_to_dict(py, response.endpoint)?)?;
     dict.set_item("text", response.text)?;
@@ -1589,6 +1404,7 @@ fn sipp_embedding_response_to_dict(
 }
 
 fn token_usage_to_dict(py: Python<'_>, usage: TokenUsage) -> PyResult<Py<PyAny>> {
+    let usage = dto::TokenUsage::from(usage);
     let dict = PyDict::new_bound(py);
     dict.set_item("input_tokens", usage.input_tokens)?;
     dict.set_item("output_tokens", usage.output_tokens)?;
@@ -1613,11 +1429,12 @@ fn token_batch_to_dict(py: Python<'_>, batch: TokenBatch) -> PyResult<Py<PyAny>>
 }
 
 fn request_stats_to_dict(py: Python<'_>, stats: RequestStats) -> PyResult<Py<PyAny>> {
+    let stats = dto::RequestStats::from(stats);
     let dict = PyDict::new_bound(py);
     dict.set_item("input_tokens", stats.input_tokens)?;
     dict.set_item("output_tokens", stats.output_tokens)?;
-    dict.set_item("cache_mode", kv_reuse_mode_to_str(stats.cache_mode))?;
-    dict.set_item("cache_source", cache_source_to_str(stats.cache_source))?;
+    dict.set_item("cache_mode", stats.cache_mode)?;
+    dict.set_item("cache_source", stats.cache_source)?;
     dict.set_item("cache_hits", stats.cache_hits)?;
     dict.set_item("prefill_tokens", stats.prefill_tokens)?;
     dict.set_item("ttft_ms", stats.ttft_ms)?;
@@ -1631,115 +1448,14 @@ fn request_stats_to_dict(py: Python<'_>, stats: RequestStats) -> PyResult<Py<PyA
     Ok(dict.into_py(py))
 }
 
-fn kv_reuse_mode_to_str(mode: KvReuseMode) -> &'static str {
-    match mode {
-        KvReuseMode::Disabled => "disabled",
-        KvReuseMode::LiveSlotPrefix => "live_slot_prefix",
-        KvReuseMode::StateSnapshot => "state_snapshot",
-        KvReuseMode::LiveSlotAndSnapshot => "live_slot_and_snapshot",
-    }
+fn py_gpu_layers(value: &Bound<'_, PyAny>) -> PyResult<dto::GpuLayers> {
+    serde_json::from_value(py_to_json(value)?)
+        .map_err(|_| PyTypeError::new_err(r#"gpu_layers must be "auto", "all", or {"count": int}"#))
 }
 
-fn cache_source_to_str(source: CacheSource) -> &'static str {
-    match source {
-        CacheSource::None => "none",
-        CacheSource::Live => "live",
-        CacheSource::Snapshot => "snapshot",
-    }
-}
-
-fn parse_gpu_layers(value: &str) -> PyResult<GpuLayerConfig> {
-    parse_choice(
-        value,
-        r#"gpu_layers must be "auto", "all", or {"count": int}"#,
-    )
-}
-
-fn parse_gpu_layers_value(value: &Bound<'_, PyAny>) -> PyResult<GpuLayerConfig> {
-    if let Ok(value) = value.extract::<String>() {
-        return parse_gpu_layers(&value);
-    }
-    if let Ok(dict) = value.downcast::<PyDict>() {
-        let count = dict
-            .get_item("count")?
-            .ok_or_else(|| PyValueError::new_err("gpu_layers.count is required"))?
-            .extract::<i32>()?;
-        return Ok(GpuLayerConfig::from_layer_count(count));
-    }
-    Err(PyTypeError::new_err(
-        r#"gpu_layers must be "auto", "all", or {"count": int}"#,
-    ))
-}
-
-fn parse_split_mode(value: &str) -> PyResult<SplitMode> {
-    parse_choice(value, "split_mode must be one of: none, layer, row, tensor")
-}
-
-fn parse_flash_attention(value: &str) -> PyResult<FlashAttentionMode> {
-    parse_choice(
-        value,
-        "flash_attention must be one of: auto, enabled, disabled",
-    )
-}
-
-fn parse_kv_cache_type(value: &str) -> PyResult<KvCacheType> {
-    parse_choice(
-        value,
-        "cache type must be one of: f16, f32, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1",
-    )
-}
-
-fn parse_rope_scaling(value: &str) -> PyResult<RopeScaling> {
-    parse_choice(value, "rope_scaling must be one of: none, linear, yarn")
-}
-
-fn parse_kv_reuse_mode(value: &str) -> PyResult<KvReuseMode> {
-    parse_choice(
-        value,
-        "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
-    )
-}
-
-fn parse_sampler_stage(value: &str) -> PyResult<SamplerStage> {
-    parse_choice(
-        value,
-        "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
-    )
-}
-
-fn parse_scheduler_policy(value: &str) -> PyResult<SchedulerPolicyMode> {
-    parse_choice(
-        value,
-        "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
-    )
-}
-
-fn parse_chat_role(value: &str) -> PyResult<ChatRole> {
-    parse_choice(value, "chat role must be one of: system, user, assistant")
-}
-
-fn parse_choice<T>(value: &str, error_message: &'static str) -> PyResult<T>
-where
-    T: DeserializeOwned,
-{
-    serde_json::from_value(serde_json::Value::String(value.to_string()))
-        .map_err(|_| PyValueError::new_err(error_message))
-}
-
-fn py_finite_f32(value: f32, name: &'static str) -> PyResult<f32> {
-    if !value.is_finite() {
-        return Err(PyValueError::new_err(format!("{name} must be finite")));
-    }
-    Ok(value)
-}
-
-fn py_optional_finite_f32(value: Option<f32>, name: &'static str) -> PyResult<Option<f32>> {
-    value.map(|value| py_finite_f32(value, name)).transpose()
-}
-
-fn assign_if_some<T>(target: &mut T, value: Option<T>) {
-    if let Some(value) = value {
-        *target = value;
+fn convert_error(error: dto::ConvertError) -> PyErr {
+    match error {
+        dto::ConvertError::InvalidArg(message) => PyValueError::new_err(message),
     }
 }
 

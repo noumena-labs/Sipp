@@ -3,14 +3,14 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use serde::Serialize;
+use serde_json::Value;
 use sipp::lifecycle::{
     browser_lifecycle_error_response, browser_lifecycle_response_json,
     browser_lifecycle_success_response, BrowserCommitLoadRequest, BrowserCreateConfig,
     BrowserLifecycleEnvelope, BrowserLifecycleService, BrowserLoadOptions, BrowserLoadSource,
     BrowserObservabilityEventType, ModelError,
 };
-use serde::Serialize;
-use serde_json::Value;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

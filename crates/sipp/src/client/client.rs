@@ -15,9 +15,8 @@ use crate::client::provider_endpoint::ProviderEndpoint;
 #[cfg(feature = "providers")]
 use crate::client::ProviderEndpointConfig;
 use crate::client::{
-    SippChatRequest, SippEmbedRequest, SippEmbeddingRun, SippError, SippQueryRequest,
-    SippRequestContext, SippResult, SippTextRun, EndpointCapabilities, EndpointDescriptor,
-    EndpointRef,
+    EndpointCapabilities, EndpointDescriptor, EndpointRef, SippChatRequest, SippEmbedRequest,
+    SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext, SippResult, SippTextRun,
 };
 
 /////////////////////////////////////////////////////////////////////////////////

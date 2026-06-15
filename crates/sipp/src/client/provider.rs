@@ -6,7 +6,7 @@ use crate::providers::{
     OpenAiCompatibleProtocol, ProviderAuth, ProviderTransport, SecretString,
 };
 
-use crate::client::{SippError, SippResult, ProviderEndpointError};
+use crate::client::{ProviderEndpointError, SippError, SippResult};
 
 /// Redacted secret value used by direct provider configuration.
 #[derive(Clone, PartialEq, Eq)]

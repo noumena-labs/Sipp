@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use crate::engine::{
-    ChatRequest, SippEngine, EmbedRequest, EngineEmbeddingResponseFuture,
-    EngineTextResponseFuture, EngineTokenBatches, QueryRequest,
+    ChatRequest, EmbedRequest, EngineEmbeddingResponseFuture, EngineTextResponseFuture,
+    EngineTokenBatches, QueryRequest, SippEngine,
 };
 
 use crate::client::dispatch::InferenceEndpoint;
 use crate::client::{
-    map, validate, SippChatRequest, SippEmbedRequest, SippEmbeddingRun, SippError,
-    SippQueryRequest, SippRequestContext, SippTextRun, SippTokenBatches,
-    EndpointCapabilities, EndpointRef,
+    map, validate, EndpointCapabilities, EndpointRef, SippChatRequest, SippEmbedRequest,
+    SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext, SippTextRun,
+    SippTokenBatches,
 };
 
 /////////////////////////////////////////////////////////////////////////////////

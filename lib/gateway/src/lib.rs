@@ -7,11 +7,11 @@
 mod profile;
 mod toolkit;
 
+pub use profile::GatewayCodec;
 pub use sipp::{
     GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
     GatewayTimeoutPolicy,
 };
-pub use profile::GatewayCodec;
 pub use toolkit::{
     request_context, request_id, AuthenticatedRequest, Authenticator, DecodedRequest,
     DefaultErrorTranslator, ErrorTranslator, GatewayHttpError, NoAuthentication, ProtocolCodec,

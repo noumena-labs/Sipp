@@ -142,9 +142,7 @@ impl BuildEnv {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
             vulkan_sdk: env::var_os("VULKAN_SDK").map(PathBuf::from),
-            cmake_out_dir: env::var("SIPP_SYS_CMAKE_OUT_DIR")
-                .ok()
-                .map(sanitize_path),
+            cmake_out_dir: env::var("SIPP_SYS_CMAKE_OUT_DIR").ok().map(sanitize_path),
         }
     }
 }

@@ -1,5 +1,5 @@
-use sipp::lifecycle::{ClassifiedAsset, ModelError, PairingPlan, PairingResolver};
 use serde::Serialize;
+use sipp::lifecycle::{ClassifiedAsset, ModelError, PairingPlan, PairingResolver};
 
 use crate::ffi::serialize_json_response;
 

@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
+use http::{HeaderMap, StatusCode};
 use sipp::gateway_core::{GatewayError, GatewayErrorKind, GatewayRequestContext};
 use sipp::{
-    SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippQueryRequest,
-    SippTextResponse,
+    SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippQueryRequest, SippTextResponse,
 };
-use http::{HeaderMap, StatusCode};
 use thiserror::Error;
 
 /// Result returned by gateway HTTP helper extension points.

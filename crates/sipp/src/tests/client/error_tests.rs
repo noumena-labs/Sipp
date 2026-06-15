@@ -1,4 +1,4 @@
-use crate::client::{SippError, EndpointError};
+use crate::client::{EndpointError, SippError};
 
 #[test]
 fn gateway_endpoint_errors_remain_structured() {

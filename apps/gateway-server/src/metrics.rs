@@ -5,9 +5,9 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
+use serde::Serialize;
 use sipp::core::TokenUsage;
 use sipp::gateway_core::Operation;
-use serde::Serialize;
 
 const TIMESERIES_BUCKET_SECONDS: u64 = 10;
 const MAX_TIMESERIES_BUCKETS: usize = 180;

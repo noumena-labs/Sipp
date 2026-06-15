@@ -2,14 +2,14 @@ mod support;
 
 use std::path::PathBuf;
 
+use futures::executor::block_on;
 use sipp::backend::set_llama_log_quiet;
 use sipp::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, GpuLayerConfig, KvReuseMode, ModelPlacementConfig,
     NativeRuntimeConfig, ObservabilityRuntimeConfig, PoolingType, ResidencyRuntimeConfig,
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
-use sipp::{SippClient, SippEmbedRequest, EndpointDescriptor, LocalEmbedOptions};
-use futures::executor::block_on;
+use sipp::{EndpointDescriptor, LocalEmbedOptions, SippClient, SippEmbedRequest};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
