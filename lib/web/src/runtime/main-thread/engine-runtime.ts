@@ -9,7 +9,7 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
-  RequestSamplingPatch,
+  SamplingRuntimeOverride,
   RequestObservabilityMetrics,
   TokenBatch,
   TransportObservability,
@@ -38,7 +38,7 @@ import {
 import { EngineModule } from '../../wasm/engine-module.js';
 import { createAbortError } from '../../utils/abort.js';
 import { QueuedRequestScheduler } from '../scheduler.js';
-import { hasRequestSamplingPatchFields } from '../../engine/inference-types.js';
+import { hasSamplingRuntimeOverrideFields } from '../../engine/inference-types.js';
 import {
   resolveRuntimeThreadingMode,
   resolveRuntimeUrls,
@@ -223,12 +223,12 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   private resolvePromptSampling(
     input: PromptOptions | number | undefined
-  ): RequestSamplingPatch | undefined {
+  ): SamplingRuntimeOverride | undefined {
     if (typeof input === 'number' || input === undefined || input.sampling == null) {
       return undefined;
     }
     const sampling = input.sampling;
-    return hasRequestSamplingPatchFields(sampling) ? sampling : undefined;
+    return hasSamplingRuntimeOverrideFields(sampling) ? sampling : undefined;
   }
 
   private countMarkerOccurrences(promptText: string, marker: string): number {

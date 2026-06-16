@@ -1,5 +1,5 @@
 use crate::core::ChatMessage;
-use crate::engine::SamplingRuntimeConfig;
+use crate::engine::SamplingRuntimeOverride;
 
 use crate::client::EndpointRef;
 
@@ -39,7 +39,7 @@ pub struct LocalTextOptions {
     /// JSON schema constraint.
     pub json_schema: Option<String>,
     /// Local runtime sampling override.
-    pub sampling: Option<SamplingRuntimeConfig>,
+    pub sampling: Option<SamplingRuntimeOverride>,
     /// Binary media payloads for multimodal requests.
     pub media: Vec<Vec<u8>>,
 }

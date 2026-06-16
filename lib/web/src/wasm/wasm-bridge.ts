@@ -7,7 +7,7 @@ import type {
   KvReuseMode,
   NativeRuntimeConfig,
   PoolingType,
-  RequestSamplingPatch,
+  SamplingRuntimeOverride,
   RequestObservabilityMetrics,
   ChatMessage,
 } from '../engine/inference-types.js';
@@ -31,7 +31,7 @@ import {
 import type { ChatBoundaryInfo } from '../engine/chat-boundary-sanitizer.js';
 import { EngineModule } from './engine-module.js';
 import {
-  hasRequestSamplingPatchFields,
+  hasSamplingRuntimeOverrideFields,
   withDerivedObservabilityMetrics,
 } from '../engine/inference-types.js';
 import type { SharedTokenRingDescriptor } from '../runtime/shared-token-ring.js';
@@ -63,7 +63,7 @@ function validateGrammarSize(grammar: string | undefined): void {
 interface WasmTextRequestOptions {
   grammar?: string;
   stop?: readonly string[];
-  sampling?: RequestSamplingPatch;
+  sampling?: SamplingRuntimeOverride;
   emitTokens?: boolean;
 }
 
@@ -71,8 +71,8 @@ function serializeStop(stop: readonly string[] | undefined): string {
   return stop == null || stop.length === 0 ? '' : JSON.stringify(stop);
 }
 
-function serializeSampling(sampling: RequestSamplingPatch | undefined): string {
-  return hasRequestSamplingPatchFields(sampling) ? JSON.stringify(sampling) : '';
+function serializeSampling(sampling: SamplingRuntimeOverride | undefined): string {
+  return hasSamplingRuntimeOverrideFields(sampling) ? JSON.stringify(sampling) : '';
 }
 
 export type WasmSchedulerProgressResult = {

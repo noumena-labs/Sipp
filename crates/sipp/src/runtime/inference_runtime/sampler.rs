@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::error::{Error, Result};
 use crate::native_bridge::NativeRuntimeHandle;
-use crate::runtime::config::{NativeRuntimeConfig, RequestSampling};
+use crate::runtime::config::{NativeRuntimeConfig, SamplingRuntimeOverride};
 use crate::runtime::llama_seq_id;
 use crate::runtime::scheduler::{SamplerCacheKey, SamplerHandle, SlotPhase, SlotState};
 
@@ -75,7 +75,7 @@ pub(super) fn detach_backend_sampler(
 pub(super) fn create_sampler(
     native_runtime: &NativeRuntimeHandle,
     config: &NativeRuntimeConfig,
-    sampling_override: Option<&RequestSampling>,
+    sampling_override: Option<&SamplingRuntimeOverride>,
     grammar: Option<&str>,
     json_schema: Option<&str>,
 ) -> Result<SamplerHandle> {

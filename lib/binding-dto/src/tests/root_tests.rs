@@ -194,6 +194,48 @@ fn finite_f32_fields_reject_non_finite_values() {
 }
 
 #[test]
+fn partial_sampling_runtime_config_preserves_core_defaults() {
+    let sampling = SamplingRuntimeConfig {
+        repeat_penalty: Some(1.2),
+        backend_sampling: Some(false),
+        ..SamplingRuntimeConfig::default()
+    };
+
+    let config = CoreSamplingRuntimeConfig::try_from(&sampling).expect("sampling config");
+
+    assert_eq!(config.repeat_penalty, Some(1.2));
+    assert_eq!(config.top_k, Some(40));
+    assert_eq!(
+        config.samplers,
+        vec![
+            SamplerStage::TopK,
+            SamplerStage::Penalties,
+            SamplerStage::TopP,
+            SamplerStage::Temperature
+        ]
+    );
+    assert!(!config.backend_sampling);
+}
+
+#[test]
+fn local_text_sampling_converts_to_sparse_runtime_override() {
+    let local = LocalTextOptions {
+        sampling: Some(SamplingRuntimeConfig {
+            repeat_penalty: Some(1.2),
+            ..SamplingRuntimeConfig::default()
+        }),
+        ..LocalTextOptions::default()
+    };
+
+    let local = CoreLocalTextOptions::try_from(local).expect("local text options");
+    let sampling = local.sampling.expect("sampling override");
+
+    assert_eq!(sampling.repeat_penalty, Some(1.2));
+    assert_eq!(sampling.top_k, None);
+    assert_eq!(sampling.backend_sampling, None);
+}
+
+#[test]
 fn camel_case_request_fields_deserialize() {
     let request: SippQueryRequest = serde_json::from_value(json!({
         "requestId": "r-1",

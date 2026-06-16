@@ -16,7 +16,7 @@ use sipp::backend::set_llama_log_quiet;
 #[cfg(target_family = "wasm")]
 use sipp::engine::protocol::{EmbedOptions, PoolingType};
 #[cfg(target_family = "wasm")]
-use sipp::runtime::config::{NativeRuntimeConfig, RequestSampling, SamplingRuntimePatch};
+use sipp::runtime::config::{NativeRuntimeConfig, SamplingRuntimeOverride};
 #[cfg(target_family = "wasm")]
 use sipp::runtime::request::{
     GenerateResponse, GenerateResponseStatus, ResponseOutput, TokenEmissionSink,
@@ -86,7 +86,7 @@ struct BrowserPromptRequest {
     images: Vec<Vec<u8>>,
     grammar: String,
     stop: Vec<String>,
-    sampling: Option<RequestSampling>,
+    sampling: Option<SamplingRuntimeOverride>,
     emit_tokens: i32,
 }
 
@@ -348,7 +348,7 @@ impl BrowserEngine {
         &mut self,
         stop_json: &str,
         sampling_json: &str,
-    ) -> Option<(Vec<String>, Option<RequestSampling>)> {
+    ) -> Option<(Vec<String>, Option<SamplingRuntimeOverride>)> {
         let stop = if stop_json.is_empty() {
             Vec::new()
         } else {
@@ -363,8 +363,8 @@ impl BrowserEngine {
         let sampling = if sampling_json.is_empty() {
             None
         } else {
-            match serde_json::from_str::<SamplingRuntimePatch>(sampling_json) {
-                Ok(patch) if !patch.is_empty() => Some(RequestSampling::Patch(patch)),
+            match serde_json::from_str::<SamplingRuntimeOverride>(sampling_json) {
+                Ok(override_config) if !override_config.is_empty() => Some(override_config),
                 Ok(_) => None,
                 Err(error) => {
                     self.set_last_error(format!("invalid sampling JSON: {error}"));

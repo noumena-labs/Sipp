@@ -1,7 +1,7 @@
 use crate::collection::sorted_unique_non_empty_strings;
 use crate::engine::protocol::EmbedOptions;
 use crate::error::{Error, Result};
-use crate::runtime::config::RequestSampling;
+use crate::runtime::config::SamplingRuntimeOverride;
 use crate::runtime::llama_token;
 use crate::runtime::request::{GenerateRequest, GenerateRequestId, MultimodalPayload};
 
@@ -47,7 +47,7 @@ impl InferenceRuntime {
         grammar: impl Into<String>,
         json_schema: impl Into<String>,
         stop: Vec<String>,
-        sampling: Option<RequestSampling>,
+        sampling: Option<SamplingRuntimeOverride>,
         emit_tokens: bool,
     ) -> Result<GenerateRequestId> {
         if !self.is_ready() {
@@ -82,7 +82,7 @@ impl InferenceRuntime {
         grammar: impl Into<String>,
         json_schema: impl Into<String>,
         stop: Vec<String>,
-        sampling: Option<RequestSampling>,
+        sampling: Option<SamplingRuntimeOverride>,
         emit_tokens: bool,
     ) -> Result<GenerateRequestId> {
         if !self.is_ready() || !self.native_runtime.mtmd_ready() {
@@ -210,7 +210,7 @@ struct GenerateRequestInput {
     grammar: String,
     json_schema: String,
     stop: Vec<String>,
-    sampling: Option<RequestSampling>,
+    sampling: Option<SamplingRuntimeOverride>,
     emit_tokens: bool,
     tokenization: RequestTokenization,
 }
@@ -240,7 +240,7 @@ struct GenerateRequestFields {
     grammar: String,
     json_schema: String,
     stop: Vec<String>,
-    sampling: Option<RequestSampling>,
+    sampling: Option<SamplingRuntimeOverride>,
     emit_tokens: bool,
 }
 

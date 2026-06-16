@@ -71,7 +71,7 @@ export interface LocalTextOptions {
   contextKey?: string
   grammar?: string
   jsonSchema?: string
-  sampling?: SamplingRuntimeConfig
+  sampling?: SamplingRuntimeOverride
   media?: Array<Buffer>
 }
 
@@ -357,6 +357,9 @@ export interface SamplingRuntimeConfig {
   preserved_tokens?: Array<number>
   backend_sampling?: boolean
 }
+
+/** Request-level local sampler override applied over runtime defaults. */
+export type SamplingRuntimeOverride = SamplingRuntimeConfig
 
 /** Scheduler policy knobs for latency, balance, or throughput behavior. */
 export interface SchedulerPolicyConfig {

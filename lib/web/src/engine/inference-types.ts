@@ -105,23 +105,13 @@ export interface SamplingRuntimeConfig {
   backend_sampling?: boolean;
 }
 
-/** Sparse request-level local sampler override. */
-export type RequestSamplingPatch = Partial<
-  Pick<
-    SamplingRuntimeConfig,
-    | 'temperature'
-    | 'top_p'
-    | 'repeat_last_n'
-    | 'repeat_penalty'
-    | 'frequency_penalty'
-    | 'presence_penalty'
-  >
->;
+/** Request-level local sampler override applied over runtime defaults. */
+export type SamplingRuntimeOverride = SamplingRuntimeConfig;
 
-/** Returns true when a request sampler patch contains at least one override. */
-export function hasRequestSamplingPatchFields(
-  sampling: RequestSamplingPatch | undefined
-): sampling is RequestSamplingPatch {
+/** Returns true when a request sampler override contains at least one field. */
+export function hasSamplingRuntimeOverrideFields(
+  sampling: SamplingRuntimeOverride | undefined
+): sampling is SamplingRuntimeOverride {
   return sampling != null && Object.values(sampling).some((value) => value != null);
 }
 
@@ -184,7 +174,7 @@ export interface PromptOptions {
   tokenBatchSink?: (batch: TokenBatch) => void;
   media?: Uint8Array[];
   stop?: readonly string[];
-  sampling?: RequestSamplingPatch;
+  sampling?: SamplingRuntimeOverride;
   /**
    * Optional GBNF grammar source applied to the sampler for this request.
    * When provided, the native runtime constrains token sampling to strings
@@ -230,7 +220,7 @@ export interface GenerateRequest {
   maxOutputTokens: number;
   media?: Uint8Array[];
   stop?: readonly string[];
-  sampling?: RequestSamplingPatch;
+  sampling?: SamplingRuntimeOverride;
   /** Optional GBNF grammar source (see {@link PromptOptions.grammar}). */
   grammar?: string;
 }

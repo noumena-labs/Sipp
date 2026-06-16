@@ -6,8 +6,8 @@ mod token_emission;
 pub use config::{
     CacheRuntimeConfig, ContextRuntimeConfig, FlashAttentionMode, GenerateOptions, GpuLayerConfig,
     KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig,
-    NativeRuntimeConfig, ObservabilityRuntimeConfig, RequestSampling, ResidencyRuntimeConfig,
-    ResolvedRuntimeLimits, RopeScaling, SamplerStage, SamplingRuntimeConfig, SamplingRuntimePatch,
+    NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, ResolvedRuntimeLimits,
+    RopeScaling, SamplerStage, SamplingRuntimeConfig, SamplingRuntimeOverride,
     SchedulerRuntimeConfig, SplitMode, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 pub use driver::{

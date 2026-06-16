@@ -9,10 +9,10 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
-  RequestSamplingPatch,
+  SamplingRuntimeOverride,
   TransportObservability,
 } from '../engine/inference-types.js';
-import { hasRequestSamplingPatchFields } from '../engine/inference-types.js';
+import { hasSamplingRuntimeOverrideFields } from '../engine/inference-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
@@ -85,7 +85,7 @@ interface RuntimeRequestOptions {
   maxTokens?: number;
   temperature?: number;
   topP?: number;
-  sampling?: RequestSamplingPatch;
+  sampling?: SamplingRuntimeOverride;
   stop?: readonly string[];
   signal?: AbortSignal;
   emitTokens?: boolean;
@@ -439,7 +439,7 @@ export class ModelService implements ModelLifecycleService {
       tokenBatchSink: options.tokenBatchSink == null ? undefined : deliverTokenBatch,
       media,
       stop: options.stop,
-      sampling: requestSamplingPatch(options),
+      sampling: samplingRuntimeOverride(options),
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
     };
@@ -1496,32 +1496,32 @@ export class ModelService implements ModelLifecycleService {
   }
 }
 
-function requestSamplingPatch(
+function samplingRuntimeOverride(
   options: RuntimeRequestOptions
 ): PromptOptions['sampling'] {
-  const patch: NonNullable<PromptOptions['sampling']> = {
+  const overrideConfig: NonNullable<PromptOptions['sampling']> = {
     ...(options.sampling ?? {}),
   };
-  mergeSamplingPatchField(patch, 'temperature', options.temperature);
-  mergeSamplingPatchField(patch, 'top_p', options.topP);
-  return hasRequestSamplingPatchFields(patch) ? patch : undefined;
+  mergeSamplingOverrideField(overrideConfig, 'temperature', options.temperature);
+  mergeSamplingOverrideField(overrideConfig, 'top_p', options.topP);
+  return hasSamplingRuntimeOverrideFields(overrideConfig) ? overrideConfig : undefined;
 }
 
-function mergeSamplingPatchField(
-  patch: RequestSamplingPatch,
-  field: keyof Pick<RequestSamplingPatch, 'temperature' | 'top_p'>,
+function mergeSamplingOverrideField(
+  overrideConfig: SamplingRuntimeOverride,
+  field: keyof Pick<SamplingRuntimeOverride, 'temperature' | 'top_p'>,
   value: number | undefined
 ): void {
   if (value == null) {
     return;
   }
-  if (patch[field] != null && patch[field] !== value) {
+  if (overrideConfig[field] != null && overrideConfig[field] !== value) {
     throw new QueryError(
       'QUERY_FAILED',
       `${field} conflicts with sampling.${field}`
     );
   }
-  patch[field] = value;
+  overrideConfig[field] = value;
 }
 
 function isChatInputObject(input: ChatInput): input is Extract<ChatInput, { messages: unknown }> {

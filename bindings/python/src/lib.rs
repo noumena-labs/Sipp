@@ -99,10 +99,10 @@ impl PySamplingRuntimeConfig {
         min_keep = None,
         n_probs = None,
         logit_bias = None,
-        ignore_eos = false,
-        grammar_lazy = false,
+        ignore_eos = None,
+        grammar_lazy = None,
         preserved_tokens = None,
-        backend_sampling = true
+        backend_sampling = None
     ))]
     fn new(
         samplers: Option<Vec<String>>,
@@ -132,10 +132,10 @@ impl PySamplingRuntimeConfig {
         min_keep: Option<i32>,
         n_probs: Option<i32>,
         logit_bias: Option<Vec<(i32, f32)>>,
-        ignore_eos: bool,
-        grammar_lazy: bool,
+        ignore_eos: Option<bool>,
+        grammar_lazy: Option<bool>,
         preserved_tokens: Option<Vec<i32>>,
-        backend_sampling: bool,
+        backend_sampling: Option<bool>,
     ) -> PyResult<Self> {
         let dto = dto::SamplingRuntimeConfig {
             samplers,
@@ -173,10 +173,10 @@ impl PySamplingRuntimeConfig {
                     })
                     .collect()
             }),
-            ignore_eos: Some(ignore_eos),
-            grammar_lazy: Some(grammar_lazy),
+            ignore_eos,
+            grammar_lazy,
             preserved_tokens,
-            backend_sampling: Some(backend_sampling),
+            backend_sampling,
         };
         SamplingRuntimeConfig::try_from(&dto).map_err(convert_error)?;
         Ok(Self { dto })
