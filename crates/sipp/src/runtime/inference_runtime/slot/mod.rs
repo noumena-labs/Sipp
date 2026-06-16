@@ -146,6 +146,8 @@ fn run_initial_prefill(
     // outputs are read directly from the encoder pass, not from cached KV.
     let bypass_prefix_cache = slot.plan.prefill == PrefillKind::Encode
         || slot.plan.terminal == TerminalAction::ReadEmbedding;
+    let cache_candidate = slot.cache_candidate;
+    let requires_kv_clear = slot.requires_kv_clear;
     let Some(ref mut request) = slot.request else {
         return false;
     };
@@ -158,7 +160,8 @@ fn run_initial_prefill(
         config.scheduler.policy.decode_token_reserve,
         model_fingerprint,
         kv_cache,
-        slot.cache_candidate,
+        cache_candidate,
+        requires_kv_clear,
         &request.context_key,
         &request.prompt_tokens,
         request.max_output_tokens,
@@ -172,6 +175,7 @@ fn run_initial_prefill(
                 total_cache_hits.saturating_add(cache_preparation.cache_hits as usize);
         }
         request.cache_source = cache_preparation.source;
+        slot.requires_kv_clear = false;
         if !slot.sampler_prompt_seeded
             && request.grammar.is_empty()
             && request.json_schema.is_empty()

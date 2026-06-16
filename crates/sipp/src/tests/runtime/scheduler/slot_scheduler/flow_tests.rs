@@ -26,6 +26,7 @@ fn admission(seq_id: i32) -> KvCacheAdmission {
         generation: 1,
         mirror: SequenceMirror::default(),
         candidate: CacheCandidate::None,
+        requires_kv_clear: true,
     }
 }
 

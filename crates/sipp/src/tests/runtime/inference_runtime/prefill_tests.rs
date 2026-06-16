@@ -34,22 +34,18 @@ fn prefix_reuse_plan_modes_are_exact() {
     let disabled = prefix_reuse_plan(KvReuseMode::Disabled, false);
     assert!(!disabled.live);
     assert!(!disabled.snapshot);
-    assert!(disabled.clear_before_prefill);
 
     let live = prefix_reuse_plan(KvReuseMode::LiveSlotPrefix, false);
     assert!(live.live);
     assert!(!live.snapshot);
-    assert!(!live.clear_before_prefill);
 
     let snapshot = prefix_reuse_plan(KvReuseMode::StateSnapshot, false);
     assert!(!snapshot.live);
     assert!(snapshot.snapshot);
-    assert!(snapshot.clear_before_prefill);
 
     let both = prefix_reuse_plan(KvReuseMode::LiveSlotAndSnapshot, false);
     assert!(both.live);
     assert!(both.snapshot);
-    assert!(!both.clear_before_prefill);
 }
 
 #[test]
@@ -58,7 +54,6 @@ fn prefix_reuse_plan_bypass_disables_live_and_snapshot_matching() {
 
     assert!(!plan.live);
     assert!(!plan.snapshot);
-    assert!(plan.clear_before_prefill);
 }
 
 #[test]

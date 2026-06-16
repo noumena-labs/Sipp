@@ -34,6 +34,7 @@ pub struct KvCacheAdmission {
     pub generation: u64,
     pub mirror: SequenceMirror,
     pub candidate: CacheCandidate,
+    pub requires_kv_clear: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +334,7 @@ impl KvCacheManager {
             generation: resident.generation,
             mirror,
             candidate: CacheCandidate::Live,
+            requires_kv_clear: false,
         })
     }
 
@@ -363,6 +365,7 @@ impl KvCacheManager {
             generation: self.physical[index].generation,
             mirror: SequenceMirror::default(),
             candidate: CacheCandidate::None,
+            requires_kv_clear: true,
         })
     }
 
