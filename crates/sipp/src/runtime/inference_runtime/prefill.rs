@@ -75,14 +75,18 @@ pub(super) fn live_candidate_lcp(
     cache_candidate: CacheCandidate,
     cached_tokens: &[llama_token],
     prompt_tokens: &[llama_token],
+    allow_partial_kv: bool,
 ) -> usize {
-    if !plan.live
-        || cache_candidate != CacheCandidate::Live
-        || cached_tokens.len() >= prompt_tokens.len()
-    {
+    if !plan.live || cache_candidate != CacheCandidate::Live {
         return 0;
     }
     let lcp = compute_lcp_reuse(cached_tokens, prompt_tokens);
+    if allow_partial_kv {
+        return lcp;
+    }
+    if cached_tokens.len() >= prompt_tokens.len() {
+        return 0;
+    }
     if lcp == cached_tokens.len() {
         lcp
     } else {
@@ -221,11 +225,13 @@ pub(super) fn prepare_sequence_for_prompt(
         clear_sequence_state(native_runtime, seq_id, state);
     }
 
+    let allow_partial_kv = !(native_runtime.is_recurrent() || native_runtime.is_hybrid());
     let live_match_len = live_candidate_lcp(
         reuse_plan,
         cache_candidate,
         &state.current_kv_tokens,
         prompt_tokens,
+        allow_partial_kv,
     );
     let mut match_len = live_match_len;
     let mut cache_source = if live_match_len > 0 {
@@ -290,8 +296,6 @@ pub(super) fn prepare_sequence_for_prompt(
         &state.current_kv_tokens,
         prompt_tokens,
     ));
-    let allow_partial_kv = !(native_runtime.is_recurrent() || native_runtime.is_hybrid());
-
     if match_len < state.current_kv_tokens.len() || state.current_kv_tokens.is_empty() {
         if !allow_partial_kv || state.current_kv_tokens.is_empty() {
             native_runtime.clear_sequence(seq_id, 0, -1);

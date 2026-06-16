@@ -68,22 +68,22 @@ fn live_candidate_lcp_requires_explicit_live_candidate() {
     let prompt = [1, 2, 4];
 
     assert_eq!(
-        live_candidate_lcp(plan, CacheCandidate::None, &cached, &prompt),
+        live_candidate_lcp(plan, CacheCandidate::None, &cached, &prompt, true),
         0
     );
     assert_eq!(
-        live_candidate_lcp(plan, CacheCandidate::Live, &cached, &prompt),
-        0
+        live_candidate_lcp(plan, CacheCandidate::Live, &cached, &prompt, true),
+        2
     );
 
     assert_eq!(
-        live_candidate_lcp(plan, CacheCandidate::Live, &[1, 2], &prompt),
+        live_candidate_lcp(plan, CacheCandidate::Live, &[1, 2], &prompt, true),
         2
     );
 }
 
 #[test]
-fn live_candidate_lcp_rejects_generated_suffix_trim() {
+fn live_candidate_lcp_allows_generated_suffix_trim_when_supported() {
     let plan = prefix_reuse_plan(KvReuseMode::LiveSlotPrefix, false);
     let final_sequence = [1, 2, 3, 99];
     let repeated_prompt = [1, 2, 3];
@@ -93,20 +93,53 @@ fn live_candidate_lcp_rejects_generated_suffix_trim() {
             plan,
             CacheCandidate::Live,
             &final_sequence,
-            &repeated_prompt
+            &repeated_prompt,
+            true
         ),
-        0
+        3
     );
 }
 
 #[test]
-fn live_candidate_lcp_rejects_repeated_prompt_without_continuation() {
+fn live_candidate_lcp_allows_repeated_prompt_when_supported() {
     let plan = prefix_reuse_plan(KvReuseMode::LiveSlotPrefix, false);
     let prompt = [1, 2, 3];
 
     assert_eq!(
-        live_candidate_lcp(plan, CacheCandidate::Live, &prompt, &prompt),
+        live_candidate_lcp(plan, CacheCandidate::Live, &prompt, &prompt, true),
+        3
+    );
+}
+
+#[test]
+fn live_candidate_lcp_requires_strict_prefix_without_partial_kv() {
+    let plan = prefix_reuse_plan(KvReuseMode::LiveSlotPrefix, false);
+    let final_sequence = [1, 2, 3, 99];
+    let repeated_prompt = [1, 2, 3];
+
+    assert_eq!(
+        live_candidate_lcp(
+            plan,
+            CacheCandidate::Live,
+            &final_sequence,
+            &repeated_prompt,
+            false
+        ),
         0
+    );
+    assert_eq!(
+        live_candidate_lcp(
+            plan,
+            CacheCandidate::Live,
+            &repeated_prompt,
+            &repeated_prompt,
+            false
+        ),
+        0
+    );
+    assert_eq!(
+        live_candidate_lcp(plan, CacheCandidate::Live, &[1, 2], &repeated_prompt, false),
+        2
     );
 }
 
