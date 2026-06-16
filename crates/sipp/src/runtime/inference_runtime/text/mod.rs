@@ -105,25 +105,41 @@ pub(super) fn earliest_stop_index_split(
     buffered: &str,
     stops: &[String],
 ) -> Option<usize> {
-    let output_len = output.len();
     stops
         .iter()
-        .filter_map(|stop| {
-            if stop.is_empty() {
-                return None;
-            }
-            let suffix_len = stop.len().saturating_sub(1);
-            let mut suffix_start = output_len.saturating_sub(suffix_len);
-            while suffix_start > 0 && !output.is_char_boundary(suffix_start) {
-                suffix_start -= 1;
-            }
-            let suffix = &output[suffix_start..];
-            let mut search_space = String::with_capacity(suffix.len() + buffered.len());
-            search_space.push_str(suffix);
-            search_space.push_str(buffered);
-            search_space.find(stop).map(|idx| suffix_start + idx)
-        })
+        .filter_map(|stop| find_stop_index_split(output, buffered, stop))
         .min()
+}
+
+fn find_stop_index_split(output: &str, buffered: &str, stop: &str) -> Option<usize> {
+    if stop.is_empty() {
+        return None;
+    }
+
+    let output_len = output.len();
+    let suffix_len = stop.len().saturating_sub(1);
+    let suffix_start = floor_char_boundary(output, output_len.saturating_sub(suffix_len));
+    for (relative_start, _) in output[suffix_start..].char_indices() {
+        let start = suffix_start + relative_start;
+        if stop_matches_at_split(&output[start..], buffered, stop) {
+            return Some(start);
+        }
+    }
+
+    buffered.find(stop).map(|idx| output_len + idx)
+}
+
+fn stop_matches_at_split(output_tail: &str, buffered: &str, stop: &str) -> bool {
+    let stop_bytes = stop.as_bytes();
+    let output_bytes = output_tail.as_bytes();
+    let output_match_len = output_bytes.len().min(stop_bytes.len());
+    if output_bytes[..output_match_len] != stop_bytes[..output_match_len] {
+        return false;
+    }
+    output_match_len == stop_bytes.len()
+        || buffered
+            .as_bytes()
+            .starts_with(&stop_bytes[output_match_len..])
 }
 
 pub(super) fn truncate_to_char_boundary(value: &mut String, max_len: usize) {
