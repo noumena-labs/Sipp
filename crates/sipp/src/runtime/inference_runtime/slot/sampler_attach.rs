@@ -14,18 +14,11 @@ pub(super) fn ensure_slot_sampler(
     sampler_pool: &mut HashMap<SamplerCacheKey, Vec<SamplerHandle>>,
     resident_backend_samplers: &mut HashMap<llama_seq_id, ResidentBackendSampler>,
 ) -> bool {
-    let (grammar, json_schema, sampling) = slot
-        .request()
-        .map(|request| {
-            (
-                request.grammar.clone(),
-                request.json_schema.clone(),
-                request.sampling.clone(),
-            )
-        })
-        .unwrap_or_default();
+    let Some(request) = slot.request() else {
+        return false;
+    };
 
-    let sampling_json = match config.try_sampling_json_with_override(sampling.as_ref()) {
+    let sampling_json = match config.try_sampling_json_with_override(request.sampling.as_ref()) {
         Ok(sampling_json) => sampling_json,
         Err(error) => {
             slot.fail(format!(
@@ -36,8 +29,8 @@ pub(super) fn ensure_slot_sampler(
     };
     let key = SamplerCacheKey {
         sampling_json,
-        grammar: grammar.clone(),
-        json_schema: json_schema.clone(),
+        grammar: request.grammar.clone(),
+        json_schema: request.json_schema.clone(),
     };
 
     if let Some(resident) = resident_backend_samplers.remove(&slot.seq_id) {
@@ -60,12 +53,13 @@ pub(super) fn ensure_slot_sampler(
         return true;
     }
 
+    let sampling = slot.request().and_then(|request| request.sampling.as_ref());
     match create_sampler(
         native_runtime,
         config,
-        sampling.as_ref(),
-        Some(&grammar),
-        Some(&json_schema),
+        sampling,
+        Some(&key.grammar),
+        Some(&key.json_schema),
     ) {
         Ok(sampler) => {
             slot.set_sampler(sampler);
@@ -74,7 +68,7 @@ pub(super) fn ensure_slot_sampler(
             true
         }
         Err(_) => {
-            let message = if grammar.is_empty() {
+            let message = if key.grammar.is_empty() {
                 "Failed to create per-slot sampler."
             } else {
                 "Failed to create per-slot grammar sampler."
