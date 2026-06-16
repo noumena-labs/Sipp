@@ -31,7 +31,8 @@ added.
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
 - Node installs use `@sipp/sipp-server`; npm resolves the matching optional
   platform binary package automatically. Python installs use `sipp` for CPU
-  and extras such as `sipp[cuda]` for GPU backend wheels. Use
+  and extras such as `sipp[cuda]` to pull matching backend distributions like
+  `sipp-backend-cuda`. Use
   `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you need to force `cpu`,
   `vulkan`, `cuda`, or `metal`.
 - Gateway clients need only the gateway base URL, public target name, and

@@ -21,6 +21,10 @@ pip install "sipp[metal]"
 pip install "sipp[all]"
 ```
 
+The backend wheels are separate PyPI distributions. For example,
+`sipp[cuda]` installs the main `sipp` wheel plus the matching
+`sipp-backend-cuda` wheel for the same release version.
+
 ## Use It For
 
 - Python applications that need local GGUF inference.
