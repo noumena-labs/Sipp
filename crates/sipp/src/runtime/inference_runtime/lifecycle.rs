@@ -65,6 +65,7 @@ impl InferenceRuntime {
             scratch_decode_ready_slots: Vec::with_capacity(runtime_parts.max_sequences),
             scratch_prefill_ready_slots: Vec::with_capacity(runtime_parts.max_sequences),
             scratch_logits_contributions: Vec::with_capacity(runtime_parts.scratch_token_capacity),
+            scratch_embedding_read_slots: Vec::with_capacity(runtime_parts.max_sequences),
             scratch_plan: SharedBatchPlan::with_capacities(
                 runtime_parts.scratch_token_capacity,
                 runtime_parts.max_sequences,

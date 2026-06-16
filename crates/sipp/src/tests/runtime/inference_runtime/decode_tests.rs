@@ -11,8 +11,17 @@ use crate::runtime::scheduler::{
 };
 
 fn request_slot(prompt_tokens: Vec<i32>, phase: SlotPhase) -> SlotState {
-    let mut slot = SlotState::new(0);
-    let mut request = GenerateRequest::new(7, "ctx");
+    request_slot_for(0, 7, prompt_tokens, phase)
+}
+
+fn request_slot_for(
+    slot_id: usize,
+    request_id: u32,
+    prompt_tokens: Vec<i32>,
+    phase: SlotPhase,
+) -> SlotState {
+    let mut slot = SlotState::new(slot_id);
+    let mut request = GenerateRequest::new(request_id, "ctx");
     request.prompt_tokens = prompt_tokens;
     request.max_output_tokens = 4;
     slot.request_id = request.id;
@@ -23,9 +32,18 @@ fn request_slot(prompt_tokens: Vec<i32>, phase: SlotPhase) -> SlotState {
 }
 
 fn contribution(kind: BatchContributionKind, token: i32) -> BatchContribution {
+    contribution_for_slot(0, 7, kind, token)
+}
+
+fn contribution_for_slot(
+    slot_index: usize,
+    request_id: u32,
+    kind: BatchContributionKind,
+    token: i32,
+) -> BatchContribution {
     BatchContribution {
-        slot_index: 0,
-        request_id: 7,
+        slot_index,
+        request_id,
         kind,
         token,
         position: 0,
@@ -80,6 +98,41 @@ fn decode_bookkeeping_counts_decode_steps_without_prefill_metrics() {
     assert_eq!(slot.mirror.current_kv_tokens, vec![22]);
     assert_eq!(request.decode_ms, 3.0);
     assert_eq!(request.prefill_tokens, 0);
+    assert_eq!(runtime.total_decode_ms, 3.0);
+}
+
+#[test]
+fn mixed_bookkeeping_splits_aggregate_tick_time_by_work_type() {
+    let mut runtime = test_runtime(NativeRuntimeConfig::default());
+    runtime
+        .slot_scheduler
+        .slots
+        .push(request_slot_for(0, 7, vec![11], SlotPhase::Prefill));
+    runtime
+        .slot_scheduler
+        .slots
+        .push(request_slot_for(1, 8, vec![21], SlotPhase::Decode));
+    let mut plan = SharedBatchPlan::default();
+    plan.contributions.push(contribution_for_slot(
+        0,
+        7,
+        BatchContributionKind::Prefill,
+        11,
+    ));
+    plan.contributions.push(contribution_for_slot(
+        1,
+        8,
+        BatchContributionKind::Decode,
+        22,
+    ));
+
+    runtime.apply_bookkeeping_and_emit(&plan, 1.0, 2.0, 3.0);
+
+    let prefill_request = runtime.slot_scheduler.slots[0].request().expect("request");
+    let decode_request = runtime.slot_scheduler.slots[1].request().expect("request");
+    assert_eq!(prefill_request.prefill_ms, 6.0);
+    assert_eq!(decode_request.decode_ms, 6.0);
+    assert_eq!(runtime.total_prefill_ms, 3.0);
     assert_eq!(runtime.total_decode_ms, 3.0);
 }
 

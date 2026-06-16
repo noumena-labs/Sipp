@@ -123,6 +123,7 @@ pub struct InferenceRuntime {
     scratch_decode_ready_slots: Vec<usize>,
     scratch_prefill_ready_slots: Vec<usize>,
     scratch_logits_contributions: Vec<PendingLogitsContribution>,
+    scratch_embedding_read_slots: Vec<usize>,
     /// Reused across every tick to avoid allocating a fresh ~16 KiB Vec for
     /// the batch contributions each scheduler iteration.
     scratch_plan: SharedBatchPlan,

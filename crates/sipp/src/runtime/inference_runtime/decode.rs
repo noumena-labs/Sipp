@@ -35,6 +35,8 @@ impl InferenceRuntime {
         let mut prefill_timed_slots: u64 = 0;
         let mut decode_timed_slots: u64 = 0;
         let mut emitted_slots: u64 = 0;
+        let mut tick_prefill_tokens = 0_usize;
+        let mut tick_decode_tokens = 0_usize;
 
         for contribution in &plan.contributions {
             let Some(slot) = self.slot_scheduler.slots.get_mut(contribution.slot_index) else {
@@ -88,8 +90,10 @@ impl InferenceRuntime {
             }
             if is_prefill {
                 self.total_prefill_tokens = self.total_prefill_tokens.saturating_add(1);
+                tick_prefill_tokens = tick_prefill_tokens.saturating_add(1);
                 tick_had_prefill = true;
             } else {
+                tick_decode_tokens = tick_decode_tokens.saturating_add(1);
                 tick_had_decode = true;
             }
 
@@ -100,11 +104,16 @@ impl InferenceRuntime {
             }
         }
 
-        if tick_had_decode {
-            self.total_decode_ms += tick_ms;
-        }
-        if tick_had_prefill {
-            self.total_prefill_ms += tick_ms;
+        let tick_token_count = tick_prefill_tokens.saturating_add(tick_decode_tokens);
+        if tick_token_count > 0 {
+            if tick_had_decode {
+                self.total_decode_ms +=
+                    proportional_tick_ms(tick_ms, tick_decode_tokens, tick_token_count);
+            }
+            if tick_had_prefill {
+                self.total_prefill_ms +=
+                    proportional_tick_ms(tick_ms, tick_prefill_tokens, tick_token_count);
+            }
         }
 
         // Decoder-only embedding slots: when prefill just drained the prompt,
@@ -112,27 +121,26 @@ impl InferenceRuntime {
         // standard sample/decode loop take over. We collect indices in this
         // separate pass so the per-contribution borrow on `slot` above can
         // unwind cleanly before the embedding read, which needs `&mut self`.
-        let pending_reads: Vec<usize> = self
-            .slot_scheduler
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(index, slot)| {
-                let prompt_len = slot.request().map(|r| r.prompt_tokens.len()).unwrap_or(0);
-                let ready = slot.phase == SlotPhase::Decode
-                    && slot.plan.terminal == TerminalAction::ReadEmbedding
-                    && slot.prefill_cursor >= prompt_len
-                    && slot.embedding_output.is_none();
-                ready.then_some(index)
-            })
-            .collect();
-        for slot_index in pending_reads {
+        self.scratch_embedding_read_slots.clear();
+        for (index, slot) in self.slot_scheduler.slots.iter().enumerate() {
+            let prompt_len = slot.request().map(|r| r.prompt_tokens.len()).unwrap_or(0);
+            let ready = slot.phase == SlotPhase::Decode
+                && slot.plan.terminal == TerminalAction::ReadEmbedding
+                && slot.prefill_cursor >= prompt_len
+                && slot.embedding_output.is_none();
+            if ready {
+                self.scratch_embedding_read_slots.push(index);
+            }
+        }
+        for pending_read_index in 0..self.scratch_embedding_read_slots.len() {
+            let slot_index = self.scratch_embedding_read_slots[pending_read_index];
             if let Err(error) = self.read_slot_embedding(slot_index) {
                 if let Some(slot) = self.slot_scheduler.slots.get_mut(slot_index) {
                     slot.fail(format!("embedding read failed: {error}"));
                 }
             }
         }
+        self.scratch_embedding_read_slots.clear();
     }
 
     pub(super) fn sample_logits_and_buffer_output(&mut self) {
@@ -215,4 +223,11 @@ impl InferenceRuntime {
             }
         }
     }
+}
+
+fn proportional_tick_ms(tick_ms: f64, token_count: usize, total_token_count: usize) -> f64 {
+    if total_token_count == 0 {
+        return 0.0;
+    }
+    tick_ms * token_count as f64 / total_token_count as f64
 }
