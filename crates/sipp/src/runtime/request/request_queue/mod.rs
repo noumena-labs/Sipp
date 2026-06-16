@@ -67,6 +67,28 @@ impl RequestQueue {
         Some(request_id)
     }
 
+    pub(crate) fn take_admitted_request(
+        &mut self,
+        request_id: GenerateRequestId,
+    ) -> Option<GenerateRequest> {
+        let request = self.requests.get_mut(&request_id)?;
+        let admitted = std::mem::take(request);
+        *request = GenerateRequest {
+            id: admitted.id,
+            context_key: admitted.context_key.clone(),
+            max_output_tokens: admitted.max_output_tokens,
+            emit_tokens: admitted.emit_tokens,
+            lifecycle: admitted.lifecycle,
+            enqueued_at: admitted.enqueued_at,
+            admitted_at: admitted.admitted_at,
+            input_tokens: admitted.input_tokens,
+            is_multimodal_turn: admitted.is_multimodal_turn,
+            cancel_requested: admitted.cancel_requested,
+            ..GenerateRequest::default()
+        };
+        Some(admitted)
+    }
+
     fn find_admissible_pending_request(
         &self,
         predicate: &mut impl FnMut(&GenerateRequest) -> bool,
