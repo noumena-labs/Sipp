@@ -122,6 +122,18 @@ rust::Vec<std::uint8_t> copy_string_bytes(const std::string & value) {
   return out;
 }
 
+void append_piece_bytes(
+    rust::Vec<std::uint8_t> & out,
+    const char * data,
+    std::int32_t size) {
+  if (size < 0) {
+    throw std::runtime_error("llama_token_to_piece returned a negative byte count");
+  }
+  for (std::int32_t i = 0; i < size; ++i) {
+    out.push_back(static_cast<std::uint8_t>(data[static_cast<std::size_t>(i)]));
+  }
+}
+
 std::string token_to_piece_string(
     const llama_vocab * vocab,
     std::int32_t token,
@@ -428,6 +440,40 @@ rust::Vec<std::uint8_t> NativeRuntime::token_to_piece_bytes(
     std::int32_t token,
     bool special) const {
   return copy_string_bytes(token_to_piece_string(impl_->vocab(), token, special));
+}
+
+void NativeRuntime::token_to_piece_bytes_into(
+    std::int32_t token,
+    bool special,
+    rust::Vec<std::uint8_t> & out) const {
+  std::array<char, 32> stack_buffer{};
+  std::int32_t written = llama_token_to_piece(
+      impl_->vocab(),
+      token,
+      stack_buffer.data(),
+      stack_buffer.size(),
+      0,
+      special);
+  if (written >= 0) {
+    append_piece_bytes(out, stack_buffer.data(), written);
+    return;
+  }
+  if (written == INT32_MIN) {
+    throw std::runtime_error("llama_token_to_piece overflowed");
+  }
+
+  std::vector<char> buffer(static_cast<std::size_t>(-written));
+  written = llama_token_to_piece(
+      impl_->vocab(),
+      token,
+      buffer.data(),
+      static_cast<std::int32_t>(buffer.size()),
+      0,
+      special);
+  if (written < 0) {
+    throw std::runtime_error("llama_token_to_piece failed");
+  }
+  append_piece_bytes(out, buffer.data(), written);
 }
 
 rust::String NativeRuntime::apply_chat_template_json(

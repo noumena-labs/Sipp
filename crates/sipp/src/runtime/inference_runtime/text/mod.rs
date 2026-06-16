@@ -182,11 +182,9 @@ pub(super) fn token_to_piece_into(
     if token < 0 {
         return false;
     }
-    let Ok(piece) = native_runtime.token_to_piece_bytes(token, special) else {
-        return false;
-    };
-    scratch.extend(piece);
-    true
+    native_runtime
+        .token_to_piece_bytes_into(token, special, scratch)
+        .is_ok()
 }
 
 /// Returns the number of trailing bytes that form an incomplete UTF-8 code
