@@ -72,7 +72,7 @@ impl SlotScheduler {
         let next_request_id = request_queue
             .try_pop_next_admissible(|request| kv_cache.can_admit(&request.context_key))?;
 
-        let queued_request = request_queue.requests.get(&next_request_id)?;
+        let queued_request = request_queue.pending_request(next_request_id)?;
 
         let context_key = queued_request.context_key.clone();
         let Some(plan) = resolve_plan(queued_request) else {
@@ -111,10 +111,7 @@ impl SlotScheduler {
             }
 
             let request = slot.request.take();
-            let queue_cancel_requested = request_queue
-                .requests
-                .get(&slot.request_id)
-                .is_some_and(|request| request.cancel_requested);
+            let queue_cancel_requested = request_queue.request_cancel_requested(slot.request_id);
             let request_cancel_requested = request
                 .as_ref()
                 .is_some_and(|request| request.cancel_requested);

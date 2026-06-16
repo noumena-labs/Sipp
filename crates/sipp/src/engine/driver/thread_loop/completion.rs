@@ -26,7 +26,7 @@ fn cancel_and_consume_request(runtime: &mut crate::runtime::InferenceRuntime, re
             let _ = runtime.take_completed_response(request_id);
             return;
         }
-        if !runtime.request_queue.requests.contains_key(&request_id) {
+        if !runtime.request_queue.contains_request(request_id) {
             return;
         }
 

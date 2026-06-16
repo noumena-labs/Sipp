@@ -126,7 +126,7 @@ impl InferenceRuntime {
 
         let loop_start = Instant::now();
         loop {
-            if self.request_queue.requests.len() <= self.request_queue.completed_responses.len() {
+            if !self.request_queue.has_uncompleted_requests() {
                 loop_result.status = RequestStepResult::Waiting;
                 break;
             }

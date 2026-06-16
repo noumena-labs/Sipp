@@ -126,15 +126,8 @@ fn admit_pending_request_moves_heavy_payloads_into_slot() {
 
     assert!(admit_one(&mut scheduler, &mut queue, &mut kv_cache).is_some());
 
-    let queued = queue.requests.get(&1).expect("queued request");
-    assert!(queued.original_prompt.is_empty());
-    assert!(queued.grammar.is_empty());
-    assert!(queued.json_schema.is_empty());
-    assert!(queued.stop.is_empty());
-    assert!(queued.prompt_tokens.is_empty());
-    assert!(queued.multimodal.is_none());
-    assert_eq!(queued.context_key, "ctx");
-    assert!(queued.is_multimodal_turn);
+    assert!(queue.contains_request(1));
+    assert!(queue.pending_request(1).is_none());
 
     let slot_request = scheduler.slots[0].request().expect("slot request");
     assert_eq!(slot_request.original_prompt, "heavy prompt");

@@ -28,7 +28,7 @@ fn pops_first_admissible_request_and_marks_admitted() {
     let popped = queue.try_pop_next_admissible(|request| request.id == 2);
     assert_eq!(popped, Some(2));
     assert_eq!(
-        queue.requests.get(&2).map(|request| request.lifecycle),
+        queue.request_lifecycle(2),
         Some(GenerateRequestLifecycle::Admitted)
     );
     assert_eq!(queue.try_pop_next_admissible(|_| true), Some(1));
@@ -54,9 +54,11 @@ fn cancelling_admitted_request_marks_it_for_runtime_cancellation() {
 
     assert!(queue.cancel(8, "cancelled".to_string()));
 
-    let request = queue.requests.get(&8).expect("admitted request");
-    assert!(request.cancel_requested);
-    assert_eq!(request.lifecycle, GenerateRequestLifecycle::Admitted);
+    assert!(queue.request_cancel_requested(8));
+    assert_eq!(
+        queue.request_lifecycle(8),
+        Some(GenerateRequestLifecycle::Admitted)
+    );
     assert!(!queue.completed_responses.contains_key(&8));
 }
 
