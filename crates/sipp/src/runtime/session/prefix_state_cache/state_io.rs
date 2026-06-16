@@ -21,7 +21,10 @@ mod state_io_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 impl PrefixStateCache {
-    pub(crate) fn enqueue_pending_snapshot(&mut self, snapshot: PendingPrefixSnapshot) {
+    pub(in crate::runtime::session) fn enqueue_pending_snapshot(
+        &mut self,
+        snapshot: PendingPrefixSnapshot,
+    ) {
         if snapshot.seq_id < 0
             || snapshot.token_count == 0
             || snapshot.token_count > snapshot.prefix_tokens.len()
