@@ -9,8 +9,10 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
+  RequestSamplingPatch,
   TransportObservability,
 } from '../engine/inference-types.js';
+import { hasRequestSamplingPatchFields } from '../engine/inference-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
@@ -83,6 +85,7 @@ interface RuntimeRequestOptions {
   maxTokens?: number;
   temperature?: number;
   topP?: number;
+  sampling?: RequestSamplingPatch;
   stop?: readonly string[];
   signal?: AbortSignal;
   emitTokens?: boolean;
@@ -1496,14 +1499,29 @@ export class ModelService implements ModelLifecycleService {
 function requestSamplingPatch(
   options: RuntimeRequestOptions
 ): PromptOptions['sampling'] {
-  const patch: NonNullable<PromptOptions['sampling']> = {};
-  if (options.temperature != null) {
-    patch.temperature = options.temperature;
+  const patch: NonNullable<PromptOptions['sampling']> = {
+    ...(options.sampling ?? {}),
+  };
+  mergeSamplingPatchField(patch, 'temperature', options.temperature);
+  mergeSamplingPatchField(patch, 'top_p', options.topP);
+  return hasRequestSamplingPatchFields(patch) ? patch : undefined;
+}
+
+function mergeSamplingPatchField(
+  patch: RequestSamplingPatch,
+  field: keyof Pick<RequestSamplingPatch, 'temperature' | 'top_p'>,
+  value: number | undefined
+): void {
+  if (value == null) {
+    return;
   }
-  if (options.topP != null) {
-    patch.top_p = options.topP;
+  if (patch[field] != null && patch[field] !== value) {
+    throw new QueryError(
+      'QUERY_FAILED',
+      `${field} conflicts with sampling.${field}`
+    );
   }
-  return patch.temperature == null && patch.top_p == null ? undefined : patch;
+  patch[field] = value;
 }
 
 function isChatInputObject(input: ChatInput): input is Extract<ChatInput, { messages: unknown }> {

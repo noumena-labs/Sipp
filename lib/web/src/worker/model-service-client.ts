@@ -121,6 +121,7 @@ function toWorkerQueryOptions(
     maxTokens: options.maxTokens,
     temperature: options.temperature,
     topP: options.topP,
+    sampling: options.sampling,
     stop: options.stop,
     grammar: options.grammar,
     emitTokens,

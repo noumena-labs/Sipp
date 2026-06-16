@@ -129,6 +129,7 @@ fn multimodal_payload_and_request_overrides_are_plain_value_fields() {
     request.sampling = Some(RequestSampling::Patch(SamplingRuntimePatch {
         temperature: Some(0.2),
         top_p: None,
+        ..SamplingRuntimePatch::default()
     }));
     request.prompt_tokens = vec![1, 2, 3];
     request.multimodal = Some(payload.clone());
@@ -148,7 +149,8 @@ fn multimodal_payload_and_request_overrides_are_plain_value_fields() {
         request.sampling,
         Some(RequestSampling::Patch(SamplingRuntimePatch {
             temperature: Some(0.2),
-            top_p: None
+            top_p: None,
+            ..
         }))
     ));
     assert_eq!(request.prompt_tokens, vec![1, 2, 3]);

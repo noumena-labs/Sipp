@@ -105,9 +105,24 @@ export interface SamplingRuntimeConfig {
   backend_sampling?: boolean;
 }
 
-export interface RequestSamplingPatch {
-  temperature?: number;
-  top_p?: number;
+/** Sparse request-level local sampler override. */
+export type RequestSamplingPatch = Partial<
+  Pick<
+    SamplingRuntimeConfig,
+    | 'temperature'
+    | 'top_p'
+    | 'repeat_last_n'
+    | 'repeat_penalty'
+    | 'frequency_penalty'
+    | 'presence_penalty'
+  >
+>;
+
+/** Returns true when a request sampler patch contains at least one override. */
+export function hasRequestSamplingPatchFields(
+  sampling: RequestSamplingPatch | undefined
+): sampling is RequestSamplingPatch {
+  return sampling != null && Object.values(sampling).some((value) => value != null);
 }
 
 export interface SchedulerPolicyConfig {

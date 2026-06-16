@@ -38,6 +38,7 @@ import {
 import { EngineModule } from '../../wasm/engine-module.js';
 import { createAbortError } from '../../utils/abort.js';
 import { QueuedRequestScheduler } from '../scheduler.js';
+import { hasRequestSamplingPatchFields } from '../../engine/inference-types.js';
 import {
   resolveRuntimeThreadingMode,
   resolveRuntimeUrls,
@@ -227,9 +228,7 @@ export class MainThreadEngineRuntime implements EngineRuntime {
       return undefined;
     }
     const sampling = input.sampling;
-    return sampling.temperature == null && sampling.top_p == null
-      ? undefined
-      : sampling;
+    return hasRequestSamplingPatchFields(sampling) ? sampling : undefined;
   }
 
   private countMarkerOccurrences(promptText: string, marker: string): number {

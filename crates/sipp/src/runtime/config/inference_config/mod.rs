@@ -73,15 +73,20 @@ impl NativeRuntimeConfig {
         &self,
         override_config: Option<&RequestSampling>,
     ) -> serde_json::Result<String> {
-        let mut value = serde_json::to_value(&self.sampling)?;
-        if let Some(override_config) = override_config {
-            let override_value = match override_config {
-                RequestSampling::Full(config) => serde_json::to_value(config)?,
-                RequestSampling::Patch(patch) => serde_json::to_value(patch)?,
-            };
-            merge_sampling_override_json(&mut value, override_value);
+        match override_config {
+            None => serde_json::to_string(&self.sampling),
+            Some(RequestSampling::Patch(patch)) => {
+                let mut sampling = self.sampling.clone();
+                patch.apply_to(&mut sampling);
+                serde_json::to_string(&sampling)
+            }
+            Some(RequestSampling::Full(config)) => {
+                let mut value = serde_json::to_value(&self.sampling)?;
+                let override_value = serde_json::to_value(config)?;
+                merge_sampling_override_json(&mut value, override_value);
+                serde_json::to_string(&value)
+            }
         }
-        serde_json::to_string(&value)
     }
 
     pub(crate) fn prompt_sampler_seed_start(
@@ -89,9 +94,15 @@ impl NativeRuntimeConfig {
         override_config: Option<&RequestSampling>,
         prompt_len: usize,
     ) -> usize {
+        let mut patched_sampling;
         let sampling = match override_config {
             Some(RequestSampling::Full(config)) => config,
-            Some(RequestSampling::Patch(_)) | None => &self.sampling,
+            Some(RequestSampling::Patch(patch)) => {
+                patched_sampling = self.sampling.clone();
+                patch.apply_to(&mut patched_sampling);
+                &patched_sampling
+            }
+            None => &self.sampling,
         };
         sampling.prompt_sampler_seed_start(prompt_len)
     }

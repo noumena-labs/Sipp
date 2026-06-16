@@ -107,7 +107,12 @@ test('WasmBridge forwards text request stop and sampling JSON', () => {
   const requestId = bridge.startTextRequest('default', 'hello', 16, {
     grammar: 'root ::= "ok"',
     stop: ['END'],
-    sampling: { temperature: 0.2, top_p: 0.8 },
+    sampling: {
+      temperature: 0.2,
+      top_p: 0.8,
+      repeat_last_n: 128,
+      repeat_penalty: 1.15,
+    },
     emitTokens: true,
   });
 
@@ -123,7 +128,12 @@ test('WasmBridge forwards text request stop and sampling JSON', () => {
         1,
         'root ::= "ok"',
         JSON.stringify(['END']),
-        JSON.stringify({ temperature: 0.2, top_p: 0.8 }),
+        JSON.stringify({
+          temperature: 0.2,
+          top_p: 0.8,
+          repeat_last_n: 128,
+          repeat_penalty: 1.15,
+        }),
       ],
     },
   ]);

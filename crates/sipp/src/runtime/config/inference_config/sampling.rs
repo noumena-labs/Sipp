@@ -23,6 +23,47 @@ pub struct SamplingRuntimePatch {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_last_n: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f32>,
+}
+
+impl SamplingRuntimePatch {
+    /// Returns true when the patch contains no request-level overrides.
+    pub fn is_empty(&self) -> bool {
+        self.temperature.is_none()
+            && self.top_p.is_none()
+            && self.repeat_last_n.is_none()
+            && self.repeat_penalty.is_none()
+            && self.frequency_penalty.is_none()
+            && self.presence_penalty.is_none()
+    }
+
+    pub(crate) fn apply_to(&self, sampling: &mut SamplingRuntimeConfig) {
+        if let Some(value) = self.temperature {
+            sampling.temperature = Some(value);
+        }
+        if let Some(value) = self.top_p {
+            sampling.top_p = Some(value);
+        }
+        if let Some(value) = self.repeat_last_n {
+            sampling.repeat_last_n = Some(value);
+        }
+        if let Some(value) = self.repeat_penalty {
+            sampling.repeat_penalty = Some(value);
+        }
+        if let Some(value) = self.frequency_penalty {
+            sampling.frequency_penalty = Some(value);
+        }
+        if let Some(value) = self.presence_penalty {
+            sampling.presence_penalty = Some(value);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

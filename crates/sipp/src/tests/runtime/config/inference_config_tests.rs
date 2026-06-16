@@ -157,6 +157,10 @@ fn sampling_patch_merges_only_common_knobs() {
     let patch = RequestSampling::Patch(SamplingRuntimePatch {
         temperature: Some(0.2),
         top_p: None,
+        repeat_last_n: Some(128),
+        repeat_penalty: Some(1.15),
+        frequency_penalty: Some(0.1),
+        presence_penalty: Some(0.2),
     });
 
     let json = config
@@ -166,6 +170,10 @@ fn sampling_patch_merges_only_common_knobs() {
 
     assert_float_eq(value["temperature"].as_f64(), 0.2);
     assert_float_eq(value["top_p"].as_f64(), 0.8);
+    assert_eq!(value["repeat_last_n"], 128);
+    assert_float_eq(value["repeat_penalty"].as_f64(), 1.15);
+    assert_float_eq(value["frequency_penalty"].as_f64(), 0.1);
+    assert_float_eq(value["presence_penalty"].as_f64(), 0.2);
     assert_eq!(value["backend_sampling"], cfg!(not(target_arch = "wasm32")));
     assert_eq!(value["samplers"].as_array().expect("samplers").len(), 4);
 }
@@ -182,16 +190,24 @@ fn prompt_sampler_seed_start_uses_default_penalty_tail() {
 fn prompt_sampler_seed_start_respects_sampling_overrides() {
     let mut config = NativeRuntimeConfig::default();
     config.sampling.repeat_last_n = Some(7);
-    let patch = RequestSampling::Patch(SamplingRuntimePatch {
+    let temperature_patch = RequestSampling::Patch(SamplingRuntimePatch {
         temperature: Some(0.2),
-        top_p: None,
+        ..SamplingRuntimePatch::default()
+    });
+    let repeat_patch = RequestSampling::Patch(SamplingRuntimePatch {
+        repeat_last_n: Some(11),
+        ..SamplingRuntimePatch::default()
     });
     let full = RequestSampling::Full(SamplingRuntimeConfig {
         repeat_last_n: Some(11),
         ..SamplingRuntimeConfig::default()
     });
 
-    assert_eq!(config.prompt_sampler_seed_start(Some(&patch), 20), 13);
+    assert_eq!(
+        config.prompt_sampler_seed_start(Some(&temperature_patch), 20),
+        13
+    );
+    assert_eq!(config.prompt_sampler_seed_start(Some(&repeat_patch), 20), 9);
     assert_eq!(config.prompt_sampler_seed_start(Some(&full), 20), 9);
 }
 

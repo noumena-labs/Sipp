@@ -364,9 +364,7 @@ impl BrowserEngine {
             None
         } else {
             match serde_json::from_str::<SamplingRuntimePatch>(sampling_json) {
-                Ok(patch) if patch.temperature.is_some() || patch.top_p.is_some() => {
-                    Some(RequestSampling::Patch(patch))
-                }
+                Ok(patch) if !patch.is_empty() => Some(RequestSampling::Patch(patch)),
                 Ok(_) => None,
                 Err(error) => {
                     self.set_last_error(format!("invalid sampling JSON: {error}"));

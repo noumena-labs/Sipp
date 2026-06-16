@@ -211,6 +211,7 @@ fn local_sampling(
         Ok(Some(RequestSampling::Patch(SamplingRuntimePatch {
             temperature,
             top_p,
+            ..SamplingRuntimePatch::default()
         })))
     } else {
         Ok(None)
