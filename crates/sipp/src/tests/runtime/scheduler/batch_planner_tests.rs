@@ -136,7 +136,7 @@ fn chunked_single_slot_prefill_revisits_without_duplicate_positions() {
 }
 
 #[test]
-fn snapshot_mode_prefill_reaches_logits_without_decode_seed_pause() {
+fn snapshot_mode_prefill_requests_logits_on_prompt_tail() {
     let planner = BatchPlanner;
     let mut request = request(1, vec![10, 11, 12, 13], 4);
     request.cache_mode = KvReuseMode::LiveSlotAndSnapshot;
@@ -164,7 +164,7 @@ fn snapshot_mode_prefill_reaches_logits_without_decode_seed_pause() {
 }
 
 #[test]
-fn live_only_prefill_does_not_pause_at_decode_seed_boundary() {
+fn live_only_prefill_requests_logits_on_prompt_tail() {
     let planner = BatchPlanner;
     let mut request = request(1, vec![10, 11, 12, 13], 4);
     request.cache_mode = KvReuseMode::LiveSlotPrefix;

@@ -20,9 +20,8 @@ fn decode_seed_snapshot_requires_at_least_two_prompt_tokens() {
 }
 
 #[test]
-fn capture_prefix_snapshots_queues_live_snapshot_under_decode_pressure() {
+fn capture_prefix_snapshots_queues_live_snapshot_at_seed_boundary() {
     let mut runtime = test_runtime(NativeRuntimeConfig::default());
-    runtime.scratch_decode_ready_slots.push(1);
     runtime.slot_scheduler.slots.push(prefill_slot(vec![1, 2]));
     let mut plan = SharedBatchPlan::default();
     plan.contributions.push(BatchContribution {
