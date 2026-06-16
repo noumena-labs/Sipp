@@ -106,6 +106,65 @@ impl Default for SamplingRuntimeConfig {
     }
 }
 
+impl SamplingRuntimeConfig {
+    pub(crate) fn prompt_sampler_seed_start(&self, prompt_len: usize) -> usize {
+        let Some(history_len) = self.finite_prompt_history_len() else {
+            return 0;
+        };
+        prompt_len.saturating_sub(history_len)
+    }
+
+    fn finite_prompt_history_len(&self) -> Option<usize> {
+        if self.mirostat.unwrap_or(0) != 0 {
+            return Some(0);
+        }
+
+        let mut history_len = 0;
+        if self.stage_enabled(SamplerStage::Penalties) && self.penalties_enabled() {
+            update_history_len(
+                &mut history_len,
+                self.repeat_last_n.unwrap_or(CPP_DEFAULT_REPEAT_LAST_N),
+            )?;
+        }
+        if self.stage_enabled(SamplerStage::Dry) && self.dry_enabled() {
+            update_history_len(
+                &mut history_len,
+                self.dry_penalty_last_n
+                    .unwrap_or(CPP_DEFAULT_DRY_PENALTY_LAST_N),
+            )?;
+        }
+        Some(history_len)
+    }
+
+    fn stage_enabled(&self, stage: SamplerStage) -> bool {
+        self.samplers.is_empty() && matches!(stage, SamplerStage::Penalties | SamplerStage::Dry)
+            || self.samplers.contains(&stage)
+    }
+
+    fn penalties_enabled(&self) -> bool {
+        self.repeat_last_n.unwrap_or(CPP_DEFAULT_REPEAT_LAST_N) != 0
+            && (self.repeat_penalty.unwrap_or(CPP_DEFAULT_REPEAT_PENALTY)
+                != CPP_DEFAULT_REPEAT_PENALTY
+                || self
+                    .frequency_penalty
+                    .unwrap_or(CPP_DEFAULT_FREQUENCY_PENALTY)
+                    != CPP_DEFAULT_FREQUENCY_PENALTY
+                || self
+                    .presence_penalty
+                    .unwrap_or(CPP_DEFAULT_PRESENCE_PENALTY)
+                    != CPP_DEFAULT_PRESENCE_PENALTY)
+    }
+
+    fn dry_enabled(&self) -> bool {
+        self.dry_multiplier.unwrap_or(CPP_DEFAULT_DRY_MULTIPLIER) != 0.0
+            && self.dry_base.unwrap_or(CPP_DEFAULT_DRY_BASE) >= 1.0
+            && self
+                .dry_penalty_last_n
+                .unwrap_or(CPP_DEFAULT_DRY_PENALTY_LAST_N)
+                != 0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SamplerStage {
@@ -151,6 +210,22 @@ fn should_merge_sampling_override(value: &serde_json::Value) -> bool {
         _ => true,
     }
 }
+
+fn update_history_len(history_len: &mut usize, last_n: i32) -> Option<()> {
+    if last_n < 0 {
+        return None;
+    }
+    *history_len = (*history_len).max(last_n as usize);
+    Some(())
+}
+
+const CPP_DEFAULT_REPEAT_LAST_N: i32 = 64;
+const CPP_DEFAULT_DRY_PENALTY_LAST_N: i32 = -1;
+const CPP_DEFAULT_REPEAT_PENALTY: f32 = 1.0;
+const CPP_DEFAULT_FREQUENCY_PENALTY: f32 = 0.0;
+const CPP_DEFAULT_PRESENCE_PENALTY: f32 = 0.0;
+const CPP_DEFAULT_DRY_MULTIPLIER: f32 = 0.0;
+const CPP_DEFAULT_DRY_BASE: f32 = 1.75;
 
 #[cfg(test)]
 #[path = "../../../tests/runtime/config/inference_config/sampling_tests.rs"]

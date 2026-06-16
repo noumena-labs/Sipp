@@ -83,6 +83,18 @@ impl NativeRuntimeConfig {
         }
         serde_json::to_string(&value)
     }
+
+    pub(crate) fn prompt_sampler_seed_start(
+        &self,
+        override_config: Option<&RequestSampling>,
+        prompt_len: usize,
+    ) -> usize {
+        let sampling = match override_config {
+            Some(RequestSampling::Full(config)) => config,
+            Some(RequestSampling::Patch(_)) | None => &self.sampling,
+        };
+        sampling.prompt_sampler_seed_start(prompt_len)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

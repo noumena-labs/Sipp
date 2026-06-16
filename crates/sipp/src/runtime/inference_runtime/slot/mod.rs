@@ -1,7 +1,5 @@
 use crate::native_bridge::NativeRuntimeHandle;
-use crate::runtime::config::{
-    NativeRuntimeConfig, RequestSampling, SamplerStage, SamplingRuntimeConfig,
-};
+use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::request::GenerateRequestLifecycle;
 use crate::runtime::request::RequestQueue;
 use crate::runtime::scheduler::{PrefillKind, SlotPhase, SlotState, TerminalAction};
@@ -178,8 +176,7 @@ fn run_initial_prefill(
             && request.json_schema.is_empty()
         {
             if let Some(sampler) = slot.sampler.as_mut() {
-                let seed_start = prompt_sampler_seed_start(
-                    config,
+                let seed_start = config.prompt_sampler_seed_start(
                     request.sampling.as_ref(),
                     request.prompt_tokens.len(),
                 );
@@ -204,90 +201,3 @@ fn run_initial_prefill(
     }
     false
 }
-
-fn prompt_sampler_seed_start(
-    config: &NativeRuntimeConfig,
-    sampling_override: Option<&RequestSampling>,
-    prompt_len: usize,
-) -> usize {
-    let sampling = match sampling_override {
-        Some(RequestSampling::Full(sampling)) => sampling,
-        Some(RequestSampling::Patch(_)) | None => &config.sampling,
-    };
-    let Some(history_len) = finite_prompt_history_len(sampling) else {
-        return 0;
-    };
-    prompt_len.saturating_sub(history_len)
-}
-
-fn finite_prompt_history_len(sampling: &SamplingRuntimeConfig) -> Option<usize> {
-    if sampling.mirostat.unwrap_or(0) != 0 {
-        return Some(0);
-    }
-
-    let mut history_len = 0;
-    if sampler_stage_enabled(sampling, SamplerStage::Penalties) && penalties_enabled(sampling) {
-        update_history_len(
-            &mut history_len,
-            sampling.repeat_last_n.unwrap_or(CPP_DEFAULT_REPEAT_LAST_N),
-        )?;
-    }
-    if sampler_stage_enabled(sampling, SamplerStage::Dry) && dry_enabled(sampling) {
-        update_history_len(
-            &mut history_len,
-            sampling
-                .dry_penalty_last_n
-                .unwrap_or(CPP_DEFAULT_DRY_PENALTY_LAST_N),
-        )?;
-    }
-    Some(history_len)
-}
-
-fn sampler_stage_enabled(sampling: &SamplingRuntimeConfig, stage: SamplerStage) -> bool {
-    sampling.samplers.is_empty() && matches!(stage, SamplerStage::Penalties | SamplerStage::Dry)
-        || sampling.samplers.contains(&stage)
-}
-
-fn penalties_enabled(sampling: &SamplingRuntimeConfig) -> bool {
-    sampling.repeat_last_n.unwrap_or(CPP_DEFAULT_REPEAT_LAST_N) != 0
-        && (sampling
-            .repeat_penalty
-            .unwrap_or(CPP_DEFAULT_REPEAT_PENALTY)
-            != CPP_DEFAULT_REPEAT_PENALTY
-            || sampling
-                .frequency_penalty
-                .unwrap_or(CPP_DEFAULT_FREQUENCY_PENALTY)
-                != CPP_DEFAULT_FREQUENCY_PENALTY
-            || sampling
-                .presence_penalty
-                .unwrap_or(CPP_DEFAULT_PRESENCE_PENALTY)
-                != CPP_DEFAULT_PRESENCE_PENALTY)
-}
-
-fn dry_enabled(sampling: &SamplingRuntimeConfig) -> bool {
-    sampling
-        .dry_multiplier
-        .unwrap_or(CPP_DEFAULT_DRY_MULTIPLIER)
-        != 0.0
-        && sampling.dry_base.unwrap_or(CPP_DEFAULT_DRY_BASE) >= 1.0
-        && sampling
-            .dry_penalty_last_n
-            .unwrap_or(CPP_DEFAULT_DRY_PENALTY_LAST_N)
-            != 0
-}
-
-fn update_history_len(history_len: &mut usize, last_n: i32) -> Option<()> {
-    if last_n < 0 {
-        return None;
-    }
-    *history_len = (*history_len).max(last_n as usize);
-    Some(())
-}
-
-const CPP_DEFAULT_REPEAT_LAST_N: i32 = 64;
-const CPP_DEFAULT_DRY_PENALTY_LAST_N: i32 = -1;
-const CPP_DEFAULT_REPEAT_PENALTY: f32 = 1.0;
-const CPP_DEFAULT_FREQUENCY_PENALTY: f32 = 0.0;
-const CPP_DEFAULT_PRESENCE_PENALTY: f32 = 0.0;
-const CPP_DEFAULT_DRY_MULTIPLIER: f32 = 0.0;
-const CPP_DEFAULT_DRY_BASE: f32 = 1.75;
