@@ -339,7 +339,7 @@ impl KvCacheManager {
     }
 
     fn admit_cold(&mut self, context_key: &str) -> Option<KvCacheAdmission> {
-        let seq_id = self.select_cold_target(context_key)?;
+        let (seq_id, requires_kv_clear) = self.select_cold_target(context_key)?;
         let index = seq_index(seq_id, self.physical.len())?;
         self.prefix_state_cache
             .drop_pending_snapshots_for_seq(seq_id);
@@ -365,23 +365,23 @@ impl KvCacheManager {
             generation: self.physical[index].generation,
             mirror: SequenceMirror::default(),
             candidate: CacheCandidate::None,
-            requires_kv_clear: true,
+            requires_kv_clear,
         })
     }
 
-    fn select_cold_target(&mut self, context_key: &str) -> Option<llama_seq_id> {
+    fn select_cold_target(&mut self, context_key: &str) -> Option<(llama_seq_id, bool)> {
         if let Some(seq_id) = self.take_own_resident_target(context_key) {
-            return Some(seq_id);
+            return Some((seq_id, true));
         }
         if self.sessions.contains_key(context_key) || self.sessions.len() < self.physical.len() {
-            if let Some(seq_id) = self.first_free_sequence() {
-                return Some(seq_id);
+            if let Some(target) = self.first_free_sequence_target() {
+                return Some(target);
             }
         }
         if let Some(seq_id) = self.evict_lru_idle_session() {
-            return Some(seq_id);
+            return Some((seq_id, true));
         }
-        self.first_free_sequence()
+        self.first_free_sequence_target()
     }
 
     fn take_own_resident_target(&mut self, context_key: &str) -> Option<llama_seq_id> {
@@ -479,15 +479,18 @@ impl KvCacheManager {
     }
 
     fn has_available_sequence(&self) -> bool {
-        self.first_free_sequence().is_some() || self.first_valid_idle_session_key().is_some()
+        self.first_free_sequence_target().is_some() || self.first_valid_idle_session_key().is_some()
     }
 
-    fn first_free_sequence(&self) -> Option<llama_seq_id> {
+    fn first_free_sequence_target(&self) -> Option<(llama_seq_id, bool)> {
         self.physical
             .iter()
             .enumerate()
             .find(|(_, sequence)| matches!(sequence.state, SeqState::Free))
-            .and_then(|(index, _)| llama_seq_id::try_from(index).ok())
+            .and_then(|(index, sequence)| {
+                let seq_id = llama_seq_id::try_from(index).ok()?;
+                Some((seq_id, free_sequence_requires_clear(sequence)))
+            })
     }
 
     fn valid_resident_index(&self, resident: ResidentRef) -> Option<usize> {
@@ -538,6 +541,10 @@ fn max_representable_sequences() -> usize {
         .ok()
         .and_then(|value| value.checked_add(1))
         .unwrap_or(usize::MAX)
+}
+
+fn free_sequence_requires_clear(sequence: &PhysicalSequence) -> bool {
+    sequence.generation > 0
 }
 
 #[cfg(test)]

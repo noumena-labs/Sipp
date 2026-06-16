@@ -14,6 +14,23 @@ fn mirror(tokens: &[i32]) -> SequenceMirror {
 }
 
 #[test]
+fn never_used_free_sequences_do_not_require_clear() {
+    let mut manager = KvCacheManager::new(2);
+
+    let first = manager
+        .admit("a", KvReuseMode::LiveSlotPrefix, false)
+        .expect("first admission");
+    let second = manager
+        .admit("b", KvReuseMode::LiveSlotPrefix, false)
+        .expect("second admission");
+
+    assert_eq!(first.seq_id, 0);
+    assert_eq!(second.seq_id, 1);
+    assert!(!first.requires_kv_clear);
+    assert!(!second.requires_kv_clear);
+}
+
+#[test]
 fn warm_reuse_moves_idle_tokens_into_admission_mirror() {
     let mut manager = KvCacheManager::new(1);
 
@@ -22,7 +39,7 @@ fn warm_reuse_moves_idle_tokens_into_admission_mirror() {
         .expect("cold admission");
     assert_eq!(cold.candidate, CacheCandidate::None);
     assert_eq!(cold.seq_id, 0);
-    assert!(cold.requires_kv_clear);
+    assert!(!cold.requires_kv_clear);
     assert!(cold.mirror.current_kv_tokens.is_empty());
 
     manager.finalize_slot(
