@@ -6,7 +6,7 @@ use super::*;
 use crate::core::{TokenBatch, TokenEmissionStats};
 use crate::engine::{
     CacheSource, EmbedOptions, GenerateOptions, GpuLayerConfig, KvReuseMode, NativeRuntimeConfig,
-    RequestSampling, SamplingRuntimeConfig, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+    SamplingRuntimeOverride, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 use crate::runtime::request::GenerateResponse;
 use futures::executor::block_on;
@@ -92,9 +92,9 @@ fn generate_options_convert_to_query_options() {
         max_tokens: 7,
         stream: true,
         stop: vec!["END".to_string()],
-        sampling: Some(SamplingRuntimeConfig {
+        sampling: Some(SamplingRuntimeOverride {
             temperature: Some(0.1),
-            ..SamplingRuntimeConfig::default()
+            ..SamplingRuntimeOverride::default()
         }),
         grammar: Some("root ::= \"x\"".to_string()),
         json_schema: Some("{}".to_string()),
@@ -106,9 +106,7 @@ fn generate_options_convert_to_query_options() {
     assert_eq!(options.grammar, "root ::= \"x\"");
     assert_eq!(options.json_schema, "{}");
     assert_eq!(options.stop, vec!["END"]);
-    let Some(RequestSampling::Full(sampling)) = &options.sampling else {
-        panic!("generate options should map to a full sampling override");
-    };
+    let sampling = options.sampling.as_ref().expect("sampling override");
     assert_eq!(sampling.temperature, Some(0.1));
 }
 

@@ -89,11 +89,13 @@ class SamplingRuntimeConfig:
         min_keep: Optional[int] = None,
         n_probs: Optional[int] = None,
         logit_bias: Optional[Sequence[tuple[int, float]]] = None,
-        ignore_eos: bool = False,
-        grammar_lazy: bool = False,
+        ignore_eos: Optional[bool] = None,
+        grammar_lazy: Optional[bool] = None,
         preserved_tokens: Optional[Sequence[int]] = None,
-        backend_sampling: bool = True,
+        backend_sampling: Optional[bool] = None,
     ) -> None: ...
+
+SamplingRuntimeOverride = SamplingRuntimeConfig
 
 class SchedulerPolicyConfig:
     def __init__(
@@ -299,7 +301,7 @@ class LocalTextOptions:
         context_key: Optional[str] = None,
         grammar: Optional[str] = None,
         json_schema: Optional[str] = None,
-        sampling: Optional[SamplingRuntimeConfig] = None,
+        sampling: Optional[SamplingRuntimeOverride] = None,
         media: Optional[Sequence[bytes]] = None,
     ) -> None: ...
 

@@ -9,8 +9,10 @@ import type {
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
+  SamplingRuntimeOverride,
   TransportObservability,
 } from '../engine/inference-types.js';
+import { hasSamplingRuntimeOverrideFields } from '../engine/inference-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
 import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
 import { ModelRegistryStore } from './model-registry-store.js';
@@ -83,6 +85,7 @@ interface RuntimeRequestOptions {
   maxTokens?: number;
   temperature?: number;
   topP?: number;
+  sampling?: SamplingRuntimeOverride;
   stop?: readonly string[];
   signal?: AbortSignal;
   emitTokens?: boolean;
@@ -436,7 +439,7 @@ export class ModelService implements ModelLifecycleService {
       tokenBatchSink: options.tokenBatchSink == null ? undefined : deliverTokenBatch,
       media,
       stop: options.stop,
-      sampling: requestSamplingPatch(options),
+      sampling: samplingRuntimeOverride(options),
       grammar: options.grammar,
       onRequestStarted: options.onRequestStarted,
     };
@@ -1493,17 +1496,32 @@ export class ModelService implements ModelLifecycleService {
   }
 }
 
-function requestSamplingPatch(
+function samplingRuntimeOverride(
   options: RuntimeRequestOptions
 ): PromptOptions['sampling'] {
-  const patch: NonNullable<PromptOptions['sampling']> = {};
-  if (options.temperature != null) {
-    patch.temperature = options.temperature;
+  const overrideConfig: NonNullable<PromptOptions['sampling']> = {
+    ...(options.sampling ?? {}),
+  };
+  mergeSamplingOverrideField(overrideConfig, 'temperature', options.temperature);
+  mergeSamplingOverrideField(overrideConfig, 'top_p', options.topP);
+  return hasSamplingRuntimeOverrideFields(overrideConfig) ? overrideConfig : undefined;
+}
+
+function mergeSamplingOverrideField(
+  overrideConfig: SamplingRuntimeOverride,
+  field: keyof Pick<SamplingRuntimeOverride, 'temperature' | 'top_p'>,
+  value: number | undefined
+): void {
+  if (value == null) {
+    return;
   }
-  if (options.topP != null) {
-    patch.top_p = options.topP;
+  if (overrideConfig[field] != null && overrideConfig[field] !== value) {
+    throw new QueryError(
+      'QUERY_FAILED',
+      `${field} conflicts with sampling.${field}`
+    );
   }
-  return patch.temperature == null && patch.top_p == null ? undefined : patch;
+  overrideConfig[field] = value;
 }
 
 function isChatInputObject(input: ChatInput): input is Extract<ChatInput, { messages: unknown }> {

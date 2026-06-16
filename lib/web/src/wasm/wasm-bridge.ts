@@ -7,8 +7,9 @@ import type {
   KvReuseMode,
   NativeRuntimeConfig,
   PoolingType,
-  RequestSamplingPatch,
+  SamplingRuntimeOverride,
   RequestObservabilityMetrics,
+  ChatMessage,
 } from '../engine/inference-types.js';
 import type {
   ClassifiedAsset,
@@ -28,9 +29,11 @@ import {
   type RegistryManifest,
 } from '../models/types.js';
 import type { ChatBoundaryInfo } from '../engine/chat-boundary-sanitizer.js';
-import type { ChatMessage } from '../engine/inference-types.js';
 import { EngineModule } from './engine-module.js';
-import { withDerivedObservabilityMetrics } from '../engine/inference-types.js';
+import {
+  hasSamplingRuntimeOverrideFields,
+  withDerivedObservabilityMetrics,
+} from '../engine/inference-types.js';
 import type { SharedTokenRingDescriptor } from '../runtime/shared-token-ring.js';
 import { createAbortError } from '../utils/abort.js';
 import { assertGrammarByteSize } from '../utils/grammar.js';
@@ -60,7 +63,7 @@ function validateGrammarSize(grammar: string | undefined): void {
 interface WasmTextRequestOptions {
   grammar?: string;
   stop?: readonly string[];
-  sampling?: RequestSamplingPatch;
+  sampling?: SamplingRuntimeOverride;
   emitTokens?: boolean;
 }
 
@@ -68,10 +71,8 @@ function serializeStop(stop: readonly string[] | undefined): string {
   return stop == null || stop.length === 0 ? '' : JSON.stringify(stop);
 }
 
-function serializeSampling(sampling: RequestSamplingPatch | undefined): string {
-  return sampling == null || (sampling.temperature == null && sampling.top_p == null)
-    ? ''
-    : JSON.stringify(sampling);
+function serializeSampling(sampling: SamplingRuntimeOverride | undefined): string {
+  return hasSamplingRuntimeOverrideFields(sampling) ? JSON.stringify(sampling) : '';
 }
 
 export type WasmSchedulerProgressResult = {

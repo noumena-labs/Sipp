@@ -132,15 +132,14 @@ fn llama_common_args_presizes_exact_argument_count() {
 }
 
 #[test]
-fn try_sampling_json_merges_overrides_without_silent_fallback() {
+fn try_sampling_json_applies_request_override_without_silent_fallback() {
     let config = NativeRuntimeConfig::default();
-    let override_config = SamplingRuntimeConfig {
+    let override_config = SamplingRuntimeOverride {
         top_k: Some(12),
-        backend_sampling: false,
-        ..SamplingRuntimeConfig::default()
+        backend_sampling: Some(false),
+        ..SamplingRuntimeOverride::default()
     };
 
-    let override_config = RequestSampling::Full(override_config);
     let json = config
         .try_sampling_json_with_override(Some(&override_config))
         .expect("sampling JSON");
@@ -152,22 +151,115 @@ fn try_sampling_json_merges_overrides_without_silent_fallback() {
 }
 
 #[test]
-fn sampling_patch_merges_only_common_knobs() {
+fn sampling_override_merges_request_knobs() {
     let config = NativeRuntimeConfig::default();
-    let patch = RequestSampling::Patch(SamplingRuntimePatch {
+    let override_config = SamplingRuntimeOverride {
         temperature: Some(0.2),
         top_p: None,
-    });
+        repeat_last_n: Some(128),
+        repeat_penalty: Some(1.15),
+        frequency_penalty: Some(0.1),
+        presence_penalty: Some(0.2),
+        ..SamplingRuntimeOverride::default()
+    };
 
     let json = config
-        .try_sampling_json_with_override(Some(&patch))
+        .try_sampling_json_with_override(Some(&override_config))
         .expect("sampling JSON");
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
     assert_float_eq(value["temperature"].as_f64(), 0.2);
     assert_float_eq(value["top_p"].as_f64(), 0.8);
+    assert_eq!(value["repeat_last_n"], 128);
+    assert_float_eq(value["repeat_penalty"].as_f64(), 1.15);
+    assert_float_eq(value["frequency_penalty"].as_f64(), 0.1);
+    assert_float_eq(value["presence_penalty"].as_f64(), 0.2);
     assert_eq!(value["backend_sampling"], cfg!(not(target_arch = "wasm32")));
     assert_eq!(value["samplers"].as_array().expect("samplers").len(), 4);
+}
+
+#[test]
+fn prompt_sampler_seed_start_uses_default_penalty_tail() {
+    let config = NativeRuntimeConfig::default();
+
+    assert_eq!(config.prompt_sampler_seed_start(None, 100), 36);
+    assert_eq!(config.prompt_sampler_seed_start(None, 32), 0);
+}
+
+#[test]
+fn prompt_sampler_seed_start_respects_sampling_overrides() {
+    let mut config = NativeRuntimeConfig::default();
+    config.sampling.repeat_last_n = Some(7);
+    let temperature_override = SamplingRuntimeOverride {
+        temperature: Some(0.2),
+        ..SamplingRuntimeOverride::default()
+    };
+    let repeat_override = SamplingRuntimeOverride {
+        repeat_last_n: Some(11),
+        ..SamplingRuntimeOverride::default()
+    };
+    let full_history_override = SamplingRuntimeOverride {
+        repeat_last_n: Some(11),
+        ..SamplingRuntimeOverride::default()
+    };
+
+    assert_eq!(
+        config.prompt_sampler_seed_start(Some(&temperature_override), 20),
+        13
+    );
+    assert_eq!(
+        config.prompt_sampler_seed_start(Some(&repeat_override), 20),
+        9
+    );
+    assert_eq!(
+        config.prompt_sampler_seed_start(Some(&full_history_override), 20),
+        9
+    );
+}
+
+#[test]
+fn prompt_sampler_seed_start_preserves_full_history_modes() {
+    let repeat_all = SamplingRuntimeOverride {
+        repeat_last_n: Some(-1),
+        ..SamplingRuntimeOverride::default()
+    };
+    let dry_all = SamplingRuntimeOverride {
+        samplers: Some(vec![SamplerStage::Dry]),
+        dry_multiplier: Some(0.8),
+        ..SamplingRuntimeOverride::default()
+    };
+    let config = NativeRuntimeConfig::default();
+
+    assert_eq!(config.prompt_sampler_seed_start(Some(&repeat_all), 100), 0);
+    assert_eq!(config.prompt_sampler_seed_start(Some(&dry_all), 100), 0);
+}
+
+#[test]
+fn prompt_sampler_seed_start_skips_inactive_history_samplers() {
+    let no_history = SamplingRuntimeOverride {
+        samplers: Some(vec![SamplerStage::TopK, SamplerStage::TopP]),
+        ..SamplingRuntimeOverride::default()
+    };
+    let disabled_penalty = SamplingRuntimeOverride {
+        repeat_last_n: Some(0),
+        repeat_penalty: Some(1.0),
+        ..SamplingRuntimeOverride::default()
+    };
+    let mirostat = SamplingRuntimeOverride {
+        mirostat: Some(1),
+        ..SamplingRuntimeOverride::default()
+    };
+    let config = NativeRuntimeConfig::default();
+
+    assert_eq!(
+        config.prompt_sampler_seed_start(Some(&no_history), 100),
+        100
+    );
+    assert_eq!(
+        config.prompt_sampler_seed_start(Some(&disabled_penalty), 100),
+        100
+    );
+    assert_eq!(config.prompt_sampler_seed_start(Some(&mirostat), 100), 100);
 }
 
 #[test]

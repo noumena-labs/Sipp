@@ -172,6 +172,7 @@ fn initial_text_prefill_failure_marks_slot_and_request_failed() {
     let mut native_runtime = NativeRuntimeHandle::empty_for_tests();
     let config = NativeRuntimeConfig::default();
     let mut kv_cache = KvCacheManager::default();
+    let mut total_cache_hits = 0;
     let mut request_queue = RequestQueue::new();
     let mut scratch = Vec::new();
 
@@ -181,6 +182,7 @@ fn initial_text_prefill_failure_marks_slot_and_request_failed() {
         &config,
         0,
         &mut kv_cache,
+        &mut total_cache_hits,
         &mut request_queue,
         &mut scratch,
     ));

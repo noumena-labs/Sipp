@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::error::{Error, Result};
 use crate::native_bridge::NativeRuntimeHandle;
-use crate::runtime::config::{NativeRuntimeConfig, RequestSampling};
+use crate::runtime::config::{NativeRuntimeConfig, SamplingRuntimeOverride};
 use crate::runtime::llama_seq_id;
 use crate::runtime::scheduler::{SamplerCacheKey, SamplerHandle, SlotPhase, SlotState};
 
@@ -75,7 +75,7 @@ pub(super) fn detach_backend_sampler(
 pub(super) fn create_sampler(
     native_runtime: &NativeRuntimeHandle,
     config: &NativeRuntimeConfig,
-    sampling_override: Option<&RequestSampling>,
+    sampling_override: Option<&SamplingRuntimeOverride>,
     grammar: Option<&str>,
     json_schema: Option<&str>,
 ) -> Result<SamplerHandle> {
@@ -107,17 +107,10 @@ impl InferenceRuntime {
         for slot in &mut self.slot_scheduler.slots {
             detach_backend_sampler(&mut self.native_runtime, slot);
         }
-        let resident_seq_ids = self
-            .resident_backend_samplers
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        for seq_id in resident_seq_ids {
-            detach_resident_backend_sampler(
-                &mut self.native_runtime,
-                &mut self.resident_backend_samplers,
-                seq_id,
-            );
+        for seq_id in std::mem::take(&mut self.resident_backend_samplers).into_keys() {
+            if seq_id >= 0 {
+                self.native_runtime.detach_sampler(seq_id);
+            }
         }
     }
 }
@@ -177,17 +170,6 @@ fn settle_terminal_backend_sampler(
     detach_backend_sampler(native_runtime, slot);
     slot.sampler_key = None;
     slot.sampler = None;
-}
-
-fn detach_resident_backend_sampler(
-    native_runtime: &mut NativeRuntimeHandle,
-    resident_backend_samplers: &mut HashMap<llama_seq_id, ResidentBackendSampler>,
-    seq_id: llama_seq_id,
-) {
-    if seq_id < 0 || resident_backend_samplers.remove(&seq_id).is_none() {
-        return;
-    }
-    native_runtime.detach_sampler(seq_id);
 }
 
 fn reset_sampler(sampler: &mut SamplerHandle) {

@@ -69,4 +69,5 @@ export type {
   KvReuseMode,
   NativeRuntimeConfig,
   RequestObservabilityMetrics,
+  SamplingRuntimeOverride,
 } from './engine/inference-types.js';

@@ -28,18 +28,22 @@ impl InferenceRuntime {
         native_sync_ms: f64,
         native_logic_ms: f64,
     ) {
-        let mut tick_had_prefill = false;
-        let mut tick_had_decode = false;
         let tick_ms = native_decode_ms + native_sync_ms + native_logic_ms;
         let mut timed_slots: u64 = 0;
         let mut prefill_timed_slots: u64 = 0;
         let mut decode_timed_slots: u64 = 0;
         let mut emitted_slots: u64 = 0;
+        let mut tick_prefill_tokens = 0_usize;
+        let mut tick_decode_tokens = 0_usize;
 
         for contribution in &plan.contributions {
             let Some(slot) = self.slot_scheduler.slots.get_mut(contribution.slot_index) else {
                 continue;
             };
+            let Some(request) = slot.request() else {
+                continue;
+            };
+            let prompt_len = request.prompt_tokens.len();
 
             let Some(next_n_past) = slot.mirror.n_past.checked_add(1) else {
                 slot.fail("KV position overflowed during batch bookkeeping.");
@@ -51,7 +55,6 @@ impl InferenceRuntime {
 
             let is_prefill = contribution.kind == BatchContributionKind::Prefill;
             if is_prefill {
-                let prompt_len = slot.request().map(|r| r.prompt_tokens.len()).unwrap_or(0);
                 let Some(next_prefill_cursor) = slot.prefill_cursor.checked_add(1) else {
                     slot.fail("Prefill cursor overflowed during batch bookkeeping.");
                     continue;
@@ -88,9 +91,9 @@ impl InferenceRuntime {
             }
             if is_prefill {
                 self.total_prefill_tokens = self.total_prefill_tokens.saturating_add(1);
-                tick_had_prefill = true;
+                tick_prefill_tokens = tick_prefill_tokens.saturating_add(1);
             } else {
-                tick_had_decode = true;
+                tick_decode_tokens = tick_decode_tokens.saturating_add(1);
             }
 
             if unique_slot_first_use(&mut emitted_slots, contribution.slot_index)
@@ -100,11 +103,12 @@ impl InferenceRuntime {
             }
         }
 
-        if tick_had_decode {
-            self.total_decode_ms += tick_ms;
+        let tick_token_count = tick_prefill_tokens.saturating_add(tick_decode_tokens);
+        if tick_decode_tokens > 0 {
+            self.total_decode_ms += tick_ms * tick_decode_tokens as f64 / tick_token_count as f64;
         }
-        if tick_had_prefill {
-            self.total_prefill_ms += tick_ms;
+        if tick_prefill_tokens > 0 {
+            self.total_prefill_ms += tick_ms * tick_prefill_tokens as f64 / tick_token_count as f64;
         }
 
         // Decoder-only embedding slots: when prefill just drained the prompt,
@@ -112,27 +116,28 @@ impl InferenceRuntime {
         // standard sample/decode loop take over. We collect indices in this
         // separate pass so the per-contribution borrow on `slot` above can
         // unwind cleanly before the embedding read, which needs `&mut self`.
-        let pending_reads: Vec<usize> = self
-            .slot_scheduler
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(index, slot)| {
-                let prompt_len = slot.request().map(|r| r.prompt_tokens.len()).unwrap_or(0);
-                let ready = slot.phase == SlotPhase::Decode
-                    && slot.plan.terminal == TerminalAction::ReadEmbedding
-                    && slot.prefill_cursor >= prompt_len
-                    && slot.embedding_output.is_none();
-                ready.then_some(index)
-            })
-            .collect();
-        for slot_index in pending_reads {
+        self.scratch_embedding_read_slots.clear();
+        for (index, slot) in self.slot_scheduler.slots.iter().enumerate() {
+            let Some(request) = slot.request() else {
+                continue;
+            };
+            let ready = slot.phase == SlotPhase::Decode
+                && slot.plan.terminal == TerminalAction::ReadEmbedding
+                && slot.prefill_cursor >= request.prompt_tokens.len()
+                && slot.embedding_output.is_none();
+            if ready {
+                self.scratch_embedding_read_slots.push(index);
+            }
+        }
+        for pending_read_index in 0..self.scratch_embedding_read_slots.len() {
+            let slot_index = self.scratch_embedding_read_slots[pending_read_index];
             if let Err(error) = self.read_slot_embedding(slot_index) {
                 if let Some(slot) = self.slot_scheduler.slots.get_mut(slot_index) {
                     slot.fail(format!("embedding read failed: {error}"));
                 }
             }
         }
+        self.scratch_embedding_read_slots.clear();
     }
 
     pub(super) fn sample_logits_and_buffer_output(&mut self) {
@@ -180,12 +185,11 @@ impl InferenceRuntime {
 
             let stop_matched = apply_stop_sequences_to_slot(slot);
             let gen_len = slot.generated_tokens.len();
-            let mut cancel = false;
-            let mut max_output_tokens = 0;
-            if let Some(r) = slot.request() {
-                cancel = r.cancel_requested;
-                max_output_tokens = r.max_output_tokens;
-            }
+            let Some(request) = slot.request() else {
+                continue;
+            };
+            let cancel = request.cancel_requested;
+            let max_output_tokens = request.max_output_tokens;
             let should_complete = stop_matched
                 || cancel
                 || (max_output_tokens > 0

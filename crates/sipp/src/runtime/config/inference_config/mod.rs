@@ -16,9 +16,8 @@ use super::SchedulerPolicyConfig;
 use super::SchedulerPolicyMode;
 pub use context::{ContextRuntimeConfig, FlashAttentionMode, KvCacheType, RopeScaling};
 pub use placement::{GpuLayerConfig, ModelPlacementConfig, SplitMode};
-use sampling::merge_sampling_override_json;
+pub use sampling::SamplingRuntimeOverride;
 pub use sampling::{LogitBias, SamplerStage, SamplingRuntimeConfig};
-pub use sampling::{RequestSampling, SamplingRuntimePatch};
 
 pub const DEFAULT_CONTEXT_KEY: &str = "default";
 pub const DEFAULT_MAX_TOKENS: i32 = 64;
@@ -71,17 +70,25 @@ impl NativeRuntimeConfig {
 
     pub fn try_sampling_json_with_override(
         &self,
-        override_config: Option<&RequestSampling>,
+        override_config: Option<&SamplingRuntimeOverride>,
     ) -> serde_json::Result<String> {
-        let mut value = serde_json::to_value(&self.sampling)?;
+        let mut sampling = self.sampling.clone();
         if let Some(override_config) = override_config {
-            let override_value = match override_config {
-                RequestSampling::Full(config) => serde_json::to_value(config)?,
-                RequestSampling::Patch(patch) => serde_json::to_value(patch)?,
-            };
-            merge_sampling_override_json(&mut value, override_value);
+            override_config.apply_to(&mut sampling);
         }
-        serde_json::to_string(&value)
+        serde_json::to_string(&sampling)
+    }
+
+    pub(crate) fn prompt_sampler_seed_start(
+        &self,
+        override_config: Option<&SamplingRuntimeOverride>,
+        prompt_len: usize,
+    ) -> usize {
+        let mut sampling = self.sampling.clone();
+        if let Some(override_config) = override_config {
+            override_config.apply_to(&mut sampling);
+        }
+        sampling.prompt_sampler_seed_start(prompt_len)
     }
 }
 
@@ -217,7 +224,7 @@ pub struct GenerateOptions {
     pub max_tokens: i32,
     pub stream: bool,
     pub stop: Vec<String>,
-    pub sampling: Option<SamplingRuntimeConfig>,
+    pub sampling: Option<SamplingRuntimeOverride>,
     pub grammar: Option<String>,
     pub json_schema: Option<String>,
     pub cache_key: Option<String>,

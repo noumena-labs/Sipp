@@ -10,7 +10,9 @@ pub use crate::core::{ChatMessage, ChatRole};
 use futures_channel::mpsc;
 
 use crate::engine::protocol::{EmbedRequest, EngineEvent};
-use crate::engine::{GenerateOptions, RequestSampling, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS};
+use crate::engine::{
+    GenerateOptions, SamplingRuntimeOverride, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+};
 use crate::error::{Error, Result};
 use crate::runtime::InferenceRuntime;
 
@@ -29,7 +31,7 @@ pub struct QueryOptions {
     pub grammar: String,
     pub json_schema: String,
     pub stop: Vec<String>,
-    pub sampling: Option<RequestSampling>,
+    pub sampling: Option<SamplingRuntimeOverride>,
     pub media: Vec<Vec<u8>>,
 }
 
@@ -55,7 +57,7 @@ impl From<GenerateOptions> for QueryOptions {
             grammar: options.grammar.unwrap_or_default(),
             json_schema: options.json_schema.unwrap_or_default(),
             stop: options.stop,
-            sampling: options.sampling.map(RequestSampling::Full),
+            sampling: options.sampling,
             media: Vec::new(),
         }
     }

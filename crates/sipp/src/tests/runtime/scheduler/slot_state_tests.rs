@@ -14,6 +14,7 @@ fn admission(seq_id: i32, generation: u64, tokens: Vec<i32>) -> KvCacheAdmission
             current_kv_tokens: tokens,
         },
         candidate: CacheCandidate::Live,
+        requires_kv_clear: false,
     }
 }
 
@@ -37,6 +38,7 @@ fn attach_request_copies_session_mirror_and_resets_slot_progress() {
     assert_eq!(slot.seq_id, 7);
     assert_eq!(slot.lease_generation, 11);
     assert_eq!(slot.cache_candidate, CacheCandidate::Live);
+    assert!(!slot.requires_kv_clear);
     assert_eq!(slot.phase, SlotPhase::Admitted);
     assert_eq!(slot.prefill_cursor, 0);
     assert!(!slot.sampler_prompt_seeded);
@@ -60,6 +62,7 @@ fn reset_to_idle_clears_request_and_runtime_buffers() {
     assert_eq!(slot.seq_id, -1);
     assert_eq!(slot.lease_generation, 0);
     assert_eq!(slot.cache_candidate, CacheCandidate::None);
+    assert!(!slot.requires_kv_clear);
     assert_eq!(slot.request_id, 0);
     assert!(slot.request.is_none());
     assert!(slot.buffered_output_text.is_empty());

@@ -1,13 +1,13 @@
 //! Per-tick batch planner: turns the current slots into a flat list of token contributions sized to the scheduler tick budget.
 
-use crate::runtime::config::{KvReuseMode, SchedulerTickBudget};
+use crate::runtime::config::SchedulerTickBudget;
 use crate::runtime::llama_token;
 use crate::runtime::numeric::{
     positive_i32_to_usize, saturating_u32_to_i32, saturating_usize_to_i32,
 };
 use crate::runtime::request::GenerateRequestId;
 
-use super::{SlotState, TerminalAction};
+use super::SlotState;
 
 #[cfg(test)]
 mod apply_results;
@@ -206,7 +206,7 @@ impl BatchPlanner {
             let resume_offset = plan.in_tick_offset[next_prefill_slot_index];
             let mut remaining_slot_budget = slot_chunk_budget;
 
-            let prompt_end = prefill_stop_exclusive(slot, request.prompt_tokens.len());
+            let prompt_end = request.prompt_tokens.len();
             for token_index in (slot.prefill_cursor + resume_offset)..prompt_end {
                 if remaining_slot_budget <= 0 || remaining_prefill_budget <= 0 {
                     break;
@@ -298,26 +298,6 @@ fn prefill_contribution(
         position,
         request_logits: false,
     }
-}
-
-fn prefill_stop_exclusive(slot: &SlotState, prompt_len: usize) -> usize {
-    let Some(request) = slot.request() else {
-        return prompt_len;
-    };
-    if snapshot_reuse_enabled(request.cache_mode)
-        && slot.plan.terminal == TerminalAction::SampleTokens
-        && slot.prefill_cursor < prompt_len.saturating_sub(1)
-    {
-        return prompt_len.saturating_sub(1);
-    }
-    prompt_len
-}
-
-fn snapshot_reuse_enabled(mode: KvReuseMode) -> bool {
-    matches!(
-        mode,
-        KvReuseMode::StateSnapshot | KvReuseMode::LiveSlotAndSnapshot
-    )
 }
 
 #[cfg(test)]

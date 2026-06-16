@@ -2,7 +2,7 @@ use crate::runtime::llama_token;
 
 #[cfg(test)]
 use super::prefix_entry_approx_bytes;
-use super::{PrefixCacheEntry, PrefixCacheLookupKey, PrefixStateCache};
+use super::{prefix_entry_matches, PrefixCacheEntry, PrefixCacheLookupKey, PrefixStateCache};
 
 impl PrefixStateCache {
     #[cfg(test)]
@@ -68,10 +68,7 @@ impl PrefixStateCache {
         self.lookup_buckets.get(&lookup_key).and_then(|bucket| {
             bucket.iter().copied().find(|&entry_index| {
                 self.entries.get(entry_index).is_some_and(|entry| {
-                    entry.snapshot_scope == snapshot_scope
-                        && entry.prefix_tokens.len() == token_count
-                        && token_count <= tokens.len()
-                        && entry.prefix_tokens.as_slice() == &tokens[..token_count]
+                    prefix_entry_matches(entry, model_fingerprint, snapshot_scope, tokens)
                 })
             })
         })

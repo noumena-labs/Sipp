@@ -34,7 +34,6 @@ pub(super) fn resolve_initial_decode_context_reservation(
 pub(super) struct PrefixReusePlan {
     pub live: bool,
     pub snapshot: bool,
-    pub clear_before_prefill: bool,
 }
 
 pub(super) fn prefix_reuse_plan(mode: KvReuseMode, bypass_prefix_cache: bool) -> PrefixReusePlan {
@@ -42,7 +41,6 @@ pub(super) fn prefix_reuse_plan(mode: KvReuseMode, bypass_prefix_cache: bool) ->
         return PrefixReusePlan {
             live: false,
             snapshot: false,
-            clear_before_prefill: true,
         };
     }
 
@@ -50,22 +48,18 @@ pub(super) fn prefix_reuse_plan(mode: KvReuseMode, bypass_prefix_cache: bool) ->
         KvReuseMode::Disabled => PrefixReusePlan {
             live: false,
             snapshot: false,
-            clear_before_prefill: true,
         },
         KvReuseMode::LiveSlotPrefix => PrefixReusePlan {
             live: true,
             snapshot: false,
-            clear_before_prefill: false,
         },
         KvReuseMode::StateSnapshot => PrefixReusePlan {
             live: false,
             snapshot: true,
-            clear_before_prefill: true,
         },
         KvReuseMode::LiveSlotAndSnapshot => PrefixReusePlan {
             live: true,
             snapshot: true,
-            clear_before_prefill: false,
         },
     }
 }
@@ -75,14 +69,18 @@ pub(super) fn live_candidate_lcp(
     cache_candidate: CacheCandidate,
     cached_tokens: &[llama_token],
     prompt_tokens: &[llama_token],
+    allow_partial_kv: bool,
 ) -> usize {
-    if !plan.live
-        || cache_candidate != CacheCandidate::Live
-        || cached_tokens.len() >= prompt_tokens.len()
-    {
+    if !plan.live || cache_candidate != CacheCandidate::Live {
         return 0;
     }
     let lcp = compute_lcp_reuse(cached_tokens, prompt_tokens);
+    if allow_partial_kv {
+        return lcp;
+    }
+    if cached_tokens.len() >= prompt_tokens.len() {
+        return 0;
+    }
     if lcp == cached_tokens.len() {
         lcp
     } else {
@@ -204,6 +202,7 @@ pub(super) fn prepare_sequence_for_prompt(
     model_fingerprint: u64,
     kv_cache: &mut KvCacheManager,
     cache_candidate: CacheCandidate,
+    requires_kv_clear: bool,
     context_key: &str,
     prompt_tokens: &[llama_token],
     n_tokens_predict: i32,
@@ -216,16 +215,14 @@ pub(super) fn prepare_sequence_for_prompt(
         return None;
     }
 
+    let allow_partial_kv = !(native_runtime.is_recurrent() || native_runtime.is_hybrid());
     let reuse_plan = prefix_reuse_plan(cache_mode, bypass_prefix_cache);
-    if reuse_plan.clear_before_prefill {
-        clear_sequence_state(native_runtime, seq_id, state);
-    }
-
     let live_match_len = live_candidate_lcp(
         reuse_plan,
         cache_candidate,
         &state.current_kv_tokens,
         prompt_tokens,
+        allow_partial_kv,
     );
     let mut match_len = live_match_len;
     let mut cache_source = if live_match_len > 0 {
@@ -233,13 +230,6 @@ pub(super) fn prepare_sequence_for_prompt(
     } else {
         CacheSource::None
     };
-    let mut restored_from_prefix_cache = false;
-    if cache_candidate == CacheCandidate::Live
-        && cache_source == CacheSource::None
-        && !state.current_kv_tokens.is_empty()
-    {
-        clear_sequence_state(native_runtime, seq_id, state);
-    }
 
     // Snapshot restore is manager-owned; prefill receives only the prefix mirror.
     if reuse_plan.snapshot {
@@ -255,12 +245,13 @@ pub(super) fn prepare_sequence_for_prompt(
             state.n_past = usize_to_i32(snapshot.token_count)?;
             match_len = snapshot.token_count.min(prompt_tokens.len());
             cache_source = CacheSource::Snapshot;
-            restored_from_prefix_cache = true;
         }
     }
 
-    if !restored_from_prefix_cache && cache_source == CacheSource::None {
-        clear_sequence_state(native_runtime, seq_id, state);
+    if cache_source == CacheSource::None {
+        if requires_kv_clear || !state.current_kv_tokens.is_empty() {
+            clear_sequence_state(native_runtime, seq_id, state);
+        }
         match_len = 0;
     }
 
@@ -290,10 +281,8 @@ pub(super) fn prepare_sequence_for_prompt(
         &state.current_kv_tokens,
         prompt_tokens,
     ));
-    let allow_partial_kv = !(native_runtime.is_recurrent() || native_runtime.is_hybrid());
-
-    if match_len < state.current_kv_tokens.len() || state.current_kv_tokens.is_empty() {
-        if !allow_partial_kv || state.current_kv_tokens.is_empty() {
+    if match_len < state.current_kv_tokens.len() {
+        if !allow_partial_kv {
             native_runtime.clear_sequence(seq_id, 0, -1);
             state.current_kv_tokens.clear();
             state.n_past = 0;

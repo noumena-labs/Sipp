@@ -5,6 +5,7 @@ import type {
   KvReuseMode,
   NativeRuntimeConfig,
   PoolingType,
+  SamplingRuntimeOverride,
   TokenEmissionStats,
   TokenBatch,
 } from '../engine/inference-types.js';
@@ -190,6 +191,8 @@ export interface QueryOptions {
   maxTokens?: number;
   temperature?: number;
   topP?: number;
+  /** Local-only sparse sampler override using native sampling field names. */
+  sampling?: SamplingRuntimeOverride;
   stop?: readonly string[];
   signal?: AbortSignal;
   emitTokens?: boolean;

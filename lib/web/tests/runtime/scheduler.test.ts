@@ -252,7 +252,7 @@ test('QueuedRequestScheduler drains shared token ring to TokenBatch sinks', asyn
   assert.equal(transport.tokenDrainMs, undefined);
 });
 
-test('QueuedRequestScheduler keeps native token budget on the main thread while emitting tokens', async () => {
+test('QueuedRequestScheduler limits native token budget while emitting tokens', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
   const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
@@ -319,14 +319,14 @@ test('QueuedRequestScheduler keeps native token budget on the main thread while 
   const tracked = scheduler.track(1);
   await tracked.promise;
 
-  assert.deepEqual(loopTokenLimits, [512, 512]);
+  assert.deepEqual(loopTokenLimits, [1, 1]);
   assert.equal(batches.length, 1);
   assert.equal(batches[0].text, 'a');
   assert.equal(batches[0].frameCount, 1);
   assert.equal(tokenBatchSinkErrors.size, 0);
 });
 
-test('QueuedRequestScheduler drains shared token ring with bulk native loops', async () => {
+test('QueuedRequestScheduler drains shared token ring with streaming native loops', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability('worker');
   const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
@@ -385,7 +385,7 @@ test('QueuedRequestScheduler drains shared token ring with bulk native loops', a
   await tracked.promise;
 
   assert.deepEqual(maxDurationValues, [0]);
-  assert.deepEqual(tokenLimits, [512]);
+  assert.deepEqual(tokenLimits, [1]);
   assert.equal(batches.length, 1);
   assert.equal(batches[0].text, 'w');
 });

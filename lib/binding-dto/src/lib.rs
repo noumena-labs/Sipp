@@ -16,6 +16,7 @@ use sipp::engine::{
     ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
     ResidencyRuntimeConfig as CoreResidencyRuntimeConfig, RopeScaling, SamplerStage,
     SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
+    SamplingRuntimeOverride as CoreSamplingRuntimeOverride,
     SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode,
 };
 use sipp::runtime::config::{
@@ -105,6 +106,17 @@ impl TryFrom<&SamplingRuntimeConfig> for CoreSamplingRuntimeConfig {
     type Error = ConvertError;
 
     fn try_from(value: &SamplingRuntimeConfig) -> Result<Self> {
+        let override_config = CoreSamplingRuntimeOverride::try_from(value)?;
+        let mut config = Self::default();
+        override_config.apply_to(&mut config);
+        Ok(config)
+    }
+}
+
+impl TryFrom<&SamplingRuntimeConfig> for CoreSamplingRuntimeOverride {
+    type Error = ConvertError;
+
+    fn try_from(value: &SamplingRuntimeConfig) -> Result<Self> {
         if value
             .seed
             .is_some_and(|value| value < 0 || value > u32::MAX as i64)
@@ -121,8 +133,7 @@ impl TryFrom<&SamplingRuntimeConfig> for CoreSamplingRuntimeConfig {
                         .map(|stage| parse_sampler_stage(stage))
                         .collect::<Result<Vec<_>>>()
                 })
-                .transpose()?
-                .unwrap_or_default(),
+                .transpose()?,
             seed: value.seed.map(|value| value as u32),
             top_k: value.top_k,
             top_p: option_f32(value.top_p, "top_p")?,
@@ -142,7 +153,7 @@ impl TryFrom<&SamplingRuntimeConfig> for CoreSamplingRuntimeConfig {
             dry_base: option_f32(value.dry_base, "dry_base")?,
             dry_allowed_length: value.dry_allowed_length,
             dry_penalty_last_n: value.dry_penalty_last_n,
-            dry_sequence_breakers: value.dry_sequence_breakers.clone().unwrap_or_default(),
+            dry_sequence_breakers: value.dry_sequence_breakers.clone(),
             mirostat: value.mirostat,
             mirostat_tau: option_f32(value.mirostat_tau, "mirostat_tau")?,
             mirostat_eta: option_f32(value.mirostat_eta, "mirostat_eta")?,
@@ -162,12 +173,11 @@ impl TryFrom<&SamplingRuntimeConfig> for CoreSamplingRuntimeConfig {
                         })
                         .collect::<Result<Vec<_>>>()
                 })
-                .transpose()?
-                .unwrap_or_default(),
-            ignore_eos: value.ignore_eos.unwrap_or(false),
-            grammar_lazy: value.grammar_lazy.unwrap_or(false),
-            preserved_tokens: value.preserved_tokens.clone().unwrap_or_default(),
-            backend_sampling: value.backend_sampling.unwrap_or(true),
+                .transpose()?,
+            ignore_eos: value.ignore_eos,
+            grammar_lazy: value.grammar_lazy,
+            preserved_tokens: value.preserved_tokens.clone(),
+            backend_sampling: value.backend_sampling,
         })
     }
 }
@@ -664,7 +674,7 @@ impl TryFrom<LocalTextOptions> for CoreLocalTextOptions {
             sampling: value
                 .sampling
                 .as_ref()
-                .map(|value| CoreSamplingRuntimeConfig::try_from(value))
+                .map(|value| CoreSamplingRuntimeOverride::try_from(value))
                 .transpose()?,
             media: value.media,
         })

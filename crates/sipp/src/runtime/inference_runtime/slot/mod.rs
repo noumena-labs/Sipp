@@ -34,12 +34,13 @@ impl InferenceRuntime {
         let slot_count = self.slot_scheduler.slots.len();
         for slot_index in 0..slot_count {
             let slot = &mut self.slot_scheduler.slots[slot_index];
-            if slot.request().is_none() || slot.seq_id < 0 {
+            if slot.seq_id < 0 {
                 continue;
             }
-
-            let cancel_requested = slot.request().map(|r| r.cancel_requested).unwrap_or(false);
-            if cancel_requested {
+            let Some(request) = slot.request() else {
+                continue;
+            };
+            if request.cancel_requested {
                 slot.cancel(REQUEST_CANCELLED_MESSAGE);
                 continue;
             }
@@ -76,6 +77,7 @@ impl InferenceRuntime {
                     &self.config,
                     self.model_fingerprint,
                     &mut self.kv_cache,
+                    &mut self.total_cache_hits,
                     &mut self.request_queue,
                     &mut self.scratch_token_piece,
                 ) {
@@ -108,6 +110,7 @@ fn run_initial_prefill(
     config: &NativeRuntimeConfig,
     model_fingerprint: u64,
     kv_cache: &mut KvCacheManager,
+    total_cache_hits: &mut usize,
     request_queue: &mut RequestQueue,
     scratch_token_piece: &mut Vec<u8>,
 ) -> bool {
@@ -143,6 +146,8 @@ fn run_initial_prefill(
     // outputs are read directly from the encoder pass, not from cached KV.
     let bypass_prefix_cache = slot.plan.prefill == PrefillKind::Encode
         || slot.plan.terminal == TerminalAction::ReadEmbedding;
+    let cache_candidate = slot.cache_candidate;
+    let requires_kv_clear = slot.requires_kv_clear;
     let Some(ref mut request) = slot.request else {
         return false;
     };
@@ -155,7 +160,8 @@ fn run_initial_prefill(
         config.scheduler.policy.decode_token_reserve,
         model_fingerprint,
         kv_cache,
-        slot.cache_candidate,
+        cache_candidate,
+        requires_kv_clear,
         &request.context_key,
         &request.prompt_tokens,
         request.max_output_tokens,
@@ -164,13 +170,22 @@ fn run_initial_prefill(
         &mut prefill_cursor,
     ) {
         request.cache_hits = cache_preparation.cache_hits;
+        if cache_preparation.cache_hits > 0 {
+            *total_cache_hits =
+                total_cache_hits.saturating_add(cache_preparation.cache_hits as usize);
+        }
         request.cache_source = cache_preparation.source;
+        slot.requires_kv_clear = false;
         if !slot.sampler_prompt_seeded
             && request.grammar.is_empty()
             && request.json_schema.is_empty()
         {
             if let Some(sampler) = slot.sampler.as_mut() {
-                for &token in &request.prompt_tokens {
+                let seed_start = config.prompt_sampler_seed_start(
+                    request.sampling.as_ref(),
+                    request.prompt_tokens.len(),
+                );
+                for &token in &request.prompt_tokens[seed_start..] {
                     if !sampler.accept(token, false) {
                         break;
                     }

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::runtime::config::KvReuseMode;
 use crate::runtime::request::{
-    token_byte_ring, GenerateRequest, GenerateRequestId, GenerateResponseStatus, RequestQueue,
-    ResponseOutput,
+    token_byte_ring, GenerateRequest, GenerateRequestId, GenerateResponseStatus, MultimodalPayload,
+    RequestQueue, ResponseOutput,
 };
 use crate::runtime::scheduler::{SlotExecutionPlan, SlotPhase};
 use crate::runtime::session::{CacheCandidate, KvCacheAdmission, KvCacheManager, SequenceMirror};
@@ -26,6 +26,7 @@ fn admission(seq_id: i32) -> KvCacheAdmission {
         generation: 1,
         mirror: SequenceMirror::default(),
         candidate: CacheCandidate::None,
+        requires_kv_clear: true,
     }
 }
 
@@ -104,6 +105,44 @@ fn admit_pending_request_leases_sequence_and_marks_manager_in_flight() {
     assert_eq!(slot.seq_id, 0);
     assert_eq!(slot.phase, SlotPhase::Prefill);
     assert!(!kv_cache.can_admit("other"));
+}
+
+#[test]
+fn admit_pending_request_moves_heavy_payloads_into_slot() {
+    let mut scheduler = SlotScheduler::default();
+    let mut kv_cache = KvCacheManager::new(1);
+    scheduler.resize(1, &mut kv_cache);
+    let mut queue = RequestQueue::new();
+    let mut request = request(1, "ctx");
+    request.original_prompt = "heavy prompt".to_string();
+    request.grammar = "root ::= \"ok\"".to_string();
+    request.json_schema = "{}".to_string();
+    request.stop = vec!["</s>".to_string()];
+    request.prompt_tokens = vec![1, 2, 3, 4];
+    request.multimodal = Some(MultimodalPayload {
+        image_buffers: vec![vec![9; 1024]],
+    });
+    request.is_multimodal_turn = true;
+    assert!(queue.push(request));
+
+    assert!(admit_one(&mut scheduler, &mut queue, &mut kv_cache).is_some());
+
+    assert!(queue.contains_request(1));
+    assert!(queue.pending_request(1).is_none());
+
+    let slot_request = scheduler.slots[0].request().expect("slot request");
+    assert_eq!(slot_request.original_prompt, "heavy prompt");
+    assert_eq!(slot_request.grammar, "root ::= \"ok\"");
+    assert_eq!(slot_request.json_schema, "{}");
+    assert_eq!(slot_request.stop, vec!["</s>"]);
+    assert_eq!(slot_request.prompt_tokens, vec![1, 2, 3, 4]);
+    assert_eq!(
+        slot_request
+            .multimodal
+            .as_ref()
+            .map(|payload| payload.image_buffers[0].len()),
+        Some(1024)
+    );
 }
 
 #[test]

@@ -50,6 +50,7 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert sipp.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
     assert hasattr(sipp.SippClient, "add")
     assert hasattr(sipp, "GatewayDescriptor")
+    assert sipp.SamplingRuntimeOverride is sipp.SamplingRuntimeConfig
     assert not hasattr(sipp.SippClient, "add_" + "local")
     assert not hasattr(sipp.SippClient, "add_http_endpoint")
 

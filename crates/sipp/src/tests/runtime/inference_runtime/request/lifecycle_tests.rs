@@ -22,11 +22,7 @@ fn cancel_request_marks_active_slot_clone() {
 
     assert!(runtime.cancel_request(7));
 
-    assert!(runtime
-        .request_queue
-        .requests
-        .get(&7)
-        .is_some_and(|request| request.cancel_requested));
+    assert!(runtime.request_queue.request_cancel_requested(7));
     assert!(runtime.slot_scheduler.slots[0]
         .request()
         .is_some_and(|request| request.cancel_requested));

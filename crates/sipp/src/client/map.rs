@@ -1,7 +1,7 @@
 use crate::core::TokenUsage;
 use crate::engine::{
     EmbedOptions, EmbedRequest, EmbeddingResult, GenerationResult, QueryOptions, QueryRequest,
-    RequestSampling, RequestStats, SamplingRuntimePatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+    RequestStats, SamplingRuntimeOverride, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 
 use crate::client::{
@@ -199,21 +199,15 @@ fn local_query_options(
 fn local_sampling(
     temperature: Option<f32>,
     top_p: Option<f32>,
-    sampling: Option<crate::engine::SamplingRuntimeConfig>,
-) -> Result<Option<RequestSampling>, SippError> {
-    if let Some(mut sampling) = sampling {
-        merge_sampling_field("temperature", &mut sampling.temperature, temperature)?;
-        merge_sampling_field("top_p", &mut sampling.top_p, top_p)?;
-        return Ok(Some(RequestSampling::Full(sampling)));
-    }
-
-    if temperature.is_some() || top_p.is_some() {
-        Ok(Some(RequestSampling::Patch(SamplingRuntimePatch {
-            temperature,
-            top_p,
-        })))
-    } else {
+    sampling: Option<SamplingRuntimeOverride>,
+) -> Result<Option<SamplingRuntimeOverride>, SippError> {
+    let mut override_config = sampling.unwrap_or_default();
+    merge_sampling_field("temperature", &mut override_config.temperature, temperature)?;
+    merge_sampling_field("top_p", &mut override_config.top_p, top_p)?;
+    if override_config.is_empty() {
         Ok(None)
+    } else {
+        Ok(Some(override_config))
     }
 }
 

@@ -16,6 +16,7 @@ import { SharedTokenRingReader } from './shared-token-ring.js';
 // thread from the same ring and does not run through this scheduler.
 const CONTINUOUS_LOOP_TICK_LIMIT = 1024;
 const CONTINUOUS_LOOP_TOKEN_LIMIT = 512;
+const STREAMING_LOOP_TOKEN_LIMIT = 1;
 const MAIN_THREAD_TOKEN_SLICE_US = 8_000;
 const WORKER_TOKEN_SLICE_US = 0;
 const REQUEST_STEP_RESULT_INVALID = -1;
@@ -212,10 +213,14 @@ export class QueuedRequestScheduler {
           return;
         }
 
+        const generatedTokenLimit =
+          this.options.queuedPromptTokenBatchSinks.size > 0
+            ? STREAMING_LOOP_TOKEN_LIMIT
+            : CONTINUOUS_LOOP_TOKEN_LIMIT;
         const loopResult = await bridge.runInferenceLoop(
           CONTINUOUS_LOOP_TICK_LIMIT,
           this.options.tracker.activeCount,
-          CONTINUOUS_LOOP_TOKEN_LIMIT,
+          generatedTokenLimit,
           { maxDurationUs: this.loopDurationUs() }
         );
         this.drainTokenRingObserved(bridge);

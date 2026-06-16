@@ -16,7 +16,7 @@ use crate::runtime::numeric::duration_ms;
 use crate::runtime::request::{GenerateRequestId, RequestQueue, NO_SAMPLED_TOKEN_ID};
 use crate::runtime::residency::ResidencyLease;
 use crate::runtime::scheduler::{
-    BatchPlanner, SamplerCacheKey, SharedBatchPlan, SlotPhase, SlotScheduler,
+    BatchPlanner, PrefillKind, SamplerCacheKey, SharedBatchPlan, SlotPhase, SlotScheduler,
 };
 use crate::runtime::session::KvCacheManager;
 use crate::runtime::{llama_seq_id, llama_token};
@@ -123,6 +123,8 @@ pub struct InferenceRuntime {
     scratch_decode_ready_slots: Vec<usize>,
     scratch_prefill_ready_slots: Vec<usize>,
     scratch_logits_contributions: Vec<PendingLogitsContribution>,
+    scratch_embedding_read_slots: Vec<usize>,
+    scratch_encoder_slots: Vec<usize>,
     /// Reused across every tick to avoid allocating a fresh ~16 KiB Vec for
     /// the batch contributions each scheduler iteration.
     scratch_plan: SharedBatchPlan,
@@ -157,6 +159,8 @@ impl InferenceRuntime {
 
         let completed_before = self.request_queue.completed_responses.len();
         let mut admitted_any = false;
+        let mut encoder_slots = std::mem::take(&mut self.scratch_encoder_slots);
+        encoder_slots.clear();
         let capabilities = self.capabilities.clone();
         while let Some(slot_index) = self.slot_scheduler.admit_pending_requests(
             &mut self.request_queue,
@@ -165,10 +169,27 @@ impl InferenceRuntime {
             |request| resolve_request_slot_plan_for_capabilities(&capabilities, request).ok(),
         ) {
             admitted_any = true;
-            if let Err(error) = self.run_admission_prefill(slot_index) {
-                self.fail_admitted_slot(slot_index, error);
+            if self
+                .slot_scheduler
+                .slots
+                .get(slot_index)
+                .is_some_and(|slot| slot.plan.prefill == PrefillKind::Encode)
+            {
+                encoder_slots.push(slot_index);
             }
         }
+        if !encoder_slots.is_empty() {
+            if let Err(error) = self.run_encoder_admission_batch(&encoder_slots) {
+                let message = format!("admission prefill failed: {error}");
+                for &slot_index in &encoder_slots {
+                    if let Some(slot) = self.slot_scheduler.slots.get_mut(slot_index) {
+                        slot.fail(message.clone());
+                    }
+                }
+            }
+        }
+        encoder_slots.clear();
+        self.scratch_encoder_slots = encoder_slots;
 
         let tick_executed = self.run_policy_batch_tick_locked();
         self.settle_terminal_samplers_locked();

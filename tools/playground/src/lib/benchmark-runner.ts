@@ -374,7 +374,10 @@ function invalidCacheReuseRunLabels(
 function repeatedPromptCacheSource(
   mode: RequestObservability['cacheMode'] | undefined
 ): RequestObservability['cacheSource'] | null {
-  if (mode === 'state_snapshot' || mode === 'live_slot_and_snapshot') {
+  if (mode === 'live_slot_prefix' || mode === 'live_slot_and_snapshot') {
+    return 'live';
+  }
+  if (mode === 'state_snapshot') {
     return 'snapshot';
   }
   return null;

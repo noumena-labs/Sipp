@@ -1024,12 +1024,21 @@ test('ModelService maps common generation options into local prompt options', as
     maxTokens: 12,
     temperature: 0.2,
     topP: 0.8,
+    sampling: {
+      repeat_last_n: 128,
+      repeat_penalty: 1.15,
+    },
     stop: ['END'],
   });
 
   const options = runtime.enqueuedOptions.at(-1) as PromptOptions;
   assert.equal(options.nTokens, 12);
-  assert.deepEqual(options.sampling, { temperature: 0.2, top_p: 0.8 });
+  assert.deepEqual(options.sampling, {
+    repeat_last_n: 128,
+    repeat_penalty: 1.15,
+    temperature: 0.2,
+    top_p: 0.8,
+  });
   assert.deepEqual(options.stop, ['END']);
 });
 

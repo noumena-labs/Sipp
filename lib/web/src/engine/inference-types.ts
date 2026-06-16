@@ -105,9 +105,14 @@ export interface SamplingRuntimeConfig {
   backend_sampling?: boolean;
 }
 
-export interface RequestSamplingPatch {
-  temperature?: number;
-  top_p?: number;
+/** Request-level local sampler override applied over runtime defaults. */
+export type SamplingRuntimeOverride = SamplingRuntimeConfig;
+
+/** Returns true when a request sampler override contains at least one field. */
+export function hasSamplingRuntimeOverrideFields(
+  sampling: SamplingRuntimeOverride | undefined
+): sampling is SamplingRuntimeOverride {
+  return sampling != null && Object.values(sampling).some((value) => value != null);
 }
 
 export interface SchedulerPolicyConfig {
@@ -169,7 +174,7 @@ export interface PromptOptions {
   tokenBatchSink?: (batch: TokenBatch) => void;
   media?: Uint8Array[];
   stop?: readonly string[];
-  sampling?: RequestSamplingPatch;
+  sampling?: SamplingRuntimeOverride;
   /**
    * Optional GBNF grammar source applied to the sampler for this request.
    * When provided, the native runtime constrains token sampling to strings
@@ -215,7 +220,7 @@ export interface GenerateRequest {
   maxOutputTokens: number;
   media?: Uint8Array[];
   stop?: readonly string[];
-  sampling?: RequestSamplingPatch;
+  sampling?: SamplingRuntimeOverride;
   /** Optional GBNF grammar source (see {@link PromptOptions.grammar}). */
   grammar?: string;
 }

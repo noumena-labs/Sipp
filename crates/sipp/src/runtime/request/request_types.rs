@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crate::engine::protocol::EmbedOptions;
-use crate::runtime::config::{KvReuseMode, RequestSampling};
+use crate::runtime::config::{KvReuseMode, SamplingRuntimeOverride};
 use crate::runtime::llama_token;
 use crate::runtime::metrics::CacheSource;
 
@@ -45,7 +45,7 @@ pub struct GenerateRequest {
     pub grammar: String,
     pub json_schema: String,
     pub stop: Vec<String>,
-    pub sampling: Option<RequestSampling>,
+    pub sampling: Option<SamplingRuntimeOverride>,
     pub prompt_tokens: Vec<llama_token>,
     pub multimodal: Option<MultimodalPayload>,
     /// When `Some`, this is an `embed()` request: the slot plan resolves to

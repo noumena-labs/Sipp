@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 use crate::engine::protocol::EmbedOptions;
-use crate::runtime::config::{RequestSampling, SamplingRuntimePatch};
+use crate::runtime::config::SamplingRuntimeOverride;
 
 use super::*;
 
@@ -126,10 +126,11 @@ fn multimodal_payload_and_request_overrides_are_plain_value_fields() {
     request.grammar = "root ::= \"x\"".to_string();
     request.json_schema = "{}".to_string();
     request.stop = vec!["</s>".to_string()];
-    request.sampling = Some(RequestSampling::Patch(SamplingRuntimePatch {
+    request.sampling = Some(SamplingRuntimeOverride {
         temperature: Some(0.2),
         top_p: None,
-    }));
+        ..SamplingRuntimeOverride::default()
+    });
     request.prompt_tokens = vec![1, 2, 3];
     request.multimodal = Some(payload.clone());
     request.embed_options = Some(EmbedOptions {
@@ -146,10 +147,11 @@ fn multimodal_payload_and_request_overrides_are_plain_value_fields() {
     assert_eq!(request.stop, vec!["</s>"]);
     assert!(matches!(
         request.sampling,
-        Some(RequestSampling::Patch(SamplingRuntimePatch {
+        Some(SamplingRuntimeOverride {
             temperature: Some(0.2),
-            top_p: None
-        }))
+            top_p: None,
+            ..
+        })
     ));
     assert_eq!(request.prompt_tokens, vec![1, 2, 3]);
     assert_eq!(request.multimodal, Some(payload));

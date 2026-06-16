@@ -72,6 +72,7 @@ pub struct SlotState {
     pub request: Option<GenerateRequest>,
     pub lease_generation: u64,
     pub cache_candidate: CacheCandidate,
+    pub requires_kv_clear: bool,
     pub mirror: SequenceMirror,
     pub prefill_cursor: usize,
     pub decode_step_count: usize,
@@ -110,6 +111,7 @@ impl SlotState {
         self.request = None;
         self.lease_generation = 0;
         self.cache_candidate = CacheCandidate::None;
+        self.requires_kv_clear = false;
         self.backend_sampler_attached = false;
         self.mirror = SequenceMirror::default();
         self.clear_request_progress();
@@ -127,6 +129,7 @@ impl SlotState {
         self.seq_id = admission.seq_id;
         self.lease_generation = admission.generation;
         self.cache_candidate = admission.candidate;
+        self.requires_kv_clear = admission.requires_kv_clear;
         self.mirror = admission.mirror;
         self.phase = SlotPhase::Admitted;
         self.backend_sampler_attached = false;
@@ -208,6 +211,7 @@ impl Default for SlotState {
             request: None,
             lease_generation: 0,
             cache_candidate: CacheCandidate::None,
+            requires_kv_clear: false,
             mirror: SequenceMirror::default(),
             prefill_cursor: 0,
             decode_step_count: 0,

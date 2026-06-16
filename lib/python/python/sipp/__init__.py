@@ -289,6 +289,7 @@ ProviderError = _native.ProviderError
 EndpointError = _native.EndpointError
 ResidencyRuntimeConfig = _native.ResidencyRuntimeConfig
 SamplingRuntimeConfig = _native.SamplingRuntimeConfig
+SamplingRuntimeOverride = _native.SamplingRuntimeConfig
 SchedulerPolicyConfig = _native.SchedulerPolicyConfig
 SchedulerRuntimeConfig = _native.SchedulerRuntimeConfig
 UnsupportedOperationError = _native.UnsupportedOperationError
@@ -320,6 +321,7 @@ __all__ = [
     "EndpointError",
     "ResidencyRuntimeConfig",
     "SamplingRuntimeConfig",
+    "SamplingRuntimeOverride",
     "SchedulerPolicyConfig",
     "SchedulerRuntimeConfig",
     "UnsupportedOperationError",

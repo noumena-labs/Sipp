@@ -14,6 +14,23 @@ fn mirror(tokens: &[i32]) -> SequenceMirror {
 }
 
 #[test]
+fn never_used_free_sequences_do_not_require_clear() {
+    let mut manager = KvCacheManager::new(2);
+
+    let first = manager
+        .admit("a", KvReuseMode::LiveSlotPrefix, false)
+        .expect("first admission");
+    let second = manager
+        .admit("b", KvReuseMode::LiveSlotPrefix, false)
+        .expect("second admission");
+
+    assert_eq!(first.seq_id, 0);
+    assert_eq!(second.seq_id, 1);
+    assert!(!first.requires_kv_clear);
+    assert!(!second.requires_kv_clear);
+}
+
+#[test]
 fn warm_reuse_moves_idle_tokens_into_admission_mirror() {
     let mut manager = KvCacheManager::new(1);
 
@@ -22,6 +39,7 @@ fn warm_reuse_moves_idle_tokens_into_admission_mirror() {
         .expect("cold admission");
     assert_eq!(cold.candidate, CacheCandidate::None);
     assert_eq!(cold.seq_id, 0);
+    assert!(!cold.requires_kv_clear);
     assert!(cold.mirror.current_kv_tokens.is_empty());
 
     manager.finalize_slot(
@@ -39,6 +57,7 @@ fn warm_reuse_moves_idle_tokens_into_admission_mirror() {
     assert_eq!(warm.candidate, CacheCandidate::Live);
     assert_eq!(warm.seq_id, cold.seq_id);
     assert_eq!(warm.generation, cold.generation);
+    assert!(!warm.requires_kv_clear);
     assert_eq!(warm.mirror.current_kv_tokens, vec![1, 2, 3, 4]);
 }
 
@@ -64,6 +83,7 @@ fn stale_resident_ref_never_reuses_reassigned_sequence() {
     assert_eq!(b.candidate, CacheCandidate::None);
     assert_eq!(b.seq_id, a.seq_id);
     assert!(b.generation > a.generation);
+    assert!(b.requires_kv_clear);
     manager.finalize_slot(
         "b",
         b.seq_id,
@@ -79,6 +99,7 @@ fn stale_resident_ref_never_reuses_reassigned_sequence() {
     assert_eq!(a_return.candidate, CacheCandidate::None);
     assert_eq!(a_return.seq_id, a.seq_id);
     assert!(a_return.generation > b.generation);
+    assert!(a_return.requires_kv_clear);
     assert!(a_return.mirror.current_kv_tokens.is_empty());
 }
 
@@ -103,6 +124,7 @@ fn disabled_mode_success_evicts_live_residency() {
         .expect("next admission");
     assert_eq!(next.candidate, CacheCandidate::None);
     assert!(next.generation > admission.generation);
+    assert!(next.requires_kv_clear);
     assert!(next.mirror.current_kv_tokens.is_empty());
 }
 
@@ -131,6 +153,7 @@ fn forced_reset_releases_in_flight_state_and_bumps_generation() {
         .expect("next admission");
     assert_eq!(next.candidate, CacheCandidate::None);
     assert!(next.generation > admission.generation);
+    assert!(next.requires_kv_clear);
 }
 
 #[test]
@@ -146,6 +169,7 @@ fn stale_finalize_does_not_overwrite_new_lease() {
         .admit("current", KvReuseMode::LiveSlotPrefix, false)
         .expect("current admission");
     assert!(current.generation > stale.generation);
+    assert!(current.requires_kv_clear);
 
     manager.finalize_slot(
         "stale",
@@ -178,6 +202,7 @@ fn stale_generation_callbacks_do_not_clear_new_same_context_lease() {
         .admit("ctx", KvReuseMode::LiveSlotPrefix, false)
         .expect("current admission");
     assert!(current.generation > stale.generation);
+    assert!(current.requires_kv_clear);
 
     manager.finalize_slot(
         "ctx",
@@ -218,6 +243,7 @@ fn bypass_cache_forces_cold_admission_even_with_live_resident() {
         .expect("bypass admission");
     assert_eq!(bypass.candidate, CacheCandidate::None);
     assert!(bypass.generation > initial.generation);
+    assert!(bypass.requires_kv_clear);
     assert!(bypass.mirror.current_kv_tokens.is_empty());
 }
 
@@ -269,6 +295,7 @@ fn lru_scan_drops_stale_residents_and_evicts_only_valid_idle_sequence() {
 
     assert_eq!(next.seq_id, valid.seq_id);
     assert_eq!(next.candidate, CacheCandidate::None);
+    assert!(next.requires_kv_clear);
     assert!(manager.sessions.contains_key("next"));
     assert!(!manager.sessions.contains_key("stale"));
     assert!(!manager.sessions.contains_key("valid"));
@@ -300,6 +327,7 @@ fn state_snapshot_success_does_not_keep_live_residency() {
         .expect("next admission");
     assert_eq!(next.candidate, CacheCandidate::None);
     assert!(next.generation > admission.generation);
+    assert!(next.requires_kv_clear);
     assert!(next.mirror.current_kv_tokens.is_empty());
 }
 
@@ -324,4 +352,28 @@ fn failed_slot_evicts_live_residency() {
         .expect("next admission");
     assert_eq!(next.candidate, CacheCandidate::None);
     assert!(next.generation > admission.generation);
+    assert!(next.requires_kv_clear);
+}
+
+#[test]
+fn queued_snapshot_is_dropped_when_sequence_is_released() {
+    let mut manager = KvCacheManager::new(1);
+
+    let admission = manager
+        .admit("ctx", KvReuseMode::LiveSlotAndSnapshot, false)
+        .expect("admission");
+
+    assert!(manager.queue_prefix_snapshot(
+        7,
+        "ctx",
+        admission.seq_id,
+        admission.generation,
+        &[1, 2],
+        2,
+    ));
+    assert_eq!(manager.pending_prefix_snapshot_count(), 1);
+
+    manager.release_slot_for_reset("ctx", admission.seq_id, admission.generation);
+
+    assert_eq!(manager.pending_prefix_snapshot_count(), 0);
 }
