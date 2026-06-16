@@ -3,11 +3,14 @@
 //! Covers deterministic inference-runtime helpers, state transitions, and error paths while avoiding native model execution unless a test is explicitly ignored.
 
 use super::super::sampler::ResidentBackendSampler;
+use super::prompt_sampler_seed_start;
 use super::recovery::normalize_runnable_slot_state;
 use super::run_initial_prefill;
 use super::sampler_attach::ensure_slot_sampler;
 use crate::native_bridge::{NativeRuntimeHandle, SamplerHandle};
-use crate::runtime::config::NativeRuntimeConfig;
+use crate::runtime::config::{
+    NativeRuntimeConfig, RequestSampling, SamplerStage, SamplingRuntimeConfig, SamplingRuntimePatch,
+};
 use crate::runtime::inference_runtime::runtime_tests::test_runtime;
 use crate::runtime::request::RequestQueue;
 use crate::runtime::request::{GenerateRequest, GenerateRequestLifecycle};
@@ -27,6 +30,83 @@ fn decode_slot(prompt_tokens: Vec<i32>, max_output_tokens: i32) -> SlotState {
         .map(|request| request.prompt_tokens.len())
         .unwrap_or_default();
     slot
+}
+
+#[test]
+fn prompt_sampler_seed_start_uses_default_penalty_tail() {
+    let config = NativeRuntimeConfig::default();
+
+    assert_eq!(prompt_sampler_seed_start(&config, None, 100), 36);
+    assert_eq!(prompt_sampler_seed_start(&config, None, 32), 0);
+}
+
+#[test]
+fn prompt_sampler_seed_start_respects_sampling_overrides() {
+    let mut config = NativeRuntimeConfig::default();
+    config.sampling.repeat_last_n = Some(7);
+    let patch = RequestSampling::Patch(SamplingRuntimePatch {
+        temperature: Some(0.2),
+        top_p: None,
+    });
+    let full = RequestSampling::Full(SamplingRuntimeConfig {
+        repeat_last_n: Some(11),
+        ..SamplingRuntimeConfig::default()
+    });
+
+    assert_eq!(prompt_sampler_seed_start(&config, Some(&patch), 20), 13);
+    assert_eq!(prompt_sampler_seed_start(&config, Some(&full), 20), 9);
+}
+
+#[test]
+fn prompt_sampler_seed_start_preserves_full_history_modes() {
+    let repeat_all = RequestSampling::Full(SamplingRuntimeConfig {
+        repeat_last_n: Some(-1),
+        ..SamplingRuntimeConfig::default()
+    });
+    let dry_all = RequestSampling::Full(SamplingRuntimeConfig {
+        samplers: vec![SamplerStage::Dry],
+        dry_multiplier: Some(0.8),
+        dry_penalty_last_n: None,
+        ..SamplingRuntimeConfig::default()
+    });
+    let config = NativeRuntimeConfig::default();
+
+    assert_eq!(
+        prompt_sampler_seed_start(&config, Some(&repeat_all), 100),
+        0
+    );
+    assert_eq!(prompt_sampler_seed_start(&config, Some(&dry_all), 100), 0);
+}
+
+#[test]
+fn prompt_sampler_seed_start_skips_inactive_history_samplers() {
+    let no_history = RequestSampling::Full(SamplingRuntimeConfig {
+        samplers: vec![SamplerStage::TopK, SamplerStage::TopP],
+        ..SamplingRuntimeConfig::default()
+    });
+    let disabled_penalty = RequestSampling::Full(SamplingRuntimeConfig {
+        repeat_last_n: Some(0),
+        repeat_penalty: Some(1.0),
+        ..SamplingRuntimeConfig::default()
+    });
+    let mirostat = RequestSampling::Full(SamplingRuntimeConfig {
+        mirostat: Some(1),
+        ..SamplingRuntimeConfig::default()
+    });
+    let config = NativeRuntimeConfig::default();
+
+    assert_eq!(
+        prompt_sampler_seed_start(&config, Some(&no_history), 100),
+        100
+    );
+    assert_eq!(
+        prompt_sampler_seed_start(&config, Some(&disabled_penalty), 100),
+        100
+    );
+    assert_eq!(
+        prompt_sampler_seed_start(&config, Some(&mirostat), 100),
+        100
+    );
 }
 
 #[test]
