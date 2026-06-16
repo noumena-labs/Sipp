@@ -1,6 +1,6 @@
 //! Snapshot prefix-cache: LRU+priority store of llama.cpp state buffers keyed by (model, scope, prefix-hash).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use crate::defaults::BYTES_PER_MIB;
@@ -35,6 +35,18 @@ pub(super) struct PrefixStateStoreRequest<'a> {
     token_count: usize,
     prefix_hash: u64,
     retention_priority: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::runtime::session) struct PendingPrefixSnapshot {
+    pub seq_id: llama_seq_id,
+    pub generation: u64,
+    pub model_fingerprint: u64,
+    pub snapshot_scope: String,
+    pub token_count: usize,
+    pub prefix_hash: u64,
+    pub retention_priority: u64,
+    pub prefix_tokens: Vec<llama_token>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -86,6 +98,7 @@ pub struct PrefixCacheHandle {
 pub struct PrefixStateCache {
     pub(crate) entries: Vec<PrefixCacheEntry>,
     pub(super) lookup_buckets: HashMap<PrefixCacheLookupKey, Vec<usize>>,
+    pub(super) pending_snapshots: VecDeque<PendingPrefixSnapshot>,
     pub(super) max_entries: usize,
     pub(super) max_total_bytes: usize,
     pub(super) total_approx_bytes: usize,
@@ -97,6 +110,7 @@ impl PrefixStateCache {
         Self {
             entries: Vec::with_capacity(max_entries),
             lookup_buckets: HashMap::with_capacity(max_entries),
+            pending_snapshots: VecDeque::new(),
             max_entries,
             max_total_bytes: max_total_bytes.max(1),
             total_approx_bytes: 0,

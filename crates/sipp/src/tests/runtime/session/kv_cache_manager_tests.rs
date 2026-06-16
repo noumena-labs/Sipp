@@ -325,3 +325,26 @@ fn failed_slot_evicts_live_residency() {
     assert_eq!(next.candidate, CacheCandidate::None);
     assert!(next.generation > admission.generation);
 }
+
+#[test]
+fn queued_snapshot_is_dropped_when_sequence_is_released() {
+    let mut manager = KvCacheManager::new(1);
+
+    let admission = manager
+        .admit("ctx", KvReuseMode::LiveSlotAndSnapshot, false)
+        .expect("admission");
+
+    assert!(manager.queue_prefix_snapshot(
+        7,
+        "ctx",
+        admission.seq_id,
+        admission.generation,
+        &[1, 2],
+        2,
+    ));
+    assert_eq!(manager.pending_prefix_snapshot_count(), 1);
+
+    manager.release_slot_for_reset("ctx", admission.seq_id, admission.generation);
+
+    assert_eq!(manager.pending_prefix_snapshot_count(), 0);
+}

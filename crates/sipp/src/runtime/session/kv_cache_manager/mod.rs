@@ -6,6 +6,7 @@ use crate::runtime::metrics::CacheSource;
 use crate::runtime::numeric::saturating_usize_to_u64;
 use crate::runtime::{llama_seq_id, llama_token};
 
+use super::prefix_state_cache::PendingPrefixSnapshot;
 use super::{PrefixCachePolicy, PrefixStateCache};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -190,6 +191,7 @@ impl KvCacheManager {
         }
         self.sessions.clear();
         self.idle_lru.clear();
+        self.prefix_state_cache.clear_pending_snapshots();
     }
 
     pub(crate) fn restore_best_snapshot_prefix(
@@ -256,6 +258,64 @@ impl KvCacheManager {
         true
     }
 
+    pub(crate) fn queue_prefix_snapshot(
+        &mut self,
+        model_fingerprint: u64,
+        snapshot_scope: &str,
+        seq_id: llama_seq_id,
+        generation: u64,
+        tokens: &[llama_token],
+        terminal_token_count: usize,
+    ) -> bool {
+        let token_count = tokens.len();
+        if !self
+            .prefix_cache_policy
+            .should_store_boundary(token_count, terminal_token_count)
+        {
+            return false;
+        }
+
+        self.prefix_state_cache
+            .enqueue_pending_snapshot(PendingPrefixSnapshot {
+                seq_id,
+                generation,
+                model_fingerprint,
+                snapshot_scope: snapshot_scope.to_string(),
+                token_count,
+                prefix_hash: self.prefix_cache_policy.hash_prefix(tokens, token_count),
+                retention_priority: saturating_usize_to_u64(token_count),
+                prefix_tokens: tokens[..token_count].to_vec(),
+            });
+        true
+    }
+
+    pub(crate) fn drain_pending_prefix_snapshots(
+        &mut self,
+        native_runtime: &NativeRuntimeHandle,
+        max_to_drain: usize,
+    ) -> usize {
+        let generations_by_seq: Vec<u64> = self
+            .physical
+            .iter()
+            .map(|sequence| sequence.generation)
+            .collect();
+        let prefix_cache_policy = &mut self.prefix_cache_policy;
+        self.prefix_state_cache.drain_pending_snapshots(
+            native_runtime,
+            max_to_drain,
+            |seq_id, generation| {
+                seq_index(seq_id, generations_by_seq.len())
+                    .is_some_and(|index| generations_by_seq[index] == generation)
+            },
+            |token_count| prefix_cache_policy.record_store(token_count),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_prefix_snapshot_count(&self) -> usize {
+        self.prefix_state_cache.pending_snapshot_count()
+    }
+
     fn try_admit_warm(&mut self, context_key: &str) -> Option<KvCacheAdmission> {
         let resident = self.sessions.get(context_key)?.resident?;
         let index = self.valid_resident_index(resident)?;
@@ -279,6 +339,8 @@ impl KvCacheManager {
     fn admit_cold(&mut self, context_key: &str) -> Option<KvCacheAdmission> {
         let seq_id = self.select_cold_target(context_key)?;
         let index = seq_index(seq_id, self.physical.len())?;
+        self.prefix_state_cache
+            .drop_pending_snapshots_for_seq(seq_id);
         self.physical[index].state = SeqState::Free;
         self.physical[index].generation = self.physical[index].generation.saturating_add(1);
         self.physical[index].state = SeqState::Leased;
@@ -372,6 +434,8 @@ impl KvCacheManager {
         let Some(index) = seq_index(seq_id, self.physical.len()) else {
             return;
         };
+        self.prefix_state_cache
+            .drop_pending_snapshots_for_seq(seq_id);
         self.physical[index].state = SeqState::Free;
         self.physical[index].generation = self.physical[index].generation.saturating_add(1);
     }

@@ -8,6 +8,8 @@ use super::{
     SchedulerBurstResult,
 };
 
+const PENDING_PREFIX_SNAPSHOT_DRAIN_BUDGET: usize = 2;
+
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
@@ -22,7 +24,10 @@ mod scheduler_api_private_tests;
 
 impl InferenceRuntime {
     pub fn run_scheduler_tick(&mut self) -> RequestStepResult {
+        let completed_before = self.request_queue.completed_responses.len();
         let result = self.run_scheduler_tick_locked();
+        let completed_after = self.request_queue.completed_responses.len();
+        self.drain_pending_prefix_snapshots_if_quiet(result, completed_after > completed_before);
         self.request_queue.flush_token_emissions();
         result
     }
@@ -70,8 +75,12 @@ impl InferenceRuntime {
             }
 
             if step_result == RequestStepResult::Waiting {
-                self.request_queue.flush_token_emissions();
                 burst_result.status = completed_or_waiting(&burst_result);
+                self.drain_pending_prefix_snapshots_if_quiet(
+                    burst_result.status,
+                    burst_result.completed_response_count > 0,
+                );
+                self.request_queue.flush_token_emissions();
                 return burst_result;
             }
 
@@ -83,14 +92,22 @@ impl InferenceRuntime {
                 deadline.is_some_and(|deadline| Instant::now() >= deadline);
 
             if completed_limit_reached || generated_limit_reached || duration_limit_reached {
-                self.request_queue.flush_token_emissions();
                 burst_result.status = completed_or_waiting(&burst_result);
+                self.drain_pending_prefix_snapshots_if_quiet(
+                    burst_result.status,
+                    burst_result.completed_response_count > 0,
+                );
+                self.request_queue.flush_token_emissions();
                 return burst_result;
             }
         }
 
-        self.request_queue.flush_token_emissions();
         burst_result.status = completed_or_waiting(&burst_result);
+        self.drain_pending_prefix_snapshots_if_quiet(
+            burst_result.status,
+            burst_result.completed_response_count > 0,
+        );
+        self.request_queue.flush_token_emissions();
         burst_result
     }
 
@@ -164,6 +181,10 @@ impl InferenceRuntime {
             }
         }
 
+        self.drain_pending_prefix_snapshots_if_quiet(
+            loop_result.status,
+            loop_result.completed_response_count > 0,
+        );
         self.request_queue.flush_token_emissions();
         loop_result
     }
@@ -200,6 +221,21 @@ impl InferenceRuntime {
         } else {
             fair_share
         }
+    }
+
+    fn drain_pending_prefix_snapshots_if_quiet(
+        &mut self,
+        status: RequestStepResult,
+        completed_request: bool,
+    ) {
+        if status != RequestStepResult::Waiting && !completed_request {
+            return;
+        }
+
+        self.kv_cache.drain_pending_prefix_snapshots(
+            &self.native_runtime,
+            PENDING_PREFIX_SNAPSHOT_DRAIN_BUDGET,
+        );
     }
 }
 

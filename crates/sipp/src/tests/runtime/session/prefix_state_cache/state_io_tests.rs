@@ -6,7 +6,7 @@
 
 use crate::native_bridge::NativeRuntimeHandle;
 
-use super::super::PrefixStateStoreRequest;
+use super::super::{PendingPrefixSnapshot, PrefixStateStoreRequest};
 use super::*;
 
 fn request<'a>(
@@ -24,6 +24,24 @@ fn request<'a>(
         token_count,
         prefix_hash: 99,
         retention_priority: 3,
+    }
+}
+
+fn pending_snapshot(
+    seq_id: i32,
+    generation: u64,
+    snapshot_scope: &str,
+    tokens: Vec<i32>,
+) -> PendingPrefixSnapshot {
+    PendingPrefixSnapshot {
+        seq_id,
+        generation,
+        model_fingerprint: 7,
+        snapshot_scope: snapshot_scope.to_string(),
+        token_count: tokens.len(),
+        prefix_hash: 99,
+        retention_priority: 3,
+        prefix_tokens: tokens,
     }
 }
 
@@ -79,4 +97,43 @@ fn restore_prefix_state_rejects_negative_seq_or_empty_runtime() {
 
     assert!(!cache.restore_prefix_state(&mut runtime, -1, &entry));
     assert!(!cache.restore_prefix_state(&mut runtime, 0, &entry));
+}
+
+#[test]
+fn enqueue_pending_snapshot_coalesces_exact_identity() {
+    let mut cache = PrefixStateCache::new(4, 1024);
+    let mut replacement = pending_snapshot(0, 11, "ctx", vec![1, 2]);
+    replacement.retention_priority = 99;
+
+    cache.enqueue_pending_snapshot(pending_snapshot(0, 11, "ctx", vec![1, 2]));
+    cache.enqueue_pending_snapshot(replacement);
+
+    assert_eq!(cache.pending_snapshot_count(), 1);
+    assert_eq!(cache.pending_snapshots[0].retention_priority, 99);
+}
+
+#[test]
+fn drop_pending_snapshots_for_seq_removes_only_matching_sequence() {
+    let mut cache = PrefixStateCache::new(4, 1024);
+    cache.enqueue_pending_snapshot(pending_snapshot(0, 11, "a", vec![1, 2]));
+    cache.enqueue_pending_snapshot(pending_snapshot(1, 11, "b", vec![3, 4]));
+
+    cache.drop_pending_snapshots_for_seq(0);
+
+    assert_eq!(cache.pending_snapshot_count(), 1);
+    assert_eq!(cache.pending_snapshots[0].seq_id, 1);
+}
+
+#[test]
+fn drain_pending_snapshots_drops_stale_generation_without_store() {
+    let mut cache = PrefixStateCache::new(4, 1024);
+    let runtime = NativeRuntimeHandle::empty_for_tests();
+    cache.enqueue_pending_snapshot(pending_snapshot(0, 11, "ctx", vec![1, 2]));
+
+    let drained =
+        cache.drain_pending_snapshots(&runtime, 2, |_seq_id, generation| generation == 12, |_| {});
+
+    assert_eq!(drained, 1);
+    assert_eq!(cache.pending_snapshot_count(), 0);
+    assert!(cache.entries.is_empty());
 }

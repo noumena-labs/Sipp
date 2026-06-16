@@ -1,3 +1,4 @@
+use crate::runtime::config::KvReuseMode;
 use crate::runtime::scheduler::BatchContributionKind;
 
 use super::{unique_slot_first_use, InferenceRuntime};
@@ -32,14 +33,28 @@ impl InferenceRuntime {
             if slot.mirror.current_kv_tokens.len() > terminal_token_count {
                 continue;
             }
-            self.kv_cache.capture_prefix_snapshot(
-                &self.native_runtime,
-                self.model_fingerprint,
-                &request.context_key,
-                slot.seq_id,
-                &slot.mirror.current_kv_tokens,
-                terminal_token_count,
-            );
+            // Pure snapshot mode evicts the sequence at completion, so it must
+            // materialize before finalization. Live+snapshot keeps the
+            // sequence idle and can defer the expensive state readback.
+            if request.cache_mode == KvReuseMode::StateSnapshot {
+                self.kv_cache.capture_prefix_snapshot(
+                    &self.native_runtime,
+                    self.model_fingerprint,
+                    &request.context_key,
+                    slot.seq_id,
+                    &slot.mirror.current_kv_tokens,
+                    terminal_token_count,
+                );
+            } else {
+                self.kv_cache.queue_prefix_snapshot(
+                    self.model_fingerprint,
+                    &request.context_key,
+                    slot.seq_id,
+                    slot.lease_generation,
+                    &slot.mirror.current_kv_tokens,
+                    terminal_token_count,
+                );
+            }
         }
     }
 }

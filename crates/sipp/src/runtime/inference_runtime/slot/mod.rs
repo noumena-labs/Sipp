@@ -76,6 +76,7 @@ impl InferenceRuntime {
                     &self.config,
                     self.model_fingerprint,
                     &mut self.kv_cache,
+                    &mut self.total_cache_hits,
                     &mut self.request_queue,
                     &mut self.scratch_token_piece,
                 ) {
@@ -108,6 +109,7 @@ fn run_initial_prefill(
     config: &NativeRuntimeConfig,
     model_fingerprint: u64,
     kv_cache: &mut KvCacheManager,
+    total_cache_hits: &mut usize,
     request_queue: &mut RequestQueue,
     scratch_token_piece: &mut Vec<u8>,
 ) -> bool {
@@ -164,6 +166,10 @@ fn run_initial_prefill(
         &mut prefill_cursor,
     ) {
         request.cache_hits = cache_preparation.cache_hits;
+        if cache_preparation.cache_hits > 0 {
+            *total_cache_hits =
+                total_cache_hits.saturating_add(cache_preparation.cache_hits as usize);
+        }
         request.cache_source = cache_preparation.source;
         if !slot.sampler_prompt_seeded
             && request.grammar.is_empty()
