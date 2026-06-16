@@ -251,6 +251,10 @@ function formatTps(value: number | null | undefined): string {
   return value == null ? 'n/a' : `${round(value)} tok/s`;
 }
 
+function requestContextKey(operation: BenchmarkOperation): string {
+  return `playground-${operation}`;
+}
+
 function downloadJson(filename: string, value: unknown): void {
   const blob = new Blob([JSON.stringify(value, null, 2)], {
     type: 'application/json',
@@ -880,7 +884,7 @@ export default function App() {
         const run = await runObservedRequest(client, requestPrompt, {
           operation: requestOperation,
           maxTokens: requestTokenCount,
-          contextKey: `query-${Date.now()}`,
+          contextKey: requestContextKey(requestOperation),
           media: image,
           emitTokens: requestEmitTokens,
           onTokenBatch,
