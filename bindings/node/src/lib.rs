@@ -3,70 +3,40 @@
 //! This crate exposes the shared Rust client facade to JavaScript while
 //! translating Node request objects, async tasks, and native errors.
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 
-use sipp::backend::{
-    backend_observability_json as core_backend_observability_json,
-    set_llama_log_quiet as core_set_llama_log_quiet,
-};
-use sipp::core::TokenUsage as CoreTokenUsage;
-use sipp::engine::protocol::{
-    CacheSource as CoreCacheSource, RequestStats as CoreRequestStats,
-};
-use sipp::engine::{
-    ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode, GpuLayerConfig,
-    KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
-    MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
-    NativeRuntimeConfig as CoreNativeRuntimeConfig,
-    ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
-    ResidencyRuntimeConfig as CoreResidencyRuntimeConfig, RopeScaling, SamplerStage,
-    SamplingRuntimeConfig as CoreSamplingRuntimeConfig,
-    SchedulerRuntimeConfig as CoreSchedulerRuntimeConfig, SplitMode, TokenBatch as CoreTokenBatch,
-};
-use sipp::runtime::config::{
-    SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
-};
-use sipp::{
-    AnthropicProviderConfig as CoreAnthropicProviderConfig,
-    SippCancellationHandle as CoreCancellationHandle,
-    SippCancellationReason as CoreCancellationReason, SippChatRequest as CoreClientChatRequest,
-    SippClient as CoreClient, SippEmbedRequest as CoreClientEmbedRequest,
-    SippEmbeddingResponse as CoreClientEmbeddingResponse,
-    SippEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
-    SippEmbeddingRun as CoreClientEmbeddingRun, SippError as CoreClientError,
-    SippQueryRequest as CoreClientQueryRequest, SippRequestContext as CoreClientRequestContext,
-    SippTextOptions as CoreClientTextOptions, SippTextResponse as CoreClientTextResponse,
-    SippTextResponseFuture as CoreClientTextResponseFuture, SippTextRun as CoreClientTextRun,
-    SippTokenBatches as CoreClientTokenBatches, EndpointDescriptor as CoreEndpointDescriptor,
-    EndpointRef as CoreEndpointRef, GatewayAuthentication as CoreGatewayAuthentication,
-    GatewayEndpointConfig as CoreGatewayEndpointConfig, GatewayRoutes as CoreGatewayRoutes,
-    GatewaySecret as CoreGatewaySecret, GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy,
-    LocalEmbedOptions as CoreClientLocalEmbedOptions,
-    LocalTextOptions as CoreClientLocalTextOptions,
-    OpenAiCompatibleProviderConfig as CoreOpenAiCompatibleProviderConfig,
-    OpenAiProviderConfig as CoreOpenAiProviderConfig, ProviderAuthConfig as CoreProviderAuthConfig,
-    ProviderEndpointConfig as CoreProviderEndpointConfig,
-    ProviderEndpointError as CoreProviderEndpointError,
-    ProviderEndpointErrorKind as CoreProviderEndpointErrorKind,
-    ProviderSecret as CoreProviderSecret,
-};
 use futures::executor::block_on;
 use futures::StreamExt;
 use napi::bindgen_prelude::{AsyncTask, Buffer, Either, Env};
 use napi::{Error, JsValue, Result, Status, Task};
 use napi_derive::napi;
-use serde::de::DeserializeOwned;
+use sipp::backend::{
+    backend_observability_json as core_backend_observability_json,
+    set_llama_log_quiet as core_set_llama_log_quiet,
+};
+use sipp::core::TokenUsage as CoreTokenUsage;
+use sipp::engine::protocol::RequestStats as CoreRequestStats;
+use sipp::engine::{PoolingType as CorePoolingType, TokenBatch as CoreTokenBatch};
+use sipp::{
+    EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
+    ProviderEndpointError as CoreProviderEndpointError,
+    ProviderEndpointErrorKind as CoreProviderEndpointErrorKind,
+    SippCancellationHandle as CoreCancellationHandle,
+    SippCancellationReason as CoreCancellationReason, SippClient as CoreClient,
+    SippEmbeddingResponse as CoreClientEmbeddingResponse,
+    SippEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
+    SippEmbeddingRun as CoreClientEmbeddingRun, SippError as CoreClientError,
+    SippRequestContext as CoreClientRequestContext, SippTextResponse as CoreClientTextResponse,
+    SippTextResponseFuture as CoreClientTextResponseFuture, SippTextRun as CoreClientTextRun,
+    SippTokenBatches as CoreClientTokenBatches,
+};
+use sipp_binding_dto as dto;
 
-#[cfg(test)]
-#[path = "tests/root_tests.rs"]
-mod root_tests;
-
-#[cfg(test)]
-#[path = "tests/stats_tests.rs"]
-mod stats_tests;
+fn convert_error(error: dto::ConvertError) -> Error {
+    match error {
+        dto::ConvertError::InvalidArg(message) => Error::new(Status::InvalidArg, message),
+    }
+}
 
 type SharedSippClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
@@ -151,69 +121,53 @@ pub struct SamplingRuntimeConfig {
     pub backend_sampling: Option<bool>,
 }
 
-impl SamplingRuntimeConfig {
-    fn to_core(&self) -> Result<CoreSamplingRuntimeConfig> {
-        if self
-            .seed
-            .is_some_and(|value| value < 0 || value > u32::MAX as i64)
-        {
-            return Err(invalid_arg("seed must fit in an unsigned 32-bit integer"));
+impl From<&LogitBiasConfig> for dto::LogitBiasConfig {
+    fn from(value: &LogitBiasConfig) -> Self {
+        Self {
+            token: value.token,
+            bias: value.bias,
         }
-        Ok(CoreSamplingRuntimeConfig {
-            samplers: self
-                .samplers
-                .as_ref()
-                .map(|samplers| {
-                    samplers
-                        .iter()
-                        .map(|stage| parse_sampler_stage(stage))
-                        .collect::<Result<Vec<_>>>()
-                })
-                .transpose()?
-                .unwrap_or_default(),
-            seed: self.seed.map(|value| value as u32),
-            top_k: self.top_k,
-            top_p: option_f32(self.top_p),
-            min_p: option_f32(self.min_p),
-            typical_p: option_f32(self.typical_p),
-            xtc_probability: option_f32(self.xtc_probability),
-            xtc_threshold: option_f32(self.xtc_threshold),
-            top_n_sigma: option_f32(self.top_n_sigma),
-            temperature: option_f32(self.temperature),
-            dynatemp_range: option_f32(self.dynatemp_range),
-            dynatemp_exponent: option_f32(self.dynatemp_exponent),
-            repeat_last_n: self.repeat_last_n,
-            repeat_penalty: option_f32(self.repeat_penalty),
-            frequency_penalty: option_f32(self.frequency_penalty),
-            presence_penalty: option_f32(self.presence_penalty),
-            dry_multiplier: option_f32(self.dry_multiplier),
-            dry_base: option_f32(self.dry_base),
-            dry_allowed_length: self.dry_allowed_length,
-            dry_penalty_last_n: self.dry_penalty_last_n,
-            dry_sequence_breakers: self.dry_sequence_breakers.clone().unwrap_or_default(),
-            mirostat: self.mirostat,
-            mirostat_tau: option_f32(self.mirostat_tau),
-            mirostat_eta: option_f32(self.mirostat_eta),
-            min_keep: self.min_keep,
-            n_probs: self.n_probs,
-            logit_bias: self
+    }
+}
+
+impl From<&SamplingRuntimeConfig> for dto::SamplingRuntimeConfig {
+    fn from(value: &SamplingRuntimeConfig) -> Self {
+        Self {
+            samplers: value.samplers.clone(),
+            seed: value.seed,
+            top_k: value.top_k,
+            top_p: value.top_p,
+            min_p: value.min_p,
+            typical_p: value.typical_p,
+            xtc_probability: value.xtc_probability,
+            xtc_threshold: value.xtc_threshold,
+            top_n_sigma: value.top_n_sigma,
+            temperature: value.temperature,
+            dynatemp_range: value.dynatemp_range,
+            dynatemp_exponent: value.dynatemp_exponent,
+            repeat_last_n: value.repeat_last_n,
+            repeat_penalty: value.repeat_penalty,
+            frequency_penalty: value.frequency_penalty,
+            presence_penalty: value.presence_penalty,
+            dry_multiplier: value.dry_multiplier,
+            dry_base: value.dry_base,
+            dry_allowed_length: value.dry_allowed_length,
+            dry_penalty_last_n: value.dry_penalty_last_n,
+            dry_sequence_breakers: value.dry_sequence_breakers.clone(),
+            mirostat: value.mirostat,
+            mirostat_tau: value.mirostat_tau,
+            mirostat_eta: value.mirostat_eta,
+            min_keep: value.min_keep,
+            n_probs: value.n_probs,
+            logit_bias: value
                 .logit_bias
                 .as_ref()
-                .map(|biases| {
-                    biases
-                        .iter()
-                        .map(|bias| LogitBias {
-                            token: bias.token,
-                            bias: bias.bias as f32,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            ignore_eos: self.ignore_eos.unwrap_or(false),
-            grammar_lazy: self.grammar_lazy.unwrap_or(false),
-            preserved_tokens: self.preserved_tokens.clone().unwrap_or_default(),
-            backend_sampling: self.backend_sampling.unwrap_or(true),
-        })
+                .map(|biases| biases.iter().map(dto::LogitBiasConfig::from).collect()),
+            ignore_eos: value.ignore_eos,
+            grammar_lazy: value.grammar_lazy,
+            preserved_tokens: value.preserved_tokens.clone(),
+            backend_sampling: value.backend_sampling,
+        }
     }
 }
 
@@ -253,34 +207,32 @@ pub struct ModelPlacementConfig {
     pub no_host: Option<bool>,
 }
 
-impl ModelPlacementConfig {
-    fn to_core(&self) -> Result<CoreModelPlacementConfig> {
-        let mut core = CoreModelPlacementConfig::default();
-        assign_if_some(&mut core.devices, self.devices.clone());
-        if let Some(value) = &self.gpu_layers {
-            core.gpu_layers = match value {
-                Either::A(value) => parse_gpu_layers(value)?,
-                Either::B(value) => GpuLayerConfig::from_layer_count(value.count),
-            };
+impl From<&GpuLayerCountConfig> for dto::GpuLayerCountConfig {
+    fn from(value: &GpuLayerCountConfig) -> Self {
+        Self { count: value.count }
+    }
+}
+
+impl From<&ModelPlacementConfig> for dto::ModelPlacementConfig {
+    fn from(value: &ModelPlacementConfig) -> Self {
+        Self {
+            devices: value.devices.clone(),
+            gpu_layers: value.gpu_layers.as_ref().map(|value| match value {
+                Either::A(preset) => dto::GpuLayers::Preset(preset.clone()),
+                Either::B(count) => dto::GpuLayers::Count(count.into()),
+            }),
+            split_mode: value.split_mode.clone(),
+            main_gpu: value.main_gpu,
+            tensor_split: value.tensor_split.clone(),
+            use_mmap: value.use_mmap,
+            use_mlock: value.use_mlock,
+            fit_params: value.fit_params,
+            fit_params_min_ctx: value.fit_params_min_ctx,
+            fit_params_target_bytes: value.fit_params_target_bytes.clone(),
+            check_tensors: value.check_tensors,
+            no_extra_bufts: value.no_extra_bufts,
+            no_host: value.no_host,
         }
-        if let Some(value) = &self.split_mode {
-            core.split_mode = parse_split_mode(value)?;
-        }
-        core.main_gpu = self.main_gpu;
-        if let Some(value) = &self.tensor_split {
-            core.tensor_split = value.iter().map(|value| *value as f32).collect();
-        }
-        assign_if_some(&mut core.use_mmap, self.use_mmap);
-        assign_if_some(&mut core.use_mlock, self.use_mlock);
-        assign_if_some(&mut core.fit_params, self.fit_params);
-        core.fit_params_min_ctx = self.fit_params_min_ctx;
-        if let Some(value) = &self.fit_params_target_bytes {
-            core.fit_params_target_bytes = value.iter().map(|value| *value as u64).collect();
-        }
-        assign_if_some(&mut core.check_tensors, self.check_tensors);
-        assign_if_some(&mut core.no_extra_bufts, self.no_extra_bufts);
-        assign_if_some(&mut core.no_host, self.no_host);
-        Ok(core)
     }
 }
 
@@ -334,47 +286,34 @@ pub struct ContextRuntimeConfig {
     pub pooling: Option<PoolingType>,
 }
 
-impl ContextRuntimeConfig {
-    fn to_core(&self) -> Result<sipp::engine::ContextRuntimeConfig> {
-        let mut core = sipp::engine::ContextRuntimeConfig {
-            n_ctx: self.n_ctx,
-            n_batch: self.n_batch,
-            n_ubatch: self.n_ubatch,
-            n_parallel: self.n_parallel,
-            n_threads: self.n_threads,
-            n_threads_batch: self.n_threads_batch,
-            flash_attention: self
-                .flash_attention
-                .as_deref()
-                .map(parse_flash_attention)
-                .transpose()?
-                .unwrap_or_default(),
-            kv_unified: self.kv_unified,
-            ..Default::default()
-        };
-        if let Some(value) = &self.cache_type_k {
-            core.cache_type_k = parse_kv_cache_type(value)?;
+impl From<&ContextRuntimeConfig> for dto::ContextRuntimeConfig {
+    fn from(value: &ContextRuntimeConfig) -> Self {
+        Self {
+            n_ctx: value.n_ctx,
+            n_batch: value.n_batch,
+            n_ubatch: value.n_ubatch,
+            n_parallel: value.n_parallel,
+            n_threads: value.n_threads,
+            n_threads_batch: value.n_threads_batch,
+            flash_attention: value.flash_attention.clone(),
+            kv_unified: value.kv_unified,
+            cache_type_k: value.cache_type_k.clone(),
+            cache_type_v: value.cache_type_v.clone(),
+            offload_kqv: value.offload_kqv,
+            op_offload: value.op_offload,
+            swa_full: value.swa_full,
+            warmup: value.warmup,
+            rope_scaling: value.rope_scaling.clone(),
+            rope_freq_base: value.rope_freq_base,
+            rope_freq_scale: value.rope_freq_scale,
+            yarn_orig_ctx: value.yarn_orig_ctx,
+            yarn_ext_factor: value.yarn_ext_factor,
+            yarn_attn_factor: value.yarn_attn_factor,
+            yarn_beta_fast: value.yarn_beta_fast,
+            yarn_beta_slow: value.yarn_beta_slow,
+            embeddings: value.embeddings,
+            pooling: value.pooling.map(dto::PoolingType::from),
         }
-        if let Some(value) = &self.cache_type_v {
-            core.cache_type_v = parse_kv_cache_type(value)?;
-        }
-        assign_if_some(&mut core.offload_kqv, self.offload_kqv);
-        assign_if_some(&mut core.op_offload, self.op_offload);
-        assign_if_some(&mut core.swa_full, self.swa_full);
-        assign_if_some(&mut core.warmup, self.warmup);
-        if let Some(value) = &self.rope_scaling {
-            core.rope_scaling = Some(parse_rope_scaling(value)?);
-        }
-        core.rope_freq_base = option_f32(self.rope_freq_base);
-        core.rope_freq_scale = option_f32(self.rope_freq_scale);
-        core.yarn_orig_ctx = self.yarn_orig_ctx;
-        core.yarn_ext_factor = option_f32(self.yarn_ext_factor);
-        core.yarn_attn_factor = option_f32(self.yarn_attn_factor);
-        core.yarn_beta_fast = option_f32(self.yarn_beta_fast);
-        core.yarn_beta_slow = option_f32(self.yarn_beta_slow);
-        core.embeddings = self.embeddings;
-        core.pooling = self.pooling.map(CorePoolingType::from);
-        Ok(core)
     }
 }
 
@@ -388,17 +327,13 @@ pub struct SchedulerPolicyConfig {
     pub enable_adaptive_prefill_chunking: Option<bool>,
 }
 
-impl SchedulerPolicyConfig {
-    fn apply_to_core(&self, core: &mut CoreSchedulerPolicyConfig) -> Result<()> {
-        if let Some(value) = &self.mode {
-            core.mode = parse_scheduler_policy(value)?;
+impl From<&SchedulerPolicyConfig> for dto::SchedulerPolicyConfig {
+    fn from(value: &SchedulerPolicyConfig) -> Self {
+        Self {
+            mode: value.mode.clone(),
+            decode_token_reserve: value.decode_token_reserve,
+            enable_adaptive_prefill_chunking: value.enable_adaptive_prefill_chunking,
         }
-        assign_if_some(&mut core.decode_token_reserve, self.decode_token_reserve);
-        assign_if_some(
-            &mut core.enable_adaptive_prefill_chunking,
-            self.enable_adaptive_prefill_chunking,
-        );
-        Ok(())
     }
 }
 
@@ -416,17 +351,15 @@ pub struct SchedulerRuntimeConfig {
     pub max_queued_requests: Option<i32>,
 }
 
-impl SchedulerRuntimeConfig {
-    fn to_core(&self) -> Result<CoreSchedulerRuntimeConfig> {
-        let mut core = CoreSchedulerRuntimeConfig::default();
-        assign_if_some(&mut core.continuous_batching, self.continuous_batching);
-        if let Some(value) = &self.policy {
-            value.apply_to_core(&mut core.policy)?;
+impl From<&SchedulerRuntimeConfig> for dto::SchedulerRuntimeConfig {
+    fn from(value: &SchedulerRuntimeConfig) -> Self {
+        Self {
+            continuous_batching: value.continuous_batching,
+            policy: value.policy.as_ref().map(dto::SchedulerPolicyConfig::from),
+            prefill_chunk_size: value.prefill_chunk_size,
+            max_running_requests: value.max_running_requests,
+            max_queued_requests: value.max_queued_requests,
         }
-        assign_if_some(&mut core.prefill_chunk_size, self.prefill_chunk_size);
-        core.max_running_requests = self.max_running_requests;
-        core.max_queued_requests = self.max_queued_requests;
-        Ok(core)
     }
 }
 
@@ -444,27 +377,15 @@ pub struct CacheRuntimeConfig {
     pub max_snapshot_bytes: Option<f64>,
 }
 
-impl CacheRuntimeConfig {
-    fn to_core(&self) -> Result<sipp::engine::CacheRuntimeConfig> {
-        let mut core = sipp::engine::CacheRuntimeConfig::default();
-        if let Some(value) = &self.mode {
-            core.mode = parse_kv_reuse_mode(value)?;
+impl From<&CacheRuntimeConfig> for dto::CacheRuntimeConfig {
+    fn from(value: &CacheRuntimeConfig) -> Self {
+        Self {
+            mode: value.mode.clone(),
+            retained_prefix_tokens: value.retained_prefix_tokens,
+            snapshot_interval_tokens: value.snapshot_interval_tokens,
+            max_snapshot_entries: value.max_snapshot_entries,
+            max_snapshot_bytes: value.max_snapshot_bytes,
         }
-        assign_if_some(
-            &mut core.retained_prefix_tokens,
-            self.retained_prefix_tokens,
-        );
-        assign_if_some(
-            &mut core.snapshot_interval_tokens,
-            self.snapshot_interval_tokens,
-        );
-        assign_if_some(&mut core.max_snapshot_entries, self.max_snapshot_entries);
-        assign_if_some_map(
-            &mut core.max_snapshot_bytes,
-            self.max_snapshot_bytes,
-            |value| value as usize,
-        );
-        Ok(core)
     }
 }
 
@@ -481,13 +402,13 @@ pub struct MultimodalRuntimeConfig {
     pub image_max_tokens: Option<i32>,
 }
 
-impl MultimodalRuntimeConfig {
-    fn to_core(&self) -> CoreMultimodalRuntimeConfig {
-        CoreMultimodalRuntimeConfig {
-            projector_path: self.projector_path.clone(),
-            use_gpu: self.use_gpu,
-            image_min_tokens: self.image_min_tokens,
-            image_max_tokens: self.image_max_tokens,
+impl From<&MultimodalRuntimeConfig> for dto::MultimodalRuntimeConfig {
+    fn from(value: &MultimodalRuntimeConfig) -> Self {
+        Self {
+            projector_path: value.projector_path.clone(),
+            use_gpu: value.use_gpu,
+            image_min_tokens: value.image_min_tokens,
+            image_max_tokens: value.image_max_tokens,
         }
     }
 }
@@ -505,25 +426,14 @@ pub struct ResidencyRuntimeConfig {
     pub gpu_memory_safety_margin_bytes: Option<f64>,
 }
 
-impl ResidencyRuntimeConfig {
-    fn to_core(&self) -> CoreResidencyRuntimeConfig {
-        let mut core = CoreResidencyRuntimeConfig::default();
-        assign_if_some_map(
-            &mut core.max_gpu_models_per_device,
-            self.max_gpu_models_per_device,
-            |value| value as usize,
-        );
-        assign_if_some(
-            &mut core.allow_cpu_models_while_gpu_loaded,
-            self.allow_cpu_models_while_gpu_loaded,
-        );
-        assign_if_some(&mut core.require_gpu_lease, self.require_gpu_lease);
-        assign_if_some_map(
-            &mut core.gpu_memory_safety_margin_bytes,
-            self.gpu_memory_safety_margin_bytes,
-            |value| value as u64,
-        );
-        core
+impl From<&ResidencyRuntimeConfig> for dto::ResidencyRuntimeConfig {
+    fn from(value: &ResidencyRuntimeConfig) -> Self {
+        Self {
+            max_gpu_models_per_device: value.max_gpu_models_per_device,
+            allow_cpu_models_while_gpu_loaded: value.allow_cpu_models_while_gpu_loaded,
+            require_gpu_lease: value.require_gpu_lease,
+            gpu_memory_safety_margin_bytes: value.gpu_memory_safety_margin_bytes,
+        }
     }
 }
 
@@ -536,11 +446,11 @@ pub struct ObservabilityRuntimeConfig {
     pub backend_profiling: Option<bool>,
 }
 
-impl ObservabilityRuntimeConfig {
-    fn to_core(&self) -> CoreObservabilityRuntimeConfig {
-        CoreObservabilityRuntimeConfig {
-            runtime_metrics: self.runtime_metrics.unwrap_or(false),
-            backend_profiling: self.backend_profiling.unwrap_or(false),
+impl From<&ObservabilityRuntimeConfig> for dto::ObservabilityRuntimeConfig {
+    fn from(value: &ObservabilityRuntimeConfig) -> Self {
+        Self {
+            runtime_metrics: value.runtime_metrics,
+            backend_profiling: value.backend_profiling,
         }
     }
 }
@@ -558,36 +468,36 @@ pub struct NativeRuntimeConfig {
     pub observability: Option<ObservabilityRuntimeConfig>,
 }
 
-impl NativeRuntimeConfig {
-    fn to_core(&self) -> Result<CoreNativeRuntimeConfig> {
-        Ok(CoreNativeRuntimeConfig {
-            placement: optional_core_or_default(
-                self.placement.as_ref(),
-                ModelPlacementConfig::to_core,
-            )?,
-            context: optional_core_or_default(
-                self.context.as_ref(),
-                ContextRuntimeConfig::to_core,
-            )?,
-            sampling: optional_core_or_default(
-                self.sampling.as_ref(),
-                SamplingRuntimeConfig::to_core,
-            )?,
-            scheduler: optional_core_or_default(
-                self.scheduler.as_ref(),
-                SchedulerRuntimeConfig::to_core,
-            )?,
-            cache: optional_core_or_default(self.cache.as_ref(), CacheRuntimeConfig::to_core)?,
-            multimodal: optional_core_or_default(self.multimodal.as_ref(), |value| {
-                Ok(value.to_core())
-            })?,
-            residency: optional_core_or_default(self.residency.as_ref(), |value| {
-                Ok(value.to_core())
-            })?,
-            observability: optional_core_or_default(self.observability.as_ref(), |value| {
-                Ok(value.to_core())
-            })?,
-        })
+impl From<&NativeRuntimeConfig> for dto::NativeRuntimeConfig {
+    fn from(value: &NativeRuntimeConfig) -> Self {
+        Self {
+            placement: value
+                .placement
+                .as_ref()
+                .map(dto::ModelPlacementConfig::from),
+            context: value.context.as_ref().map(dto::ContextRuntimeConfig::from),
+            sampling: value
+                .sampling
+                .as_ref()
+                .map(dto::SamplingRuntimeConfig::from),
+            scheduler: value
+                .scheduler
+                .as_ref()
+                .map(dto::SchedulerRuntimeConfig::from),
+            cache: value.cache.as_ref().map(dto::CacheRuntimeConfig::from),
+            multimodal: value
+                .multimodal
+                .as_ref()
+                .map(dto::MultimodalRuntimeConfig::from),
+            residency: value
+                .residency
+                .as_ref()
+                .map(dto::ResidencyRuntimeConfig::from),
+            observability: value
+                .observability
+                .as_ref()
+                .map(dto::ObservabilityRuntimeConfig::from),
+        }
     }
 }
 
@@ -598,21 +508,11 @@ pub struct EndpointRef {
     pub id: String,
 }
 
-impl EndpointRef {
-    fn to_core(&self) -> Result<CoreEndpointRef> {
-        match self.kind.as_str() {
-            "local" => Ok(CoreEndpointRef::Local {
-                id: self.id.clone(),
-            }),
-            "gateway" => Ok(CoreEndpointRef::Gateway {
-                id: self.id.clone(),
-            }),
-            "provider" => Ok(CoreEndpointRef::Provider {
-                id: self.id.clone(),
-            }),
-            _ => Err(invalid_arg(
-                "endpoint kind must be local, gateway, or provider",
-            )),
+impl From<EndpointRef> for dto::EndpointRef {
+    fn from(value: EndpointRef) -> Self {
+        Self {
+            kind: value.kind,
+            id: value.id,
         }
     }
 }
@@ -628,20 +528,14 @@ pub struct SippTextOptions {
     pub stop: Option<Vec<String>>,
 }
 
-impl SippTextOptions {
-    fn to_core(&self) -> Result<CoreClientTextOptions> {
-        Ok(CoreClientTextOptions {
-            max_tokens: self.max_tokens,
-            temperature: self
-                .temperature
-                .map(|value| finite_f64_to_f32(value, "temperature"))
-                .transpose()?,
-            top_p: self
-                .top_p
-                .map(|value| finite_f64_to_f32(value, "topP"))
-                .transpose()?,
-            stop: self.stop.clone().unwrap_or_default(),
-        })
+impl From<SippTextOptions> for dto::SippTextOptions {
+    fn from(value: SippTextOptions) -> Self {
+        Self {
+            max_tokens: value.max_tokens,
+            temperature: value.temperature,
+            top_p: value.top_p,
+            stop: value.stop,
+        }
     }
 }
 
@@ -657,28 +551,21 @@ pub struct LocalTextOptions {
     pub media: Option<Vec<Buffer>>,
 }
 
-impl LocalTextOptions {
-    fn to_core(&self) -> Result<CoreClientLocalTextOptions> {
-        Ok(CoreClientLocalTextOptions {
-            context_key: self.context_key.clone(),
-            grammar: self.grammar.clone(),
-            json_schema: self.json_schema.clone(),
-            sampling: self
+impl From<LocalTextOptions> for dto::LocalTextOptions {
+    fn from(value: LocalTextOptions) -> Self {
+        Self {
+            context_key: value.context_key,
+            grammar: value.grammar,
+            json_schema: value.json_schema,
+            sampling: value
                 .sampling
                 .as_ref()
-                .map(SamplingRuntimeConfig::to_core)
-                .transpose()?,
-            media: self
+                .map(dto::SamplingRuntimeConfig::from),
+            media: value
                 .media
-                .as_ref()
-                .map(|buffers| {
-                    buffers
-                        .iter()
-                        .map(|buffer| buffer.as_ref().to_vec())
-                        .collect()
-                })
+                .map(|buffers| buffers.into_iter().map(Vec::<u8>::from).collect())
                 .unwrap_or_default(),
-        })
+        }
     }
 }
 
@@ -690,11 +577,11 @@ pub struct LocalEmbedOptions {
     pub normalize: Option<bool>,
 }
 
-impl LocalEmbedOptions {
-    fn to_core(&self) -> CoreClientLocalEmbedOptions {
-        CoreClientLocalEmbedOptions {
-            context_key: self.context_key.clone(),
-            normalize: self.normalize,
+impl From<LocalEmbedOptions> for dto::LocalEmbedOptions {
+    fn from(value: LocalEmbedOptions) -> Self {
+        Self {
+            context_key: value.context_key,
+            normalize: value.normalize,
         }
     }
 }
@@ -716,17 +603,18 @@ pub struct SippQueryRequest {
     pub emit_tokens: Option<bool>,
 }
 
-impl SippQueryRequest {
-    fn to_core(&self) -> Result<CoreClientQueryRequest> {
-        Ok(CoreClientQueryRequest {
-            endpoint: optional_endpoint(self.endpoint.as_ref())?,
-            prompt: self.prompt.clone(),
-            options: optional_core_or_default(self.options.as_ref(), SippTextOptions::to_core)?,
-            local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
-            endpoint_options: endpoint_options_or_empty(self.endpoint_options.clone())?,
-            provider_options: provider_options_or_empty(self.provider_options.clone())?,
-            emit_tokens: self.emit_tokens.unwrap_or(false),
-        })
+impl From<SippQueryRequest> for dto::SippQueryRequest {
+    fn from(value: SippQueryRequest) -> Self {
+        Self {
+            request_id: value.request_id,
+            endpoint: value.endpoint.map(dto::EndpointRef::from),
+            prompt: value.prompt,
+            options: value.options.map(dto::SippTextOptions::from),
+            local: value.local.map(dto::LocalTextOptions::from),
+            endpoint_options: value.endpoint_options,
+            provider_options: value.provider_options,
+            emit_tokens: value.emit_tokens,
+        }
     }
 }
 
@@ -747,17 +635,22 @@ pub struct SippChatRequest {
     pub emit_tokens: Option<bool>,
 }
 
-impl SippChatRequest {
-    fn to_core(&self) -> Result<CoreClientChatRequest> {
-        Ok(CoreClientChatRequest {
-            endpoint: optional_endpoint(self.endpoint.as_ref())?,
-            messages: chat_messages_to_core(self.messages.clone())?,
-            options: optional_core_or_default(self.options.as_ref(), SippTextOptions::to_core)?,
-            local: optional_core_or_default(self.local.as_ref(), LocalTextOptions::to_core)?,
-            endpoint_options: endpoint_options_or_empty(self.endpoint_options.clone())?,
-            provider_options: provider_options_or_empty(self.provider_options.clone())?,
-            emit_tokens: self.emit_tokens.unwrap_or(false),
-        })
+impl From<SippChatRequest> for dto::SippChatRequest {
+    fn from(value: SippChatRequest) -> Self {
+        Self {
+            request_id: value.request_id,
+            endpoint: value.endpoint.map(dto::EndpointRef::from),
+            messages: value
+                .messages
+                .into_iter()
+                .map(dto::ChatMessage::from)
+                .collect(),
+            options: value.options.map(dto::SippTextOptions::from),
+            local: value.local.map(dto::LocalTextOptions::from),
+            endpoint_options: value.endpoint_options,
+            provider_options: value.provider_options,
+            emit_tokens: value.emit_tokens,
+        }
     }
 }
 
@@ -775,19 +668,16 @@ pub struct SippEmbedRequest {
     pub provider_options: Option<serde_json::Value>,
 }
 
-impl SippEmbedRequest {
-    fn to_core(&self) -> Result<CoreClientEmbedRequest> {
-        Ok(CoreClientEmbedRequest {
-            endpoint: optional_endpoint(self.endpoint.as_ref())?,
-            input: self.input.clone(),
-            local: self
-                .local
-                .as_ref()
-                .map(LocalEmbedOptions::to_core)
-                .unwrap_or_default(),
-            endpoint_options: endpoint_options_or_empty(self.endpoint_options.clone())?,
-            provider_options: provider_options_or_empty(self.provider_options.clone())?,
-        })
+impl From<SippEmbedRequest> for dto::SippEmbedRequest {
+    fn from(value: SippEmbedRequest) -> Self {
+        Self {
+            request_id: value.request_id,
+            endpoint: value.endpoint.map(dto::EndpointRef::from),
+            input: value.input,
+            local: value.local.map(dto::LocalEmbedOptions::from),
+            endpoint_options: value.endpoint_options,
+            provider_options: value.provider_options,
+        }
     }
 }
 
@@ -813,6 +703,34 @@ pub struct GatewayAuthentication {
 pub struct ProviderStaticHeader {
     pub name: String,
     pub value: String,
+}
+
+impl From<ChatMessage> for dto::ChatMessage {
+    fn from(value: ChatMessage) -> Self {
+        Self {
+            role: value.role,
+            content: value.content,
+        }
+    }
+}
+
+impl From<&GatewayAuthentication> for dto::GatewayAuthentication {
+    fn from(value: &GatewayAuthentication) -> Self {
+        Self {
+            kind: value.kind.clone(),
+            value: value.value.clone(),
+            header_name: value.header_name.clone(),
+        }
+    }
+}
+
+impl From<&ProviderStaticHeader> for dto::ProviderStaticHeader {
+    fn from(value: &ProviderStaticHeader) -> Self {
+        Self {
+            name: value.name.clone(),
+            value: value.value.clone(),
+        }
+    }
 }
 
 /// Local or direct provider endpoint descriptor accepted by add.
@@ -851,271 +769,37 @@ pub struct EndpointDescriptor {
     pub protocol_options: Option<serde_json::Value>,
 }
 
-impl EndpointDescriptor {
-    fn to_core(&self) -> Result<CoreEndpointDescriptor> {
-        match self.kind.as_str() {
-            "local" => self.local_to_core(),
-            "gateway" => self.gateway_to_core(),
-            "provider" => self.provider_to_core(),
-            _ => Err(invalid_arg(
-                "endpoint descriptor kind must be local, gateway, or provider",
-            )),
-        }
-    }
-
-    fn local_to_core(&self) -> Result<CoreEndpointDescriptor> {
-        reject_endpoint_descriptor_fields(
-            &[
-                ("baseUrl", self.base_url.is_some()),
-                ("target", self.target.is_some()),
-                ("authentication", self.authentication.is_some()),
-                ("provider", self.provider.is_some()),
-                ("model", self.model.is_some()),
-                ("apiKey", self.api_key.is_some()),
-                ("timeoutMs", self.timeout_ms.is_some()),
-                ("version", self.version.is_some()),
-                ("authHeaderName", self.auth_header_name.is_some()),
-                ("authHeaderValue", self.auth_header_value.is_some()),
-                ("staticHeaders", self.static_headers.is_some()),
-                ("correlationHeader", self.correlation_header.is_some()),
-                ("queryRoute", self.query_route.is_some()),
-                ("chatRoute", self.chat_route.is_some()),
-                ("embedRoute", self.embed_route.is_some()),
-                ("protocolOptions", self.protocol_options.is_some()),
-            ],
-            "local",
-        )?;
-        let model_path = self
-            .model_path
-            .clone()
-            .ok_or_else(|| invalid_arg("local descriptor modelPath is required"))?;
-        let config = self
-            .config
-            .as_ref()
-            .map(NativeRuntimeConfig::to_core)
-            .transpose()?
-            .unwrap_or_default();
-        Ok(CoreEndpointDescriptor::local(model_path, config))
-    }
-
-    fn gateway_to_core(&self) -> Result<CoreEndpointDescriptor> {
-        reject_endpoint_descriptor_fields(
-            &[
-                ("modelPath", self.model_path.is_some()),
-                ("config", self.config.is_some()),
-                ("provider", self.provider.is_some()),
-                ("model", self.model.is_some()),
-                ("apiKey", self.api_key.is_some()),
-                ("version", self.version.is_some()),
-                ("authHeaderName", self.auth_header_name.is_some()),
-                ("authHeaderValue", self.auth_header_value.is_some()),
-                ("correlationHeader", self.correlation_header.is_some()),
-            ],
-            "gateway",
-        )?;
-        let timeout = endpoint_timeout(self.timeout_ms)?.unwrap_or(Duration::from_secs(60));
-        let mut routes = CoreGatewayRoutes::default();
-        assign_if_some(&mut routes.query, self.query_route.clone());
-        assign_if_some(&mut routes.chat, self.chat_route.clone());
-        assign_if_some(&mut routes.embed, self.embed_route.clone());
-        Ok(CoreEndpointDescriptor::gateway(CoreGatewayEndpointConfig {
-            target: required_descriptor_string(self.target.as_ref(), "gateway target")?,
-            base_url: required_descriptor_string(self.base_url.as_ref(), "gateway baseUrl")?,
-            routes,
-            authentication: gateway_authentication(self.authentication.as_ref())?,
-            static_headers: self
-                .static_headers
+impl From<&EndpointDescriptor> for dto::EndpointDescriptor {
+    fn from(value: &EndpointDescriptor) -> Self {
+        Self {
+            kind: value.kind.clone(),
+            model_path: value.model_path.clone(),
+            config: value.config.as_ref().map(dto::NativeRuntimeConfig::from),
+            base_url: value.base_url.clone(),
+            target: value.target.clone(),
+            authentication: value
+                .authentication
                 .as_ref()
-                .map(|headers| {
-                    headers
-                        .iter()
-                        .map(|header| (header.name.clone(), header.value.clone()))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            timeouts: CoreGatewayTimeoutPolicy {
-                connect: timeout,
-                request: timeout,
-                read: timeout,
-            },
-            protocol_options: endpoint_options_or_empty(self.protocol_options.clone())?,
-        }))
-    }
-
-    fn provider_to_core(&self) -> Result<CoreEndpointDescriptor> {
-        reject_endpoint_descriptor_fields(
-            &[
-                ("modelPath", self.model_path.is_some()),
-                ("config", self.config.is_some()),
-                ("target", self.target.is_some()),
-                ("authentication", self.authentication.is_some()),
-                ("queryRoute", self.query_route.is_some()),
-                ("chatRoute", self.chat_route.is_some()),
-                ("embedRoute", self.embed_route.is_some()),
-                ("protocolOptions", self.protocol_options.is_some()),
-            ],
-            "provider",
-        )?;
-        let model = required_descriptor_string(self.model.as_ref(), "provider model")?;
-        let provider = required_descriptor_string(self.provider.as_ref(), "provider")?;
-        let timeout = endpoint_timeout(self.timeout_ms)?;
-        let config = match provider.as_str() {
-            "openai" => {
-                reject_endpoint_descriptor_fields(
-                    &[
-                        ("version", self.version.is_some()),
-                        ("authHeaderName", self.auth_header_name.is_some()),
-                        ("authHeaderValue", self.auth_header_value.is_some()),
-                        ("staticHeaders", self.static_headers.is_some()),
-                        ("correlationHeader", self.correlation_header.is_some()),
-                    ],
-                    "OpenAI provider",
-                )?;
-                CoreProviderEndpointConfig::OpenAi(CoreOpenAiProviderConfig {
-                    model,
-                    api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
-                    base_url: self.base_url.clone(),
-                    timeout,
-                })
-            }
-            "anthropic" => {
-                reject_endpoint_descriptor_fields(
-                    &[
-                        ("authHeaderName", self.auth_header_name.is_some()),
-                        ("authHeaderValue", self.auth_header_value.is_some()),
-                        ("staticHeaders", self.static_headers.is_some()),
-                        ("correlationHeader", self.correlation_header.is_some()),
-                    ],
-                    "Anthropic provider",
-                )?;
-                CoreProviderEndpointConfig::Anthropic(CoreAnthropicProviderConfig {
-                    model,
-                    api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
-                    base_url: self.base_url.clone(),
-                    version: self.version.clone(),
-                    timeout,
-                })
-            }
-            "openai_compatible" | "openai-compatible" => {
-                reject_endpoint_descriptor_fields(
-                    &[("version", self.version.is_some())],
-                    "OpenAI-compatible provider",
-                )?;
-                CoreProviderEndpointConfig::OpenAiCompatible(CoreOpenAiCompatibleProviderConfig {
-                    model,
-                    base_url: required_descriptor_string(
-                        self.base_url.as_ref(),
-                        "provider baseUrl",
-                    )?,
-                    auth: provider_auth(self)?,
-                    static_headers: self
-                        .static_headers
-                        .as_ref()
-                        .map(|headers| {
-                            headers
-                                .iter()
-                                .map(|header| {
-                                    (
-                                        header.name.clone(),
-                                        CoreProviderSecret::new(header.value.clone()),
-                                    )
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    correlation_header: self.correlation_header.clone(),
-                    timeout,
-                })
-            }
-            _ => {
-                return Err(invalid_arg(
-                    "provider must be one of: openai, anthropic, openai_compatible",
-                ));
-            }
-        };
-        Ok(CoreEndpointDescriptor::provider(config))
-    }
-}
-
-fn reject_endpoint_descriptor_fields(
-    fields: &[(&'static str, bool)],
-    kind: &'static str,
-) -> Result<()> {
-    for (field, present) in fields {
-        if *present {
-            return Err(invalid_arg(format!(
-                "{field} is not valid for {kind} endpoint descriptors"
-            )));
+                .map(dto::GatewayAuthentication::from),
+            provider: value.provider.clone(),
+            model: value.model.clone(),
+            api_key: value.api_key.clone(),
+            timeout_ms: value.timeout_ms.map(u64::from),
+            version: value.version.clone(),
+            auth_header_name: value.auth_header_name.clone(),
+            auth_header_value: value.auth_header_value.clone(),
+            static_headers: value.static_headers.as_ref().map(|headers| {
+                headers
+                    .iter()
+                    .map(dto::ProviderStaticHeader::from)
+                    .collect()
+            }),
+            correlation_header: value.correlation_header.clone(),
+            query_route: value.query_route.clone(),
+            chat_route: value.chat_route.clone(),
+            embed_route: value.embed_route.clone(),
+            protocol_options: value.protocol_options.clone(),
         }
-    }
-    Ok(())
-}
-
-fn required_descriptor_string(value: Option<&String>, name: &'static str) -> Result<String> {
-    value
-        .cloned()
-        .ok_or_else(|| invalid_arg(format!("{name} is required")))
-}
-
-fn endpoint_timeout(timeout_ms: Option<u32>) -> Result<Option<Duration>> {
-    match timeout_ms {
-        Some(0) => Err(invalid_arg("timeoutMs must be a positive integer")),
-        Some(timeout_ms) => Ok(Some(Duration::from_millis(u64::from(timeout_ms)))),
-        None => Ok(None),
-    }
-}
-
-fn provider_secret(value: Option<&String>, name: &'static str) -> Result<CoreProviderSecret> {
-    required_descriptor_string(value, name).map(CoreProviderSecret::new)
-}
-
-fn gateway_authentication(
-    authentication: Option<&GatewayAuthentication>,
-) -> Result<CoreGatewayAuthentication> {
-    match authentication {
-        None => Ok(CoreGatewayAuthentication::None),
-        Some(authentication) if authentication.kind == "none" => {
-            Ok(CoreGatewayAuthentication::None)
-        }
-        Some(authentication) if authentication.kind == "bearer" => {
-            Ok(CoreGatewayAuthentication::Bearer(CoreGatewaySecret::new(
-                required_descriptor_string(authentication.value.as_ref(), "authentication value")?,
-            )))
-        }
-        Some(authentication) if authentication.kind == "header" => {
-            Ok(CoreGatewayAuthentication::Header {
-                name: required_descriptor_string(
-                    authentication.header_name.as_ref(),
-                    "authentication headerName",
-                )?,
-                value: CoreGatewaySecret::new(required_descriptor_string(
-                    authentication.value.as_ref(),
-                    "authentication value",
-                )?),
-            })
-        }
-        Some(_) => Err(invalid_arg(
-            "authentication kind must be none, bearer, or header",
-        )),
-    }
-}
-
-fn provider_auth(descriptor: &EndpointDescriptor) -> Result<CoreProviderAuthConfig> {
-    match (
-        descriptor.api_key.as_ref(),
-        descriptor.auth_header_name.as_ref(),
-        descriptor.auth_header_value.as_ref(),
-    ) {
-        (Some(key), None, None) => Ok(CoreProviderAuthConfig::Bearer(CoreProviderSecret::new(
-            key.clone(),
-        ))),
-        (None, Some(name), Some(value)) => Ok(CoreProviderAuthConfig::Header {
-            name: name.clone(),
-            value: CoreProviderSecret::new(value.clone()),
-        }),
-        _ => Err(invalid_arg(
-            "OpenAI-compatible provider requires either apiKey or authHeaderName/authHeaderValue",
-        )),
     }
 }
 
@@ -1175,7 +859,7 @@ pub enum PoolingType {
     Rank,
 }
 
-impl From<PoolingType> for CorePoolingType {
+impl From<PoolingType> for dto::PoolingType {
     fn from(value: PoolingType) -> Self {
         match value {
             PoolingType::Unspecified => Self::Unspecified,
@@ -1239,23 +923,15 @@ pub struct SippResponseMetadata {
 }
 
 fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
-    match endpoint {
-        CoreEndpointRef::Local { id } => EndpointRef {
-            kind: "local".to_string(),
-            id,
-        },
-        CoreEndpointRef::Gateway { id } => EndpointRef {
-            kind: "gateway".to_string(),
-            id,
-        },
-        CoreEndpointRef::Provider { id } => EndpointRef {
-            kind: "provider".to_string(),
-            id,
-        },
+    let endpoint = dto::EndpointRef::from(endpoint);
+    EndpointRef {
+        kind: endpoint.kind,
+        id: endpoint.id,
     }
 }
 
 fn token_usage_to_node(usage: CoreTokenUsage) -> TokenUsage {
+    let usage = dto::TokenUsage::from(usage);
     TokenUsage {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
@@ -1282,9 +958,7 @@ fn sipp_text_response_to_node(response: CoreClientTextResponse) -> SippTextRespo
     }
 }
 
-fn sipp_embedding_response_to_node(
-    response: CoreClientEmbeddingResponse,
-) -> SippEmbeddingResponse {
+fn sipp_embedding_response_to_node(response: CoreClientEmbeddingResponse) -> SippEmbeddingResponse {
     SippEmbeddingResponse {
         endpoint: endpoint_ref_to_node(response.endpoint),
         values: response.values.into_iter().map(f64::from).collect(),
@@ -1343,7 +1017,10 @@ impl SippClient {
         Ok(AsyncTask::new(ClientAddTask {
             client: self.inner.clone(),
             id,
-            descriptor: descriptor.to_core()?,
+            descriptor: {
+                let descriptor = dto::EndpointDescriptor::from(&descriptor);
+                CoreEndpointDescriptor::try_from(&descriptor).map_err(convert_error)?
+            },
         }))
     }
 
@@ -1352,7 +1029,8 @@ impl SippClient {
         let context = CoreClientRequestContext {
             request_id: request.request_id.clone(),
         };
-        let request = request.to_core()?;
+        let request = dto::SippQueryRequest::from(request);
+        let request = sipp::SippQueryRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
@@ -1366,7 +1044,8 @@ impl SippClient {
         let context = CoreClientRequestContext {
             request_id: request.request_id.clone(),
         };
-        let request = request.to_core()?;
+        let request = dto::SippChatRequest::from(request);
+        let request = sipp::SippChatRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
@@ -1380,7 +1059,8 @@ impl SippClient {
         let context = CoreClientRequestContext {
             request_id: request.request_id.clone(),
         };
-        let request = request.to_core()?;
+        let request = dto::SippEmbedRequest::from(request);
+        let request = sipp::SippEmbedRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
@@ -1599,55 +1279,6 @@ pub fn set_llama_log_quiet(quiet: bool) {
     core_set_llama_log_quiet(quiet);
 }
 
-fn endpoint_options_or_empty(
-    value: Option<serde_json::Value>,
-) -> Result<serde_json::Map<String, serde_json::Value>> {
-    json_options_or_empty(value, "endpointOptions")
-}
-
-fn provider_options_or_empty(
-    value: Option<serde_json::Value>,
-) -> Result<serde_json::Map<String, serde_json::Value>> {
-    json_options_or_empty(value, "providerOptions")
-}
-
-fn json_options_or_empty(
-    value: Option<serde_json::Value>,
-    name: &'static str,
-) -> Result<serde_json::Map<String, serde_json::Value>> {
-    match value {
-        Some(serde_json::Value::Object(options)) => Ok(options),
-        Some(_) => Err(napi_error(format!("{name} must be a JSON object"))),
-        None => Ok(serde_json::Map::new()),
-    }
-}
-
-fn optional_endpoint(endpoint: Option<&EndpointRef>) -> Result<Option<CoreEndpointRef>> {
-    endpoint.map(EndpointRef::to_core).transpose()
-}
-
-fn finite_f64_to_f32(value: f64, name: &'static str) -> Result<f32> {
-    if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
-        return Err(invalid_arg(format!("{name} must be a finite f32")));
-    }
-    Ok(value as f32)
-}
-
-fn chat_messages_to_core(messages: Vec<ChatMessage>) -> Result<Vec<CoreChatMessage>> {
-    if messages.is_empty() {
-        return Err(invalid_arg("chat messages must not be empty"));
-    }
-    messages
-        .into_iter()
-        .map(|message| {
-            Ok(CoreChatMessage {
-                role: parse_chat_role(&message.role)?,
-                content: message.content,
-            })
-        })
-        .collect()
-}
-
 fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
     TokenBatch {
         request_id: batch.request_id,
@@ -1665,11 +1296,12 @@ fn token_batch_to_node(batch: CoreTokenBatch) -> TokenBatch {
 }
 
 fn request_stats_to_node(stats: CoreRequestStats) -> RequestStats {
+    let stats = dto::RequestStats::from(stats);
     RequestStats {
         input_tokens: stats.input_tokens,
         output_tokens: stats.output_tokens,
-        cache_mode: kv_reuse_mode_to_string(stats.cache_mode),
-        cache_source: cache_source_to_string(stats.cache_source),
+        cache_mode: stats.cache_mode,
+        cache_source: stats.cache_source,
         cache_hits: stats.cache_hits,
         prefill_tokens: stats.prefill_tokens,
         ttft_ms: stats.ttft_ms,
@@ -1681,110 +1313,6 @@ fn request_stats_to_node(stats: CoreRequestStats) -> RequestStats {
         prefill_ms: stats.prefill_ms,
         decode_ms: stats.decode_ms,
     }
-}
-
-fn kv_reuse_mode_to_string(mode: KvReuseMode) -> String {
-    match mode {
-        KvReuseMode::Disabled => "disabled",
-        KvReuseMode::LiveSlotPrefix => "live_slot_prefix",
-        KvReuseMode::StateSnapshot => "state_snapshot",
-        KvReuseMode::LiveSlotAndSnapshot => "live_slot_and_snapshot",
-    }
-    .to_string()
-}
-
-fn cache_source_to_string(source: CoreCacheSource) -> String {
-    match source {
-        CoreCacheSource::None => "none",
-        CoreCacheSource::Live => "live",
-        CoreCacheSource::Snapshot => "snapshot",
-    }
-    .to_string()
-}
-
-fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
-    parse_choice(
-        value,
-        r#"gpu_layers must be "auto", "all", or { count: number }"#,
-    )
-}
-
-fn parse_split_mode(value: &str) -> Result<SplitMode> {
-    parse_choice(value, "split_mode must be one of: none, layer, row, tensor")
-}
-
-fn parse_flash_attention(value: &str) -> Result<FlashAttentionMode> {
-    parse_choice(
-        value,
-        "flash_attention must be one of: auto, enabled, disabled",
-    )
-}
-
-fn parse_kv_cache_type(value: &str) -> Result<KvCacheType> {
-    parse_choice(
-        value,
-        "cache type must be one of: f16, f32, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1",
-    )
-}
-
-fn parse_rope_scaling(value: &str) -> Result<RopeScaling> {
-    parse_choice(value, "ropeScaling must be one of: none, linear, yarn")
-}
-
-fn parse_kv_reuse_mode(value: &str) -> Result<KvReuseMode> {
-    parse_choice(
-        value,
-        "cache mode must be one of: disabled, live_slot_prefix, state_snapshot, live_slot_and_snapshot",
-    )
-}
-
-fn parse_sampler_stage(value: &str) -> Result<SamplerStage> {
-    parse_choice(
-        value,
-        "sampler stage must be one of: dry, top_k, typical_p, top_p, top_n_sigma, min_p, xtc, temperature, infill, penalties, adaptive_p",
-    )
-}
-
-fn parse_scheduler_policy(value: &str) -> Result<SchedulerPolicyMode> {
-    parse_choice(
-        value,
-        "scheduler.policy.mode must be one of: latency_first, balanced, throughput_first",
-    )
-}
-
-fn parse_chat_role(value: &str) -> Result<CoreChatRole> {
-    parse_choice(value, "chat role must be one of: system, user, assistant")
-}
-
-fn parse_choice<T>(value: &str, error_message: &'static str) -> Result<T>
-where
-    T: DeserializeOwned,
-{
-    serde_json::from_value(serde_json::Value::String(value.to_string()))
-        .map_err(|_| invalid_arg(error_message))
-}
-
-fn optional_core_or_default<T, U>(value: Option<&T>, map: impl FnOnce(&T) -> Result<U>) -> Result<U>
-where
-    U: Default,
-{
-    value.map(map).transpose().map(Option::unwrap_or_default)
-}
-
-fn assign_if_some<T>(target: &mut T, value: Option<T>) {
-    if let Some(value) = value {
-        *target = value;
-    }
-}
-
-fn assign_if_some_map<T, U>(target: &mut T, value: Option<U>, map: impl FnOnce(U) -> T) {
-    if let Some(value) = value {
-        *target = map(value);
-    }
-}
-
-fn option_f32(value: Option<f64>) -> Option<f32> {
-    value.map(|value| value as f32)
 }
 
 fn invalid_arg(message: impl Into<String>) -> Error {

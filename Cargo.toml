@@ -5,6 +5,7 @@ members = [
     "apps/cli",
     "apps/gateway-server",
     "lib/gateway",
+    "lib/binding-dto",
     "xtask",
     "bindings/python",
     "bindings/node",
@@ -30,6 +31,7 @@ cxx-build = "1"
 sipp = { path = "crates/sipp", version = "0.1.0", default-features = false }
 sipp-sys = { path = "crates/sys", version = "0.1.0" }
 sipp-gateway = { path = "lib/gateway", version = "0.1.0", default-features = false }
+sipp-binding-dto = { path = "lib/binding-dto", version = "0.1.0" }
 futures = "0.3"
 futures-channel = "0.3"
 futures-core = "0.3"

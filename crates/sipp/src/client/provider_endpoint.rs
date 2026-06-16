@@ -13,10 +13,9 @@ use futures_channel::mpsc;
 use crate::client::dispatch::InferenceEndpoint;
 use crate::client::io_executor::IoExecutor;
 use crate::client::{
-    map, validate, SippChatRequest, SippEmbedRequest, SippEmbeddingRun, SippError,
-    SippQueryRequest, SippRequestContext, SippResponseMetadata, SippResult,
-    SippTextResponse, SippTextRun, SippTokenBatches, EndpointCapabilities, EndpointRef,
-    ProviderEndpointError,
+    map, validate, EndpointCapabilities, EndpointRef, ProviderEndpointError, SippChatRequest,
+    SippEmbedRequest, SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext,
+    SippResponseMetadata, SippResult, SippTextResponse, SippTextRun, SippTokenBatches,
 };
 
 /////////////////////////////////////////////////////////////////////////////////

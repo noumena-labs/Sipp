@@ -32,12 +32,8 @@ fn stats_accepts_basic_mode() {
 
 #[test]
 fn invalid_backend_and_stats_modes_are_rejected_by_clap() {
-    assert!(
-        Args::try_parse_from(["sipp", "model.gguf", "prompt", "--backend", "bogus"]).is_err()
-    );
-    assert!(
-        Args::try_parse_from(["sipp", "model.gguf", "prompt", "--stats", "verbose"]).is_err()
-    );
+    assert!(Args::try_parse_from(["sipp", "model.gguf", "prompt", "--backend", "bogus"]).is_err());
+    assert!(Args::try_parse_from(["sipp", "model.gguf", "prompt", "--stats", "verbose"]).is_err());
 }
 
 #[test]

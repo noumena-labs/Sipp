@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{Parser, ValueEnum};
+use serde_json::json;
 use sipp::backend::set_llama_log_quiet;
 use sipp::engine::{GpuLayerConfig, NativeRuntimeConfig, SamplingRuntimeConfig};
 use sipp::lifecycle::{BackendPolicy, BackendPreference, ModelLoadOptions, StatsMode};
 use sipp::runtime::metrics::RuntimeObservabilityMetrics;
 use sipp::runtime::request::{GenerateResponseStatus, ResponseOutput};
 use sipp::runtime::{InferenceRuntime, RequestStepResult};
-use serde_json::json;
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS

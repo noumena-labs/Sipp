@@ -1,0 +1,13 @@
+[package]
+name = "sipp-binding-dto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+sipp = { workspace = true, features = ["providers"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true

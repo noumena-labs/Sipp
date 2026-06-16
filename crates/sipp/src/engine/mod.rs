@@ -11,9 +11,9 @@ pub use config::{
     SchedulerRuntimeConfig, SplitMode, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 pub use driver::{
-    ChatMessage, ChatRequest, ChatRole, SippEngine, EngineEmbeddingResponseFuture,
-    EngineEmbeddingRun, EngineEventReceiver, EngineLoad, EngineTextResponseFuture, EngineTextRun,
-    EngineTokenBatches, QueryOptions, QueryRequest,
+    ChatMessage, ChatRequest, ChatRole, EngineEmbeddingResponseFuture, EngineEmbeddingRun,
+    EngineEventReceiver, EngineLoad, EngineTextResponseFuture, EngineTextRun, EngineTokenBatches,
+    QueryOptions, QueryRequest, SippEngine,
 };
 pub use protocol::{
     CacheSource, EmbedOptions, EmbedRequest, EmbeddingCapabilities, EmbeddingResult, EngineEvent,

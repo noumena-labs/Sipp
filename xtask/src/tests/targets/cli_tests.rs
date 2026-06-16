@@ -39,11 +39,7 @@ fn labels_features_and_binary_names_are_stable() {
     assert_eq!(cargo_features(&Backend::Cuda), "backend-dl,cuda");
     assert_eq!(
         cli_binary_file_name(),
-        if cfg!(windows) {
-            "sipp.exe"
-        } else {
-            "sipp"
-        }
+        if cfg!(windows) { "sipp.exe" } else { "sipp" }
     );
 }
 

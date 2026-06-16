@@ -1962,6 +1962,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sipp-binding-dto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sipp",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "sipp-cli"
 version = "0.1.0"
 dependencies = [
@@ -2036,6 +2046,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sipp",
+ "sipp-binding-dto",
  "tokio",
 ]
 
@@ -2048,6 +2059,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sipp",
+ "sipp-binding-dto",
  "tokio",
 ]
 

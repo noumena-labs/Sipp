@@ -20,6 +20,7 @@ openmp = ["sipp/openmp"]
 
 [dependencies]
 sipp = { workspace = true, features = ["providers"] }
+sipp-binding-dto.workspace = true
 futures.workspace = true
 napi = { workspace = true, features = ["serde-json"] }
 napi-derive.workspace = true

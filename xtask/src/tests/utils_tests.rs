@@ -17,7 +17,7 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
     assert_eq!(ctx.build_root(), temp.join(".build"));
     assert_eq!(
         ctx.cargo_node_target_dir(&Backend::Vulkan),
-        temp.join(".build/cargo/node/vulkan")
+        temp.join(".build/cargo/bindings/vulkan")
     );
     assert_eq!(
         ctx.cargo_cli_target_dir(&Backend::Cuda),
@@ -29,7 +29,7 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
     );
     assert_eq!(
         ctx.cargo_python_target_dir(None),
-        temp.join(".build/cargo/python/cpu")
+        temp.join(".build/cargo/bindings/cpu")
     );
     assert_eq!(
         ctx.cargo_wasm_target_dir(true),

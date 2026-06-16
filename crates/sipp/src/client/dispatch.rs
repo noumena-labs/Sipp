@@ -1,6 +1,6 @@
 use crate::client::{
-    SippChatRequest, SippEmbedRequest, SippEmbeddingRun, SippQueryRequest,
-    SippRequestContext, SippTextRun, EndpointCapabilities, EndpointRef,
+    EndpointCapabilities, EndpointRef, SippChatRequest, SippEmbedRequest, SippEmbeddingRun,
+    SippQueryRequest, SippRequestContext, SippTextRun,
 };
 
 /// Typed inference endpoint registered with [`SippClient`](crate::client::SippClient).

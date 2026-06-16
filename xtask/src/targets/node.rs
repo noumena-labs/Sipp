@@ -6,6 +6,7 @@ use crate::output;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use xshell::{cmd, Shell};
@@ -41,7 +42,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
     let dist_dir = ctx.node_artifacts_dir();
     prepare_dist_dir(sh, ctx, &dist_dir)?;
 
-    let best_effort = matches!(backend, Some(Backend::All));
+    let best_effort = matches!(backend, Some(Backend::All)) && !require_all_backends();
     let backends_to_build = backends_to_build(backend);
     let mut built = Vec::new();
     let mut skipped = Vec::new();
@@ -185,6 +186,10 @@ fn build_backend_variant(
 
 fn backend_label(backend: Option<&Backend>) -> &'static str {
     backend.map(Backend::as_str).unwrap_or("cpu (default)")
+}
+
+fn require_all_backends() -> bool {
+    matches!(env::var("SIPP_REQUIRE_ALL_BACKENDS").as_deref(), Ok("1"))
 }
 
 fn find_artifact(dir: &Path) -> Result<Option<PathBuf>> {

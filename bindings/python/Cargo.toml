@@ -20,6 +20,7 @@ openmp = ["sipp/openmp"]
 
 [dependencies]
 sipp = { workspace = true, features = ["providers"] }
+sipp-binding-dto.workspace = true
 futures.workspace = true
 pyo3 = { workspace = true, features = ["abi3-py39", "extension-module"] }
 serde.workspace = true

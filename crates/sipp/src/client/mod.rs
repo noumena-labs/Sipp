@@ -29,7 +29,7 @@ mod validate;
 pub use client::SippClient;
 pub use descriptor::{EndpointDescriptor, LocalModelDescriptor};
 pub use endpoint::{EndpointCapabilities, EndpointRef};
-pub use error::{SippError, SippResult, EndpointError};
+pub use error::{EndpointError, SippError, SippResult};
 #[cfg(feature = "providers")]
 pub use error::{ProviderEndpointError, ProviderEndpointErrorKind};
 pub use gateway::{
@@ -42,11 +42,11 @@ pub use provider::{
     ProviderAuthConfig, ProviderEndpointConfig, ProviderSecret,
 };
 pub use request::{
-    SippChatRequest, SippEmbedRequest, SippQueryRequest, SippRequestContext,
-    SippTextOptions, EndpointOptions, LocalEmbedOptions, LocalTextOptions, ProviderOptions,
+    EndpointOptions, LocalEmbedOptions, LocalTextOptions, ProviderOptions, SippChatRequest,
+    SippEmbedRequest, SippQueryRequest, SippRequestContext, SippTextOptions,
 };
 pub use response::{SippEmbeddingResponse, SippResponseMetadata, SippTextResponse};
 pub use run::{
-    SippCancellationHandle, SippCancellationReason, SippEmbeddingResponseFuture,
-    SippEmbeddingRun, SippTextResponseFuture, SippTextRun, SippTokenBatches,
+    SippCancellationHandle, SippCancellationReason, SippEmbeddingResponseFuture, SippEmbeddingRun,
+    SippTextResponseFuture, SippTextRun, SippTokenBatches,
 };

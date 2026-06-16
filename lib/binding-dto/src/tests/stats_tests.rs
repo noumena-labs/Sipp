@@ -1,10 +1,10 @@
-//! Tests Node binding conversion for response stats exposed through N-API.
+//! Tests result-stats conversion from core types.
 
 use super::*;
 
 #[test]
 fn request_stats_map_tps_fields() {
-    let stats = request_stats_to_node(CoreRequestStats {
+    let stats = RequestStats::from(CoreRequestStats {
         input_tokens: 1,
         output_tokens: 2,
         e2e_tokens_per_second: Some(40.0),

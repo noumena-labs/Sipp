@@ -437,13 +437,21 @@ fn test_unit_and_smoke_targets_parse() {
     };
     assert_eq!(args.package.as_deref(), Some("sipp-sys"));
 
-    let cli = Cli::parse_from(["xtask", "test", "unit", "group", "interface"]);
+    let cli = Cli::parse_from([
+        "xtask",
+        "test",
+        "unit",
+        "--no-coverage",
+        "group",
+        "interface",
+    ]);
     let Commands::Test { command } = cli.command else {
         panic!("expected test command");
     };
     let TestCommands::Unit(args) = command else {
         panic!("expected unit command");
     };
+    assert!(args.no_coverage);
     let TestUnitCommands::Group(args) = args.command else {
         panic!("expected unit group command");
     };

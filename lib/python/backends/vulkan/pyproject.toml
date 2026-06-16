@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "sipp-backend-vulkan"
+version = "0.1.0"
+description = "Native Vulkan backend for Sipp Python"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+
+[tool.maturin]
+module-name = "sipp_backend_vulkan._native"
+manifest-path = "../../../../bindings/python/Cargo.toml"
+python-source = "python"

@@ -2,6 +2,7 @@ mod support;
 
 use std::path::PathBuf;
 
+use futures::executor::block_on;
 use sipp::backend::set_llama_log_quiet;
 use sipp::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, GpuLayerConfig, KvReuseMode, ModelPlacementConfig,
@@ -9,10 +10,9 @@ use sipp::engine::{
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
 use sipp::{
-    SippClient, SippEmbedRequest, EndpointDescriptor, GatewayAuthentication,
-    GatewayEndpointConfig, GatewayRoutes, GatewaySecret, GatewayTimeoutPolicy, LocalEmbedOptions,
+    EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
+    GatewayTimeoutPolicy, LocalEmbedOptions, SippClient, SippEmbedRequest,
 };
-use futures::executor::block_on;
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {

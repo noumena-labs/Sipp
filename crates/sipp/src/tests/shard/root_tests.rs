@@ -338,10 +338,7 @@ fn split_file_missing_input_is_io_error() {
 fn file_shard_sink_creates_parent_directory_and_reports_written_bytes() {
     assert_eq!(shard_parent_dir(Path::new("shard.gguf")), None);
 
-    let relative = PathBuf::from(format!(
-        "sipp-shard-rootless-{}.gguf",
-        std::process::id()
-    ));
+    let relative = PathBuf::from(format!("sipp-shard-rootless-{}.gguf", std::process::id()));
     fs::remove_file(&relative).ok();
     let mut sink = FileShardSink;
     let writer = sink

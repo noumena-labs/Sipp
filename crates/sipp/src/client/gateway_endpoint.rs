@@ -13,10 +13,9 @@ use crate::client::dispatch::InferenceEndpoint;
 use crate::client::gateway::{GatewayAuthentication, GatewayEndpointConfig, GatewaySecret};
 use crate::client::io_executor::IoExecutor;
 use crate::client::{
-    validate, SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippEmbeddingRun,
-    SippError, SippQueryRequest, SippRequestContext, SippResponseMetadata, SippResult,
-    SippTextResponse, SippTextRun, SippTokenBatches, EndpointCapabilities, EndpointError,
-    EndpointRef,
+    validate, EndpointCapabilities, EndpointError, EndpointRef, SippChatRequest, SippEmbedRequest,
+    SippEmbeddingResponse, SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext,
+    SippResponseMetadata, SippResult, SippTextResponse, SippTextRun, SippTokenBatches,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -243,11 +242,7 @@ impl GatewayTransport {
         })
     }
 
-    async fn post_json(
-        &self,
-        route: &str,
-        body: serde_json::Value,
-    ) -> SippResult<GatewayResponse> {
+    async fn post_json(&self, route: &str, body: serde_json::Value) -> SippResult<GatewayResponse> {
         let response = self
             .client
             .post(self.url(route))

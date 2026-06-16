@@ -2,6 +2,7 @@ mod support;
 
 use std::path::PathBuf;
 
+use futures::executor::block_on;
 use sipp::backend::set_llama_log_quiet;
 use sipp::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, GpuLayerConfig, KvReuseMode, ModelPlacementConfig,
@@ -9,10 +10,9 @@ use sipp::engine::{
     SchedulerRuntimeConfig,
 };
 use sipp::{
-    SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor, GatewayAuthentication,
-    GatewayEndpointConfig, GatewayRoutes, GatewaySecret, GatewayTimeoutPolicy, LocalTextOptions,
+    EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
+    GatewayTimeoutPolicy, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions,
 };
-use futures::executor::block_on;
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
@@ -122,8 +122,7 @@ fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRu
 fn text_options() -> SippTextOptions {
     SippTextOptions {
         max_tokens: support::env_parse("SIPP_MAX_TOKENS").or(Some(support::DEFAULT_MAX_TOKENS)),
-        temperature: support::env_parse("SIPP_TEMPERATURE")
-            .or(Some(support::DEFAULT_TEMPERATURE)),
+        temperature: support::env_parse("SIPP_TEMPERATURE").or(Some(support::DEFAULT_TEMPERATURE)),
         top_p: support::env_parse("SIPP_TOP_P").or(Some(support::DEFAULT_TOP_P)),
         stop: Vec::new(),
     }

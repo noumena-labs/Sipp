@@ -8,7 +8,7 @@ mod residency;
 pub(crate) mod scheduler;
 pub(crate) mod session;
 
-pub use sipp_sys::{llama_seq_id, llama_token};
 pub use inference_runtime::{InferenceRuntime, RequestStepResult, SchedulerBurstResult};
+pub use sipp_sys::{llama_seq_id, llama_token};
 
 pub(crate) const REQUEST_CANCELLED_MESSAGE: &str = "Request cancelled.";

@@ -1,4 +1,9 @@
 use crate::build_support::context::BuildContext;
+use cmake::Config;
+
+pub(crate) fn apply_cuda_cmake_overrides(config: &mut Config) {
+    config.define("CMAKE_CUDA_FLAGS", cuda_cmake_flags());
+}
 
 pub(crate) fn link_system_libraries(context: &BuildContext) {
     println!("cargo:rustc-link-lib=dylib=stdc++");
@@ -36,4 +41,8 @@ fn link_cuda_libraries(context: &BuildContext) {
     for lib in ["cudart", "cublas", "cublasLt", "cuda"] {
         println!("cargo:rustc-link-lib=dylib={lib}");
     }
+}
+
+pub(super) fn cuda_cmake_flags() -> &'static str {
+    "-Xcompiler=-fPIC"
 }

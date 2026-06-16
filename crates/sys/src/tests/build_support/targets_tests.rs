@@ -4,6 +4,31 @@
 //! requiring host-specific native toolchains.
 
 use super::*;
+use crate::build_support::context::{BuildContext, BuildEnv, FeatureFlags};
+
+fn target_context(target: &str) -> BuildContext {
+    BuildContext {
+        manifest_dir: "crates/sys".into(),
+        llama_dir: "crates/sys/llama.cpp".into(),
+        target: target.to_owned(),
+        target_kind: TargetKind::Macos,
+        host_is_windows: false,
+        features: FeatureFlags {
+            backend_dl: false,
+            cuda: false,
+            metal: false,
+            vulkan: false,
+            openmp: false,
+            pthreads: false,
+        },
+        env_vars: BuildEnv {
+            cuda_path: None,
+            cuda_architectures: None,
+            vulkan_sdk: None,
+            cmake_out_dir: None,
+        },
+    }
+}
 
 #[test]
 fn classify_prefers_emscripten_os_or_triple() {
@@ -37,4 +62,21 @@ fn target_kind_reports_only_emscripten_as_emscripten() {
     assert!(!TargetKind::Windows.is_emscripten());
     assert!(!TargetKind::Macos.is_emscripten());
     assert!(!TargetKind::Unix.is_emscripten());
+}
+
+#[test]
+fn macos_deployment_target_supports_filesystem_floor() {
+    assert_eq!(
+        super::macos::deployment_target(&target_context("x86_64-apple-darwin")),
+        "10.15"
+    );
+    assert_eq!(
+        super::macos::deployment_target(&target_context("aarch64-apple-darwin")),
+        "11.0"
+    );
+}
+
+#[test]
+fn unix_cuda_flags_compile_position_independent_objects() {
+    assert!(super::unix::cuda_cmake_flags().contains("-fPIC"));
 }

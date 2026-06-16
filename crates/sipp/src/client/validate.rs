@@ -177,8 +177,6 @@ fn finite_optional(name: &'static str, value: Option<f32>) -> Result<(), SippErr
     if value.is_some_and(f32::is_finite) || value.is_none() {
         Ok(())
     } else {
-        Err(SippError::InvalidRequest(format!(
-            "{name} must be finite"
-        )))
+        Err(SippError::InvalidRequest(format!("{name} must be finite")))
     }
 }

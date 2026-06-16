@@ -49,6 +49,7 @@ fn test_summary_labels_test_subcommands() {
     );
     assert_eq!(
         test_summary(&TestCommands::Unit(TestUnitArgs {
+            no_coverage: false,
             command: TestUnitCommands::Group(TestUnitGroupArgs {
                 target: TestUnitGroupTarget::Full,
             }),
@@ -165,6 +166,7 @@ fn effective_output_options_keep_build_and_run_compact_by_default() {
 fn effective_output_options_keep_test_execution_compact_by_default() {
     let unit = Commands::Test {
         command: TestCommands::Unit(TestUnitArgs {
+            no_coverage: false,
             command: TestUnitCommands::Group(TestUnitGroupArgs {
                 target: TestUnitGroupTarget::Whitebox,
             }),

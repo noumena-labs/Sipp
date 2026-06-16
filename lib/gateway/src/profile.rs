@@ -1,10 +1,10 @@
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 use sipp::core::{ChatMessage, ChatRole, TokenUsage};
 use sipp::{
-    SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippQueryRequest,
-    SippTextOptions, SippTextResponse,
+    SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippQueryRequest, SippTextOptions,
+    SippTextResponse,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::toolkit::{DecodedRequest, GatewayHttpError, ProtocolCodec, ToolkitResult};
 

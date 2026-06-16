@@ -2,12 +2,12 @@ mod support;
 
 use std::time::Duration;
 
+use futures::executor::block_on;
 use sipp::core::{ChatMessage, ChatRole};
 use sipp::{
-    SippChatRequest, SippClient, SippTextOptions, EndpointDescriptor, ProviderAuthConfig,
-    ProviderEndpointConfig, ProviderSecret,
+    EndpointDescriptor, ProviderAuthConfig, ProviderEndpointConfig, ProviderSecret,
+    SippChatRequest, SippClient, SippTextOptions,
 };
-use futures::executor::block_on;
 
 const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai/";
 const GEMINI_DEFAULT_MODEL: &str = "gemini-3.5-flash";
@@ -132,8 +132,7 @@ fn openai_compatible_auth() -> support::ExampleResult<ProviderAuthConfig> {
 fn text_options() -> SippTextOptions {
     SippTextOptions {
         max_tokens: support::env_parse("SIPP_MAX_TOKENS").or(Some(support::DEFAULT_MAX_TOKENS)),
-        temperature: support::env_parse("SIPP_TEMPERATURE")
-            .or(Some(support::DEFAULT_TEMPERATURE)),
+        temperature: support::env_parse("SIPP_TEMPERATURE").or(Some(support::DEFAULT_TEMPERATURE)),
         top_p: support::env_parse("SIPP_TOP_P").or(Some(support::DEFAULT_TOP_P)),
         stop: Vec::new(),
     }

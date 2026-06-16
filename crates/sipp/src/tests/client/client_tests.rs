@@ -1,8 +1,8 @@
 use futures::executor::block_on;
 
 use crate::client::{
-    SippClient, SippError, EndpointDescriptor, EndpointRef, GatewayAuthentication,
-    GatewayEndpointConfig, GatewayRoutes, GatewayTimeoutPolicy,
+    EndpointDescriptor, EndpointRef, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes,
+    GatewayTimeoutPolicy, SippClient, SippError,
 };
 
 #[test]

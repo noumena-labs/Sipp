@@ -1,4 +1,4 @@
-name: Release cogentlm packages
+name: Release sipp packages
 
 on:
   workflow_dispatch:
@@ -26,23 +26,32 @@ on:
         type: boolean
 
 permissions:
+  actions: read
   contents: read
-  packages: read
-  id-token: write
 
 concurrency:
-  group: release-cogentlm
+  group: release-sipp
   cancel-in-progress: false
 
+env:
+  CUDA_VERSION: "13.3"
+  CUDA_PACKAGE_SUFFIX: "13-3"
+  CUDA_WINDOWS_INSTALLER_URL: https://developer.download.nvidia.com/compute/cuda/13.3.0/local_installers/cuda_13.3.0_windows.exe
+  NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  SIPP_MAX_GLIBC: "2.35"
+  SIPP_MAX_WHEEL_MB: "100"
+
 jobs:
-  release:
-    name: Generate and publish release packages
-    runs-on: ubuntu-latest
-    env:
-      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
-      SELECTED_PACKAGE: ${{ inputs.package }}
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.versions.outputs.tag }}
+      version: ${{ steps.versions.outputs.version }}
     steps:
       - name: Require master for publishing
+        shell: bash
         run: |
           set -euo pipefail
           if [ "${{ inputs.dry_run }}" = "false" ] && [ "${GITHUB_REF}" != "refs/heads/master" ]; then
@@ -50,10 +59,41 @@ jobs:
             exit 1
           fi
 
-      - name: Block unsupported Rust crates.io publish
-        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'rust') }}
+      - name: Require green CI for release SHA
+        if: ${{ inputs.dry_run == false }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          echo "::error::Rust crates.io publishing is blocked until cogentlm-sys no longer depends on the private llama.cpp submodule path. Run a dry run to generate the Rust source artifact, or choose web-npm, node-npm, or python."
+          set -euo pipefail
+          response="$(curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&status=success&per_page=1")"
+          if [ "$(jq '.total_count' <<< "$response")" -lt 1 ]; then
+            echo "::error::Release SHA $SHA has no successful CI workflow run. Wait for CI to pass before publishing."
+            exit 1
+          fi
+
+      - name: Validate npm dist-tag
+        shell: bash
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$NPM_TAG" =~ ^[a-z][a-z0-9-]*$ ]]; then
+            echo "::error::npm_tag '$NPM_TAG' must be a lowercase dist-tag such as latest, next, or beta."
+            exit 1
+          fi
+
+      - name: Block unsupported Rust crates.io publish
+        if: ${{ inputs.dry_run == false && inputs.package == 'rust' }}
+        shell: bash
+        run: |
+          echo "::error::Rust crates.io publishing is pending publish wiring for the sipp and sipp-sys crates (vendored llama.cpp sign-off, registry credentials, and cargo publish ordering). Run a dry run to generate the Rust source artifact, or choose all, web-npm, node-npm, or python."
           exit 1
 
       - name: Check out repository
@@ -61,22 +101,164 @@ jobs:
         with:
           submodules: false
 
-      - name: Check out private llama.cpp submodule
+      - name: Resolve aligned version
+        id: resolve
+        uses: ./.github/actions/resolve-version
+
+      - name: Check release tag
+        id: versions
+        shell: bash
         env:
-          LLAMA_CPP_INTERNAL_DEPLOY_KEY: ${{ secrets.LLAMA_CPP_INTERNAL_DEPLOY_KEY }}
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           set -euo pipefail
-          if [ -z "${LLAMA_CPP_INTERNAL_DEPLOY_KEY:-}" ]; then
-            echo "::error::Set LLAMA_CPP_INTERNAL_DEPLOY_KEY to a read-only deploy key for noumena-labs/llama.cpp."
+          RELEASE_TAG="sipp-v$VERSION"
+          level="error"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            level="warning"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "::${level}::Release tag $RELEASE_TAG already exists."
+            if [ "${{ inputs.dry_run }}" != "true" ]; then
+              exit 1
+            fi
+          fi
+          latest_release_tag="$(git ls-remote --tags --refs origin 'sipp-v*' | awk -F/ '{ print $NF }' | sort -V | tail -1 || true)"
+          echo "Latest remote Sipp release tag: ${latest_release_tag:-none}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check for already-published versions
+        shell: bash
+        env:
+          PACKAGE: ${{ inputs.package }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          VERSION: ${{ steps.versions.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          level="error"
+          if [ "$DRY_RUN" = "true" ]; then
+            level="warning"
+          fi
+          conflicts=0
+
+          check_npm() {
+            local name="$1" version="$2" status
+            status=$(curl -s -o /tmp/npm-package.json -w '%{http_code}' "https://registry.npmjs.org/$name")
+            if [ "$status" = "200" ] && jq -e --arg v "$version" '.versions[$v]' /tmp/npm-package.json > /dev/null; then
+              echo "::${level}::$name@$version is already published to npm; bump the version before releasing."
+              conflicts=1
+            else
+              echo "$name@$version is not yet on npm (registry status $status)."
+            fi
+          }
+
+          check_pypi() {
+            local name="$1" version="$2" status
+            status=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/$name/$version/json")
+            if [ "$status" = "200" ]; then
+              echo "::${level}::$name==$version is already published to PyPI; bump the version before releasing."
+              conflicts=1
+            else
+              echo "$name==$version is not yet on PyPI (status $status)."
+            fi
+          }
+
+          if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "web-npm" ]; then
+            check_npm sipp "$VERSION"
+          fi
+          if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "node-npm" ]; then
+            check_npm sipp-server "$VERSION"
+            check_npm sipp-server-darwin-arm64 "$VERSION"
+            check_npm sipp-server-darwin-x64 "$VERSION"
+            check_npm sipp-server-linux-x64-gnu "$VERSION"
+            check_npm sipp-server-win32-x64-msvc "$VERSION"
+          fi
+          if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "python" ]; then
+            check_pypi sipp "$VERSION"
+            check_pypi sipp-backend-cuda "$VERSION"
+            check_pypi sipp-backend-metal "$VERSION"
+            check_pypi sipp-backend-vulkan "$VERSION"
+          fi
+
+          if [ "$conflicts" -eq 1 ] && [ "$DRY_RUN" != "true" ]; then
             exit 1
           fi
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "$LLAMA_CPP_INTERNAL_DEPLOY_KEY" > ~/.ssh/llama_cpp_internal
-          chmod 600 ~/.ssh/llama_cpp_internal
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule sync --recursive
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/llama_cpp_internal -o IdentitiesOnly=yes" git submodule update --init --recursive
+
+  gate:
+    name: Release gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    needs: preflight
+    env:
+      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Set up compiler cache
+        if: ${{ runner.os != 'Windows' }}
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: release-gate
+          max-size: 3G
+
+      - name: Cache Cargo and native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-release-gate-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-release-gate-${{ runner.os }}-
+
+      - name: Cache hermetic build toolchains
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            .build/toolchain
+            .build/uv-cache
+          key: sipp-toolchain-release-gate-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          restore-keys: |
+            sipp-toolchain-release-gate-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Run release source gate
+        run: |
+          cargo xtask --plain test unit --no-coverage suite xtask
+          cargo xtask --plain test unit --no-coverage suite rust-crates
+          cargo xtask --plain test unit --no-coverage suite rust-bindings
+          cargo xtask --plain test unit --no-coverage suite api
+          cargo xtask --plain test unit --no-coverage suite cli
+
+  web-npm:
+    name: Build web npm package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    needs: gate
+    if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
+    env:
+      CE_WASM_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -96,10 +278,14 @@ jobs:
           bun-version: 1.3.11
 
       - name: Set up CMake and Ninja
-        uses: lukka/get-cmake@latest
+        uses: lukka/get-cmake@v4.3.1
 
-      - name: Set up Emscripten
-        uses: emscripten-core/setup-emsdk@v16
+      - name: Set up compiler cache
+        if: ${{ runner.os != 'Windows' }}
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: release-web
+          max-size: 3G
 
       - name: Cache Cargo and native build outputs
         uses: actions/cache@v5.0.5
@@ -110,190 +296,353 @@ jobs:
             .build/cargo
             .build/cmake
             .build/c
-          key: cargo-release-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          key: cargo-release-web-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
           restore-keys: |
-            cargo-release-${{ runner.os }}-
+            cargo-release-web-${{ runner.os }}-
 
-      - name: Cache JavaScript dependencies
-        uses: actions/cache@v5.0.5
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-            lib/web/node_modules
-            lib/node/node_modules
-            bindings/node/node_modules
-            demos/*/node_modules
-            tools/*/node_modules
-            examples/web/node_modules
-          key: bun-release-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'lib/node/package.json', 'lib/web/package.json', 'bindings/node/package.json', 'demos/*/package.json', 'tools/*/package.json', 'examples/web/package.json') }}
-          restore-keys: |
-            bun-release-${{ runner.os }}-
-
-      - name: Cache xtask toolchains
+      - name: Cache hermetic build toolchains
         uses: actions/cache@v5.0.5
         with:
           path: |
             .build/toolchain
             .build/uv-cache
-          key: xtask-toolchain-release-${{ runner.os }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          key: sipp-toolchain-release-web-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
           restore-keys: |
-            xtask-toolchain-release-${{ runner.os }}-
-
-      - name: Cache sample models
-        uses: actions/cache@v5.0.5
-        with:
-          path: .build/models
-          key: sample-models-release-${{ runner.os }}-${{ hashFiles('xtask/src/sample_model.rs') }}
-          restore-keys: |
-            sample-models-release-${{ runner.os }}-
+            sipp-toolchain-release-web-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install JavaScript workspace dependencies
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun install --frozen-lockfile
 
-      - name: Run full release test workflow
-        run: |
-          cargo xtask --plain test unit group full
-          cargo xtask --plain test smoke group full --backend cpu
-
       - name: Build staged web package
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         run: cargo xtask --plain build wasm
 
       - name: Run web package import smoke
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         run: |
           node --input-type=module <<'NODE'
-          const pkg = await import('./.build/artifacts/npm/cogentlm/dist/esm/index.js');
-          if (typeof pkg.CogentClient !== 'function') {
-            throw new Error('CogentClient export is missing from the staged package.');
+          const pkg = await import('./.build/artifacts/npm/sipp/dist/esm/index.js');
+          if (typeof pkg.SippClient !== 'function') {
+            throw new Error('SippClient export is missing from the staged package.');
           }
           NODE
 
       - name: Prepare public web npm metadata
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
-        working-directory: .build/artifacts/npm/cogentlm
+        working-directory: .build/artifacts/npm/sipp
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-          pkg.name = 'cogentlm';
+          pkg.name = 'sipp';
           pkg.publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' };
           writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
 
       - name: Upload web npm artifact
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: cogentlm-web-npm
-          path: .build/artifacts/npm/cogentlm
+          name: sipp-web-npm
+          path: .build/artifacts/npm/sipp
 
       - name: Validate web npm publish
-        if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: .build/artifacts/npm/cogentlm
+        working-directory: .build/artifacts/npm/sipp
         run: npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
 
-      - name: Publish web package to npm
-        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'web-npm') }}
-        env:
-          NPM_TAG: ${{ inputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: .build/artifacts/npm/cogentlm
-        run: npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
+  native:
+    name: Build native packages
+    needs: gate
+    if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python' || inputs.package == 'rust' }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/build-native.yml
+    with:
+      package: ${{ inputs.package }}
+      node-registry: https://registry.npmjs.org
+      enforce: true
 
-      - name: Build Node server package
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        run: cargo xtask --plain build node --backend all
+  node-npm:
+    name: Assemble Node npm packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: native
+    if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: false
 
-      - name: Stage Node server package
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.3.11
+
+      - name: Install JavaScript workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Download Node native artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: sipp-node-native-*
+          path: .build/artifacts/node
+          merge-multiple: true
+
+      - name: Stage public Node server packages
         working-directory: lib/node
+        env:
+          SIPP_NODE_PACKAGE_ACCESS: public
+          SIPP_NODE_PACKAGE_NAME: sipp-server
+          SIPP_NODE_PACKAGE_REGISTRY: https://registry.npmjs.org
         run: bun run build:stage
 
-      - name: Prepare public Node npm metadata
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
-        working-directory: .build/artifacts/npm/cogentlm-server
+      - name: Install staged packages and require router
+        shell: bash
         run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs';
-          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-          pkg.name = 'cogentlm-server';
-          pkg.publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' };
-          writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
-          NODE
+          set -euo pipefail
+          wrapper_dir=.build/artifacts/npm/sipp-server
+          platform_dir=.build/artifacts/npm/sipp-server-linux-x64-gnu
+          if [ ! -d "$platform_dir" ]; then
+            echo "::error::Staged linux-x64-gnu platform package is missing."
+            exit 1
+          fi
+          package_name="$(node -p "require('./$wrapper_dir/package.json').name")"
+          smoke_dir="$RUNNER_TEMP/sipp-npm-smoke"
+          rm -rf "$smoke_dir"
+          mkdir -p "$smoke_dir"
+          wrapper_tgz="$(npm pack "./$wrapper_dir" --pack-destination "$smoke_dir" --json | jq -r '.[0].filename')"
+          platform_tgz="$(npm pack "./$platform_dir" --pack-destination "$smoke_dir" --json | jq -r '.[0].filename')"
+          cd "$smoke_dir"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund --omit=optional "./$platform_tgz" "./$wrapper_tgz"
+          SMOKE_PACKAGE_NAME="$package_name" SIPP_NODE_BACKEND=cpu node -e '
+            const wrapper = require(process.env.SMOKE_PACKAGE_NAME);
+            const backend = wrapper.getActiveBackend();
+            if (backend !== "cpu") {
+              throw new Error(`expected cpu backend from staged packages, got ${backend}`);
+            }
+            console.log(`Loaded ${process.env.SMOKE_PACKAGE_NAME} from staged tarballs with backend=${backend}`);
+          '
 
-      - name: Upload Node npm artifact
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+      - name: Upload Node npm artifacts
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: cogentlm-server-npm
-          path: .build/artifacts/npm/cogentlm-server
+          name: sipp-server-npm
+          path: |
+            .build/artifacts/npm/sipp-server
+            .build/artifacts/npm/sipp-server-*
 
       - name: Validate Node npm publish
-        if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
+        shell: bash
         env:
           NPM_TAG: ${{ inputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: .build/artifacts/npm/cogentlm-server
-        run: npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
+        run: |
+          set -euo pipefail
+          for package_dir in .build/artifacts/npm/sipp-server-* .build/artifacts/npm/sipp-server; do
+            [ -d "$package_dir" ] || continue
+            npm publish "$package_dir" --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
+          done
 
-      - name: Publish Node package to npm
-        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'node-npm') }}
-        env:
-          NPM_TAG: ${{ inputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: .build/artifacts/npm/cogentlm-server
-        run: npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
+  python:
+    name: Combine Python wheels
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: native
+    if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+    steps:
+      - name: Download Python wheel artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: sipp-python-wheels-*
+          path: .build/artifacts/python
+          merge-multiple: true
 
-      - name: Build Python wheel
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        run: cargo xtask --plain build python --backend all
-
-      - name: Validate Python wheel metadata
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
-        run: .build/toolchain/uv/uv tool run twine check .build/artifacts/python/*.whl
-
-      - name: Upload Python wheel artifact
-        if: ${{ inputs.package == 'all' || inputs.package == 'python' }}
+      - name: Upload combined Python wheel artifact
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: cogentlm-python-wheels
+          name: sipp-python-wheels
           path: .build/artifacts/python/*.whl
 
-      - name: Publish Python package to PyPI
-        if: ${{ inputs.dry_run == false && (inputs.package == 'all' || inputs.package == 'python') }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+  rust-source:
+    name: Package Rust source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: native
+    if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
         with:
-          packages-dir: .build/artifacts/python
+          # Keep the submodule out so the tarball stays facade-only; vendored
+          # llama.cpp ships only after sign-off.
+          submodules: false
 
       - name: Package Rust facade source artifact
-        if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p .build/artifacts/rust
-          tar -czf .build/artifacts/rust/cogentlm-rust-source-${{ github.run_number }}.${{ github.run_attempt }}.tar.gz \
+          tar -czf .build/artifacts/rust/sipp-rust-source-${{ github.run_number }}.${{ github.run_attempt }}.tar.gz \
             Cargo.toml \
             Cargo.lock \
             README.md \
             LICENSE \
-            lib/rust \
-            crates/core \
-            crates/shard \
+            crates/sipp \
             crates/sys \
-            crates/engine \
-            crates/remote \
-            crates/gateway \
-            crates/gateway-providers \
-            crates/client
+            lib/gateway \
+            lib/binding-dto
 
       - name: Upload Rust crate artifact
-        if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: cogentlm-rust-source
+          name: sipp-rust-source
           path: .build/artifacts/rust/*.tar.gz
+
+  # Tag and cut the GitHub Release *before* anything is pushed to a public
+  # registry, so a published package always has a corresponding tag/Release.
+  tag-release:
+    name: Tag release and cut GitHub Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs:
+      - preflight
+      - web-npm
+      - node-npm
+      - python
+      - rust-source
+    if: ${{ inputs.dry_run == false && inputs.package == 'all' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: false
+
+      - name: Download Python wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-python-wheels
+          path: .build/release-assets
+
+      - name: Download Rust source tarball
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-rust-source
+          path: .build/release-assets
+
+      - name: Tag published version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "::error::Release tag $RELEASE_TAG already exists."
+            exit 1
+          fi
+          git tag "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+          echo "Tagged $GITHUB_SHA as $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          name: ${{ needs.preflight.outputs.tag }}
+          generate_release_notes: true
+          files: .build/release-assets/**
+
+  publish-web:
+    name: Publish web package to npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs:
+      - web-npm
+      - tag-release
+    # always() tolerates tag-release being skipped on partial-package publishes
+    # (e.g. package == web-npm), which deliberately do not cut a tag.
+    if: ${{ always() && inputs.dry_run == false && needs.web-npm.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download web npm artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-web-npm
+          path: .build/artifacts/npm/sipp
+
+      - name: Publish web package to npm
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: .build/artifacts/npm/sipp
+        run: npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
+
+  publish-node:
+    name: Publish Node packages to npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs:
+      - node-npm
+      - tag-release
+    if: ${{ always() && inputs.dry_run == false && needs.node-npm.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Download Node npm artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-server-npm
+          path: .build/artifacts/npm
+
+      - name: Publish Node packages to npm
+        shell: bash
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for package_dir in .build/artifacts/npm/sipp-server-* .build/artifacts/npm/sipp-server; do
+            [ -d "$package_dir" ] || continue
+            npm publish "$package_dir" --registry https://registry.npmjs.org --tag "$NPM_TAG"
+          done
+
+  publish-python:
+    name: Publish Python package to PyPI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs:
+      - python
+      - tag-release
+    if: ${{ always() && inputs.dry_run == false && needs.python.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download combined Python wheels
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-python-wheels
+          path: .build/artifacts/python
+
+      - name: Publish Python package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: .build/artifacts/python

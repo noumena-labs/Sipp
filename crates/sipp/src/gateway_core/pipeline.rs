@@ -3,8 +3,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::client::{
-    SippChatRequest, SippClient, SippEmbedRequest, SippEmbeddingResponse,
-    SippEmbeddingRun, SippQueryRequest, SippTextResponse, SippTextRun, EndpointRef,
+    EndpointRef, SippChatRequest, SippClient, SippEmbedRequest, SippEmbeddingResponse,
+    SippEmbeddingRun, SippQueryRequest, SippTextResponse, SippTextRun,
 };
 use crate::core::{FinishReason, TokenBatch, TokenUsage};
 use futures_util::future::{select, Either};
@@ -72,11 +72,8 @@ pub trait GatewayExecutor: Send + Sync {
     fn chat(&self, context: &GatewayRequestContext, request: SippChatRequest) -> SippTextRun;
 
     /// Execute embedding inference.
-    fn embed(
-        &self,
-        context: &GatewayRequestContext,
-        request: SippEmbedRequest,
-    ) -> SippEmbeddingRun;
+    fn embed(&self, context: &GatewayRequestContext, request: SippEmbedRequest)
+        -> SippEmbeddingRun;
 }
 
 /// Executor backed by a configured [`SippClient`].

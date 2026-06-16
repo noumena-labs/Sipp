@@ -5,8 +5,8 @@ use crate::engine::{
 };
 
 use crate::client::{
-    SippEmbeddingResponse, SippError, SippQueryRequest, SippResponseMetadata,
-    SippTextOptions, SippTextResponse, EndpointRef, LocalEmbedOptions, LocalTextOptions,
+    EndpointRef, LocalEmbedOptions, LocalTextOptions, SippEmbeddingResponse, SippError,
+    SippQueryRequest, SippResponseMetadata, SippTextOptions, SippTextResponse,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -21,9 +21,7 @@ mod map_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-pub(crate) fn local_query_request(
-    request: SippQueryRequest,
-) -> Result<QueryRequest, SippError> {
+pub(crate) fn local_query_request(request: SippQueryRequest) -> Result<QueryRequest, SippError> {
     let options = local_query_options(request.options, request.local)?;
     Ok(QueryRequest::new(request.prompt)
         .options(options)

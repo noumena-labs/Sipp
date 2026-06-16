@@ -9,10 +9,10 @@ use axum::http::header::{COOKIE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::routing::{get, put};
 use axum::{Json, Router};
-use sipp::backend::backend_observability_json;
 use rand::random;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sipp::backend::backend_observability_json;
 
 use crate::config::{RouteConfig, TargetSummary};
 use crate::metrics::GatewayMetrics;

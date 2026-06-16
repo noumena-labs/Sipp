@@ -17,6 +17,10 @@ npm install sipp-server
 Use this package only in Node runtime code. Browser components should use
 [`sipp`](browser.md).
 
+`sipp-server` is a wrapper package. npm installs the matching optional
+platform package for the current OS and CPU, and the runtime loader selects
+the best packaged backend for that host.
+
 ## Use It For
 
 - Server-side local GGUF inference.
@@ -67,6 +71,8 @@ console.log(streamed || response.text);
 ```
 
 Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
+By default, macOS tries `metal` then `cpu`; Windows and Linux try `cuda`,
+`vulkan`, then `cpu`.
 See [Runtime Options](../reference/runtime-options.md) for local runtime config
 groups and request option boundaries.
 

@@ -16,10 +16,7 @@ fn package_name_reads_manifest_name() {
         r#"{"name":"@noumena-labs/sipp","version":"0.1.0"}"#,
     );
 
-    assert_eq!(
-        package_name(&package_dir).unwrap(),
-        "@noumena-labs/sipp"
-    );
+    assert_eq!(package_name(&package_dir).unwrap(), "@noumena-labs/sipp");
 }
 
 #[test]
@@ -37,23 +34,14 @@ fn root_workspace_package_filters_preserve_order_and_remove_duplicates() {
     let temp = TempDir::new("javascript-filters");
     let web_dir = temp.create_dir("lib/web");
     let demo_dir = temp.create_dir("demos/chat");
-    temp.write(
-        "lib/web/package.json",
-        r#"{"name":"@noumena-labs/sipp"}"#,
-    );
-    temp.write(
-        "demos/chat/package.json",
-        r#"{"name":"sipp-chat-demo"}"#,
-    );
+    temp.write("lib/web/package.json", r#"{"name":"@noumena-labs/sipp"}"#);
+    temp.write("demos/chat/package.json", r#"{"name":"sipp-chat-demo"}"#);
 
     let filters = root_workspace_package_filters(&[demo_dir.clone(), web_dir, demo_dir]).unwrap();
 
     assert_eq!(
         filters,
-        vec![
-            "sipp-chat-demo".to_owned(),
-            "@noumena-labs/sipp".to_owned()
-        ]
+        vec!["sipp-chat-demo".to_owned(), "@noumena-labs/sipp".to_owned()]
     );
 }
 
