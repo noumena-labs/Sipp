@@ -136,7 +136,7 @@ fn chunked_single_slot_prefill_revisits_without_duplicate_positions() {
 }
 
 #[test]
-fn snapshot_mode_prefill_pauses_at_decode_seed_boundary() {
+fn snapshot_mode_prefill_reaches_logits_without_decode_seed_pause() {
     let planner = BatchPlanner;
     let mut request = request(1, vec![10, 11, 12, 13], 4);
     request.cache_mode = KvReuseMode::LiveSlotAndSnapshot;
@@ -155,9 +155,12 @@ fn snapshot_mode_prefill_pauses_at_decode_seed_boundary() {
         .map(|contribution| contribution.position)
         .collect();
 
-    assert_eq!(positions, vec![0, 1, 2]);
-    assert_eq!(plan.prefill_token_count, 3);
-    assert!(plan.contributions.iter().all(|item| !item.request_logits));
+    assert_eq!(positions, vec![0, 1, 2, 3]);
+    assert_eq!(plan.prefill_token_count, 4);
+    assert_eq!(
+        plan.contributions.last().map(|item| item.request_logits),
+        Some(true)
+    );
 }
 
 #[test]

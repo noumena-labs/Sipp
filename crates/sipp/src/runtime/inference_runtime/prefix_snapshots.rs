@@ -26,19 +26,22 @@ impl InferenceRuntime {
             else {
                 continue;
             };
-            if slot.mirror.current_kv_tokens.len() > terminal_token_count {
+            if slot.mirror.current_kv_tokens.len() < terminal_token_count {
                 continue;
             }
+            let snapshot_tokens = &slot.mirror.current_kv_tokens[..terminal_token_count];
             // Pure snapshot mode evicts the sequence at completion, so it must
             // materialize before finalization. Live+snapshot keeps the
-            // sequence idle and can defer the expensive state readback.
+            // sequence idle and can defer the expensive state readback. Both
+            // paths store the prompt-minus-one identity; restore trims native
+            // state captured after that boundary.
             if request.cache_mode == KvReuseMode::StateSnapshot {
                 self.kv_cache.capture_prefix_snapshot(
                     &self.native_runtime,
                     self.model_fingerprint,
                     &request.context_key,
                     slot.seq_id,
-                    &slot.mirror.current_kv_tokens,
+                    snapshot_tokens,
                     terminal_token_count,
                 );
             } else {
@@ -47,7 +50,7 @@ impl InferenceRuntime {
                     &request.context_key,
                     slot.seq_id,
                     slot.lease_generation,
-                    &slot.mirror.current_kv_tokens,
+                    snapshot_tokens,
                     terminal_token_count,
                 );
             }

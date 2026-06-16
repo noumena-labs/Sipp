@@ -23,7 +23,7 @@ fn decode_seed_snapshot_requires_at_least_two_prompt_tokens() {
 fn capture_prefix_snapshots_queues_live_snapshot_under_decode_pressure() {
     let mut runtime = test_runtime(NativeRuntimeConfig::default());
     runtime.scratch_decode_ready_slots.push(1);
-    runtime.slot_scheduler.slots.push(prefill_slot());
+    runtime.slot_scheduler.slots.push(prefill_slot(vec![1, 2]));
     let mut plan = SharedBatchPlan::default();
     plan.contributions.push(BatchContribution {
         slot_index: 0,
@@ -39,7 +39,29 @@ fn capture_prefix_snapshots_queues_live_snapshot_under_decode_pressure() {
     assert_eq!(runtime.kv_cache.pending_prefix_snapshot_count(), 1);
 }
 
-fn prefill_slot() -> SlotState {
+#[test]
+fn capture_prefix_snapshots_queues_from_full_prompt_state() {
+    let mut runtime = test_runtime(NativeRuntimeConfig::default());
+    runtime
+        .slot_scheduler
+        .slots
+        .push(prefill_slot(vec![1, 2, 3]));
+    let mut plan = SharedBatchPlan::default();
+    plan.contributions.push(BatchContribution {
+        slot_index: 0,
+        request_id: 7,
+        kind: BatchContributionKind::Prefill,
+        token: 3,
+        position: 2,
+        request_logits: true,
+    });
+
+    runtime.capture_prefix_snapshots(&plan);
+
+    assert_eq!(runtime.kv_cache.pending_prefix_snapshot_count(), 1);
+}
+
+fn prefill_slot(current_kv_tokens: Vec<i32>) -> SlotState {
     let mut slot = SlotState::new(0);
     let mut request = GenerateRequest::new(7, "ctx");
     request.prompt_tokens = vec![1, 2, 3];
@@ -48,7 +70,7 @@ fn prefill_slot() -> SlotState {
     slot.request = Some(request);
     slot.seq_id = 0;
     slot.phase = SlotPhase::Prefill;
-    slot.mirror.current_kv_tokens = vec![1, 2];
-    slot.mirror.n_past = 2;
+    slot.mirror.n_past = i32::try_from(current_kv_tokens.len()).unwrap();
+    slot.mirror.current_kv_tokens = current_kv_tokens;
     slot
 }
