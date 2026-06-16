@@ -41,6 +41,7 @@ impl PrefixStateCache {
         self.pending_snapshots.push_back(snapshot);
     }
 
+    #[cfg(test)]
     pub(crate) fn pending_snapshot_count(&self) -> usize {
         self.pending_snapshots.len()
     }

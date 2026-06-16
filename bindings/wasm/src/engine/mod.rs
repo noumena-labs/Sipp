@@ -496,7 +496,7 @@ impl BrowserEngine {
                 GenerateResponseStatus::Failed => COMPLETED_REQUEST_STATUS_FAILED,
             };
         }
-        if runtime.request_queue.requests.contains_key(&request_id) {
+        if runtime.request_queue.contains_request(request_id) {
             COMPLETED_REQUEST_STATUS_PENDING
         } else {
             COMPLETED_REQUEST_STATUS_UNKNOWN

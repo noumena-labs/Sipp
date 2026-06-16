@@ -135,6 +135,7 @@ impl RequestQueue {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn request_lifecycle(
         &self,
         request_id: GenerateRequestId,
