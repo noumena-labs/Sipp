@@ -24,91 +24,13 @@ impl InferenceRuntime {
         embedding_slot_plan(&self.capabilities)
     }
 
-    pub(super) fn run_admission_prefill(&mut self, slot_index: usize) -> Result<()> {
-        let plan = self
-            .slot_scheduler
-            .slots
-            .get(slot_index)
-            .ok_or(Error::RuntimeNotReady)?
-            .plan;
-
-        if plan.prefill != PrefillKind::Encode {
-            return Ok(());
-        }
-        self.run_encoder_prompt_ingest(slot_index)?;
-        // For `EncoderOnly + ReadEmbedding` the prompt-ingest finished the
-        // whole inference: pull the pooled embedding straight off the context
-        // and mark the slot terminal. `EncoderDecoder + SampleTokens` falls
-        // through to the existing decode loop.
-        if plan.terminal == TerminalAction::ReadEmbedding {
-            self.read_slot_embedding(slot_index)?;
-        }
-        Ok(())
-    }
-
     pub(super) fn fail_admitted_slot(&mut self, slot_index: usize, error: Error) {
         if let Some(slot) = self.slot_scheduler.slots.get_mut(slot_index) {
             slot.fail(format!("admission prefill failed: {error}"));
         }
     }
 
-    fn run_encoder_prompt_ingest(&mut self, slot_index: usize) -> Result<()> {
-        let (seq_id, prompt_tokens) = {
-            let slot = self
-                .slot_scheduler
-                .slots
-                .get(slot_index)
-                .ok_or(Error::RuntimeNotReady)?;
-            let request = slot
-                .request()
-                .ok_or(Error::InvalidRequest("admitted slot has no request"))?;
-            if slot.seq_id < 0 {
-                return Err(Error::InvalidRequest(
-                    "admitted slot has no sequence id for encoder pass",
-                ));
-            }
-            (slot.seq_id, request.prompt_tokens.clone())
-        };
-
-        if prompt_tokens.is_empty() {
-            return Err(Error::InvalidRequest(
-                "encoder prompt ingest received an empty token slice",
-            ));
-        }
-
-        let max_tokens = i32::try_from(prompt_tokens.len())
-            .map_err(|_| Error::InvalidRequest("encoder prompt exceeds i32::MAX tokens"))?;
-
-        let mut batch = LlamaBatchBuilder::default();
-        batch.ensure_capacity(max_tokens, 1)?;
-        for (position, token) in prompt_tokens.iter().enumerate() {
-            let position_i32 = i32::try_from(position)
-                .map_err(|_| Error::InvalidRequest("encoder prompt position exceeds i32::MAX"))?;
-            if !batch.add_token(*token, position_i32, seq_id, false) {
-                return Err(Error::BatchCapacity {
-                    capacity: max_tokens,
-                    requested: max_tokens + 1,
-                });
-            }
-        }
-
-        let status = self
-            .native_runtime
-            .encode(batch.batch())
-            .map_err(|error| Error::RuntimeCommand(error.to_string()))?;
-        if status != 0 {
-            return Err(Error::Decode(status));
-        }
-        if !self.native_runtime.synchronize() {
-            return Err(Error::RuntimeCommand(
-                "llama_synchronize() failed after encoder pass".to_string(),
-            ));
-        }
-
-        self.finalize_encoder_pass(slot_index, prompt_tokens.len())
-    }
-
-    pub(super) fn run_encoder_embedding_batch(&mut self, slot_indices: &[usize]) -> Result<()> {
+    pub(super) fn run_encoder_admission_batch(&mut self, slot_indices: &[usize]) -> Result<()> {
         let max_tokens = encoder_batch_token_count(&self.slot_scheduler.slots, slot_indices)?;
         let max_sequences = i32::try_from(slot_indices.len())
             .map_err(|_| Error::InvalidRequest("encoder batch exceeds i32::MAX sequences"))?;
@@ -139,17 +61,27 @@ impl InferenceRuntime {
         }
 
         for &slot_index in slot_indices {
-            let prompt_len = self
+            let slot = self
                 .slot_scheduler
                 .slots
                 .get(slot_index)
-                .and_then(SlotState::request)
-                .map(|request| request.prompt_tokens.len())
                 .ok_or(Error::RuntimeNotReady)?;
-            if let Err(error) = self
+            let terminal = slot.plan.terminal;
+            let prompt_len = slot
+                .request()
+                .map(|request| request.prompt_tokens.len())
+                .ok_or(Error::InvalidRequest("admitted slot has no request"))?;
+
+            let result = self
                 .finalize_encoder_pass(slot_index, prompt_len)
-                .and_then(|_| self.read_slot_embedding(slot_index))
-            {
+                .and_then(|_| {
+                    if terminal == TerminalAction::ReadEmbedding {
+                        self.read_slot_embedding(slot_index)
+                    } else {
+                        Ok(())
+                    }
+                });
+            if let Err(error) = result {
                 self.fail_admitted_slot(slot_index, error);
             }
         }
