@@ -28,8 +28,6 @@ impl InferenceRuntime {
         native_sync_ms: f64,
         native_logic_ms: f64,
     ) {
-        let mut tick_had_prefill = false;
-        let mut tick_had_decode = false;
         let tick_ms = native_decode_ms + native_sync_ms + native_logic_ms;
         let mut timed_slots: u64 = 0;
         let mut prefill_timed_slots: u64 = 0;
@@ -91,10 +89,8 @@ impl InferenceRuntime {
             if is_prefill {
                 self.total_prefill_tokens = self.total_prefill_tokens.saturating_add(1);
                 tick_prefill_tokens = tick_prefill_tokens.saturating_add(1);
-                tick_had_prefill = true;
             } else {
                 tick_decode_tokens = tick_decode_tokens.saturating_add(1);
-                tick_had_decode = true;
             }
 
             if unique_slot_first_use(&mut emitted_slots, contribution.slot_index)
@@ -105,15 +101,11 @@ impl InferenceRuntime {
         }
 
         let tick_token_count = tick_prefill_tokens.saturating_add(tick_decode_tokens);
-        if tick_token_count > 0 {
-            if tick_had_decode {
-                self.total_decode_ms +=
-                    proportional_tick_ms(tick_ms, tick_decode_tokens, tick_token_count);
-            }
-            if tick_had_prefill {
-                self.total_prefill_ms +=
-                    proportional_tick_ms(tick_ms, tick_prefill_tokens, tick_token_count);
-            }
+        if tick_decode_tokens > 0 {
+            self.total_decode_ms += tick_ms * tick_decode_tokens as f64 / tick_token_count as f64;
+        }
+        if tick_prefill_tokens > 0 {
+            self.total_prefill_ms += tick_ms * tick_prefill_tokens as f64 / tick_token_count as f64;
         }
 
         // Decoder-only embedding slots: when prefill just drained the prompt,
@@ -123,10 +115,12 @@ impl InferenceRuntime {
         // unwind cleanly before the embedding read, which needs `&mut self`.
         self.scratch_embedding_read_slots.clear();
         for (index, slot) in self.slot_scheduler.slots.iter().enumerate() {
-            let prompt_len = slot.request().map(|r| r.prompt_tokens.len()).unwrap_or(0);
+            let Some(request) = slot.request() else {
+                continue;
+            };
             let ready = slot.phase == SlotPhase::Decode
                 && slot.plan.terminal == TerminalAction::ReadEmbedding
-                && slot.prefill_cursor >= prompt_len
+                && slot.prefill_cursor >= request.prompt_tokens.len()
                 && slot.embedding_output.is_none();
             if ready {
                 self.scratch_embedding_read_slots.push(index);
@@ -223,11 +217,4 @@ impl InferenceRuntime {
             }
         }
     }
-}
-
-fn proportional_tick_ms(tick_ms: f64, token_count: usize, total_token_count: usize) -> f64 {
-    if total_token_count == 0 {
-        return 0.0;
-    }
-    tick_ms * token_count as f64 / total_token_count as f64
 }
