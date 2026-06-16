@@ -9,8 +9,7 @@ use super::{
 };
 #[derive(Debug, Clone)]
 pub struct RequestQueue {
-    pending_requests: HashMap<GenerateRequestId, GenerateRequest>,
-    request_states: HashMap<GenerateRequestId, RequestQueueState>,
+    entries: HashMap<GenerateRequestId, RequestQueueEntry>,
     pending_request_ids: VecDeque<GenerateRequestId>,
     pub completed_responses: HashMap<GenerateRequestId, GenerateResponse>,
     pub total_emitted_token_count: i32,
@@ -18,10 +17,40 @@ pub struct RequestQueue {
     pending_token_emissions: HashMap<GenerateRequestId, PendingTokenEmission>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RequestQueueState {
-    lifecycle: GenerateRequestLifecycle,
-    cancel_requested: bool,
+#[derive(Debug, Clone)]
+enum RequestQueueEntry {
+    Pending(GenerateRequest),
+    State {
+        lifecycle: GenerateRequestLifecycle,
+        cancel_requested: bool,
+    },
+}
+
+impl RequestQueueEntry {
+    fn lifecycle(&self) -> GenerateRequestLifecycle {
+        match self {
+            Self::Pending(request) => request.lifecycle,
+            Self::State { lifecycle, .. } => *lifecycle,
+        }
+    }
+
+    fn cancel_requested(&self) -> bool {
+        match self {
+            Self::Pending(request) => request.cancel_requested,
+            Self::State {
+                cancel_requested, ..
+            } => *cancel_requested,
+        }
+    }
+
+    fn set_cancel_requested(&mut self) {
+        match self {
+            Self::Pending(request) => request.cancel_requested = true,
+            Self::State {
+                cancel_requested, ..
+            } => *cancel_requested = true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -39,8 +68,7 @@ impl Default for RequestQueue {
 impl RequestQueue {
     pub fn new() -> Self {
         Self {
-            pending_requests: HashMap::new(),
-            request_states: HashMap::new(),
+            entries: HashMap::new(),
             pending_request_ids: VecDeque::new(),
             completed_responses: HashMap::new(),
             total_emitted_token_count: 0,
@@ -57,19 +85,11 @@ impl RequestQueue {
 
         request.reset_for_queue();
         request.enqueued_at.get_or_insert_with(Instant::now);
-        if self.request_states.contains_key(&request_id)
-            || self.pending_requests.contains_key(&request_id)
-        {
+        if self.entries.contains_key(&request_id) {
             return false;
         }
-        self.request_states.insert(
-            request_id,
-            RequestQueueState {
-                lifecycle: GenerateRequestLifecycle::Pending,
-                cancel_requested: false,
-            },
-        );
-        self.pending_requests.insert(request_id, request);
+        self.entries
+            .insert(request_id, RequestQueueEntry::Pending(request));
         self.pending_request_ids.push_back(request_id);
         true
     }
@@ -88,39 +108,56 @@ impl RequestQueue {
         &mut self,
         request_id: GenerateRequestId,
     ) -> Option<GenerateRequest> {
-        self.pending_requests.remove(&request_id)
+        let entry = self.entries.remove(&request_id)?;
+        let RequestQueueEntry::Pending(request) = entry else {
+            self.entries.insert(request_id, entry);
+            return None;
+        };
+        let lifecycle = request.lifecycle;
+        let cancel_requested = request.cancel_requested;
+        self.entries.insert(
+            request_id,
+            RequestQueueEntry::State {
+                lifecycle,
+                cancel_requested,
+            },
+        );
+        Some(request)
     }
 
     pub(crate) fn pending_request(
         &self,
         request_id: GenerateRequestId,
     ) -> Option<&GenerateRequest> {
-        self.pending_requests.get(&request_id)
+        match self.entries.get(&request_id) {
+            Some(RequestQueueEntry::Pending(request)) => Some(request),
+            _ => None,
+        }
     }
 
     pub(crate) fn request_lifecycle(
         &self,
         request_id: GenerateRequestId,
     ) -> Option<GenerateRequestLifecycle> {
-        self.request_states
+        self.entries
             .get(&request_id)
-            .map(|state| state.lifecycle)
+            .map(RequestQueueEntry::lifecycle)
     }
 
     pub(crate) fn request_cancel_requested(&self, request_id: GenerateRequestId) -> bool {
-        self.request_states
+        self.entries
             .get(&request_id)
-            .is_some_and(|state| state.cancel_requested)
+            .is_some_and(RequestQueueEntry::cancel_requested)
     }
 
     pub fn contains_request(&self, request_id: GenerateRequestId) -> bool {
-        self.request_states.contains_key(&request_id)
+        self.entries.contains_key(&request_id)
     }
 
     pub fn has_uncompleted_requests(&self) -> bool {
-        self.request_states.values().any(|state| {
+        self.entries.values().any(|entry| {
             !matches!(
-                state.lifecycle,
+                entry.lifecycle(),
                 GenerateRequestLifecycle::Completed
                     | GenerateRequestLifecycle::Cancelled
                     | GenerateRequestLifecycle::Failed
@@ -137,35 +174,25 @@ impl RequestQueue {
             .copied()
             .enumerate()
             .find(|(_, request_id)| {
-                let pending = self
-                    .request_states
-                    .get(request_id)
-                    .is_some_and(|state| state.lifecycle == GenerateRequestLifecycle::Pending);
-                pending
-                    && self
-                        .pending_requests
-                        .get(request_id)
-                        .is_some_and(|request| predicate(request))
+                self.pending_request(*request_id).is_some_and(|request| {
+                    request.lifecycle == GenerateRequestLifecycle::Pending && predicate(request)
+                })
             })
     }
 
     fn mark_admitted(&mut self, request_id: GenerateRequestId) {
-        let Some(state) = self.request_states.get_mut(&request_id) else {
-            return;
-        };
-        state.lifecycle = GenerateRequestLifecycle::Admitted;
-        if let Some(request) = self.pending_requests.get_mut(&request_id) {
+        if let Some(RequestQueueEntry::Pending(request)) = self.entries.get_mut(&request_id) {
             request.lifecycle = GenerateRequestLifecycle::Admitted;
             request.admitted_at = Some(Instant::now());
         }
     }
 
     pub fn cancel(&mut self, request_id: GenerateRequestId, error_message: String) -> bool {
-        let Some(state) = self.request_states.get_mut(&request_id) else {
+        let Some(entry) = self.entries.get_mut(&request_id) else {
             return false;
         };
-        let lifecycle = state.lifecycle;
-        state.cancel_requested = true;
+        let lifecycle = entry.lifecycle();
+        entry.set_cancel_requested();
         let was_pending = lifecycle == GenerateRequestLifecycle::Pending;
         if was_pending {
             self.mark_completed(GenerateResponse::cancelled(request_id, error_message));
@@ -177,7 +204,6 @@ impl RequestQueue {
     pub fn mark_completed(&mut self, response: GenerateResponse) {
         let request_id = response.request_id;
         self.apply_terminal_response_status(request_id, response.status);
-        self.pending_requests.remove(&request_id);
 
         self.completed_responses.insert(request_id, response);
     }
@@ -224,15 +250,13 @@ impl RequestQueue {
         request_id: GenerateRequestId,
     ) -> Option<GenerateResponse> {
         let response = self.completed_responses.remove(&request_id)?;
-        self.pending_requests.remove(&request_id);
-        self.request_states.remove(&request_id);
+        self.entries.remove(&request_id);
         self.pending_token_emissions.remove(&request_id);
         Some(response)
     }
 
     pub fn clear(&mut self) {
-        self.pending_requests.clear();
-        self.request_states.clear();
+        self.entries.clear();
         self.pending_request_ids.clear();
         self.completed_responses.clear();
         self.total_emitted_token_count = 0;
@@ -249,11 +273,16 @@ impl RequestQueue {
         request_id: GenerateRequestId,
         status: GenerateResponseStatus,
     ) {
-        let Some(state) = self.request_states.get_mut(&request_id) else {
+        let Some(entry) = self.entries.get_mut(&request_id) else {
             return;
         };
-        let was_pending = state.lifecycle == GenerateRequestLifecycle::Pending;
-        state.lifecycle = GenerateRequestLifecycle::from_response_status(status, state.lifecycle);
+        let was_pending = matches!(entry, RequestQueueEntry::Pending(_));
+        let lifecycle = GenerateRequestLifecycle::from_response_status(status, entry.lifecycle());
+        let cancel_requested = entry.cancel_requested();
+        *entry = RequestQueueEntry::State {
+            lifecycle,
+            cancel_requested,
+        };
         if was_pending {
             self.remove_pending_request_id(request_id);
         }
