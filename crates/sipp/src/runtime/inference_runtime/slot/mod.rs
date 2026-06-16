@@ -34,12 +34,13 @@ impl InferenceRuntime {
         let slot_count = self.slot_scheduler.slots.len();
         for slot_index in 0..slot_count {
             let slot = &mut self.slot_scheduler.slots[slot_index];
-            if slot.request().is_none() || slot.seq_id < 0 {
+            if slot.seq_id < 0 {
                 continue;
             }
-
-            let cancel_requested = slot.request().map(|r| r.cancel_requested).unwrap_or(false);
-            if cancel_requested {
+            let Some(request) = slot.request() else {
+                continue;
+            };
+            if request.cancel_requested {
                 slot.cancel(REQUEST_CANCELLED_MESSAGE);
                 continue;
             }

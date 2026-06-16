@@ -40,6 +40,10 @@ impl InferenceRuntime {
             let Some(slot) = self.slot_scheduler.slots.get_mut(contribution.slot_index) else {
                 continue;
             };
+            let Some(request) = slot.request() else {
+                continue;
+            };
+            let prompt_len = request.prompt_tokens.len();
 
             let Some(next_n_past) = slot.mirror.n_past.checked_add(1) else {
                 slot.fail("KV position overflowed during batch bookkeeping.");
@@ -51,7 +55,6 @@ impl InferenceRuntime {
 
             let is_prefill = contribution.kind == BatchContributionKind::Prefill;
             if is_prefill {
-                let prompt_len = slot.request().map(|r| r.prompt_tokens.len()).unwrap_or(0);
                 let Some(next_prefill_cursor) = slot.prefill_cursor.checked_add(1) else {
                     slot.fail("Prefill cursor overflowed during batch bookkeeping.");
                     continue;
@@ -182,12 +185,11 @@ impl InferenceRuntime {
 
             let stop_matched = apply_stop_sequences_to_slot(slot);
             let gen_len = slot.generated_tokens.len();
-            let mut cancel = false;
-            let mut max_output_tokens = 0;
-            if let Some(r) = slot.request() {
-                cancel = r.cancel_requested;
-                max_output_tokens = r.max_output_tokens;
-            }
+            let Some(request) = slot.request() else {
+                continue;
+            };
+            let cancel = request.cancel_requested;
+            let max_output_tokens = request.max_output_tokens;
             let should_complete = stop_matched
                 || cancel
                 || (max_output_tokens > 0

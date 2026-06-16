@@ -181,13 +181,8 @@ impl SlotScheduler {
 
         let buffered = std::mem::take(&mut slot.buffered_output_text);
         let request_id = slot.request_id;
-        let mut should_emit = false;
 
-        if let Some(request) = slot.request_mut() {
-            should_emit = request.emit_tokens;
-        }
-
-        if should_emit {
+        if slot.request().is_some_and(|request| request.emit_tokens) {
             request_queue.append_token_piece(request_id, &buffered);
         }
         slot.output_text.push_str(&buffered);
