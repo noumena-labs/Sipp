@@ -54,7 +54,6 @@ public:
   bool mtmd_ready() const;
   rust::Vec<std::int32_t> tokenize(rust::Str text, bool add_special, bool parse_special) const;
   rust::String token_to_piece(std::int32_t token, bool special) const;
-  rust::Vec<std::uint8_t> token_to_piece_bytes(std::int32_t token, bool special) const;
   void token_to_piece_bytes_into(
       std::int32_t token,
       bool special,

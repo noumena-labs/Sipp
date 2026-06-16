@@ -205,16 +205,6 @@ impl NativeRuntimeHandle {
         })?
     }
 
-    pub(crate) fn token_to_piece_bytes(
-        &self,
-        token: ffi::llama_token,
-        special: bool,
-    ) -> Result<Vec<u8>> {
-        let mut out = Vec::new();
-        self.token_to_piece_bytes_into(token, special, &mut out)?;
-        Ok(out)
-    }
-
     pub(crate) fn token_to_piece_bytes_into(
         &self,
         token: ffi::llama_token,

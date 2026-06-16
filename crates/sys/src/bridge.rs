@@ -48,8 +48,6 @@ pub mod ffi {
             parse_special: bool,
         ) -> Result<Vec<i32>>;
         fn token_to_piece(self: &NativeRuntime, token: i32, special: bool) -> Result<String>;
-        fn token_to_piece_bytes(self: &NativeRuntime, token: i32, special: bool)
-            -> Result<Vec<u8>>;
         fn token_to_piece_bytes_into(
             self: &NativeRuntime,
             token: i32,

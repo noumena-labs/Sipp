@@ -170,7 +170,7 @@ pub(super) fn flush_pending_utf8(slot: &mut SlotState) {
 
 /// Fills `scratch` with the bytes of `token`'s text piece. Returns `false`
 /// on error so callers can act without `Result` boxing. The scratch vector
-/// is reused across calls (per-token work is `resize` + `truncate`).
+/// is reused across calls and cleared by the native bridge before writing.
 #[inline]
 pub(super) fn token_to_piece_into(
     native_runtime: &NativeRuntimeHandle,
@@ -178,8 +178,8 @@ pub(super) fn token_to_piece_into(
     special: bool,
     scratch: &mut Vec<u8>,
 ) -> bool {
-    scratch.clear();
     if token < 0 {
+        scratch.clear();
         return false;
     }
     native_runtime

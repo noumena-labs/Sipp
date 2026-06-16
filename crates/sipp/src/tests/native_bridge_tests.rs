@@ -61,10 +61,6 @@ fn empty_runtime_handle_rejects_required_native_calls() {
         runtime.token_to_piece(1, true),
         Err(Error::RuntimeNotReady)
     ));
-    assert!(matches!(
-        runtime.token_to_piece_bytes(1, true),
-        Err(Error::RuntimeNotReady)
-    ));
     let mut piece_scratch = vec![1, 2, 3];
     assert!(matches!(
         runtime.token_to_piece_bytes_into(1, true, &mut piece_scratch),
