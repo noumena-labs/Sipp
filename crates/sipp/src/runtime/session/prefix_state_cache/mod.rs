@@ -187,7 +187,7 @@ impl PrefixStateCache {
     }
 }
 
-fn prefix_entry_matches(
+pub(super) fn prefix_entry_matches(
     entry: &PrefixCacheEntry,
     model_fingerprint: u64,
     snapshot_scope: &str,
