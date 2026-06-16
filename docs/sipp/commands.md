@@ -73,7 +73,7 @@ to `book/`.
 sipp test list
 sipp test list --group unit --layer interface --cases --search router --format json
 sipp test unit group full
-sipp test unit suite rust-crates --package sipp
+sipp test unit suite rust-crates --package sipp-rs
 sipp test unit suite node-package --backend cpu
 sipp test unit suite browser-package
 sipp test smoke suite example-node --backend cpu

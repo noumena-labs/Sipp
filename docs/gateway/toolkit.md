@@ -14,7 +14,7 @@ listener management.
 ## Distribution
 
 The toolkit crate target is `sipp-gateway`. crates.io publishing covers
-the `sipp` and `sipp-sys` crates; the toolkit is intentionally
+the `sipp-rs` and `sipp-sys` crates; the toolkit is intentionally
 source-distributed. Use [Source Builds](../maintainers/source-builds.md) when
 consuming the toolkit from this checkout.
 
@@ -40,7 +40,7 @@ let bytes = codec.encode_text(&decoded.target, &response)?;
 Custom gateway applications own sockets, route layout, authentication,
 configuration files, target policy, CORS, logging, and deployment defaults.
 Node route handlers can use the matching gateway profile helpers exported by
-`sipp-server` when implementing the same first-party profile in framework
+`@sipp/sipp-server` when implementing the same first-party profile in framework
 routes.
 
 ## Boundaries
@@ -61,4 +61,3 @@ applications that choose them.
 - [Gateway And Hybrid Inference](../guides/gateway-hybrid.md)
 - [Frameworks](../packages/frameworks/README.md)
 - [Source Builds](../maintainers/source-builds.md)
-

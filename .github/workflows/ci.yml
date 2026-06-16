@@ -155,5 +155,10 @@ jobs:
       - name: Doctor core readiness
         run: cargo xtask --plain doctor --target core
 
+      - name: Check public Rust package metadata
+        run: |
+          cargo metadata --no-deps --format-version 1 > /dev/null
+          cargo package -p sipp-sys --allow-dirty --no-verify
+
       - name: Run CI test profile
         run: cargo xtask --plain test unit group full

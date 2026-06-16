@@ -201,7 +201,7 @@ Run deterministic tests through explicit suite and group namespaces.
 
 Examples:
   cargo xtask test unit suite xtask
-  cargo xtask test unit suite rust-crates --package sipp
+  cargo xtask test unit suite rust-crates --package sipp-rs
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test unit group whitebox
   cargo xtask test unit group interface
@@ -239,7 +239,7 @@ Examples:
   cargo xtask test list --group unit --layer interface --cases --search router --format json
   cargo xtask test unit group full
   cargo xtask test unit group whitebox
-  cargo xtask test unit suite rust-crates --package sipp
+  cargo xtask test unit suite rust-crates --package sipp-rs
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test smoke suite example-node --backend cpu
   cargo xtask test smoke suite playground-browser

@@ -1,5 +1,5 @@
 [package]
-name = "sipp"
+name = "sipp-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,9 @@ description = "Unified Rust library for extensible Sipp inference"
 readme = "README.md"
 keywords = ["ai", "llm", "inference", "gguf"]
 categories = ["api-bindings", "science"]
+
+[lib]
+name = "sipp"
 
 [features]
 default = ["native", "gateway", "providers"]

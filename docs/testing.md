@@ -21,7 +21,7 @@ cargo xtask test unit group full
 cargo xtask test unit group whitebox
 cargo xtask test unit group interface
 cargo xtask test unit suite xtask
-cargo xtask test unit suite rust-crates --package sipp
+cargo xtask test unit suite rust-crates --package sipp-rs
 cargo xtask test unit suite browser-package
 cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
@@ -120,7 +120,7 @@ and existing coverage artifacts.
 
 ## Package Locations
 
-- `lib/web` publishes `@noumena-labs/sipp` and public `sipp`.
-- `lib/node` publishes `@noumena-labs/sipp-server` and public `sipp-server`.
+- `lib/web` publishes `@noumena-labs/sipp` and public `@sipp/sipp`.
+- `lib/node` publishes `@noumena-labs/sipp-server` and public `@sipp/sipp-server`.
 - `lib/python` publishes Python `sipp`.
-- `crates/sipp` is the Rust crate used by Rust applications and examples.
+- `crates/sipp` publishes the Rust package `sipp-rs` with library crate `sipp`.

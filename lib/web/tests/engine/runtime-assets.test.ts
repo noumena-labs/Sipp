@@ -88,10 +88,10 @@ test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets
 
 test('getDefaultRuntimeUrls maps public Vite optimized deps back to package wasm assets', () => {
   assert.deepEqual(
-    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/sipp.js?v=123'),
+    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@sipp_sipp.js?v=123'),
     {
-      moduleUrl: 'https://app.test/node_modules/sipp/dist/wasm/sipp-wasm.js',
-      wasmUrl: 'https://app.test/node_modules/sipp/dist/wasm/sipp-wasm.wasm',
+      moduleUrl: 'https://app.test/node_modules/@sipp/sipp/dist/wasm/sipp-wasm.js',
+      wasmUrl: 'https://app.test/node_modules/@sipp/sipp/dist/wasm/sipp-wasm.wasm',
       threading: 'single-thread',
     }
   );

@@ -55,7 +55,7 @@ const SKIPPED_DEMO_TEST_DIRS: &[&str] =
     &["node_modules", "dist", "build", "out", ".vite", "coverage"];
 
 const RUST_CRATE_TEST_TARGETS: &[RustTestTarget] = &[
-    RustTestTarget::lib("sipp"),
+    RustTestTarget::lib("sipp-rs"),
     RustTestTarget::lib("sipp-sys"),
     RustTestTarget::lib("sipp-gateway"),
     RustTestTarget::lib("sipp-binding-dto"),
@@ -70,7 +70,7 @@ const XTASK_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::package("xtask")
 // their real hosts. sipp-wasm is a plain staticlib and runs natively.
 const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::lib("sipp-wasm")];
 const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] =
-    &[RustTestTarget::test("sipp", "public_api")];
+    &[RustTestTarget::test("sipp-rs", "public_api")];
 const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
     &[RustTestTarget::test("sipp-cli", "cli_black_box")];
 
@@ -3628,7 +3628,7 @@ fn rust_target_case_files(ctx: &BuildContext, targets: &[RustTestTarget]) -> Res
 
 fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
     let relative: &[&str] = match package {
-        "sipp" => &["crates", "sipp"],
+        "sipp-rs" => &["crates", "sipp"],
         "sipp-sys" => &["crates", "sys"],
         "sipp-gateway" => &["lib", "gateway"],
         "sipp-binding-dto" => &["lib", "binding-dto"],

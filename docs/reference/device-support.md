@@ -205,10 +205,10 @@ Any GPU that the host browser exposes as a WebGPU adapter may work, but Sipp req
 
 | Package | Install command | Status | Run time | Primary use |
 | --- | --- | --- | --- | --- |
-| Browser (`sipp`) | `npm install sipp` | Published (npm) | WASM / WebGPU | Browser-local GGUF inference, gateway clients |
-| Node.js (`sipp-server`) | `npm install sipp-server` | Published (npm) | N-API native | Server processes, route handlers, backend services |
+| Browser (`@sipp/sipp`) | `npm install @sipp/sipp` | Published (npm) | WASM / WebGPU | Browser-local GGUF inference, gateway clients |
+| Node.js (`@sipp/sipp-server`) | `npm install @sipp/sipp-server` | Published (npm) | N-API native | Server processes, route handlers, backend services |
 | Python (`sipp`) | `pip install sipp` | Published (PyPI) | PyO3 native | Python services, scripts, gateway clients |
-| Rust (`sipp`) | `cargo add sipp` | Source artifact | Pure Rust facade | Rust applications and services |
+| Rust (`sipp-rs`) | `cargo add sipp-rs` | Published (crates.io) | Pure Rust facade | Rust applications and services |
 | Gateway server | Source-built | Source only | Axum binary | HTTP gateway for local and provider targets |
 | Gateway Docker | Docker from source | Source only | Container | Production container workflows |
 | Gateway toolkit | Source artifact | Source only | Rust crate | Custom gateway applications |
@@ -217,7 +217,6 @@ Any GPU that the host browser exposes as a WebGPU adapter may work, but Sipp req
 
 ## Limitations & Work in Progress
 
-* **Rust crates.io publishing** is blocked because `sipp-sys` depends on a private llama.cpp submodule. Only source artifacts are released.
 * **Gateway server** does not have a published binary or public container image yet. It must be built from source.
 * **Windows Docker Vulkan** is not supported. Use the CUDA or CPU profiles on Windows with WSL2.
 * **macOS Docker** is CPU-only. Metal cannot run inside a Linux Docker container.
