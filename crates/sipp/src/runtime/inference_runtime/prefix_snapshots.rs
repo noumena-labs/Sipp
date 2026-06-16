@@ -8,10 +8,6 @@ impl InferenceRuntime {
         &mut self,
         plan: &crate::runtime::scheduler::SharedBatchPlan,
     ) {
-        if !self.scratch_decode_ready_slots.is_empty() {
-            return;
-        }
-
         let mut seen_slots: u64 = 0;
         for contribution in &plan.contributions {
             if contribution.kind != BatchContributionKind::Prefill
