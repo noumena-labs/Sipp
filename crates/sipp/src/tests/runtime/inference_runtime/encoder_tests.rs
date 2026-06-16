@@ -6,9 +6,29 @@ use crate::engine::protocol::{ModelClass, PoolingType};
 use crate::error::Error;
 use crate::runtime::config::NativeRuntimeConfig;
 use crate::runtime::inference_runtime::runtime_tests::test_runtime;
+use crate::runtime::llama::LlamaBatchBuilder;
 use crate::runtime::request::GenerateRequest;
-use crate::runtime::scheduler::{PrefillKind, SlotPhase, TerminalAction};
+use crate::runtime::scheduler::{PrefillKind, SlotPhase, SlotState, TerminalAction};
 use crate::runtime::session::KvCacheAdmission;
+
+fn admitted_encoder_slot(
+    slot_id: usize,
+    request_id: u32,
+    seq_id: i32,
+    prompt_tokens: Vec<i32>,
+) -> SlotState {
+    let mut slot = SlotState::new(slot_id);
+    let mut request = GenerateRequest::new(request_id, "ctx");
+    request.prompt_tokens = prompt_tokens;
+    slot.attach_request(
+        request,
+        KvCacheAdmission {
+            seq_id,
+            ..KvCacheAdmission::default()
+        },
+    );
+    slot
+}
 
 #[test]
 fn text_generation_plan_uses_encoder_prefill_for_encoder_decoder() {
@@ -133,4 +153,52 @@ fn encoder_decoder_rewrite_preserves_source_input_token_count() {
     assert_eq!(request.input_tokens, 3);
     assert_eq!(slot.prefill_cursor, 0);
     assert_eq!(slot.phase, SlotPhase::Prefill);
+}
+
+#[test]
+fn encoder_batch_token_count_sums_admitted_prompt_tokens() {
+    let slots = vec![
+        admitted_encoder_slot(0, 7, 0, vec![11, 12, 13]),
+        admitted_encoder_slot(1, 8, 1, vec![21, 22]),
+    ];
+
+    let token_count =
+        super::encoder_batch_token_count(&slots, &[0, 1]).expect("encoder batch token count");
+
+    assert_eq!(token_count, 5);
+}
+
+#[test]
+fn encoder_batch_token_count_rejects_empty_prompt() {
+    let slots = vec![admitted_encoder_slot(0, 7, 0, Vec::new())];
+
+    let error = super::encoder_batch_token_count(&slots, &[0]).expect_err("empty encoder prompt");
+
+    assert!(matches!(
+        error,
+        Error::InvalidRequest(message) if message.contains("empty token slice")
+    ));
+}
+
+#[test]
+fn encoder_batch_token_count_rejects_missing_sequence_id() {
+    let slots = vec![admitted_encoder_slot(0, 7, -1, vec![11])];
+
+    let error = super::encoder_batch_token_count(&slots, &[0]).expect_err("missing sequence id");
+
+    assert!(matches!(
+        error,
+        Error::InvalidRequest(message) if message.contains("no sequence id")
+    ));
+}
+
+#[test]
+fn add_encoder_prompt_to_batch_appends_all_prompt_tokens() {
+    let slot = admitted_encoder_slot(0, 7, 0, vec![11, 12, 13]);
+    let mut batch = LlamaBatchBuilder::default();
+    batch.ensure_capacity(3, 1).expect("batch capacity");
+
+    super::add_encoder_prompt_to_batch(&mut batch, &slot, 3).expect("add encoder prompt");
+
+    assert_eq!(batch.n_tokens(), 3);
 }

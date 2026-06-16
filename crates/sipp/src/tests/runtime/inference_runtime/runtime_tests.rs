@@ -44,6 +44,7 @@ pub(crate) fn test_runtime(config: NativeRuntimeConfig) -> InferenceRuntime {
         scratch_prefill_ready_slots: Vec::new(),
         scratch_logits_contributions: Vec::new(),
         scratch_embedding_read_slots: Vec::new(),
+        scratch_encoder_embedding_slots: Vec::new(),
         scratch_plan: SharedBatchPlan::default(),
         scratch_token_piece: Vec::new(),
         total_decode_ms: 0.0,
