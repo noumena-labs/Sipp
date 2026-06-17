@@ -77,7 +77,7 @@ See [Runtime Options](../reference/runtime-options.md) for local runtime config
 groups and request option boundaries.
 
 On Intel Macs with integrated GPUs, prefer `SIPP_NODE_BACKEND=cpu`.
-The Metal backend is intended for Apple Silicon and validated AMD Mac GPUs.
+The Metal backend is intended for Apple Silicon and tested AMD Mac GPUs.
 Apple Silicon can run x64 Node through Rosetta 2, but x64 packages are used
 only by an x64 Node process; native arm64 Node should use arm64 packages.
 

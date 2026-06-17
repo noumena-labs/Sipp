@@ -179,15 +179,20 @@ Any GPU with Vulkan 1.2 or later driver support works on Linux and Windows. Test
 
 Windows Docker Desktop does not support the Vulkan backend.
 
+macOS source builds can compile Vulkan through the LunarG SDK, but LunarG's
+macOS drivers translate Vulkan to Metal. Sipp does not publish macOS Vulkan
+packages because the native Metal backend is simpler for normal macOS use and
+macOS Vulkan adds loader/ICD runtime requirements.
+
 ### Metal
 
 * **Apple Silicon:** M1, M2, M3, M4 series
 * **AMD:** GPUs supported by macOS (Radeon Pro series)
 
 Metal is macOS-only and unavailable inside Docker containers. Intel integrated
-GPUs expose Metal, but llama.cpp's Metal path is not a reliable acceleration
-target for them; use the CPU backend on those Macs unless you have validated
-the exact model and device.
+GPUs expose Metal, but Sipp does not treat them as a recommended Metal target;
+use the CPU backend on those Macs unless you have tested the exact model,
+context size, and device and confirmed that Metal is stable and faster than CPU.
 
 Apple Silicon can run x64 processes through Rosetta 2. A `darwin-x64` Node or
 Python native package is only used by an x64 Node/Python process; native arm64

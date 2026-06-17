@@ -95,7 +95,7 @@ backend. See [Runtime Options](../reference/runtime-options.md) for local
 runtime config groups and request option boundaries.
 
 On Intel Macs with integrated GPUs, prefer `SIPP_PYTHON_BACKEND=cpu`.
-The Metal backend is intended for Apple Silicon and validated AMD Mac GPUs.
+The Metal backend is intended for Apple Silicon and tested AMD Mac GPUs.
 Apple Silicon can run x64 Python through Rosetta 2, but x64 wheels are used
 only by an x64 Python process; native arm64 Python should use arm64 wheels.
 

@@ -87,7 +87,7 @@ print(run.result()["text"])
 设置环境变量 `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` 来选择原生后端引擎。关于本地运行时的配置参数与请求选项说明，请参阅[运行时选项](../reference/runtime-options.md)。
 
 Intel 集成显卡的 Mac 建议设置 `SIPP_PYTHON_BACKEND=cpu`。Metal 后端主要面向
-Apple Silicon 和已验证的 AMD Mac GPU。Apple Silicon 可以通过 Rosetta 2
+Apple Silicon 和已测试的 AMD Mac GPU。Apple Silicon 可以通过 Rosetta 2
 运行 x64 Python，但 x64 Wheel 只会被 x64 Python 进程使用；原生 arm64
 Python 应使用 arm64 Wheel。
 

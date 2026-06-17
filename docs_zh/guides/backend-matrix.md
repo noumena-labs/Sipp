@@ -16,8 +16,8 @@ ggml 运算级别的兼容矩阵参考上游的 [llama.cpp GGML 运算表](https
 | `cpu` | 主机 CPU | 浏览器、Node.js、Python、Rust/源码、CLI、网关服务 | 移植性最好的默认后端。原生构建用 ggml CPU；浏览器构建用 WASM CPU。 |
 | `webgpu` | 浏览器 GPU | Browser 包 | 仅限浏览器，通过 `options.backend` 激活。需要浏览器及其底层系统支持 WebGPU。 |
 | `cuda` | NVIDIA GPU | 原生构建、Node.js、Python、CLI、网关服务 | 需本地安装 CUDA Toolkit 和对应 NVIDIA 驱动。xtask 检测状态但不安装 CUDA。 |
-| `metal` | Apple GPU | macOS 原生构建、Node.js、Python、CLI、网关服务 | 仅限 macOS 原生环境。适合 Apple Silicon 和已验证的 AMD Mac；Intel 集成显卡建议使用 CPU。 |
-| `vulkan` | 兼容 Vulkan 的 GPU | 原生构建、Node.js、Python、CLI、网关服务 | 需系统和驱动支持。xtask 会在编译时按需准备 Vulkan SDK。 |
+| `metal` | Apple GPU | macOS 原生构建、Node.js、Python、CLI、网关服务 | 仅限 macOS 原生环境。适合 Apple Silicon 和已测试的 AMD Mac；Intel 集成显卡建议使用 CPU。 |
+| `vulkan` | 兼容 Vulkan 的 GPU | 原生构建、Node.js、Python、CLI、网关服务 | 需系统和驱动支持。xtask 会在编译时按需准备 Vulkan SDK。macOS Vulkan 仅建议源码构建测试，本质上通过 Metal 翻译层运行。 |
 
 上游 llama.cpp/ggml 还支持 BLAS、CANN、OpenCL、SYCL 等后端（可在运算表中看到），但目前 Sipp 官方暴露的后端仅为上述五种。
 
@@ -164,7 +164,8 @@ sipp run llama backend-ops --backend cuda --mode perf --op MUL_MAT
 
 如果需要在现代浏览器中加速，请优先使用 `webgpu`。同时，为不支持 WebGPU 的浏览器或设备保留 CPU 回退逻辑。
 
-针对原生部署：NVIDIA 硬件环境使用 `cuda`；Apple Silicon 或已验证的 AMD
+针对原生部署：NVIDIA 硬件环境使用 `cuda`；Apple Silicon 或已测试的 AMD
 macOS 环境使用 `metal`。Intel 集成显卡的 Mac 建议使用 `cpu`，除非你已经
-为目标模型测过稳定的 Metal 路径。如果需要兼容多厂商的 GPU，并在目标驱动栈
-上验证通过，则使用 `vulkan`。
+为具体模型、上下文长度和设备测试过，并确认 Metal 稳定且快于 CPU。如果需要
+兼容多厂商的 GPU，并在目标驱动栈上测试通过，则使用 `vulkan`。在 macOS 上，
+除非专门测试 LunarG 的 Vulkan-over-Metal 驱动，否则优先使用 Metal。
