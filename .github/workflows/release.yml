@@ -24,6 +24,14 @@ on:
         required: false
         default: true
         type: boolean
+      pypi_wheel_scope:
+        description: Python wheels to publish to PyPI
+        required: true
+        default: macos
+        type: choice
+        options:
+          - macos
+          - all
 
 permissions:
   actions: read
@@ -157,6 +165,7 @@ jobs:
         env:
           PACKAGE: ${{ inputs.package }}
           DRY_RUN: ${{ inputs.dry_run }}
+          PYPI_WHEEL_SCOPE: ${{ inputs.pypi_wheel_scope }}
           VERSION: ${{ steps.versions.outputs.version }}
         run: |
           set -euo pipefail
@@ -183,8 +192,7 @@ jobs:
             local name="$1" version="$2" status
             status=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/$name/$version/json")
             if [ "$status" = "200" ]; then
-              echo "::${level}::$name==$version is already published to PyPI; bump the version before releasing."
-              conflicts=1
+              echo "::warning::$name==$version is already published to PyPI; the upload step uses skip-existing so missing wheel files can still be added."
             else
               echo "$name==$version is not yet on PyPI (status $status)."
             fi
@@ -213,9 +221,13 @@ jobs:
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "python" ]; then
             check_pypi sipp-py "$VERSION"
-            check_pypi sipp-py-backend-cuda "$VERSION"
             check_pypi sipp-py-backend-metal "$VERSION"
-            check_pypi sipp-py-backend-vulkan "$VERSION"
+            if [ "$PYPI_WHEEL_SCOPE" = "all" ]; then
+              check_pypi sipp-py-backend-cuda "$VERSION"
+              check_pypi sipp-py-backend-vulkan "$VERSION"
+            else
+              echo "Skipping CUDA and Vulkan PyPI preflight because pypi_wheel_scope=$PYPI_WHEEL_SCOPE."
+            fi
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "rust" ]; then
             check_crate sipp-sys "$VERSION"
@@ -416,6 +428,7 @@ jobs:
       package: ${{ inputs.package }}
       node-registry: https://registry.npmjs.org
       enforce: true
+      pypi-wheel-scope: ${{ inputs.pypi_wheel_scope }}
 
   node-npm:
     name: Assemble Node npm packages
@@ -664,8 +677,43 @@ jobs:
           mkdir -p .build/release-assets
           cp .build/artifacts/python/*.whl .build/release-assets/
 
+      - name: Stage PyPI upload wheels
+        shell: bash
+        env:
+          PYPI_WHEEL_SCOPE: ${{ inputs.pypi_wheel_scope }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          rm -rf .build/artifacts/pypi
+          mkdir -p .build/artifacts/pypi
+
+          case "$PYPI_WHEEL_SCOPE" in
+            all)
+              wheels=(.build/artifacts/python/*.whl)
+              ;;
+            macos)
+              wheels=(.build/artifacts/python/*macosx*.whl)
+              ;;
+            *)
+              echo "::error::Unsupported pypi_wheel_scope: $PYPI_WHEEL_SCOPE"
+              exit 1
+              ;;
+          esac
+
+          if [ "${#wheels[@]}" -eq 0 ]; then
+            echo "::error::No Python wheels matched pypi_wheel_scope=$PYPI_WHEEL_SCOPE."
+            exit 1
+          fi
+
+          cp "${wheels[@]}" .build/artifacts/pypi/
+          printf 'Staged %s PyPI wheel(s) for scope %s:\n' "${#wheels[@]}" "$PYPI_WHEEL_SCOPE"
+          printf '  %s\n' "${wheels[@]##*/}"
+
       - name: Assert final artifact set
         shell: bash
+        env:
+          PYPI_WHEEL_SCOPE: ${{ inputs.pypi_wheel_scope }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -698,7 +746,19 @@ jobs:
           require_glob "Python CUDA backend wheels" .build/artifacts/python/sipp_py_backend_cuda-*.whl
           require_glob "Python Vulkan backend wheels" .build/artifacts/python/sipp_py_backend_vulkan-*.whl
           require_glob "Python Metal backend wheels" .build/artifacts/python/sipp_py_backend_metal-*.whl
+          require_glob "PyPI upload wheels" .build/artifacts/pypi/*.whl
           require_glob "Rust sipp-sys crate package" .build/release-assets/sipp-sys-*.crate
+
+          if [ "$PYPI_WHEEL_SCOPE" = "macos" ]; then
+            require_glob "PyPI macOS wheels" .build/artifacts/pypi/*macosx*.whl
+            non_macos=(.build/artifacts/pypi/*.whl)
+            for wheel in "${non_macos[@]}"; do
+              if [[ "$(basename "$wheel")" != *macosx* ]]; then
+                echo "::error::Non-macOS wheel staged for macOS-only PyPI upload: $wheel"
+                missing=1
+              fi
+            done
+          fi
 
           exit "$missing"
 
@@ -789,7 +849,7 @@ jobs:
         if: ${{ steps.pypi-auth.outputs.mode == 'token' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: .build/artifacts/python
+          packages-dir: .build/artifacts/pypi
           skip-existing: true
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
@@ -798,7 +858,7 @@ jobs:
         if: ${{ steps.pypi-auth.outputs.mode == 'trusted-publisher' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: .build/artifacts/python
+          packages-dir: .build/artifacts/pypi
           skip-existing: true
 
       - name: Publish Rust facade crate

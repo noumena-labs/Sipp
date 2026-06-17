@@ -46,6 +46,11 @@ on:
         required: false
         default: true
         type: boolean
+      pypi-wheel-scope:
+        description: Python wheels checked against the PyPI upload size budget (all or macos)
+        required: false
+        default: all
+        type: string
       cuda-architectures:
         description: Semicolon-separated CMAKE_CUDA_ARCHITECTURES for CUDA native builds
         required: false
@@ -344,18 +349,46 @@ jobs:
         shell: bash
         env:
           ENFORCE: ${{ inputs.enforce }}
+          PYPI_WHEEL_SCOPE: ${{ inputs.pypi-wheel-scope }}
         run: |
           set -euo pipefail
+
+          case "$PYPI_WHEEL_SCOPE" in
+            all|macos)
+              ;;
+            *)
+              echo "::error::Unsupported pypi-wheel-scope: $PYPI_WHEEL_SCOPE"
+              exit 1
+              ;;
+          esac
+
+          should_check_pypi_size() {
+            local wheel_name="$1"
+            case "$PYPI_WHEEL_SCOPE" in
+              all)
+                return 0
+                ;;
+              macos)
+                [[ "$wheel_name" == *macosx* ]]
+                ;;
+            esac
+          }
+
           for wheel in .build/artifacts/python/*.whl; do
+            wheel_name="$(basename "$wheel")"
+            if ! should_check_pypi_size "$wheel_name"; then
+              echo "$wheel_name is a GitHub release artifact only; skipping PyPI size budget for pypi-wheel-scope=$PYPI_WHEEL_SCOPE."
+              continue
+            fi
             size_mb=$(( $(wc -c < "$wheel") / 1024 / 1024 ))
             if [ "$size_mb" -ge "$SIPP_MAX_WHEEL_MB" ]; then
               if [ "$ENFORCE" = "true" ]; then
-                echo "::error::$(basename "$wheel") is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. Request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries before releasing."
+                echo "::error::$wheel_name is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. Request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries before releasing."
                 exit 1
               fi
-              echo "::warning::$(basename "$wheel") is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. The release workflow will block on this; request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries."
+              echo "::warning::$wheel_name is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. The release workflow will block on this if this wheel is selected for PyPI; request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries."
             else
-              echo "$(basename "$wheel") is ${size_mb} MiB (limit ${SIPP_MAX_WHEEL_MB} MiB)"
+              echo "$wheel_name is ${size_mb} MiB (limit ${SIPP_MAX_WHEEL_MB} MiB)"
             fi
           done
 
