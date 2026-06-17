@@ -7,7 +7,7 @@ use crate::cli::{
     TestSmokeFullGroupArgs, TestSmokeGroupTarget, TestSmokeLlamaArgs, TestSmokeModelArgs,
     TestSmokePlaygroundBrowserArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs,
     TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, TestVerifyArgs,
-    TestVerifyTarget,
+    TestVerifyTarget, WasmThreading,
 };
 use crate::javascript;
 use crate::output;
@@ -166,7 +166,7 @@ const TEST_SUITES: &[TestSuite] = &[
         id: TestSuiteId::PackageTs,
         group: TestGroup::Unit,
         layer: Some(TestUnitLayer::Whitebox),
-        description: "browser package TypeScript tests under lib/web/tests",
+        description: "browser TypeScript tests under lib/web/tests",
         requirements: "bun, wasm build",
         source_roots: PACKAGE_TS_SOURCE_ROOTS,
         coverage: false,
@@ -368,6 +368,7 @@ fn run_unit(sh: &Shell, ctx: &BuildContext, args: &TestUnitArgs) -> Result<()> {
 
     let options = SuiteRunOptions {
         backend: selection.backend,
+        wasm_threading: selection.wasm_threading,
         coverage: !args.no_coverage,
         model: None,
         offline: false,
@@ -414,6 +415,7 @@ fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()>
     };
     let options = SuiteRunOptions {
         backend: selection.backend,
+        wasm_threading: WasmThreading::All,
         coverage: false,
         model: selection.model.as_deref(),
         offline: selection.offline,
@@ -532,8 +534,8 @@ fn run_suite(
             };
             run_rust_target_tests(sh, ctx, targets, package, options.coverage, coverage_state)
         }
-        SuiteRunner::PackageTs => run_package_ts_tests(sh, ctx),
-        SuiteRunner::DemoTs => run_demo_ts_tests(sh, ctx),
+        SuiteRunner::PackageTs => run_package_ts_tests(sh, ctx, options.wasm_threading),
+        SuiteRunner::DemoTs => run_demo_ts_tests(sh, ctx, options.wasm_threading),
         SuiteRunner::NodePackage => {
             run_node_package_tests(sh, ctx, &options.backend, options.coverage)
         }
@@ -958,9 +960,13 @@ fn run_rust_coverage_targets(
     Ok(())
 }
 
-fn run_package_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
-    output::phase("White-box browser package TypeScript tests");
-    targets::wasm::build(sh, ctx)?;
+fn run_package_ts_tests(
+    sh: &Shell,
+    ctx: &BuildContext,
+    wasm_threading: WasmThreading,
+) -> Result<()> {
+    output::phase("White-box browser TypeScript tests");
+    targets::wasm::build(sh, ctx, wasm_threading)?;
     let browser_package_dir = ctx.browser_package_dir();
     let junit_path = suite_case_report_file(ctx, TestSuiteId::PackageTs, "bun-package.xml");
     let _dir = sh.push_dir(&browser_package_dir);
@@ -973,7 +979,7 @@ fn run_package_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     )
 }
 
-fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext, wasm_threading: WasmThreading) -> Result<()> {
     output::phase("White-box browser demo TypeScript tests");
     let tests = demo_test_files(ctx)?;
     if tests.is_empty() {
@@ -983,7 +989,7 @@ fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext) -> Result<()> {
 
     let workspaces = demo_test_workspaces(ctx, &tests)?;
     ensure_javascript_workspace_dependencies(sh, ctx, &workspaces)?;
-    targets::wasm::build(sh, ctx)?;
+    targets::wasm::build(sh, ctx, wasm_threading)?;
 
     output::detail("Test files", tests.len());
     for (index, test) in tests.into_iter().enumerate() {
@@ -1161,7 +1167,7 @@ fn run_browser_example_smoke(
     output::path("Model", &model);
     let example_dir = ctx.browser_example_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, &[example_dir.clone()])?;
-    targets::wasm::build(sh, ctx)?;
+    targets::wasm::build(sh, ctx, WasmThreading::All)?;
     ensure_playwright_chromium(sh, ctx)?;
 
     output::path("Example workspace", &example_dir);
@@ -1199,7 +1205,7 @@ fn run_playground_browser_runtime_smoke(
     output::phase("Playground browser runtime smoke");
     let playground_dir = ctx.playground_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, &[playground_dir.clone()])?;
-    targets::wasm::build(sh, ctx)?;
+    targets::wasm::build(sh, ctx, WasmThreading::All)?;
     ensure_playwright_chromium(sh, ctx)?;
 
     output::path("Playground workspace", &playground_dir);
@@ -2681,13 +2687,25 @@ fn apply_unit_suite_selection(
             selection.suites = vec![suite_by_id(TestSuiteId::RustBindings)?];
             selection.filters = unit_filters("suite", "rust-bindings");
         }
-        TestUnitSuiteTarget::BrowserPackage => {
+        TestUnitSuiteTarget::Browser(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::PackageTs)?];
-            selection.filters = unit_filters("suite", "browser-package");
+            selection.wasm_threading = args.wasm_threading;
+            selection.filters = json!({
+                "command": "unit",
+                "namespace": "suite",
+                "target": "browser",
+                "wasmThreading": args.wasm_threading.as_str(),
+            });
         }
-        TestUnitSuiteTarget::Demos => {
+        TestUnitSuiteTarget::Demos(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::DemoTs)?];
-            selection.filters = unit_filters("suite", "demos");
+            selection.wasm_threading = args.wasm_threading;
+            selection.filters = json!({
+                "command": "unit",
+                "namespace": "suite",
+                "target": "demos",
+                "wasmThreading": args.wasm_threading.as_str(),
+            });
         }
         TestUnitSuiteTarget::Api => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustPublicApi)?];
@@ -2953,7 +2971,7 @@ fn verify_target_suites(target: TestVerifyTarget) -> Result<Vec<&'static TestSui
         TestVerifyTarget::Xtask => Ok(vec![suite_by_id(TestSuiteId::Xtask)?]),
         TestVerifyTarget::Rust => Ok(vec![suite_by_id(TestSuiteId::RustCrates)?]),
         TestVerifyTarget::Bindings => Ok(vec![suite_by_id(TestSuiteId::RustBindings)?]),
-        TestVerifyTarget::BrowserPackage => Ok(vec![suite_by_id(TestSuiteId::PackageTs)?]),
+        TestVerifyTarget::Browser => Ok(vec![suite_by_id(TestSuiteId::PackageTs)?]),
         TestVerifyTarget::Demos => Ok(vec![suite_by_id(TestSuiteId::DemoTs)?]),
         TestVerifyTarget::Api => Ok(vec![suite_by_id(TestSuiteId::RustPublicApi)?]),
         TestVerifyTarget::Cli => Ok(vec![suite_by_id(TestSuiteId::Cli)?]),
@@ -4133,7 +4151,7 @@ impl CaseDiscoverer {
         match self {
             CaseDiscoverer::None => "none",
             CaseDiscoverer::RustTargets(_) => "rust-targets",
-            CaseDiscoverer::PackageTs => "package-ts",
+            CaseDiscoverer::PackageTs => "browser",
             CaseDiscoverer::DemoTs => "demo-ts",
             CaseDiscoverer::NodePackage => "node-package",
             CaseDiscoverer::PythonPackage => "python-package",
@@ -4198,6 +4216,7 @@ struct UnitSelection {
     suites: Vec<&'static TestSuite>,
     package: Option<String>,
     backend: Backend,
+    wasm_threading: WasmThreading,
     filters: Value,
 }
 
@@ -4207,6 +4226,7 @@ impl Default for UnitSelection {
             suites: Vec::new(),
             package: None,
             backend: Backend::Cpu,
+            wasm_threading: WasmThreading::All,
             filters: json!({}),
         }
     }
@@ -4302,6 +4322,7 @@ impl SmokeSelection {
 
 struct SuiteRunOptions<'a> {
     backend: Backend,
+    wasm_threading: WasmThreading,
     coverage: bool,
     model: Option<&'a Path>,
     offline: bool,

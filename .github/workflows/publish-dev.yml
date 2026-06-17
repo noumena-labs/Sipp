@@ -279,7 +279,7 @@ jobs:
           echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
 
       - name: Build and test staged web package
-        run: cargo xtask --plain test unit suite browser-package
+        run: cargo xtask --plain test unit suite browser
 
       - name: Run web package import smoke
         run: |

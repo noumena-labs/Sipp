@@ -13,7 +13,7 @@ use crate::cli::{
     TestSmokeFullGroupArgs, TestSmokeGroupArgs, TestSmokeGroupTarget, TestSmokeModelArgs,
     TestSmokeSuiteArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs, TestUnitCommands,
     TestUnitGroupArgs, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteArgs, TestUnitSuiteTarget,
-    TestVerifyArgs, TestVerifyTarget,
+    TestUnitWasmArgs, TestVerifyArgs, TestVerifyTarget, WasmThreading,
 };
 use crate::test_support::TempDir;
 use crate::utils::BuildContext;
@@ -355,6 +355,29 @@ fn unit_suite_selection_selects_one_suite() {
 }
 
 #[test]
+fn browser_unit_suite_selection_preserves_wasm_threading() {
+    let selection = selected_unit_suites(&TestUnitArgs {
+        no_coverage: true,
+        command: TestUnitCommands::Suite(TestUnitSuiteArgs {
+            target: TestUnitSuiteTarget::Browser(TestUnitWasmArgs {
+                wasm_threading: WasmThreading::SingleThread,
+            }),
+        }),
+    })
+    .unwrap();
+
+    assert_eq!(
+        selection
+            .suites
+            .iter()
+            .map(|suite| suite.id)
+            .collect::<Vec<_>>(),
+        vec![TestSuiteId::PackageTs]
+    );
+    assert_eq!(selection.wasm_threading, WasmThreading::SingleThread);
+}
+
+#[test]
 fn smoke_groups_expand_to_expected_suites() {
     let model_args = TestSmokeModelArgs {
         backend: Backend::Cpu,
@@ -442,7 +465,7 @@ fn smoke_groups_expand_to_expected_suites() {
 #[test]
 fn coverage_rejects_explicit_non_coverage_suites() {
     let args = TestVerifyArgs {
-        target: TestVerifyTarget::BrowserPackage,
+        target: TestVerifyTarget::Browser,
         changed: false,
     };
 
@@ -748,7 +771,7 @@ fn old_test_commands_are_rejected() {
     assert!(Cli::try_parse_from(["xtask", "test", "unit", "xtask"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "unit", "rust"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "unit", "bindings"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "browser-package"]).is_err());
+    assert!(Cli::try_parse_from(["xtask", "test", "unit", "browser"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "unit", "demos"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "unit", "api"]).is_err());
     assert!(Cli::try_parse_from(["xtask", "test", "unit", "cli"]).is_err());
@@ -1054,5 +1077,5 @@ fn formatting_helpers_are_platform_and_overflow_safe() {
 fn backend_and_discoverer_labels_are_stable() {
     assert_eq!(test_backends(&Backend::Cpu), vec![Backend::Cpu]);
     assert_eq!(CaseDiscoverer::None.as_str(), "none");
-    assert_eq!(CaseDiscoverer::PackageTs.as_str(), "package-ts");
+    assert_eq!(CaseDiscoverer::PackageTs.as_str(), "browser");
 }

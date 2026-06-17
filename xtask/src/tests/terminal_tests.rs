@@ -143,7 +143,7 @@ fn inline_empty_output_shows_active_status_and_recent_activity() {
     renderer.activity.push_back(ActivityLine {
         kind: LineKind::Run,
         label: "RUN",
-        text: "Running suite browser-package".to_owned(),
+        text: "Running suite browser".to_owned(),
     });
     renderer.activity.push_back(ActivityLine {
         kind: LineKind::Run,
@@ -154,7 +154,7 @@ fn inline_empty_output_shows_active_status_and_recent_activity() {
     let text = frame_text(&renderer.build_frame());
 
     assert!(text.contains("Building browser package"));
-    assert!(text.contains("Running suite browser-package"));
+    assert!(text.contains("Running suite browser"));
     assert!(!text.contains("no output emitted yet"));
 }
 
@@ -169,7 +169,7 @@ fn inline_and_visual_helpers_are_deterministic() {
 
 fn test_renderer() -> InlineRenderer {
     InlineRenderer {
-        command_label: "test unit suite browser-package".to_owned(),
+        command_label: "test unit suite browser".to_owned(),
         origin_y: 0,
         height: 12,
         width: 100,

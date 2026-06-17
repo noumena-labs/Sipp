@@ -22,8 +22,8 @@ cargo xtask test unit group whitebox
 cargo xtask test unit group interface
 cargo xtask test unit suite xtask
 cargo xtask test unit suite rust-crates --package sipp-rs
-cargo xtask test unit suite browser-package
-cargo xtask test unit suite demos
+cargo xtask test unit suite browser --wasm-threading single-thread
+cargo xtask test unit suite demos --wasm-threading single-thread
 cargo xtask test unit suite node-package --backend cpu
 cargo xtask test unit suite python-package --backend cpu
 cargo xtask test smoke suite example-node --backend cpu
@@ -52,7 +52,7 @@ Unit suite names expose suite-specific options, such as
 | `cargo xtask test unit suite xtask` | xtask CLI and orchestration tests | `xtask/src/tests` |
 | `cargo xtask test unit suite rust-crates` | Workspace crate unit tests | `crates`, `lib/gateway`, `apps` |
 | `cargo xtask test unit suite rust-bindings` | Rust binding crate unit tests | `bindings/node`, `bindings/python`, `bindings/wasm` |
-| `cargo xtask test unit suite browser-package` | Browser package TypeScript tests | `lib/web/tests` |
+| `cargo xtask test unit suite browser` | Browser TypeScript tests | `lib/web/tests` |
 | `cargo xtask test unit suite demos` | Browser demo TypeScript tests | `demos` |
 | `cargo xtask test unit suite api` | Crate-level public API integration tests | `crates/sipp/tests` |
 | `cargo xtask test unit suite cli` | CLI black-box integration tests | `apps/cli/tests` |
@@ -63,9 +63,13 @@ Unit suite names expose suite-specific options, such as
 
 | Command | Suites |
 | --- | --- |
-| `cargo xtask test unit group whitebox` | `xtask`, `rust-crates`, `rust-bindings`, `browser-package`, and `demos` |
+| `cargo xtask test unit group whitebox` | `xtask`, `rust-crates`, `rust-bindings`, `browser`, and `demos` |
 | `cargo xtask test unit group interface` | `api`, `cli`, `node-package`, and `python-package` |
 | `cargo xtask test unit group full` | Every deterministic unit suite |
+
+Browser and demo unit suites accept `--wasm-threading single-thread|pthread|all`.
+CI uses `single-thread` to keep source validation fast. Release package builds
+continue to use `cargo xtask build wasm`, whose default is `all`.
 
 `test smoke` owns holistic integration checks. It is split into explicit
 namespaces:
