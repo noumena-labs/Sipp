@@ -29,13 +29,6 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
 
       - name: Cache Cargo and xtask outputs
         uses: actions/cache@v5.0.5
@@ -50,10 +43,62 @@ jobs:
             cargo-public-ci-${{ runner.os }}-
 
       - name: Run public contributor test profile
-        run: cargo xtask --plain test unit suite xtask
+        run: cargo xtask --plain test unit --no-coverage suite xtask
 
-  internal-validate:
-    name: Internal CI gate
+  internal-rust:
+    name: Internal Rust tests
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Set up compiler cache
+        if: ${{ runner.os != 'Windows' }}
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: ci-rust
+          max-size: 3G
+
+      - name: Cache Cargo and native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-ci-rust-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-ci-rust-${{ runner.os }}-
+
+      - name: Doctor core readiness
+        run: cargo xtask --plain doctor --target core
+
+      - name: Check public Rust package metadata
+        run: |
+          cargo metadata --no-deps --format-version 1 > /dev/null
+          cargo package -p sipp-sys --allow-dirty --no-verify
+
+      - name: Run Rust unit suites
+        run: |
+          cargo xtask --plain test unit --no-coverage suite xtask
+          cargo xtask --plain test unit --no-coverage suite rust-crates
+          cargo xtask --plain test unit --no-coverage suite rust-bindings
+          cargo xtask --plain test unit --no-coverage suite api
+          cargo xtask --plain test unit --no-coverage suite cli
+
+  internal-browser:
+    name: Internal browser tests
     if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     env:
@@ -68,12 +113,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-emscripten
-          components: rust-src, llvm-tools-preview
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
+          components: rust-src
 
       - name: Set up Node
         uses: actions/setup-node@v6.4.0
@@ -92,7 +132,7 @@ jobs:
         if: ${{ runner.os != 'Windows' }}
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
-          key: ci-internal
+          key: ci-browser
           max-size: 3G
 
       - name: Set up Emscripten
@@ -109,9 +149,9 @@ jobs:
             .build/cargo
             .build/cmake
             .build/c
-          key: cargo-ci-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          key: cargo-ci-browser-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
           restore-keys: |
-            cargo-ci-${{ runner.os }}-
+            cargo-ci-browser-${{ runner.os }}-
 
       - name: Cache JavaScript dependencies
         uses: actions/cache@v5.0.5
@@ -120,14 +160,11 @@ jobs:
             ~/.bun/install/cache
             node_modules
             lib/web/node_modules
-            lib/node/node_modules
-            bindings/node/node_modules
             demos/*/node_modules
-            tools/*/node_modules
             examples/web/node_modules
-          key: bun-ci-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'lib/node/package.json', 'lib/web/package.json', 'bindings/node/package.json', 'demos/*/package.json', 'tools/*/package.json', 'examples/web/package.json') }}
+          key: bun-ci-browser-${{ runner.os }}-${{ hashFiles('bun.lock', 'package.json', 'lib/web/package.json', 'demos/*/package.json', 'examples/web/package.json') }}
           restore-keys: |
-            bun-ci-${{ runner.os }}-
+            bun-ci-browser-${{ runner.os }}-
 
       - name: Cache xtask toolchains
         uses: actions/cache@v5.0.5
@@ -135,30 +172,165 @@ jobs:
           path: |
             .build/toolchain
             .build/uv-cache
-          key: xtask-toolchain-ci-${{ runner.os }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          key: xtask-toolchain-ci-browser-${{ runner.os }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
           restore-keys: |
-            xtask-toolchain-ci-${{ runner.os }}-
-
-      - name: Cache sample models
-        uses: actions/cache@v5.0.5
-        with:
-          path: .build/models
-          key: sample-models-ci-${{ runner.os }}-${{ hashFiles('xtask/src/sample_model.rs') }}
-          restore-keys: |
-            sample-models-ci-${{ runner.os }}-
+            xtask-toolchain-ci-browser-${{ runner.os }}-
 
       - name: Install JavaScript workspace dependencies
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun install --frozen-lockfile
 
-      - name: Doctor core readiness
-        run: cargo xtask --plain doctor --target core
-
-      - name: Check public Rust package metadata
+      - name: Run browser unit suites
         run: |
-          cargo metadata --no-deps --format-version 1 > /dev/null
-          cargo package -p sipp-sys --allow-dirty --no-verify
+          cargo xtask --plain test unit --no-coverage suite browser-package
+          cargo xtask --plain test unit --no-coverage suite demos
 
-      - name: Run CI test profile
-        run: cargo xtask --plain test unit group full
+  internal-node:
+    name: Internal Node tests
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.3.11
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Set up compiler cache
+        if: ${{ runner.os != 'Windows' }}
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: ci-node
+          max-size: 3G
+
+      - name: Cache Cargo and native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-ci-node-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-ci-node-${{ runner.os }}-
+
+      - name: Cache JavaScript dependencies
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+            lib/node/node_modules
+            bindings/node/node_modules
+          key: bun-ci-node-${{ runner.os }}-${{ hashFiles('bun.lock', 'bindings/node/bun.lock', 'package.json', 'lib/node/package.json', 'bindings/node/package.json') }}
+          restore-keys: |
+            bun-ci-node-${{ runner.os }}-
+
+      - name: Cache xtask toolchains
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            .build/toolchain
+            .build/uv-cache
+          key: xtask-toolchain-ci-node-${{ runner.os }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          restore-keys: |
+            xtask-toolchain-ci-node-${{ runner.os }}-
+
+      - name: Install JavaScript workspace dependencies
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun install --frozen-lockfile
+
+      - name: Run Node package unit suite
+        run: cargo xtask --plain test unit --no-coverage suite node-package --backend cpu
+
+  internal-python:
+    name: Internal Python tests
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Set up compiler cache
+        if: ${{ runner.os != 'Windows' }}
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: ci-python
+          max-size: 3G
+
+      - name: Cache Cargo and native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-ci-python-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-ci-python-${{ runner.os }}-
+
+      - name: Cache xtask toolchains
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            .build/toolchain
+            .build/uv-cache
+          key: xtask-toolchain-ci-python-${{ runner.os }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          restore-keys: |
+            xtask-toolchain-ci-python-${{ runner.os }}-
+
+      - name: Run Python package unit suite
+        run: cargo xtask --plain test unit --no-coverage suite python-package --backend cpu
+
+  internal-validate:
+    name: Internal CI gate
+    if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    runs-on: ubuntu-latest
+    needs:
+      - internal-rust
+      - internal-browser
+      - internal-node
+      - internal-python
+    steps:
+      - name: Check internal job results
+        env:
+          RUST_RESULT: ${{ needs.internal-rust.result }}
+          BROWSER_RESULT: ${{ needs.internal-browser.result }}
+          NODE_RESULT: ${{ needs.internal-node.result }}
+          PYTHON_RESULT: ${{ needs.internal-python.result }}
+        run: |
+          set -euo pipefail
+          if [ "$RUST_RESULT" != "success" ] || [ "$BROWSER_RESULT" != "success" ] || [ "$NODE_RESULT" != "success" ] || [ "$PYTHON_RESULT" != "success" ]; then
+            echo "::error::Internal CI failed: rust=$RUST_RESULT browser=$BROWSER_RESULT node=$NODE_RESULT python=$PYTHON_RESULT"
+            exit 1
+          fi
+          echo "Internal CI passed."
