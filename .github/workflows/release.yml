@@ -91,6 +91,7 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN_PRESENT: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
           NPM_TOKEN_PRESENT: ${{ secrets.NPM_TOKEN != '' }}
+          PYPI_API_TOKEN_PRESENT: ${{ secrets.PYPI_API_TOKEN != '' }}
         run: |
           set -euo pipefail
           missing=0
@@ -100,6 +101,10 @@ jobs:
           fi
           if [ "$CARGO_REGISTRY_TOKEN_PRESENT" != "true" ]; then
             echo "::error::CARGO_REGISTRY_TOKEN is required to publish sipp-rs and sipp-sys to crates.io."
+            missing=1
+          fi
+          if [ "$PYPI_API_TOKEN_PRESENT" != "true" ]; then
+            echo "::error::PYPI_API_TOKEN is required for the first PyPI release."
             missing=1
           fi
           exit "$missing"
