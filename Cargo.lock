@@ -2029,19 +2029,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sipp-py"
-version = "0.1.0"
-dependencies = [
- "futures",
- "pyo3",
- "serde",
- "serde_json",
- "sipp-binding-dto",
- "sipp-rs",
- "tokio",
-]
-
-[[package]]
 name = "sipp-rs"
 version = "0.1.0"
 dependencies = [
@@ -2090,6 +2077,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "sipp-rs",
+]
+
+[[package]]
+name = "sipppy"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pyo3",
+ "serde",
+ "serde_json",
+ "sipp-binding-dto",
+ "sipp-rs",
+ "tokio",
 ]
 
 [[package]]

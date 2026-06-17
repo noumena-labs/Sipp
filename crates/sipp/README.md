@@ -96,7 +96,7 @@ a separate Sipp gateway.
 
 ## Learn More
 
-- [Rust package docs](../../docs/packages/rust.md)
-- [Local inference](../../docs/guides/local-inference.md)
-- [Gateway and hybrid inference](../../docs/guides/gateway-hybrid.md)
+- [Rust package docs](../../docs/en/packages/rust.md)
+- [Local inference](../../docs/en/guides/local-inference.md)
+- [Gateway and hybrid inference](../../docs/en/guides/gateway-hybrid.md)
 - [Rust examples](../../examples/rust/README.md)

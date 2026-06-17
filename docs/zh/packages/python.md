@@ -1,28 +1,28 @@
 # Python 包
 
-Python 包的 wheel 名称为 `sippy`，Python 代码导入 `sipp` 模块。它提供原生描述符类、运行句柄和 Token 流式传输，采用与 Rust 客户端相同的端点模型。
+Python 包发布名称为 `sipppy`。它安装的导入包名仍然是 `sipp`，并提供原生描述符类、运行句柄和 Token 流式传输，采用与 Rust 客户端相同的端点模型。
+
+已发布的 Wheel 需要 Python 3.10 或更新版本。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api)。
 
 ## 安装
 
-> [!NOTE]
-> 目前 Python wheel 通过项目的 GitHub Releases 分发，尚未发布到 PyPI。我们正在准备完整的 PyPI 发布，并提供完整的构建矩阵（涵盖各操作系统、架构与 Python 版本的 CPU 与 GPU 后端，类似 PyTorch 的分发矩阵）。包名 `sippy` 导入名保持稳定，仅分发渠道会发生变化。
-
-从 [GitHub Releases](https://github.com/noumena-labs/Sipp/releases) 页面下载与你的平台、Python 版本和后端匹配的 `sippy` wheel，然后用 pip 安装。默认 wheel 包含 CPU 后端：
-
-```bash
-pip install ./sippy-<version>-<python>-<platform>.whl
-```
-
-GPU 后端在同一发布中作为独立的后端 wheel 提供。请将与硬件匹配的后端 wheel 与基础 `sipppy` wheel 一起安装。
-
-PyPI 发布上线后，将使用标准的 extras 语法安装。默认 wheel 包含 CPU 后端，每个 extra 会拉取同一发布版本中匹配的 GPU 后端 wheel：
-
 ```bash
 pip install sipppy
-
 ```
+
+默认 Wheel 包含 CPU 后端。已发布到 PyPI 的 GPU 后端通过 extras 安装：
+
+```bash
+pip install "sipppy[vulkan]"
+pip install "sipppy[metal]"
+```
+
+后端 Wheel 是独立的 PyPI 分发包。例如，`sipppy[vulkan]` 会安装主
+`sipppy` Wheel 以及同版本的 `sipppy-backend-vulkan` Wheel。Python
+代码仍然使用 `from sipp import ...`。首个公开版本的 CUDA 后端 Wheel
+会附在 GitHub Release 中；待 PyPI 文件大小限制提升后再发布到 PyPI。
 
 ## 适用场景
 
@@ -85,6 +85,11 @@ print(run.result()["text"])
 ```
 
 设置环境变量 `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` 来选择原生后端引擎。关于本地运行时的配置参数与请求选项说明，请参阅[运行时选项](../reference/runtime-options.md)。
+
+Intel 集成显卡的 Mac 建议设置 `SIPP_PYTHON_BACKEND=cpu`。Metal 后端主要面向
+Apple Silicon 和已测试的 AMD Mac GPU。Apple Silicon 可以通过 Rosetta 2
+运行 x64 Python，但 x64 Wheel 只会被 x64 Python 进程使用；原生 arm64
+Python 应使用 arm64 Wheel。
 
 ## 网关推理
 

@@ -1,9 +1,9 @@
 # Sipp Python Package
 
-`lib/python` is the Python package source for the public `sippy` wheel
-(imported as `sipp`). It loads the best available native backend and exposes
-descriptor classes for local GGUF models, gateway endpoints, and provider
-endpoints.
+`lib/python` is the Python package source for the public `sipppy`
+distribution. It installs the import package `sipp`, loads the best available
+native backend, and exposes descriptor classes for local GGUF models, gateway
+endpoints, and provider endpoints.
 
 Text and embedding calls return run handles. Call `.result()` for the final
 response and `.tokens()` for streamed text batches.
@@ -20,9 +20,11 @@ sipp build python --backend cpu && python examples/python/query.py <model.gguf> 
 if the launcher is not active.
 
 Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
-The `sipppy`.
-Wheels currently ship from GitHub Releases while the full PyPI build matrix is
-in progress.
+Published wheels install the CPU-capable `sipppy` distribution by default.
+PyPI-published GPU backends are optional extras, for example
+`pip install "sipppy[vulkan]"` or `pip install "sipppy[metal]"`. CUDA
+backend wheels are attached to GitHub releases until the PyPI file-size limit
+is raised.
 
 ## Local GGUF Query
 
@@ -72,7 +74,7 @@ separate Sipp gateway.
 
 ## Learn More
 
-- [Python package docs](../../docs/packages/python.md)
-- [Local inference](../../docs/guides/local-inference.md)
-- [Gateway and hybrid inference](../../docs/guides/gateway-hybrid.md)
+- [Python package docs](../../docs/en/packages/python.md)
+- [Local inference](../../docs/en/guides/local-inference.md)
+- [Gateway and hybrid inference](../../docs/en/guides/gateway-hybrid.md)
 - [Python examples](../../examples/python/README.md)

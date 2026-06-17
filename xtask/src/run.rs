@@ -14,7 +14,7 @@ use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::targets;
 use crate::toolchains::env::apply_toolchains;
-use crate::toolchains::python::{apply_uv_env, setup_uv};
+use crate::toolchains::python::{apply_uv_env, ensure_python, setup_uv, PYTHON_BUILD_VERSION};
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::env;
@@ -910,10 +910,7 @@ fn gateway_client_addr(bind: &str) -> String {
 fn build_python_gateway_run_wheel(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
     let backend = Backend::Cpu;
     let uv_exe = setup_uv(sh, ctx)?;
-    output::run_build_command(
-        "Ensuring Python 3.12 is available through uv",
-        apply_uv_env(ctx, cmd!(sh, "{uv_exe} python install 3.12")),
-    )?;
+    ensure_python(sh, ctx, &uv_exe)?;
 
     let python_dir = ctx.python_package_project_dir();
     let dist_dir = ctx.python_artifacts_dir().join("gateway-run-wheels");
@@ -928,7 +925,7 @@ fn build_python_gateway_run_wheel(sh: &Shell, ctx: &BuildContext) -> Result<Path
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run maturin build --release --out {dist_dir}"
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --strip --out {dist_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
@@ -953,7 +950,10 @@ fn install_python_gateway_run_venv(
         "Creating Python gateway run virtual environment",
         apply_uv_env(
             ctx,
-            cmd!(sh, "{uv_exe} venv --clear --python 3.12 {venv_dir}"),
+            cmd!(
+                sh,
+                "{uv_exe} venv --clear --python {PYTHON_BUILD_VERSION} {venv_dir}"
+            ),
         ),
     )?;
     let python_exe = python_venv_exe(&venv_dir);

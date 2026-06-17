@@ -104,5 +104,5 @@ cargo xtask test verify --changed
 
 - `lib/web` 构建并发布 `@noumena-labs/sipp` 及公开浏览器包 `@sipp/sipp`。
 - `lib/node` 构建并发布 `@noumena-labs/sipp-server` 及公开 Node 服务端包 `@sipp/sipp-server`。
-- `lib/python` 构建并发布 Python 分发包 `sipp-py`，导入包名仍为 `sipp`。
+- `lib/python` 构建并发布 Python 分发包 `sipppy`，导入包名仍为 `sipp`。
 - `crates/sipp` 发布 Rust 包 `sipp-rs`，库 crate 名仍为 `sipp`。

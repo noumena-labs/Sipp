@@ -14,7 +14,7 @@ use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::targets;
 use crate::toolchains::env::apply_toolchains;
-use crate::toolchains::python::{apply_uv_env, setup_uv};
+use crate::toolchains::python::{apply_uv_env, ensure_python, setup_uv, PYTHON_BUILD_VERSION};
 use crate::utils::{ensure_playwright_chromium, BuildContext};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -1076,7 +1076,10 @@ fn run_python_package_tests(
         "Creating Python test virtual environment",
         apply_uv_env(
             ctx,
-            cmd!(sh, "{uv_exe} venv --clear --python 3.12 {venv_dir}"),
+            cmd!(
+                sh,
+                "{uv_exe} venv --clear --python {PYTHON_BUILD_VERSION} {venv_dir}"
+            ),
         ),
     )?;
     let python_exe = python_venv_exe(&venv_dir);
@@ -1388,7 +1391,10 @@ fn run_python_generation_smoke(
         "Creating Python smoke virtual environment",
         apply_uv_env(
             ctx,
-            cmd!(sh, "{uv_exe} venv --clear --python 3.12 {venv_dir}"),
+            cmd!(
+                sh,
+                "{uv_exe} venv --clear --python {PYTHON_BUILD_VERSION} {venv_dir}"
+            ),
         ),
     )?;
     let python_exe = python_venv_exe(&venv_dir);
@@ -1535,7 +1541,10 @@ fn run_python_gateway_smoke(
         "Creating Python gateway smoke virtual environment",
         apply_uv_env(
             ctx,
-            cmd!(sh, "{uv_exe} venv --clear --python 3.12 {venv_dir}"),
+            cmd!(
+                sh,
+                "{uv_exe} venv --clear --python {PYTHON_BUILD_VERSION} {venv_dir}"
+            ),
         ),
     )?;
     let python_exe = python_venv_exe(&venv_dir);
@@ -3489,10 +3498,7 @@ fn test_backends(backend: &Backend) -> Vec<Backend> {
 
 fn build_python_test_wheel(sh: &Shell, ctx: &BuildContext, backend: &Backend) -> Result<PathBuf> {
     let uv_exe = setup_uv(sh, ctx)?;
-    output::run_build_command(
-        "Ensuring Python 3.12 is available through uv",
-        apply_uv_env(ctx, cmd!(sh, "{uv_exe} python install 3.12")),
-    )?;
+    ensure_python(sh, ctx, &uv_exe)?;
 
     let python_dir = ctx.python_package_project_dir();
     let dist_dir = ctx.python_artifacts_dir().join("test-wheels");
@@ -3507,7 +3513,7 @@ fn build_python_test_wheel(sh: &Shell, ctx: &BuildContext, backend: &Backend) ->
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run maturin build --release --out {dist_dir}"
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --strip --out {dist_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
@@ -3654,7 +3660,7 @@ fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
         "sipp-cli" => &["apps", "cli"],
         "xtask" => &["xtask"],
         "sipp-napi" => &["bindings", "node"],
-        "sipp-py" => &["bindings", "python"],
+        "sipppy" => &["bindings", "python"],
         "sipp-wasm" => &["bindings", "wasm"],
         _ => anyhow::bail!("unknown Rust test package: {package}"),
     };

@@ -23,8 +23,8 @@ truth for per-operation support.
 | `cpu` | Host CPU | Browser, Node.js, Python, Rust/source, CLI, gateway server | Portable default. Native builds use ggml CPU; browser builds use WASM CPU with the browser runtime. |
 | `webgpu` | Browser GPU through WebGPU | Browser package | Browser-only. Selected with browser local endpoint `options.backend`; requires a WebGPU-capable browser and adapter. |
 | `cuda` | NVIDIA GPU | Native source builds, Node.js, Python, CLI, gateway server | Requires a local CUDA Toolkit and compatible NVIDIA driver. xtask reports CUDA readiness but does not install CUDA. |
-| `metal` | Apple GPU through Metal | Native source builds, Node.js, Python, CLI, gateway server on macOS | macOS-only native backend. |
-| `vulkan` | GPU through Vulkan | Native source builds, Node.js, Python, CLI, gateway server | Requires a Vulkan-capable system and driver. xtask can bootstrap the Vulkan SDK for builds. |
+| `metal` | Apple GPU through Metal | Native source builds, Node.js, Python, CLI, gateway server on macOS | macOS-only native backend. Best for Apple Silicon and tested AMD Macs; use CPU on Intel integrated GPUs. |
+| `vulkan` | GPU through Vulkan | Native source builds, Node.js, Python, CLI, gateway server | Requires a Vulkan-capable system and driver. xtask can bootstrap the Vulkan SDK for builds. macOS Vulkan is source-build only and runs through a Metal translation layer. |
 
 Upstream llama.cpp/ggml supports more backend families than Sipp currently
 exposes as package/runtime selectors, including BLAS, CANN, OpenCL, SYCL,
@@ -203,6 +203,9 @@ Use `webgpu` for browser-local acceleration when the application can require a
 modern WebGPU browser. Keep a CPU fallback for browsers, drivers, and devices
 that do not expose a compatible adapter.
 
-Use `cuda` for NVIDIA-heavy native deployments, `metal` for macOS native
-deployments, and `vulkan` when you want a cross-vendor native GPU path and have
-validated the target driver stack.
+Use `cuda` for NVIDIA-heavy native deployments and `metal` for Apple Silicon or
+tested AMD macOS deployments. On Intel Macs with integrated GPUs, use `cpu`
+unless the exact model, context size, and device have been tested and Metal is
+stable and faster than CPU. Use `vulkan` when you want a cross-vendor native GPU
+path and have tested the target driver stack. On macOS, prefer Metal over Vulkan
+unless you are specifically testing LunarG's Vulkan-over-Metal drivers.

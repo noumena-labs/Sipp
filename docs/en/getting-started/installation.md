@@ -12,6 +12,9 @@ or `embed`.
 | Browser | `npm install @sipp/sipp` | Browser-local GGUF inference and browser gateway clients. |
 | Node.js | `npm install @sipp/sipp-server` | Server-side local inference and framework route handlers. |
 | Python | `pip install sipppy` | Python scripts, services, and gateway clients. |
+| Python CUDA | GitHub release wheel | Python local inference with CUDA backend wheels. |
+| Python Vulkan | `pip install "sipppy[vulkan]"` | Python local inference with Vulkan backend wheels. |
+| Python Metal | `pip install "sipppy[metal]"` | Python local inference with Metal backend wheels on macOS. |
 | Rust | `cargo add sipp-rs` | Rust applications and services. |
 
 The current release workflow publishes browser npm, Node npm, Python wheels,
@@ -24,6 +27,7 @@ added.
 
 - Local inference needs a compatible GGUF model file or browser-served GGUF
   asset.
+- Python wheels require Python 3.10 or newer.
 - Browser-local inference needs a modern browser with WebAssembly support;
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
 - Node installs use `@sipp/sipp-server`; npm resolves the matching optional

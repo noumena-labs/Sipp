@@ -3,10 +3,10 @@ requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
 
 [project]
-name = "sipp-py-backend-vulkan"
+name = "sipppy-backend-vulkan"
 version = "0.1.0"
 description = "Native Vulkan backend for Sipp Python"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 
 [tool.maturin]

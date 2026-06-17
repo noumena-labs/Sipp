@@ -46,10 +46,15 @@ on:
         required: false
         default: true
         type: boolean
-      cuda-architectures:
-        description: Optional semicolon-separated CMAKE_CUDA_ARCHITECTURES override
+      pypi-wheel-scope:
+        description: Python wheels checked against the PyPI upload size budget (all, non-cuda, or macos)
         required: false
-        default: ""
+        default: all
+        type: string
+      cuda-architectures:
+        description: Semicolon-separated CMAKE_CUDA_ARCHITECTURES for CUDA native builds
+        required: false
+        default: "75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real"
         type: string
       release-lto:
         description: Cargo release-profile LTO setting for native package builds
@@ -83,7 +88,6 @@ jobs:
     timeout-minutes: 300
     env:
       SIPP_CUDA_ARCHITECTURES: ${{ inputs.cuda-architectures }}
-      SIPP_PYTHON_GPU_AUDITWHEEL: ${{ inputs.enforce == false && 'warn' || '' }}
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ inputs.release-codegen-units }}
     strategy:
@@ -305,10 +309,10 @@ jobs:
           backends = [backend.strip() for backend in os.environ["BACKENDS"].split(",") if backend.strip()]
           wheels = glob.glob(".build/artifacts/python/*.whl")
           expected = {
-              "cpu": ("sipp_py", "sipp/_native"),
-              "cuda": ("sipp_py_backend_cuda", "sipp_backend_cuda/_native"),
-              "metal": ("sipp_py_backend_metal", "sipp_backend_metal/_native"),
-              "vulkan": ("sipp_py_backend_vulkan", "sipp_backend_vulkan/_native"),
+              "cpu": ("sipppy", "sipp/_native"),
+              "cuda": ("sipppy_backend_cuda", "sipp_backend_cuda/_native"),
+              "metal": ("sipppy_backend_metal", "sipp_backend_metal/_native"),
+              "vulkan": ("sipppy_backend_vulkan", "sipp_backend_vulkan/_native"),
           }
           missing = []
           for backend in backends:
@@ -345,18 +349,49 @@ jobs:
         shell: bash
         env:
           ENFORCE: ${{ inputs.enforce }}
+          PYPI_WHEEL_SCOPE: ${{ inputs.pypi-wheel-scope }}
         run: |
           set -euo pipefail
+
+          case "$PYPI_WHEEL_SCOPE" in
+            all|non-cuda|macos)
+              ;;
+            *)
+              echo "::error::Unsupported pypi-wheel-scope: $PYPI_WHEEL_SCOPE"
+              exit 1
+              ;;
+          esac
+
+          should_check_pypi_size() {
+            local wheel_name="$1"
+            case "$PYPI_WHEEL_SCOPE" in
+              all)
+                return 0
+                ;;
+              macos)
+                [[ "$wheel_name" == *macosx* ]]
+                ;;
+              non-cuda)
+                [[ "$wheel_name" != sipppy_backend_cuda-* ]]
+                ;;
+            esac
+          }
+
           for wheel in .build/artifacts/python/*.whl; do
+            wheel_name="$(basename "$wheel")"
+            if ! should_check_pypi_size "$wheel_name"; then
+              echo "$wheel_name is a GitHub release artifact only; skipping PyPI size budget for pypi-wheel-scope=$PYPI_WHEEL_SCOPE."
+              continue
+            fi
             size_mb=$(( $(wc -c < "$wheel") / 1024 / 1024 ))
             if [ "$size_mb" -ge "$SIPP_MAX_WHEEL_MB" ]; then
               if [ "$ENFORCE" = "true" ]; then
-                echo "::error::$(basename "$wheel") is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. Request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries before releasing."
+                echo "::error::$wheel_name is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. Request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries before releasing."
                 exit 1
               fi
-              echo "::warning::$(basename "$wheel") is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. The release workflow will block on this; request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries."
+              echo "::warning::$wheel_name is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. The release workflow will block on this if this wheel is selected for PyPI; request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries."
             else
-              echo "$(basename "$wheel") is ${size_mb} MiB (limit ${SIPP_MAX_WHEEL_MB} MiB)"
+              echo "$wheel_name is ${size_mb} MiB (limit ${SIPP_MAX_WHEEL_MB} MiB)"
             fi
           done
 
@@ -369,7 +404,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then
             uv_exe=".build/toolchain/uv/uv.exe"
           fi
-          run_cmd=("$uv_exe" run --no-project --python 3.12)
+          run_cmd=("$uv_exe" run --no-project --python 3.10)
           for wheel in .build/artifacts/python/*.whl; do
             run_cmd+=(--with "$wheel")
           done
@@ -394,6 +429,54 @@ jobs:
       - name: Build Rust core on host
         if: ${{ inputs.package == 'all' && matrix.id == 'linux-x64' }}
         run: cargo xtask --plain build core
+
+      - name: Summarize native build logs on failure
+        if: ${{ failure() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $summary = $env:GITHUB_STEP_SUMMARY
+          Add-Content -Path $summary -Value "### Native build logs (${{ matrix.id }})"
+          if (!(Test-Path ".build/logs")) {
+            Add-Content -Path $summary -Value ""
+            Add-Content -Path $summary -Value "No .build/logs directory was produced."
+            exit 0
+          }
+
+          $logs = Get-ChildItem ".build/logs" -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 5
+
+          if ($logs.Count -eq 0) {
+            Add-Content -Path $summary -Value ""
+            Add-Content -Path $summary -Value "No native log files were produced."
+            exit 0
+          }
+
+          foreach ($log in $logs) {
+            Add-Content -Path $summary -Value ""
+            Add-Content -Path $summary -Value "#### $($log.Name)"
+            $matches = Select-String `
+              -Path $log.FullName `
+              -Pattern "error:|CMake Error|FAILED:|fatal error|Traceback|Exception|panic" |
+              Select-Object -Last 20
+            if ($matches) {
+              Add-Content -Path $summary -Value ""
+              Add-Content -Path $summary -Value "Matched failure lines:"
+              Add-Content -Path $summary -Value '```text'
+              foreach ($match in $matches) {
+                Add-Content -Path $summary -Value $match.Line
+              }
+              Add-Content -Path $summary -Value '```'
+            }
+            Add-Content -Path $summary -Value ""
+            Add-Content -Path $summary -Value "Last 60 lines:"
+            Add-Content -Path $summary -Value '```text'
+            Get-Content -Path $log.FullName -Tail 60 | ForEach-Object {
+              Add-Content -Path $summary -Value $_
+            }
+            Add-Content -Path $summary -Value '```'
+          }
 
       - name: Upload native build logs on failure
         if: ${{ failure() }}

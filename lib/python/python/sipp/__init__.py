@@ -219,7 +219,7 @@ def _load_explicit_backend(backend: str) -> object:
     except Exception as error:
         raise RuntimeError(
             f"{backend} backend is not installed or usable. "
-            f'Install it with: pip install "sipp[{backend}]"'
+            f'Install it with: pip install "sipppy[{backend}]"'
         ) from error
 
 

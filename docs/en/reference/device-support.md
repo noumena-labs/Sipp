@@ -10,7 +10,7 @@ Backend names are shared across build configuration and runtime selection. The s
 | --- | --- | --- | --- | --- | --- |
 | CPU | Supported | `native` | Yes | All | Portable fallback, no accelerator required |
 | CUDA | Supported | `cuda` | No | Linux, Windows | NVIDIA GPUs, compute capability 7.5+ |
-| Metal | Supported | `metal` | No | macOS | Apple Silicon and AMD GPUs |
+| Metal | Supported | `metal` | No | macOS | Apple Silicon and AMD GPUs; use CPU on Intel integrated GPUs |
 | Vulkan | Supported | `vulkan` | No | Linux, Windows | Vulkan 1.2+ GPU required |
 | WebGPU | Supported | `GGML_WEBGPU` (CMake) | No | WASM browsers | Browser-only, requires `shader-f16` |
 
@@ -179,12 +179,25 @@ Any GPU with Vulkan 1.2 or later driver support works on Linux and Windows. Test
 
 Windows Docker Desktop does not support the Vulkan backend.
 
+macOS source builds can compile Vulkan through the LunarG SDK, but LunarG's
+macOS drivers translate Vulkan to Metal. Sipp does not publish macOS Vulkan
+packages because the native Metal backend is simpler for normal macOS use and
+macOS Vulkan adds loader/ICD runtime requirements.
+
 ### Metal
 
 * **Apple Silicon:** M1, M2, M3, M4 series
 * **AMD:** GPUs supported by macOS (Radeon Pro series)
 
-Metal is macOS-only and unavailable inside Docker containers.
+Metal is macOS-only and unavailable inside Docker containers. Intel integrated
+GPUs expose Metal, but Sipp does not treat them as a recommended Metal target;
+use the CPU backend on those Macs unless you have tested the exact model,
+context size, and device and confirmed that Metal is stable and faster than CPU.
+
+Apple Silicon can run x64 processes through Rosetta 2. A `darwin-x64` Node or
+Python native package is only used by an x64 Node/Python process; native arm64
+Node/Python installations use the `darwin-arm64` packages and are the preferred
+path on Apple Silicon.
 
 ### WebGPU (Browser)
 
@@ -207,7 +220,7 @@ Any GPU that the host browser exposes as a WebGPU adapter may work, but Sipp req
 | --- | --- | --- | --- | --- |
 | Browser (`@sipp/sipp`) | `npm install @sipp/sipp` | Published (npm) | WASM / WebGPU | Browser-local GGUF inference, gateway clients |
 | Node.js (`@sipp/sipp-server`) | `npm install @sipp/sipp-server` | Published (npm) | N-API native | Server processes, route handlers, backend services |
-| Python (`sipppy`) | `pip install sipppy` | GitHub Releases (PyPI in progress) | PyO3 native | Python services, scripts, gateway clients |
+| Python (`sipppy`) | `pip install sipppy` | Published (PyPI) | PyO3 native | Python services, scripts, gateway clients |
 | Rust (`sipp-rs`) | `cargo add sipp-rs` | Published (crates.io) | Pure Rust facade | Rust applications and services |
 | Gateway server | Source-built | Source only | Axum binary | HTTP gateway for local and provider targets |
 | Gateway Docker | Docker from source | Source only | Container | Production container workflows |

@@ -25,5 +25,5 @@ steering in `persona.anchorExamples`, conversational examples in
 `persona.dialogExamples`, and style notes in `persona.notes`.
 
 See `lib/web/src/character` for the character runtime APIs and
-[../../docs/examples-demos.md](../../docs/examples-demos.md) for the demo
+[../../docs/en/examples-demos.md](../../docs/en/examples-demos.md) for the demo
 index.

@@ -1,6 +1,7 @@
 # 目录
 
 - [项目概述](README.md)
+- [路线图](roadmap.md)
 - [快速入门](getting-started/README.md)
   - [安装指南](getting-started/installation.md)
   - [快速上手](getting-started/quickstarts.md)
@@ -50,5 +51,4 @@
   - [测试指南](testing.md)
   - [测试覆盖率](coverage.md)
   - [参与贡献](contributing.md)
-- [路线图](roadmap.md)
 - [已知问题](known-issues.md)

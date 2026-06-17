@@ -3,7 +3,7 @@
 use crate::cli::Backend;
 use crate::output;
 use crate::toolchains::env::apply_toolchains;
-use crate::toolchains::python::apply_uv_env;
+use crate::toolchains::python::{apply_uv_env, ensure_python, PYTHON_BUILD_VERSION};
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::env;
@@ -23,8 +23,8 @@ mod python_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const PYTHON_PACKAGE_NAME: &str = "sipp-py";
-const PYTHON_BACKEND_PACKAGE_PREFIX: &str = "sipp-py-backend";
+const PYTHON_PACKAGE_NAME: &str = "sipppy";
+const PYTHON_BACKEND_PACKAGE_PREFIX: &str = "sipppy-backend";
 
 /// Builds the Python bindings for the selected backend.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {
@@ -35,10 +35,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
 
     let uv_exe = crate::toolchains::python::setup_uv(sh, ctx)?;
 
-    output::run_build_command(
-        "Ensuring Python 3.12 is available through uv",
-        apply_uv_env(ctx, cmd!(sh, "{uv_exe} python install 3.12")),
-    )?;
+    ensure_python(sh, ctx, &uv_exe)?;
 
     if matches!(backend, Some(Backend::All)) {
         return build_package_wheels(sh, ctx, &uv_exe);
@@ -63,7 +60,10 @@ fn build_develop(
     if !venv_dir.exists() {
         output::run_build_command(
             "Creating local Python virtual environment",
-            apply_uv_env(ctx, cmd!(sh, "{uv_exe} venv --python 3.12")),
+            apply_uv_env(
+                ctx,
+                cmd!(sh, "{uv_exe} venv --python {PYTHON_BUILD_VERSION}"),
+            ),
         )?;
     } else {
         output::success("Using existing Python virtual environment");
@@ -75,7 +75,10 @@ fn build_develop(
 
     let mut maturin_cmd = apply_uv_env(
         ctx,
-        cmd!(sh, "{uv_exe} tool run maturin develop --release --uv"),
+        cmd!(
+            sh,
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin develop --release --uv"
+        ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
@@ -185,14 +188,14 @@ fn build_sipp_wheel(
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run maturin build --release --out {dist_dir}"
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --strip --out {dist_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, Some(&Backend::Cpu))?;
-    output::run_build_command("Building Python sipp-py wheel", maturin_cmd)
-        .context("failed to build Python sipp-py wheel")?;
+    output::run_build_command("Building Python sipppy wheel", maturin_cmd)
+        .context("failed to build Python sipppy wheel")?;
 
     find_wheel_artifact_for_distribution(dist_dir, PYTHON_PACKAGE_NAME)?.with_context(|| {
         format!(
@@ -243,7 +246,7 @@ fn build_backend_package_wheel(
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run maturin build --release --out {wheel_dir}"
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --strip --out {wheel_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
@@ -300,26 +303,15 @@ fn backend_distribution_name(backend: &Backend) -> String {
     format!("{PYTHON_BACKEND_PACKAGE_PREFIX}-{}", backend.as_str())
 }
 
-// Dev Linux GPU backend wheels may depend on host driver/runtime stacks.
-// Maturin's repair mode tries to copy every DT_NEEDED library and fails on
-// driver-only libraries such as libcuda.so.1, so dev builds can keep the audit
-// visible without repairing. Release builds leave this unset and stay strict.
+// Linux GPU backend wheels depend on the host driver/runtime stack. Repair mode
+// tries to bundle driver-only libraries such as libcuda.so.1 and fails on CPU
+// CI runners, so keep the audit visible without repairing those dependencies.
 fn backend_auditwheel_mode(backend: &Backend) -> Option<&'static str> {
-    if cfg!(target_os = "linux")
-        && matches!(backend, Backend::Cuda | Backend::Vulkan)
-        && gpu_auditwheel_warn_enabled()
-    {
+    if cfg!(target_os = "linux") && matches!(backend, Backend::Cuda | Backend::Vulkan) {
         Some("warn")
     } else {
         None
     }
-}
-
-fn gpu_auditwheel_warn_enabled() -> bool {
-    matches!(
-        env::var("SIPP_PYTHON_GPU_AUDITWHEEL").as_deref(),
-        Ok("warn")
-    )
 }
 
 fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
@@ -332,7 +324,9 @@ fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let is_sipp_python_wheel = file_name.starts_with("sipp_py-")
+        let is_sipp_python_wheel = file_name.starts_with("sipppy-")
+            || file_name.starts_with("sipppy_backend_")
+            || file_name.starts_with("sipp_py-")
             || file_name.starts_with("sipp_py_backend_")
             || file_name.starts_with("sipp-")
             || file_name.starts_with("sipp_backend_");

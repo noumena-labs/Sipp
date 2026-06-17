@@ -35,5 +35,5 @@ The page exposes a stable automation API:
 
 This API is used by the automated browser playground smoke runner.
 
-See [../../docs/examples-demos.md](../../docs/examples-demos.md) for where the
+See [../../docs/en/examples-demos.md](../../docs/en/examples-demos.md) for where the
 playground fits alongside examples and demos.

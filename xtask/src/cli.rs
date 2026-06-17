@@ -387,19 +387,21 @@ Build or serve the mdBook documentation with mermaid diagram support.
 
 Examples:
   cargo xtask docs build
+  cargo xtask docs build --lang en
   cargo xtask docs serve
 
 The command installs mdbook and mdbook-mermaid when missing, extracts the
 bundled mermaid JavaScript assets into theme/, then builds or serves the
-generated book.")]
+generated book. Build defaults to both locales; use --lang en or --lang zh
+for faster single-locale iteration.")]
     #[command(arg_required_else_help = true)]
     Docs {
         /// Docs workflow to run.
         #[command(subcommand)]
         command: DocsCommands,
 
-        /// Language of the documentation to build or open first.
-        #[arg(long, value_enum, default_value = "en", global = true)]
+        /// Documentation locale to build, or locale to open first when serving.
+        #[arg(long, value_enum, default_value = "all", global = true)]
         lang: DocsLanguage,
     },
 }
@@ -449,8 +451,8 @@ Examples:
   cargo xtask build python --backend vulkan
   cargo xtask build python --backend all
 
-The default backend is CPU. `--backend all` builds the CPU-capable `sipp-py`
-wheel plus host-supported `sipp-py-backend-*` wheels for optional GPU extras.")]
+The default backend is CPU. `--backend all` builds the CPU-capable `sipppy`
+wheel plus host-supported `sipppy-backend-*` wheels for optional GPU extras.")]
     #[command(after_long_help = BACKEND_HELP)]
     Python(BackendArgs),
 
@@ -1690,8 +1692,8 @@ pub enum DocsCommands {
 Build the mdBook documentation with mermaid diagram support.
 
 Installs mdbook and mdbook-mermaid when missing, extracts the bundled mermaid
-JavaScript assets into theme/, builds English into book/, and builds Chinese
-into book/zh unless --lang zh is selected.")]
+JavaScript assets into theme/, then builds English into book/ and Chinese into
+book/zh. Use --lang en or --lang zh to build one locale.")]
     Build,
     /// Build and serve the documentation book.
     #[command(long_about = "\
@@ -1705,6 +1707,8 @@ language switch uses the same /zh/ path layout as GitHub Pages.")]
 /// Documentation language.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DocsLanguage {
+    /// Build every documentation locale.
+    All,
     /// English documentation.
     En,
     /// Chinese documentation.
@@ -1715,6 +1719,7 @@ impl DocsLanguage {
     /// Stable documentation language label.
     pub fn as_str(&self) -> &'static str {
         match self {
+            DocsLanguage::All => "all",
             DocsLanguage::En => "en",
             DocsLanguage::Zh => "zh",
         }

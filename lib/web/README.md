@@ -73,7 +73,7 @@ short-lived gateway tokens at runtime.
 
 ## Learn More
 
-- [Browser package docs](../../docs/packages/browser.md)
-- [Browser caching](../../docs/guides/browser-caching.md)
-- [Gateway and hybrid inference](../../docs/guides/gateway-hybrid.md)
+- [Browser package docs](../../docs/en/packages/browser.md)
+- [Browser caching](../../docs/en/guides/browser-caching.md)
+- [Gateway and hybrid inference](../../docs/en/guides/gateway-hybrid.md)
 - [Web examples](../../examples/web/README.md)

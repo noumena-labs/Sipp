@@ -34,7 +34,7 @@ runs:
             `version = "${process.env.PYTHON_DEV_VERSION}"`
           )
           .replace(
-            /(sipp-py-backend-(?:cuda|metal|vulkan)==)[^";\s]+/g,
+            /(sipppy-backend-(?:cuda|metal|vulkan)==)[^";\s]+/g,
             `$1${process.env.PYTHON_DEV_VERSION}`
           );
         writeFileSync(pyprojectPath, pyproject);

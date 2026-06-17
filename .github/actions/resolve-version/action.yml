@@ -31,7 +31,7 @@ runs:
         const cargoBindingDto = cargo.match(/^sipp-binding-dto = \{ path = "lib\/binding-dto", version = "([^"]+)"/m)?.[1];
         const pyproject = readFileSync('lib/python/pyproject.toml', 'utf8');
         const python = pyproject.match(/^version = "([^"]+)"/m)?.[1];
-        const pythonBackendExtras = [...pyproject.matchAll(/sipp-py-backend-(?:cuda|metal|vulkan)==([^";\s]+)/g)]
+        const pythonBackendExtras = [...pyproject.matchAll(/sipppy-backend-(?:cuda|metal|vulkan)==([^";\s]+)/g)]
           .map((match) => match[1]);
         const pythonBackendPackages = Object.fromEntries(
           ['cuda', 'metal', 'vulkan'].map((backend) => {

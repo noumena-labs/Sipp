@@ -4,6 +4,8 @@ The Python wheel is named `sipppy`. Python code imports the `sipp` module, which
 exposes native descriptor classes, run handles, token streaming, and the same
 endpoint model as the Rust client.
 
+Published wheels require Python 3.10 or newer.
+
 See the [Library API Overview](../api) for the shared `add`, `query`,
 `chat`, and `embed` contracts.
 
@@ -20,24 +22,23 @@ backend from the [GitHub Releases](https://github.com/noumena-labs/Sipp/releases
 page, then install it with pip. The default wheel includes the CPU backend:
 
 ```bash
-pip install ./sipppy-<version>-<python>-<platform>.whl
-```
-
-GPU backends ship as separate backend wheels in the same release. Install the
-backend wheel that matches your hardware alongside the base `sipppy` wheel.
-
-Once the PyPI release is available, installation will use the standard extras
-syntax. The default wheel includes the CPU backend; each extra pulls the
-matching GPU backend wheel for the same release version:
-
-```bash
 pip install sipppy
 ```
 
+The default wheel includes the CPU backend. Install PyPI-published GPU
+backends as extras:
+
+```bash
+pip install "sipppy[vulkan]"
+pip install "sipppy[metal]"
+```
+
 The backend wheels are separate PyPI distributions. For example,
-`sipp-py[cuda]` installs the main `sipp-py` wheel plus the matching
-`sipp-py-backend-cuda` wheel for the same release version. Python code still
-imports `sipp`.
+`sipppy[vulkan]` installs the main `sipppy` wheel plus the matching
+`sipppy-backend-vulkan` wheel for the same release version. Python code still
+imports `sipp`. CUDA backend wheels are attached to GitHub releases for the
+first public release and will move to PyPI after the CUDA wheel size limit is
+raised.
 
 ## Use It For
 
@@ -102,6 +103,11 @@ print(run.result()["text"])
 Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose an installed native
 backend. See [Runtime Options](../reference/runtime-options.md) for local
 runtime config groups and request option boundaries.
+
+On Intel Macs with integrated GPUs, prefer `SIPP_PYTHON_BACKEND=cpu`.
+The Metal backend is intended for Apple Silicon and tested AMD Mac GPUs.
+Apple Silicon can run x64 Python through Rosetta 2, but x64 wheels are used
+only by an x64 Python process; native arm64 Python should use arm64 wheels.
 
 ## Gateway Chat
 

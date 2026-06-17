@@ -27,5 +27,5 @@ draw on the canvas. Auto inference runs after each stroke by default.
 The director config lives at
 `public/directors/sketch-lab/drawing-director.json`.
 
-See [../../docs/guides/vision.md](../../docs/guides/vision.md) for vision
+See [../../docs/en/guides/vision.md](../../docs/en/guides/vision.md) for vision
 workflow guidance.

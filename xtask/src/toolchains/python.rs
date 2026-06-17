@@ -1,8 +1,11 @@
 use crate::output;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use xshell::{cmd, Cmd, Shell};
+
+/// Python version used by uv to build and smoke-test abi3 wheels.
+pub(crate) const PYTHON_BUILD_VERSION: &str = "3.10";
 
 /// Ensures the hermetic uv executable is available under `.build/toolchain`.
 pub(crate) fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
@@ -76,6 +79,17 @@ pub(crate) fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
     }
 
     Ok(uv_exe)
+}
+
+/// Ensures the Python interpreter used for package builds is available.
+pub(crate) fn ensure_python(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> {
+    output::run_build_command(
+        format!("Ensuring Python {PYTHON_BUILD_VERSION} is available through uv"),
+        apply_uv_env(
+            ctx,
+            cmd!(sh, "{uv_exe} python install {PYTHON_BUILD_VERSION}"),
+        ),
+    )
 }
 
 /// Applies workspace-local uv cache paths so commands do not depend on user cache state.
