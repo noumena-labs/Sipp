@@ -27,13 +27,13 @@
 </p>
 
 <div align="center">
-  <a href="docs/getting-started/quickstarts.md">Documentation</a>
+  <a href="docs/en/getting-started/quickstarts.md">Documentation</a>
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
   <a href="https://discord.gg/abzgfghhrq">Discord</a>
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
   <a href="https://github.com/noumena-labs/Sipp/issues">Issues</a>
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
-  <a href="docs/roadmap.md">Roadmap</a>
+  <a href="docs/en/roadmap.md">Roadmap</a>
   <br />
 </div>
 
@@ -42,7 +42,7 @@
 > [!WARNING]
 > Sipp is under active development. Breaking changes are expected as we optimize the runtime layers. It might not be suitable for mission-critical production environments yet. If you find issues, bugs, or missing features, please open a GitHub issue.
 
-### [Read the documentation →](docs/README.md)
+### [Read the documentation →](docs/en/README.md)
 
 ## What is Sipp?
 
@@ -67,7 +67,7 @@ const stream = await blender.chat([{ role: 'user', content: 'Explain Sipp.' }], 
 
 The unified SDK lets you dynamically partition and optimize complex application logic between local and cloud compute. Instead of wrestling with fragmented web runtimes, disconnected native wrappers for desktop, or custom middleware to protect API keys, you only need Sipp.
 
-It packages a **high-performance WebGPU engine**, with a secure container gateway proxy into a single, neat toolkit. Future releases will focus on embedded vector memory, on-device PII masking, and automated smart routing. See [Roadmap](docs/roadmap.md).
+It packages a **high-performance WebGPU engine**, with a secure container gateway proxy into a single, neat toolkit. Future releases will focus on embedded vector memory, on-device PII masking, and automated smart routing. See [Roadmap](docs/en/roadmap.md).
 
 ```bash
 sipp build wasm                # Compile high-performance WebGPU assets
@@ -107,12 +107,12 @@ Most developers should start with our pre-built, published packages rather than 
 
 | Surface | Module | Install | Docs |
 | --- | --- | --- | --- |
-| **Browser** | Sipp Edge | `npm install @sipp/sipp` | [Browser package](docs/packages/browser.md) |
-| **Node.js** | Sipp Core | `npm install @sipp/sipp-server` | [Node.js package](docs/packages/node.md) |
-| **Python** | Sipp Core | `pip install sipppy` | [Python package](docs/packages/python.md) |
-| **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust package](docs/packages/rust.md) |
-| **Gateway Server** | Sipp Cloud | Source-built | [Gateway Server](docs/gateway/server.md) |
-| **Gateway Toolkit** | Sipp Cloud | Source-built | [Gateway toolkit](docs/gateway/toolkit.md) |
+| **Browser** | Sipp Edge | `npm install @sipp/sipp` | [Browser package](docs/en/packages/browser.md) |
+| **Node.js** | Sipp Core | `npm install @sipp/sipp-server` | [Node.js package](docs/en/packages/node.md) |
+| **Python** | Sipp Core | `pip install sipppy` | [Python package](docs/en/packages/python.md) |
+| **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust package](docs/en/packages/rust.md) |
+| **Gateway Server** | Sipp Cloud | Source-built | [Gateway Server](docs/en/gateway/server.md) |
+| **Gateway Toolkit** | Sipp Cloud | Source-built | [Gateway toolkit](docs/en/gateway/toolkit.md) |
 
 ---
 
@@ -182,17 +182,17 @@ await client.close();
 
 Sipp includes native integration blueprints to handle Server-Sent Events (SSE) streaming, serverless route orchestration, and client hydration patterns out of the box.
 
-- [Next.js](docs/packages/frameworks/nextjs.md): App Router route handlers,
+- [Next.js](docs/en/packages/frameworks/nextjs.md): App Router route handlers,
   Client Components, gateway proxies, and streaming.
-- [TanStack](docs/packages/frameworks/tanstack.md): TanStack Start server
+- [TanStack](docs/en/packages/frameworks/tanstack.md): TanStack Start server
   functions and TanStack Query patterns.
-- [React And Vite](docs/packages/frameworks/vite-react.md): Browser package
+- [React And Vite](docs/en/packages/frameworks/vite-react.md): Browser package
   setup, WASM assets, OPFS model loading, and gateway examples.
 
   
 ## Documentation
 
-The full documentation lives in [docs](docs/README.md). From a source checkout, use the `sipp docs` CLI tool utility to build or serve the book resource:
+The full documentation lives in [docs/en](docs/en/README.md). From a source checkout, use the `sipp docs` CLI tool utility to build or serve the book resource:
 
 ```bash
 sipp docs build
@@ -208,7 +208,7 @@ sipp docs serve
 
 Our core development trajectory is oriented around expanding the edge-cloud infrastructure for running hybrid systems, where local and cloud resources are orchestrated seamlessly.
 
-For a detailed structural breakdown of milestones, memory architectures, and long-term research initiatives, see the full [Sipp Technical Roadmap](docs/roadmap.md).
+For a detailed structural breakdown of milestones, memory architectures, and long-term research initiatives, see the full [Sipp Technical Roadmap](docs/en/roadmap.md).
 
 ---
 

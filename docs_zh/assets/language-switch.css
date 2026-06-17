@@ -1,9 +1,0 @@
-.sipp-language-switch {
-    display: inline-flex !important;
-    align-items: center;
-    justify-content: center;
-    /* Ensure no unwanted margins push it off center */
-    margin: 0;
-    padding: 0;
-    vertical-align: middle;
-}

@@ -27,5 +27,5 @@ Demo tests live under:
 cargo xtask test unit suite demos
 ```
 
-See [../docs/examples-demos.md](../docs/examples-demos.md) for the
+See [../docs/en/examples-demos.md](../docs/en/examples-demos.md) for the
 documentation index.

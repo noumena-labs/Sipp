@@ -138,5 +138,5 @@ cargo xtask test smoke group examples
 Direct provider examples are documented and manual because they require a real
 provider API key.
 
-See [docs/examples-demos.md](../docs/examples-demos.md) for the documentation
+See [docs/en/examples-demos.md](../docs/en/examples-demos.md) for the documentation
 index.

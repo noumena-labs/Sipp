@@ -28,5 +28,5 @@ Useful flags include:
 
 Use `cargo run -p sipp-cli -- --help` for the full generated help.
 
-See [../../docs/reference/cli.md](../../docs/reference/cli.md) for the CLI
+See [../../docs/en/reference/cli.md](../../docs/en/reference/cli.md) for the CLI
 reference.

@@ -8,7 +8,7 @@ toolkit crates.
 ## Start Here
 
 - Source and generated-exe workflows:
-  [Gateway Server](../../docs/gateway/server.md)
+  [Gateway Server](../../docs/en/gateway/server.md)
 
   ```bash
   cp apps/gateway-server/config/local.toml.example apps/gateway-server/config/local.toml
@@ -16,7 +16,7 @@ toolkit crates.
   ```
 
 - Docker workflows:
-  [Gateway Docker](../../docs/gateway/docker.md)
+  [Gateway Docker](../../docs/en/gateway/docker.md)
 
   ```bash
   cp apps/gateway-server/.env.example apps/gateway-server/.env
@@ -26,10 +26,10 @@ toolkit crates.
   ```
 
 - TOML schema and route behavior:
-  [Gateway Configuration](../../docs/gateway/configuration.md)
+  [Gateway Configuration](../../docs/en/gateway/configuration.md)
 
 - Raw HTTP testing:
-  [Gateway Testing](../../docs/gateway/testing.md)
+  [Gateway Testing](../../docs/en/gateway/testing.md)
 
 ## Local Files
 

@@ -27,5 +27,5 @@ Unit coverage for the simulation runtime is included in the demos test suite:
 cargo xtask test unit suite demos
 ```
 
-See [../../docs/examples-demos.md](../../docs/examples-demos.md) for the demo
+See [../../docs/en/examples-demos.md](../../docs/en/examples-demos.md) for the demo
 index.

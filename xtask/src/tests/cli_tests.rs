@@ -6,13 +6,13 @@
 use clap::Parser;
 
 use super::{
-    Backend, Cli, Commands, DemoName, DemoServeMode, DoctorTarget, LlamaBackendOpsMode,
-    LlamaBackendOpsOutput, RunCommands, RunDemosCommands, RunExampleServeTarget,
-    RunExamplesCommands, RunGatewayExampleCase, RunGatewayExampleTarget, RunGatewayServerCommand,
-    RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands, TestGroupFilter,
-    TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget, TestSuiteId,
-    TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, ToolName,
-    ToolchainCommands, ToolchainComponent, WasmThreading,
+    Backend, Cli, Commands, DemoName, DemoServeMode, DocsLanguage, DoctorTarget,
+    LlamaBackendOpsMode, LlamaBackendOpsOutput, RunCommands, RunDemosCommands,
+    RunExampleServeTarget, RunExamplesCommands, RunGatewayExampleCase, RunGatewayExampleTarget,
+    RunGatewayServerCommand, RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands,
+    TestGroupFilter, TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget,
+    TestSuiteId, TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget,
+    ToolName, ToolchainCommands, ToolchainComponent, WasmThreading,
 };
 
 #[test]
@@ -52,6 +52,23 @@ fn build_commands_parse_backend_defaults_and_overrides() {
         panic!("expected wasm build");
     };
     assert_eq!(args.threading, WasmThreading::Pthread);
+}
+
+#[test]
+fn docs_commands_parse_language_defaults_and_overrides() {
+    let cli = Cli::parse_from(["xtask", "docs", "build"]);
+    let Commands::Docs { command, lang } = cli.command else {
+        panic!("expected docs command");
+    };
+    assert!(matches!(command, super::DocsCommands::Build));
+    assert_eq!(lang, DocsLanguage::All);
+
+    let cli = Cli::parse_from(["xtask", "docs", "serve", "--lang", "zh"]);
+    let Commands::Docs { command, lang } = cli.command else {
+        panic!("expected docs command");
+    };
+    assert!(matches!(command, super::DocsCommands::Serve));
+    assert_eq!(lang, DocsLanguage::Zh);
 }
 
 #[test]
@@ -570,6 +587,9 @@ fn labels_match_cli_wire_values() {
     assert_eq!(Backend::Metal.as_str(), "metal");
     assert_eq!(Backend::Vulkan.as_str(), "vulkan");
     assert_eq!(Backend::All.as_str(), "all");
+    assert_eq!(DocsLanguage::All.as_str(), "all");
+    assert_eq!(DocsLanguage::En.as_str(), "en");
+    assert_eq!(DocsLanguage::Zh.as_str(), "zh");
     assert_eq!(TestSuiteId::RustCrates.as_str(), "rust-crates");
     assert_eq!(
         TestSuiteId::ExampleBrowserSmoke.as_str(),

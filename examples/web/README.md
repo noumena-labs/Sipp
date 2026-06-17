@@ -40,5 +40,5 @@ Then enter URL `http://127.0.0.1:8787`, any non-empty token, and target
 `local` in the browser page.
 
 See [../README.md](../README.md) for shared example workflow details and
-[../../docs/packages/browser.md](../../docs/packages/browser.md) for browser
+[../../docs/en/packages/browser.md](../../docs/en/packages/browser.md) for browser
 package docs.

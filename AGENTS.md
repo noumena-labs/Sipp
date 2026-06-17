@@ -9,7 +9,7 @@ to the specialized context files in the [.agents/](.agents/README.md)
 directory:
 - **General Architecture:** Read [.agents/system/architecture.md](.agents/system/architecture.md) to understand the crate boundaries.
 - **Build Instructions:** Read [.agents/build/instructions.md](.agents/build/instructions.md) before executing build commands.
-- **Troubleshooting:** Start with [docs/sipp/troubleshooting.md](docs/sipp/troubleshooting.md) for setup and launcher issues.
+- **Troubleshooting:** Start with [docs/en/sipp/troubleshooting.md](docs/en/sipp/troubleshooting.md) for setup and launcher issues.
 
 ---
 
@@ -45,7 +45,7 @@ Always use the **`build-orchestrator`** skill when compiling. The repository use
 ## 4. Test & Lint Commands
 
 Always use the **`test-runner`** skill when verifying changes.
-- **List Tests:** `cargo xtask test list` (see [docs/testing.md](file:///docs/testing.md) for suite contents)
+- **List Tests:** `cargo xtask test list` (see [docs/en/testing.md](docs/en/testing.md) for suite contents)
 - **Run All Tests:** `cargo xtask test unit group full`
 - **xtask Tests:** `cargo xtask test unit suite xtask`
 - **White-box Tests:** `cargo xtask test unit suite rust-crates --package <crate_name>`

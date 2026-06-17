@@ -104,7 +104,7 @@ first-party gateway JSON profile used by Sipp clients.
 
 ## Learn More
 
-- [Node.js package docs](../../docs/packages/node.md)
-- [Local inference](../../docs/guides/local-inference.md)
-- [Gateway and hybrid inference](../../docs/guides/gateway-hybrid.md)
+- [Node.js package docs](../../docs/en/packages/node.md)
+- [Local inference](../../docs/en/guides/local-inference.md)
+- [Gateway and hybrid inference](../../docs/en/guides/gateway-hybrid.md)
 - [Node examples](../../examples/node/README.md)

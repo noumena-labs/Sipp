@@ -20,5 +20,5 @@ Custom URL and local file imports support text GGUF models.
 - Time to first token and output token counts.
 - Text and vision model selection paths.
 
-See [../../docs/examples-demos.md](../../docs/examples-demos.md) for the demo
+See [../../docs/en/examples-demos.md](../../docs/en/examples-demos.md) for the demo
 index.

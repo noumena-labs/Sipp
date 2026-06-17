@@ -1,7 +1,7 @@
 [book]
 authors = ["Noumena Labs"]
 language = "en"
-src = "docs"
+src = "docs/en"
 title = "Sipp Documentation"
 
 [build]

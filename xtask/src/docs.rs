@@ -14,9 +14,14 @@ use std::fs;
 use xshell::{cmd, Cmd, Shell};
 
 const MDBOOK_VERSION: &str = "0.5.3";
+const EN_DOCS_SRC: &str = "docs/en";
+const ZH_DOCS_SRC: &str = "docs/zh";
 const DOCS_BUILD_DIR: &str = "book";
 const ZH_DOCS_BUILD_DIR: &str = "book/zh";
 const DOCS_SERVE_URL: &str = "http://localhost:3000";
+const ALL_DOCS_LANGUAGES: &[DocsLanguage] = &[DocsLanguage::En, DocsLanguage::Zh];
+const EN_DOCS_LANGUAGES: &[DocsLanguage] = &[DocsLanguage::En];
+const ZH_DOCS_LANGUAGES: &[DocsLanguage] = &[DocsLanguage::Zh];
 
 const SIPP_CSS: &str = r#":root {
     --content-max-width: 900px;
@@ -113,12 +118,9 @@ pub fn run_build(sh: &Shell, ctx: &BuildContext, lang: DocsLanguage) -> Result<(
 
     let _dir = sh.push_dir(ctx.workspace_root());
 
-    output::phase(&format!("mdBook build ({})", lang.as_str()));
-    mdbook_build_cmd(sh, lang).run()?;
-
-    if lang != DocsLanguage::Zh {
-        output::phase("mdBook build (zh)");
-        mdbook_build_cmd(sh, DocsLanguage::Zh).run()?;
+    for &build_lang in build_languages(lang) {
+        output::phase(&format!("mdBook build ({})", build_lang.as_str()));
+        mdbook_build_cmd(sh, build_lang).run()?;
     }
 
     stage_mermaid_runtime(ctx)?;
@@ -160,15 +162,26 @@ fn mdbook_build_cmd<'a>(sh: &'a Shell, lang: DocsLanguage) -> Cmd<'a> {
 }
 
 fn apply_language_env<'a>(cmd: Cmd<'a>, lang: DocsLanguage) -> Cmd<'a> {
-    if lang == DocsLanguage::Zh {
-        return cmd
-            .env("MDBOOK_BOOK__SRC", "docs_zh")
+    match lang {
+        DocsLanguage::All => cmd,
+        DocsLanguage::En => cmd
+            .env("MDBOOK_BOOK__SRC", EN_DOCS_SRC)
+            .env("MDBOOK_BOOK__LANGUAGE", DocsLanguage::En.as_str())
+            .env("MDBOOK_BUILD__BUILD_DIR", DOCS_BUILD_DIR),
+        DocsLanguage::Zh => cmd
+            .env("MDBOOK_BOOK__SRC", ZH_DOCS_SRC)
             .env("MDBOOK_BOOK__LANGUAGE", DocsLanguage::Zh.as_str())
             .env("MDBOOK_BOOK__TITLE", "Sipp 中文文档")
-            .env("MDBOOK_BUILD__BUILD_DIR", ZH_DOCS_BUILD_DIR);
+            .env("MDBOOK_BUILD__BUILD_DIR", ZH_DOCS_BUILD_DIR),
     }
+}
 
-    cmd
+fn build_languages(lang: DocsLanguage) -> &'static [DocsLanguage] {
+    match lang {
+        DocsLanguage::All => ALL_DOCS_LANGUAGES,
+        DocsLanguage::En => EN_DOCS_LANGUAGES,
+        DocsLanguage::Zh => ZH_DOCS_LANGUAGES,
+    }
 }
 
 fn serve_book_cmd<'a>(sh: &'a Shell) -> Cmd<'a> {

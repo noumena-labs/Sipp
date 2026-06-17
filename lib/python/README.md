@@ -74,7 +74,7 @@ separate Sipp gateway.
 
 ## Learn More
 
-- [Python package docs](../../docs/packages/python.md)
-- [Local inference](../../docs/guides/local-inference.md)
-- [Gateway and hybrid inference](../../docs/guides/gateway-hybrid.md)
+- [Python package docs](../../docs/en/packages/python.md)
+- [Local inference](../../docs/en/guides/local-inference.md)
+- [Gateway and hybrid inference](../../docs/en/guides/gateway-hybrid.md)
 - [Python examples](../../examples/python/README.md)
