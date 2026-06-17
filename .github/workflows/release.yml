@@ -746,7 +746,32 @@ jobs:
           done
           publish_npm_package .build/artifacts/npm/sipp-server
 
-      - name: Publish Python packages to PyPI
+      - name: Choose PyPI publish authentication
+        id: pypi-auth
+        shell: bash
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PYPI_API_TOKEN" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+            echo "Using PYPI_API_TOKEN for Python package publish."
+          else
+            echo "mode=trusted-publisher" >> "$GITHUB_OUTPUT"
+            echo "Using PyPI Trusted Publishing for Python package publish."
+          fi
+
+      - name: Publish Python packages to PyPI with API token
+        if: ${{ steps.pypi-auth.outputs.mode == 'token' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: .build/artifacts/python
+          skip-existing: true
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Publish Python packages to PyPI with Trusted Publishing
+        if: ${{ steps.pypi-auth.outputs.mode == 'trusted-publisher' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: .build/artifacts/python
