@@ -279,7 +279,22 @@ jobs:
           echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
 
       - name: Build and test staged web package
-        run: cargo xtask --plain test unit suite browser-package
+        run: cargo xtask --plain test unit suite browser
+
+      - name: Require staged web WASM artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm; do
+            if [ ! -f "$artifact" ]; then
+              echo "::error::Missing staged web WASM artifact: $artifact"
+              exit 1
+            fi
+          done
 
       - name: Run web package import smoke
         run: |

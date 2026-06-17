@@ -1,6 +1,6 @@
 # Node.js Package
 
-The Node.js package target is `sipp-server`. It exposes the native
+The Node.js package target is `@sipp/sipp-server`. It exposes the native
 Sipp client API to Node server processes, route handlers, and framework
 server functions. Applications own framework routes, request validation, auth,
 and deployment policy.
@@ -11,13 +11,13 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 ## Install
 
 ```bash
-npm install sipp-server
+npm install @sipp/sipp-server
 ```
 
 Use this package only in Node runtime code. Browser components should use
-[`sipp`](browser.md).
+[`@sipp/sipp`](browser.md).
 
-`sipp-server` is a wrapper package. npm installs the matching optional
+`@sipp/sipp-server` is a wrapper package. npm installs the matching optional
 platform package for the current OS and CPU, and the runtime loader selects
 the best packaged backend for that host.
 
@@ -32,7 +32,7 @@ the best packaged backend for that host.
 ## Local GGUF Query
 
 ```ts
-import { SippClient } from 'sipp-server';
+import { SippClient } from '@sipp/sipp-server';
 
 const client = new SippClient();
 const endpoint = await client.add('default', {
@@ -162,7 +162,7 @@ import {
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'sipp-server';
+} from '@sipp/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -201,7 +201,7 @@ finite embedding responses.
 
 ## Framework Routes
 
-Use `sipp-server` in server-only code such as Next.js App Router route
+Use `@sipp/sipp-server` in server-only code such as Next.js App Router route
 handlers with `runtime = 'nodejs'`, TanStack Start server functions, Express
 routes, or background workers. Do not import it from browser bundles.
 

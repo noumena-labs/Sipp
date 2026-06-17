@@ -1,7 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
 use xshell::Shell;
-use xtask::cli::{Backend, BuildCommands, Cli, Commands, DocsCommands, DocsLanguage, TestCommands};
+use xtask::cli::{
+    Backend, BuildCommands, Cli, Commands, DocsCommands, DocsLanguage, TestCommands, WasmThreading,
+};
 use xtask::targets;
 use xtask::utils::BuildContext;
 use xtask::{clean, configure_output, docs, doctor, finish_output, run, setup, test, toolchain};
@@ -106,7 +108,12 @@ fn build_summary(target: &BuildCommands) -> String {
     match target {
         BuildCommands::All => "Build all default targets".to_owned(),
         BuildCommands::Core => "Build native Rust workspace".to_owned(),
-        BuildCommands::Wasm => "Build browser WASM/WebGPU package".to_owned(),
+        BuildCommands::Wasm(args) => {
+            format!(
+                "Build browser WASM/WebGPU package ({})",
+                args.threading.as_str()
+            )
+        }
         BuildCommands::Python(args) => {
             format!("Build Python bindings ({})", backend_summary(args.backend))
         }
@@ -145,13 +152,13 @@ fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()
     match target {
         BuildCommands::All => {
             targets::core::build(sh, ctx)?;
-            targets::wasm::build(sh, ctx)?;
+            targets::wasm::build(sh, ctx, WasmThreading::All)?;
             targets::python::build(sh, ctx, None)?;
             targets::node::build(sh, ctx, None)?;
             targets::cli::build(sh, ctx, None)?;
         }
         BuildCommands::Core => targets::core::build(sh, ctx)?,
-        BuildCommands::Wasm => targets::wasm::build(sh, ctx)?,
+        BuildCommands::Wasm(args) => targets::wasm::build(sh, ctx, args.threading)?,
         BuildCommands::Python(args) => targets::python::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Node(args) => targets::node::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Cli(args) => targets::cli::build(sh, ctx, args.backend.as_ref())?,

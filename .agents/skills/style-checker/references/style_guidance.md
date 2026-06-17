@@ -480,7 +480,7 @@ Use the package manager and task runner already used by the affected workspace.
 
 The repository is organized by responsibility:
 
-* `crates/`: The published `sipp` and `sipp-sys` crates.
+* `crates/`: The published `sipp-rs` and `sipp-sys` crates.
 * `bindings/`: FFI and language bindings such as Node, Python, and WASM.
 * `apps/`: First-party applications such as the Rust CLI.
 * `demos/`: Browser demos using the public browser package.

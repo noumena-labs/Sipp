@@ -12,7 +12,7 @@ use super::{
     RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands, TestGroupFilter,
     TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget, TestSuiteId,
     TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, ToolName,
-    ToolchainCommands, ToolchainComponent,
+    ToolchainCommands, ToolchainComponent, WasmThreading,
 };
 
 #[test]
@@ -43,6 +43,15 @@ fn build_commands_parse_backend_defaults_and_overrides() {
         panic!("expected gateway-server build");
     };
     assert_eq!(args.backend, Some(Backend::Vulkan));
+
+    let cli = Cli::parse_from(["xtask", "build", "wasm", "--threading", "pthread"]);
+    let Commands::Build { target } = cli.command else {
+        panic!("expected build command");
+    };
+    let super::BuildCommands::Wasm(args) = target else {
+        panic!("expected wasm build");
+    };
+    assert_eq!(args.threading, WasmThreading::Pthread);
 }
 
 #[test]
@@ -436,6 +445,29 @@ fn test_unit_and_smoke_targets_parse() {
         panic!("expected rust unit target");
     };
     assert_eq!(args.package.as_deref(), Some("sipp-sys"));
+
+    let cli = Cli::parse_from([
+        "xtask",
+        "test",
+        "unit",
+        "suite",
+        "browser",
+        "--wasm-threading",
+        "single-thread",
+    ]);
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Unit(args) = command else {
+        panic!("expected unit command");
+    };
+    let TestUnitCommands::Suite(args) = args.command else {
+        panic!("expected unit suite command");
+    };
+    let TestUnitSuiteTarget::Browser(args) = args.target else {
+        panic!("expected browser package unit target");
+    };
+    assert_eq!(args.wasm_threading, WasmThreading::SingleThread);
 
     let cli = Cli::parse_from([
         "xtask",

@@ -1,4 +1,4 @@
-name: Build native packages
+name: Native artifact matrix
 
 # Reusable native build matrix shared by release.yml and publish-dev.yml.
 # Builds the Node addon, Python wheels, and Rust core across the four supported
@@ -77,7 +77,7 @@ env:
 
 jobs:
   native:
-    name: Build native ${{ matrix.id }} packages
+    name: Build ${{ matrix.id }} native artifacts
     if: ${{ inputs.package != 'rust' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
@@ -305,10 +305,10 @@ jobs:
           backends = [backend.strip() for backend in os.environ["BACKENDS"].split(",") if backend.strip()]
           wheels = glob.glob(".build/artifacts/python/*.whl")
           expected = {
-              "cpu": ("sipp", "sipp/_native"),
-              "cuda": ("sipp_backend_cuda", "sipp_backend_cuda/_native"),
-              "metal": ("sipp_backend_metal", "sipp_backend_metal/_native"),
-              "vulkan": ("sipp_backend_vulkan", "sipp_backend_vulkan/_native"),
+              "cpu": ("sipp_py", "sipp/_native"),
+              "cuda": ("sipp_py_backend_cuda", "sipp_backend_cuda/_native"),
+              "metal": ("sipp_py_backend_metal", "sipp_backend_metal/_native"),
+              "vulkan": ("sipp_py_backend_vulkan", "sipp_backend_vulkan/_native"),
           }
           missing = []
           for backend in backends:
@@ -405,7 +405,7 @@ jobs:
           retention-days: ${{ inputs.artifact-retention-days }}
 
   rust-core:
-    name: Build Rust core
+    name: Build Rust core artifact check
     if: ${{ inputs.package == 'rust' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120

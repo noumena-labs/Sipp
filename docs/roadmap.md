@@ -56,7 +56,7 @@ The open-source Gateway Server serves as an autonomous "API Fortress" that acts 
 
 - **Gateway-Level Vector Memory & RAG Interception:** The gateway implements an internal, stateful vector index layer to handle server-side memory optimization. It caches semantic embeddings of historical document fragments and prior system queries. When a client submits a prompt, the gateway performs a preemptive vector evaluation to determine if a relevant context context match exists, entirely bypassing the need to repeatedly re-fetch or re-encode massive RAG documents from central cloud instances.
     
-- **Preemptive Middle-Layer KV Caching:** In tandem with vector storage, the gateway features a stateful intermediate Key-Value (KV) cache layer designed to intercept incoming requests _before_ they hit large upstream models. If a cached structural completion matches the incoming footprint, the gateway can reroute traffic conditionally (e.g., _"If cache footprint exists, route to fast Endpoint X; if not, route to reasoning Endpoint Y"_).
+- **Preemptive Middle-Layer Caching:** In tandem with vector storage, the gateway features a stateful intermediate cache layer designed to intercept incoming requests _before_ they hit large upstream models. If a cached structural completion matches the incoming footprint, the gateway can reroute traffic conditionally (e.g., _"If cache footprint exists, route to fast Endpoint X; if not, route to reasoning Endpoint Y"_).
     
 - **Persistent Admin Control Dashboard:** Expand on the gateway dashboard and admin UI to visualize active routes, manage cryptographic client application identities, view live input/output token allocation metrics, and manually map model fallback rules and more.
     

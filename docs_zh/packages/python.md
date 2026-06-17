@@ -1,14 +1,25 @@
 # Python 包
 
-Python 包发布名称为 `sipp`。提供原生描述符类、运行句柄和 Token 流式传输，采用与 Rust 客户端相同的端点模型。
+Python 包发布名称为 `sipp-py`。它安装的导入包名仍然是 `sipp`，并提供原生描述符类、运行句柄和 Token 流式传输，采用与 Rust 客户端相同的端点模型。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api)。
 
 ## 安装
 
 ```bash
-pip install sipp
+pip install sipp-py
 ```
+
+默认 Wheel 包含 CPU 后端。GPU 后端通过 extras 安装：
+
+```bash
+pip install "sipp-py[cuda]"
+pip install "sipp-py[vulkan]"
+pip install "sipp-py[metal]"
+pip install "sipp-py[all]"
+```
+
+后端 Wheel 是独立的 PyPI 分发包。例如，`sipp-py[cuda]` 会安装主 `sipp-py` Wheel 以及同版本的 `sipp-py-backend-cuda` Wheel。Python 代码仍然使用 `from sipp import ...`。
 
 ## 适用场景
 

@@ -1,11 +1,11 @@
 # Sipp Browser Package
 
-`lib/web` is the browser package source for the public `sipp` package. It
+`lib/web` is the browser package source for the public `@sipp/sipp` package. It
 supports browser-local GGUF inference, gateway calls, streaming text, OPFS model
 caching, and browser runtime lifecycle management through `SippClient`.
 
 Source builds use the workspace manifest in this directory. Public docs use the
-`sipp` package target.
+`@sipp/sipp` package target.
 
 ## Source Checkout
 
@@ -21,7 +21,7 @@ if the launcher is not active.
 ## Local GGUF Query
 
 ```ts
-import { SippClient } from 'sipp';
+import { SippClient } from '@sipp/sipp';
 
 const client = new SippClient();
 await client.add('default', {

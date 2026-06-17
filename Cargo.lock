@@ -1940,7 +1940,109 @@ dependencies = [
 ]
 
 [[package]]
-name = "sipp"
+name = "sipp-binding-dto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sipp-rs",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "sipp-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "serde_json",
+ "sipp-rs",
+]
+
+[[package]]
+name = "sipp-gateway"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http",
+ "serde",
+ "serde_json",
+ "sipp-rs",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-gateway-example"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sipp-gateway",
+ "sipp-rs",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-gateway-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "futures-util",
+ "http",
+ "rand",
+ "serde",
+ "serde_json",
+ "sipp-gateway",
+ "sipp-rs",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
+name = "sipp-napi"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "serde",
+ "serde_json",
+ "sipp-binding-dto",
+ "sipp-rs",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-py"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pyo3",
+ "serde",
+ "serde_json",
+ "sipp-binding-dto",
+ "sipp-rs",
+ "tokio",
+]
+
+[[package]]
+name = "sipp-rs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1962,113 +2064,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "sipp-binding-dto"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sipp",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "sipp-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "serde_json",
- "sipp",
-]
-
-[[package]]
-name = "sipp-gateway"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "http",
- "serde",
- "serde_json",
- "sipp",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "sipp-gateway-example"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "bytes",
- "clap",
- "futures-util",
- "serde",
- "serde_json",
- "sipp",
- "sipp-gateway",
- "tokio",
-]
-
-[[package]]
-name = "sipp-gateway-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "bytes",
- "clap",
- "futures-util",
- "http",
- "rand",
- "serde",
- "serde_json",
- "sipp",
- "sipp-gateway",
- "tokio",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "wiremock",
-]
-
-[[package]]
-name = "sipp-napi"
-version = "0.1.0"
-dependencies = [
- "futures",
- "napi",
- "napi-build",
- "napi-derive",
- "serde",
- "serde_json",
- "sipp",
- "sipp-binding-dto",
- "tokio",
-]
-
-[[package]]
-name = "sipp-py"
-version = "0.1.0"
-dependencies = [
- "futures",
- "pyo3",
- "serde",
- "serde_json",
- "sipp",
- "sipp-binding-dto",
- "tokio",
-]
-
-[[package]]
 name = "sipp-rust-examples"
 version = "0.1.0"
 dependencies = [
  "futures",
- "sipp",
+ "sipp-rs",
  "tokio",
 ]
 
@@ -2089,7 +2089,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "sipp",
+ "sipp-rs",
 ]
 
 [[package]]

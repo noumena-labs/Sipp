@@ -7,7 +7,8 @@ layers.
 
 ## Published Crates
 
-- `crates/sipp`: the public `sipp` Rust library. Former foundational
+- `crates/sipp`: the public `sipp` Rust library published as `sipp-rs`.
+  Former foundational
   crates continue as module folders:
   - `core`: low-level shared types.
   - `shard`: GGUF cache planning and split-file utilities.

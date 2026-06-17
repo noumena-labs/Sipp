@@ -102,7 +102,7 @@ cargo xtask test verify --changed
 
 ## 包路径说明
 
-- `lib/web` 构建并发布 `@noumena-labs/sipp` 及通用浏览器包 `sipp`。
-- `lib/node` 构建并发布 `@noumena-labs/sipp-server` 及通用 Node 服务端包 `sipp-server`。
-- `lib/python` 构建并发布 Python 包 `sipp`。
-- `crates/sipp` 提供 Rust 库 API，供外部 Rust 应用和示例使用。
+- `lib/web` 构建并发布 `@noumena-labs/sipp` 及公开浏览器包 `@sipp/sipp`。
+- `lib/node` 构建并发布 `@noumena-labs/sipp-server` 及公开 Node 服务端包 `@sipp/sipp-server`。
+- `lib/python` 构建并发布 Python 分发包 `sipp-py`，导入包名仍为 `sipp`。
+- `crates/sipp` 发布 Rust 包 `sipp-rs`，库 crate 名仍为 `sipp`。

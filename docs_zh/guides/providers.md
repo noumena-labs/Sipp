@@ -9,7 +9,7 @@ Sipp 支持两种方式调用外部服务商：在可信服务端直接调用，
 当前服务端进程负责管理凭证生命周期和应用策略时，建议使用直接服务商端点。这也是 Next.js 和 TanStack 服务端代码推荐的路由模式。
 
 ```ts
-import { SippClient } from 'sipp-server';
+import { SippClient } from '@sipp/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];

@@ -1,5 +1,6 @@
 //! WebAssembly/WebGPU browser build target.
 
+use crate::cli::WasmThreading;
 use crate::javascript;
 use crate::output;
 use crate::toolchains::emsdk::{run_with_emsdk, setup_emsdk};
@@ -11,7 +12,7 @@ use std::time::Instant;
 use xshell::{cmd, Shell};
 
 /// Builds the browser WASM artifacts and TypeScript package wrappers.
-pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+pub fn build(sh: &Shell, ctx: &BuildContext, threading: WasmThreading) -> Result<()> {
     let started_at = Instant::now();
     let root = ctx.workspace_root();
     output::phase("Browser WASM/WebGPU package");
@@ -22,29 +23,36 @@ pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let ninja_dir = setup_ninja(sh, ctx)?;
 
     let npm_dist_wasm = ctx.npm_browser_wasm_dir();
+    if npm_dist_wasm.exists() {
+        sh.remove_path(&npm_dist_wasm)?;
+    }
     sh.create_dir(&npm_dist_wasm)?;
 
-    output::phase("WASM single-thread build");
-    build_target(
-        sh,
-        ctx,
-        root,
-        &emsdk_dir,
-        ninja_dir.as_deref(),
-        false,
-        &npm_dist_wasm,
-    )?;
+    if threading.includes_single_thread() {
+        output::phase("WASM single-thread build");
+        build_target(
+            sh,
+            ctx,
+            root,
+            &emsdk_dir,
+            ninja_dir.as_deref(),
+            false,
+            &npm_dist_wasm,
+        )?;
+    }
 
-    output::phase("WASM pthread build");
-    build_target(
-        sh,
-        ctx,
-        root,
-        &emsdk_dir,
-        ninja_dir.as_deref(),
-        true,
-        &npm_dist_wasm,
-    )?;
+    if threading.includes_pthread() {
+        output::phase("WASM pthread build");
+        build_target(
+            sh,
+            ctx,
+            root,
+            &emsdk_dir,
+            ninja_dir.as_deref(),
+            true,
+            &npm_dist_wasm,
+        )?;
+    }
 
     output::phase("TypeScript browser package");
     let npm_workspace = ctx.browser_package_dir();
