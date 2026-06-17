@@ -58,7 +58,7 @@ fn strict_backend_policy_requires_exact_env_value() {
 fn backend_package_names_match_python_packaging_conventions() {
     assert_eq!(
         backend_distribution_name(&Backend::Cuda),
-        "sipp-py-backend-cuda"
+        "sipppy-backend-cuda"
     );
 }
 
@@ -77,43 +77,47 @@ fn linux_gpu_backend_wheels_warn_about_external_driver_libraries() {
 #[test]
 fn wheel_discovery_matches_normalized_distribution_names() {
     let temp = TempDir::new("target-python-discovery");
-    let sipp = temp.write("dist/sipp_py-0.1.0-py3-none-any.whl", "");
+    let sipp = temp.write("dist/sipppy-0.1.0-py3-none-any.whl", "");
     let cuda = temp.write(
-        "dist/sipp_py_backend_cuda-0.1.0-cp310-abi3-win_amd64.whl",
+        "dist/sipppy_backend_cuda-0.1.0-cp310-abi3-win_amd64.whl",
         "",
     );
     temp.write("dist/readme.txt", "");
 
     assert_eq!(
-        find_wheel_artifact_for_distribution(&temp.join("dist"), "sipp-py").unwrap(),
+        find_wheel_artifact_for_distribution(&temp.join("dist"), "sipppy").unwrap(),
         Some(sipp)
     );
     assert_eq!(
-        find_wheel_artifact_for_distribution(&temp.join("dist"), "sipp-py-backend-cuda").unwrap(),
+        find_wheel_artifact_for_distribution(&temp.join("dist"), "sipppy-backend-cuda").unwrap(),
         Some(cuda.clone())
     );
-    assert!(wheel_matches_distribution(&cuda, "sipp-py-backend-cuda"));
-    assert!(!wheel_matches_distribution(&cuda, "sipp-py-backend-vulkan"));
+    assert!(wheel_matches_distribution(&cuda, "sipppy-backend-cuda"));
+    assert!(!wheel_matches_distribution(&cuda, "sipppy-backend-vulkan"));
 }
 
 #[test]
 fn dist_preparation_removes_only_sipp_package_wheels() {
     let temp = TempDir::new("target-python-dist");
     let dist = temp.create_dir("dist");
+    temp.write("dist/sipppy-0.1.0.whl", "");
+    temp.write("dist/sipppy_backend_cuda-0.1.0.whl", "");
     temp.write("dist/sipp_py-0.1.0.whl", "");
     temp.write("dist/sipp_py_backend_cuda-0.1.0.whl", "");
     temp.write("dist/sipp-0.1.0.whl", "");
     temp.write("dist/sipp_backend_cuda-0.1.0.whl", "");
     temp.write("dist/other-0.1.0.whl", "");
-    temp.write("dist/sipp_py-0.1.0.txt", "");
+    temp.write("dist/sipppy-0.1.0.txt", "");
     let sh = xshell::Shell::new().unwrap();
 
     prepare_dist_dir(&sh, &dist).unwrap();
 
+    assert!(!dist.join("sipppy-0.1.0.whl").exists());
+    assert!(!dist.join("sipppy_backend_cuda-0.1.0.whl").exists());
     assert!(!dist.join("sipp_py-0.1.0.whl").exists());
     assert!(!dist.join("sipp_py_backend_cuda-0.1.0.whl").exists());
     assert!(!dist.join("sipp-0.1.0.whl").exists());
     assert!(!dist.join("sipp_backend_cuda-0.1.0.whl").exists());
     assert!(dist.join("other-0.1.0.whl").exists());
-    assert!(dist.join("sipp_py-0.1.0.txt").exists());
+    assert!(dist.join("sipppy-0.1.0.txt").exists());
 }

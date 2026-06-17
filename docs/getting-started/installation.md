@@ -11,10 +11,10 @@ or `embed`.
 | --- | --- | --- |
 | Browser | `npm install @sipp/sipp` | Browser-local GGUF inference and browser gateway clients. |
 | Node.js | `npm install @sipp/sipp-server` | Server-side local inference and framework route handlers. |
-| Python | `pip install sipp-py` | Python scripts, services, and gateway clients. |
+| Python | `pip install sipppy` | Python scripts, services, and gateway clients. |
 | Python CUDA | GitHub release wheel | Python local inference with CUDA backend wheels. |
-| Python Vulkan | `pip install "sipp-py[vulkan]"` | Python local inference with Vulkan backend wheels. |
-| Python Metal | `pip install "sipp-py[metal]"` | Python local inference with Metal backend wheels on macOS. |
+| Python Vulkan | `pip install "sipppy[vulkan]"` | Python local inference with Vulkan backend wheels. |
+| Python Metal | `pip install "sipppy[metal]"` | Python local inference with Metal backend wheels on macOS. |
 | Rust | `cargo add sipp-rs` | Rust applications and services. |
 
 The current release workflow publishes browser npm, Node npm, Python wheels,
@@ -31,8 +31,8 @@ added.
 - Browser-local inference needs a modern browser with WebAssembly support;
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
 - Node installs use `@sipp/sipp-server`; npm resolves the matching optional
-  platform binary package automatically. Python installs use `sipp-py` for CPU
-  and PyPI extras such as `sipp-py[vulkan]` or `sipp-py[metal]` to pull
+  platform binary package automatically. Python installs use `sipppy` for CPU
+  and PyPI extras such as `sipppy[vulkan]` or `sipppy[metal]` to pull
   matching backend distributions. CUDA backend wheels are attached to GitHub
   releases until the PyPI file-size limit is raised. Python code still imports
   `sipp`. Use `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you need to

@@ -230,15 +230,15 @@ jobs:
             check_npm @sipp/sipp-server-win32-x64-msvc "$VERSION"
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "python" ]; then
-            check_pypi sipp-py "$VERSION"
-            check_pypi sipp-py-backend-metal "$VERSION"
+            check_pypi sipppy "$VERSION"
+            check_pypi sipppy-backend-metal "$VERSION"
             case "$PYPI_WHEEL_SCOPE" in
               all)
-                check_pypi sipp-py-backend-cuda "$VERSION"
-                check_pypi sipp-py-backend-vulkan "$VERSION"
+                check_pypi sipppy-backend-cuda "$VERSION"
+                check_pypi sipppy-backend-vulkan "$VERSION"
                 ;;
               non-cuda)
-                check_pypi sipp-py-backend-vulkan "$VERSION"
+                check_pypi sipppy-backend-vulkan "$VERSION"
                 echo "Skipping CUDA PyPI preflight because pypi_wheel_scope=$PYPI_WHEEL_SCOPE."
                 ;;
               macos)
@@ -712,7 +712,7 @@ jobs:
             non-cuda)
               wheels=()
               for wheel in .build/artifacts/python/*.whl; do
-                if [[ "$(basename "$wheel")" == sipp_py_backend_cuda-* ]]; then
+                if [[ "$(basename "$wheel")" == sipppy_backend_cuda-* ]]; then
                   continue
                 fi
                 wheels+=("$wheel")
@@ -768,10 +768,10 @@ jobs:
           require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm
           require_file .build/artifacts/npm/sipp-server/package.json
           require_glob "node platform packages" .build/artifacts/npm/sipp-server-*/package.json
-          require_glob "Python sipp-py wheels" .build/artifacts/python/sipp_py-*.whl
-          require_glob "Python CUDA backend wheels" .build/artifacts/python/sipp_py_backend_cuda-*.whl
-          require_glob "Python Vulkan backend wheels" .build/artifacts/python/sipp_py_backend_vulkan-*.whl
-          require_glob "Python Metal backend wheels" .build/artifacts/python/sipp_py_backend_metal-*.whl
+          require_glob "Python sipppy wheels" .build/artifacts/python/sipppy-*.whl
+          require_glob "Python CUDA backend wheels" .build/artifacts/python/sipppy_backend_cuda-*.whl
+          require_glob "Python Vulkan backend wheels" .build/artifacts/python/sipppy_backend_vulkan-*.whl
+          require_glob "Python Metal backend wheels" .build/artifacts/python/sipppy_backend_metal-*.whl
           require_glob "PyPI upload wheels" .build/artifacts/pypi/*.whl
           require_glob "Rust sipp-sys crate package" .build/release-assets/sipp-sys-*.crate
 
@@ -787,10 +787,10 @@ jobs:
           fi
 
           if [ "$PYPI_WHEEL_SCOPE" = "non-cuda" ]; then
-            require_glob "PyPI sipp-py wheels" .build/artifacts/pypi/sipp_py-*.whl
-            require_glob "PyPI Vulkan backend wheels" .build/artifacts/pypi/sipp_py_backend_vulkan-*.whl
-            require_glob "PyPI Metal backend wheels" .build/artifacts/pypi/sipp_py_backend_metal-*.whl
-            cuda_wheels=(.build/artifacts/pypi/sipp_py_backend_cuda-*.whl)
+            require_glob "PyPI sipppy wheels" .build/artifacts/pypi/sipppy-*.whl
+            require_glob "PyPI Vulkan backend wheels" .build/artifacts/pypi/sipppy_backend_vulkan-*.whl
+            require_glob "PyPI Metal backend wheels" .build/artifacts/pypi/sipppy_backend_metal-*.whl
+            cuda_wheels=(.build/artifacts/pypi/sipppy_backend_cuda-*.whl)
             if [ "${#cuda_wheels[@]}" -ne 0 ]; then
               printf '::error::CUDA wheel staged for non-CUDA PyPI upload: %s\n' "${cuda_wheels[@]}"
               missing=1

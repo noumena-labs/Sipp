@@ -89,7 +89,7 @@ npm install @sipp/sipp
 npm install @sipp/sipp-server
 
 # For Python automation and data engineering pipelines
-pip install sipp-py
+pip install sipppy
 
 # For native systems development and application embedding
 cargo add sipp-rs
@@ -109,7 +109,7 @@ Most developers should start with our pre-built, published packages rather than 
 | --- | --- | --- | --- |
 | **Browser** | Sipp Edge | `npm install @sipp/sipp` | [Browser package](docs/packages/browser.md) |
 | **Node.js** | Sipp Core | `npm install @sipp/sipp-server` | [Node.js package](docs/packages/node.md) |
-| **Python** | Sipp Core | `pip install sipp-py` | [Python package](docs/packages/python.md) |
+| **Python** | Sipp Core | `pip install sipppy` | [Python package](docs/packages/python.md) |
 | **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust package](docs/packages/rust.md) |
 | **Gateway Server** | Sipp Cloud | Source-built | [Gateway Server](docs/gateway/server.md) |
 | **Gateway Toolkit** | Sipp Cloud | Source-built | [Gateway toolkit](docs/gateway/toolkit.md) |

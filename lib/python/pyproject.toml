@@ -3,29 +3,29 @@ requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
 
 [project]
-name = "sipp-py"
+name = "sipppy"
 version = "0.1.0"
 description = "Native Python bindings for Sipp"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 
 [project.optional-dependencies]
-cuda = ["sipp-py-backend-cuda==0.1.0"]
-vulkan = ["sipp-py-backend-vulkan==0.1.0"]
-metal = ["sipp-py-backend-metal==0.1.0"]
+cuda = ["sipppy-backend-cuda==0.1.0"]
+vulkan = ["sipppy-backend-vulkan==0.1.0"]
+metal = ["sipppy-backend-metal==0.1.0"]
 all = [
-  "sipp-py-backend-cuda==0.1.0; platform_system != 'Darwin'",
-  "sipp-py-backend-vulkan==0.1.0; platform_system != 'Darwin'",
-  "sipp-py-backend-metal==0.1.0; platform_system == 'Darwin'",
+  "sipppy-backend-cuda==0.1.0; platform_system != 'Darwin'",
+  "sipppy-backend-vulkan==0.1.0; platform_system != 'Darwin'",
+  "sipppy-backend-metal==0.1.0; platform_system == 'Darwin'",
 ]
 
 [dependency-groups]
 dev = ["maturin>=1.5,<2", "pytest>=8,<9", "pytest-cov>=7,<8"]
 
 [tool.uv.sources]
-sipp-py-backend-cuda = { path = "backends/cuda" }
-sipp-py-backend-vulkan = { path = "backends/vulkan" }
-sipp-py-backend-metal = { path = "backends/metal" }
+sipppy-backend-cuda = { path = "backends/cuda" }
+sipppy-backend-vulkan = { path = "backends/vulkan" }
+sipppy-backend-metal = { path = "backends/metal" }
 
 [tool.maturin]
 module-name = "sipp._native"

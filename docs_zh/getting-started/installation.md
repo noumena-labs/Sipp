@@ -8,10 +8,10 @@
 | --- | --- | --- |
 | 浏览器 | `npm install @sipp/sipp` | 浏览器本地 GGUF 推理及网关客户端。 |
 | Node.js | `npm install @sipp/sipp-server` | Node.js 本地推理及网关客户端。 |
-| Python | `pip install sipp-py` | Python 本地推理及网关客户端。 |
+| Python | `pip install sipppy` | Python 本地推理及网关客户端。 |
 | Python CUDA | GitHub Release Wheel | 使用 CUDA 后端 Wheel 的 Python 本地推理。 |
-| Python Vulkan | `pip install "sipp-py[vulkan]"` | 使用 Vulkan 后端 Wheel 的 Python 本地推理。 |
-| Python Metal | `pip install "sipp-py[metal]"` | macOS 上使用 Metal 后端 Wheel 的 Python 本地推理。 |
+| Python Vulkan | `pip install "sipppy[vulkan]"` | 使用 Vulkan 后端 Wheel 的 Python 本地推理。 |
+| Python Metal | `pip install "sipppy[metal]"` | macOS 上使用 Metal 后端 Wheel 的 Python 本地推理。 |
 | Rust | `cargo add sipp-rs` | Rust 本地推理及网关客户端。 |
 
 当前发布工作流会发布浏览器 npm 包、Node npm 包、Python Wheel 和 Rust 源码 Crate, 但尚未发布独立的 gateway-server 二进制文件、容器镜像或 `cargo install` 目标。在官方服务器制品发布前，部署网关服务请使用源码签出及 Dockerfile。
@@ -22,8 +22,8 @@
 - Python Wheel 需要 Python 3.10 或更新版本。
 - 浏览器本地推理需要支持 WebAssembly 的现代浏览器；WebGPU 加速取决于浏览器和设备支持。具体请查看 [设备支持](../references/device-support.md)。
 - Node 安装使用 `@sipp/sipp-server`，npm 会自动解析匹配的平台二进制包。Python
-  CPU 包使用 `sipp-py`，Vulkan、Metal 后端通过 `sipp-py[vulkan]`、
-  `sipp-py[metal]` 等 PyPI extras 拉取匹配的 `sipp-py-backend-*`
+  CPU 包使用 `sipppy`，Vulkan、Metal 后端通过 `sipppy[vulkan]`、
+  `sipppy[metal]` 等 PyPI extras 拉取匹配的 `sipppy-backend-*`
   分发包；CUDA 后端 Wheel 暂时附在 GitHub Release 中，待 PyPI
   文件大小限制提升后再发布到 PyPI。Python 代码仍然导入 `sipp`。
   如需强制指定 `cpu`、`vulkan`、`cuda` 或 `metal`，设置环境变量

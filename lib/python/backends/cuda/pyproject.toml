@@ -3,7 +3,7 @@ requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
 
 [project]
-name = "sipp-py-backend-cuda"
+name = "sipppy-backend-cuda"
 version = "0.1.0"
 description = "Native CUDA backend for Sipp Python"
 requires-python = ">=3.10"

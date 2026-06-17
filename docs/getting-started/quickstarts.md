@@ -145,7 +145,7 @@ embeddings through this runtime.
 ## Python Local
 
 ```bash
-pip install sipp-py
+pip install sipppy
 ```
 
 ```python

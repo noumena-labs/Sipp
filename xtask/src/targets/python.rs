@@ -23,8 +23,8 @@ mod python_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const PYTHON_PACKAGE_NAME: &str = "sipp-py";
-const PYTHON_BACKEND_PACKAGE_PREFIX: &str = "sipp-py-backend";
+const PYTHON_PACKAGE_NAME: &str = "sipppy";
+const PYTHON_BACKEND_PACKAGE_PREFIX: &str = "sipppy-backend";
 
 /// Builds the Python bindings for the selected backend.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {
@@ -194,8 +194,8 @@ fn build_sipp_wheel(
     .env("CARGO_TARGET_DIR", &target_dir);
 
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, Some(&Backend::Cpu))?;
-    output::run_build_command("Building Python sipp-py wheel", maturin_cmd)
-        .context("failed to build Python sipp-py wheel")?;
+    output::run_build_command("Building Python sipppy wheel", maturin_cmd)
+        .context("failed to build Python sipppy wheel")?;
 
     find_wheel_artifact_for_distribution(dist_dir, PYTHON_PACKAGE_NAME)?.with_context(|| {
         format!(
@@ -324,7 +324,9 @@ fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let is_sipp_python_wheel = file_name.starts_with("sipp_py-")
+        let is_sipp_python_wheel = file_name.starts_with("sipppy-")
+            || file_name.starts_with("sipppy_backend_")
+            || file_name.starts_with("sipp_py-")
             || file_name.starts_with("sipp_py_backend_")
             || file_name.starts_with("sipp-")
             || file_name.starts_with("sipp_backend_");

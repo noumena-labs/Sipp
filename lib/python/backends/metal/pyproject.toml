@@ -3,7 +3,7 @@ requires = ["maturin>=1.5,<2"]
 build-backend = "maturin"
 
 [project]
-name = "sipp-py-backend-metal"
+name = "sipppy-backend-metal"
 version = "0.1.0"
 description = "Native Metal backend for Sipp Python"
 requires-python = ">=3.10"

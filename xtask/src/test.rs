@@ -3660,7 +3660,7 @@ fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
         "sipp-cli" => &["apps", "cli"],
         "xtask" => &["xtask"],
         "sipp-napi" => &["bindings", "node"],
-        "sipp-py" => &["bindings", "python"],
+        "sipppy" => &["bindings", "python"],
         "sipp-wasm" => &["bindings", "wasm"],
         _ => anyhow::bail!("unknown Rust test package: {package}"),
     };

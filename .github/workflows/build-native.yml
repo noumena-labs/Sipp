@@ -309,10 +309,10 @@ jobs:
           backends = [backend.strip() for backend in os.environ["BACKENDS"].split(",") if backend.strip()]
           wheels = glob.glob(".build/artifacts/python/*.whl")
           expected = {
-              "cpu": ("sipp_py", "sipp/_native"),
-              "cuda": ("sipp_py_backend_cuda", "sipp_backend_cuda/_native"),
-              "metal": ("sipp_py_backend_metal", "sipp_backend_metal/_native"),
-              "vulkan": ("sipp_py_backend_vulkan", "sipp_backend_vulkan/_native"),
+              "cpu": ("sipppy", "sipp/_native"),
+              "cuda": ("sipppy_backend_cuda", "sipp_backend_cuda/_native"),
+              "metal": ("sipppy_backend_metal", "sipp_backend_metal/_native"),
+              "vulkan": ("sipppy_backend_vulkan", "sipp_backend_vulkan/_native"),
           }
           missing = []
           for backend in backends:
@@ -372,7 +372,7 @@ jobs:
                 [[ "$wheel_name" == *macosx* ]]
                 ;;
               non-cuda)
-                [[ "$wheel_name" != sipp_py_backend_cuda-* ]]
+                [[ "$wheel_name" != sipppy_backend_cuda-* ]]
                 ;;
             esac
           }

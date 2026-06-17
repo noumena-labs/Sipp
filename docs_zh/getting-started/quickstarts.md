@@ -136,7 +136,7 @@ console.log(query.text, chat.text, embedding.values.length);
 ## Python 本地推理
 
 ```bash
-pip install sipp-py
+pip install sipppy
 ```
 
 ```python

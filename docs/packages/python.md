@@ -1,6 +1,6 @@
 # Python Package
 
-The Python package target is `sipp-py`. It installs the import package
+The Python package target is `sipppy`. It installs the import package
 `sipp` and exposes native descriptor classes, run handles, token streaming,
 and the same endpoint model as the Rust client.
 
@@ -12,20 +12,20 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 ## Install
 
 ```bash
-pip install sipp-py
+pip install sipppy
 ```
 
 The default wheel includes the CPU backend. Install PyPI-published GPU
 backends as extras:
 
 ```bash
-pip install "sipp-py[vulkan]"
-pip install "sipp-py[metal]"
+pip install "sipppy[vulkan]"
+pip install "sipppy[metal]"
 ```
 
 The backend wheels are separate PyPI distributions. For example,
-`sipp-py[vulkan]` installs the main `sipp-py` wheel plus the matching
-`sipp-py-backend-vulkan` wheel for the same release version. Python code still
+`sipppy[vulkan]` installs the main `sipppy` wheel plus the matching
+`sipppy-backend-vulkan` wheel for the same release version. Python code still
 imports `sipp`. CUDA backend wheels are attached to GitHub releases for the
 first public release and will move to PyPI after the CUDA wheel size limit is
 raised.
