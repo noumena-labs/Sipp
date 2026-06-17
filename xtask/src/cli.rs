@@ -449,8 +449,8 @@ Examples:
   cargo xtask build python --backend vulkan
   cargo xtask build python --backend all
 
-The default backend is CPU. `--backend all` builds the CPU-capable `sipp`
-wheel plus host-supported `sipp-backend-*` wheels for optional GPU extras.")]
+The default backend is CPU. `--backend all` builds the CPU-capable `sipp-py`
+wheel plus host-supported `sipp-py-backend-*` wheels for optional GPU extras.")]
     #[command(after_long_help = BACKEND_HELP)]
     Python(BackendArgs),
 

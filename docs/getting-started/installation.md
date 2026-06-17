@@ -11,10 +11,10 @@ or `embed`.
 | --- | --- | --- |
 | Browser | `npm install @sipp/sipp` | Browser-local GGUF inference and browser gateway clients. |
 | Node.js | `npm install @sipp/sipp-server` | Server-side local inference and framework route handlers. |
-| Python | `pip install sipp` | Python scripts, services, and gateway clients. |
-| Python CUDA | `pip install "sipp[cuda]"` | Python local inference with CUDA backend wheels. |
-| Python Vulkan | `pip install "sipp[vulkan]"` | Python local inference with Vulkan backend wheels. |
-| Python Metal | `pip install "sipp[metal]"` | Python local inference with Metal backend wheels on macOS. |
+| Python | `pip install sipp-py` | Python scripts, services, and gateway clients. |
+| Python CUDA | `pip install "sipp-py[cuda]"` | Python local inference with CUDA backend wheels. |
+| Python Vulkan | `pip install "sipp-py[vulkan]"` | Python local inference with Vulkan backend wheels. |
+| Python Metal | `pip install "sipp-py[metal]"` | Python local inference with Metal backend wheels on macOS. |
 | Rust | `cargo add sipp-rs` | Rust applications and services. |
 
 The current release workflow publishes browser npm, Node npm, Python wheels,
@@ -30,9 +30,9 @@ added.
 - Browser-local inference needs a modern browser with WebAssembly support;
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
 - Node installs use `@sipp/sipp-server`; npm resolves the matching optional
-  platform binary package automatically. Python installs use `sipp` for CPU
-  and extras such as `sipp[cuda]` to pull matching backend distributions like
-  `sipp-backend-cuda`. Use
+  platform binary package automatically. Python installs use `sipp-py` for CPU
+  and extras such as `sipp-py[cuda]` to pull matching backend distributions
+  like `sipp-py-backend-cuda`. Python code still imports `sipp`. Use
   `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you need to force `cpu`,
   `vulkan`, `cuda`, or `metal`.
 - Gateway clients need only the gateway base URL, public target name, and

@@ -207,10 +207,10 @@ jobs:
             check_npm @sipp/sipp-server-win32-x64-msvc "$VERSION"
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "python" ]; then
-            check_pypi sipp "$VERSION"
-            check_pypi sipp-backend-cuda "$VERSION"
-            check_pypi sipp-backend-metal "$VERSION"
-            check_pypi sipp-backend-vulkan "$VERSION"
+            check_pypi sipp-py "$VERSION"
+            check_pypi sipp-py-backend-cuda "$VERSION"
+            check_pypi sipp-py-backend-metal "$VERSION"
+            check_pypi sipp-py-backend-vulkan "$VERSION"
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "rust" ]; then
             check_crate sipp-sys "$VERSION"
@@ -670,10 +670,10 @@ jobs:
           require_file .build/artifacts/npm/sipp/package.json
           require_file .build/artifacts/npm/sipp-server/package.json
           require_glob "node platform packages" .build/artifacts/npm/sipp-server-*/package.json
-          require_glob "Python sipp wheels" .build/artifacts/python/sipp-*.whl
-          require_glob "Python CUDA backend wheels" .build/artifacts/python/sipp_backend_cuda-*.whl
-          require_glob "Python Vulkan backend wheels" .build/artifacts/python/sipp_backend_vulkan-*.whl
-          require_glob "Python Metal backend wheels" .build/artifacts/python/sipp_backend_metal-*.whl
+          require_glob "Python sipp-py wheels" .build/artifacts/python/sipp_py-*.whl
+          require_glob "Python CUDA backend wheels" .build/artifacts/python/sipp_py_backend_cuda-*.whl
+          require_glob "Python Vulkan backend wheels" .build/artifacts/python/sipp_py_backend_vulkan-*.whl
+          require_glob "Python Metal backend wheels" .build/artifacts/python/sipp_py_backend_metal-*.whl
           require_glob "Rust sipp-sys crate package" .build/release-assets/sipp-sys-*.crate
 
           exit "$missing"

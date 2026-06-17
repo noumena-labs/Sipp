@@ -377,24 +377,24 @@ wheels = [
 ]
 
 [[package]]
-name = "sipp"
+name = "sipp-py"
 version = "0.1.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
 all = [
-    { name = "sipp-backend-cuda", marker = "sys_platform != 'darwin'" },
-    { name = "sipp-backend-metal", marker = "sys_platform == 'darwin'" },
-    { name = "sipp-backend-vulkan", marker = "sys_platform != 'darwin'" },
+    { name = "sipp-py-backend-cuda", marker = "sys_platform != 'darwin'" },
+    { name = "sipp-py-backend-metal", marker = "sys_platform == 'darwin'" },
+    { name = "sipp-py-backend-vulkan", marker = "sys_platform != 'darwin'" },
 ]
 cuda = [
-    { name = "sipp-backend-cuda" },
+    { name = "sipp-py-backend-cuda" },
 ]
 metal = [
-    { name = "sipp-backend-metal" },
+    { name = "sipp-py-backend-metal" },
 ]
 vulkan = [
-    { name = "sipp-backend-vulkan" },
+    { name = "sipp-py-backend-vulkan" },
 ]
 
 [package.dev-dependencies]
@@ -406,12 +406,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "sipp-backend-cuda", marker = "sys_platform != 'darwin' and extra == 'all'", directory = "backends/cuda" },
-    { name = "sipp-backend-cuda", marker = "extra == 'cuda'", directory = "backends/cuda" },
-    { name = "sipp-backend-metal", marker = "sys_platform == 'darwin' and extra == 'all'", directory = "backends/metal" },
-    { name = "sipp-backend-metal", marker = "extra == 'metal'", directory = "backends/metal" },
-    { name = "sipp-backend-vulkan", marker = "sys_platform != 'darwin' and extra == 'all'", directory = "backends/vulkan" },
-    { name = "sipp-backend-vulkan", marker = "extra == 'vulkan'", directory = "backends/vulkan" },
+    { name = "sipp-py-backend-cuda", marker = "sys_platform != 'darwin' and extra == 'all'", directory = "backends/cuda" },
+    { name = "sipp-py-backend-cuda", marker = "extra == 'cuda'", directory = "backends/cuda" },
+    { name = "sipp-py-backend-metal", marker = "sys_platform == 'darwin' and extra == 'all'", directory = "backends/metal" },
+    { name = "sipp-py-backend-metal", marker = "extra == 'metal'", directory = "backends/metal" },
+    { name = "sipp-py-backend-vulkan", marker = "sys_platform != 'darwin' and extra == 'all'", directory = "backends/vulkan" },
+    { name = "sipp-py-backend-vulkan", marker = "extra == 'vulkan'", directory = "backends/vulkan" },
 ]
 provides-extras = ["cuda", "vulkan", "metal", "all"]
 
@@ -423,17 +423,17 @@ dev = [
 ]
 
 [[package]]
-name = "sipp-backend-cuda"
+name = "sipp-py-backend-cuda"
 version = "0.1.0"
 source = { directory = "backends/cuda" }
 
 [[package]]
-name = "sipp-backend-metal"
+name = "sipp-py-backend-metal"
 version = "0.1.0"
 source = { directory = "backends/metal" }
 
 [[package]]
-name = "sipp-backend-vulkan"
+name = "sipp-py-backend-vulkan"
 version = "0.1.0"
 source = { directory = "backends/vulkan" }
 
