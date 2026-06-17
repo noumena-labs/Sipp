@@ -63,18 +63,7 @@ fn backend_package_names_match_python_packaging_conventions() {
 }
 
 #[test]
-fn gpu_backend_wheels_default_to_strict_auditwheel_policy() {
-    let _env = EnvGuard::new(&[("SIPP_PYTHON_GPU_AUDITWHEEL", None)]);
-
-    assert_eq!(backend_auditwheel_mode(&Backend::Cuda), None);
-    assert_eq!(backend_auditwheel_mode(&Backend::Vulkan), None);
-    assert_eq!(backend_auditwheel_mode(&Backend::Cpu), None);
-}
-
-#[test]
-fn linux_gpu_backend_wheels_can_warn_about_external_driver_libraries() {
-    let _env = EnvGuard::new(&[("SIPP_PYTHON_GPU_AUDITWHEEL", Some("warn"))]);
-
+fn linux_gpu_backend_wheels_warn_about_external_driver_libraries() {
     if cfg!(target_os = "linux") {
         assert_eq!(backend_auditwheel_mode(&Backend::Cuda), Some("warn"));
         assert_eq!(backend_auditwheel_mode(&Backend::Vulkan), Some("warn"));

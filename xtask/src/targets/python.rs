@@ -310,26 +310,15 @@ fn backend_distribution_name(backend: &Backend) -> String {
     format!("{PYTHON_BACKEND_PACKAGE_PREFIX}-{}", backend.as_str())
 }
 
-// Dev Linux GPU backend wheels may depend on host driver/runtime stacks.
-// Maturin's repair mode tries to copy every DT_NEEDED library and fails on
-// driver-only libraries such as libcuda.so.1, so dev builds can keep the audit
-// visible without repairing. Release builds leave this unset and stay strict.
+// Linux GPU backend wheels depend on the host driver/runtime stack. Repair mode
+// tries to bundle driver-only libraries such as libcuda.so.1 and fails on CPU
+// CI runners, so keep the audit visible without repairing those dependencies.
 fn backend_auditwheel_mode(backend: &Backend) -> Option<&'static str> {
-    if cfg!(target_os = "linux")
-        && matches!(backend, Backend::Cuda | Backend::Vulkan)
-        && gpu_auditwheel_warn_enabled()
-    {
+    if cfg!(target_os = "linux") && matches!(backend, Backend::Cuda | Backend::Vulkan) {
         Some("warn")
     } else {
         None
     }
-}
-
-fn gpu_auditwheel_warn_enabled() -> bool {
-    matches!(
-        env::var("SIPP_PYTHON_GPU_AUDITWHEEL").as_deref(),
-        Ok("warn")
-    )
 }
 
 fn prepare_dist_dir(sh: &Shell, dist_dir: &Path) -> Result<()> {
