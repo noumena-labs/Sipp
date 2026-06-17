@@ -27,9 +27,10 @@ on:
       pypi_wheel_scope:
         description: Python wheels to publish to PyPI
         required: true
-        default: macos
+        default: non-cuda
         type: choice
         options:
+          - non-cuda
           - macos
           - all
 
@@ -176,6 +177,15 @@ jobs:
           fi
           conflicts=0
 
+          case "$PYPI_WHEEL_SCOPE" in
+            all|non-cuda|macos)
+              ;;
+            *)
+              echo "::error::Unsupported pypi_wheel_scope: $PYPI_WHEEL_SCOPE"
+              exit 1
+              ;;
+          esac
+
           check_npm() {
             local name="$1" version="$2" encoded status
             encoded="$(jq -rn --arg value "$name" '$value|@uri')"
@@ -222,12 +232,19 @@ jobs:
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "python" ]; then
             check_pypi sipp-py "$VERSION"
             check_pypi sipp-py-backend-metal "$VERSION"
-            if [ "$PYPI_WHEEL_SCOPE" = "all" ]; then
-              check_pypi sipp-py-backend-cuda "$VERSION"
-              check_pypi sipp-py-backend-vulkan "$VERSION"
-            else
-              echo "Skipping CUDA and Vulkan PyPI preflight because pypi_wheel_scope=$PYPI_WHEEL_SCOPE."
-            fi
+            case "$PYPI_WHEEL_SCOPE" in
+              all)
+                check_pypi sipp-py-backend-cuda "$VERSION"
+                check_pypi sipp-py-backend-vulkan "$VERSION"
+                ;;
+              non-cuda)
+                check_pypi sipp-py-backend-vulkan "$VERSION"
+                echo "Skipping CUDA PyPI preflight because pypi_wheel_scope=$PYPI_WHEEL_SCOPE."
+                ;;
+              macos)
+                echo "Skipping CUDA and Vulkan PyPI preflight because pypi_wheel_scope=$PYPI_WHEEL_SCOPE."
+                ;;
+            esac
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "rust" ]; then
             check_crate sipp-sys "$VERSION"
@@ -692,6 +709,15 @@ jobs:
             all)
               wheels=(.build/artifacts/python/*.whl)
               ;;
+            non-cuda)
+              wheels=()
+              for wheel in .build/artifacts/python/*.whl; do
+                if [[ "$(basename "$wheel")" == sipp_py_backend_cuda-* ]]; then
+                  continue
+                fi
+                wheels+=("$wheel")
+              done
+              ;;
             macos)
               wheels=(.build/artifacts/python/*macosx*.whl)
               ;;
@@ -758,6 +784,17 @@ jobs:
                 missing=1
               fi
             done
+          fi
+
+          if [ "$PYPI_WHEEL_SCOPE" = "non-cuda" ]; then
+            require_glob "PyPI sipp-py wheels" .build/artifacts/pypi/sipp_py-*.whl
+            require_glob "PyPI Vulkan backend wheels" .build/artifacts/pypi/sipp_py_backend_vulkan-*.whl
+            require_glob "PyPI Metal backend wheels" .build/artifacts/pypi/sipp_py_backend_metal-*.whl
+            cuda_wheels=(.build/artifacts/pypi/sipp_py_backend_cuda-*.whl)
+            if [ "${#cuda_wheels[@]}" -ne 0 ]; then
+              printf '::error::CUDA wheel staged for non-CUDA PyPI upload: %s\n' "${cuda_wheels[@]}"
+              missing=1
+            fi
           fi
 
           exit "$missing"

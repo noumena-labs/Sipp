@@ -15,19 +15,20 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 pip install sipp-py
 ```
 
-The default wheel includes the CPU backend. Install GPU backends as extras:
+The default wheel includes the CPU backend. Install PyPI-published GPU
+backends as extras:
 
 ```bash
-pip install "sipp-py[cuda]"
 pip install "sipp-py[vulkan]"
 pip install "sipp-py[metal]"
-pip install "sipp-py[all]"
 ```
 
 The backend wheels are separate PyPI distributions. For example,
-`sipp-py[cuda]` installs the main `sipp-py` wheel plus the matching
-`sipp-py-backend-cuda` wheel for the same release version. Python code still
-imports `sipp`.
+`sipp-py[vulkan]` installs the main `sipp-py` wheel plus the matching
+`sipp-py-backend-vulkan` wheel for the same release version. Python code still
+imports `sipp`. CUDA backend wheels are attached to GitHub releases for the
+first public release and will move to PyPI after the CUDA wheel size limit is
+raised.
 
 ## Use It For
 

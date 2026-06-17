@@ -21,8 +21,10 @@ if the launcher is not active.
 
 Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 Published wheels install the CPU-capable `sipp-py` distribution by default.
-GPU backends are optional extras, for example `pip install "sipp-py[cuda]"`
-or `pip install "sipp-py[vulkan]"`.
+PyPI-published GPU backends are optional extras, for example
+`pip install "sipp-py[vulkan]"` or `pip install "sipp-py[metal]"`. CUDA
+backend wheels are attached to GitHub releases until the PyPI file-size limit
+is raised.
 
 ## Local GGUF Query
 

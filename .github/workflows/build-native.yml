@@ -47,7 +47,7 @@ on:
         default: true
         type: boolean
       pypi-wheel-scope:
-        description: Python wheels checked against the PyPI upload size budget (all or macos)
+        description: Python wheels checked against the PyPI upload size budget (all, non-cuda, or macos)
         required: false
         default: all
         type: string
@@ -354,7 +354,7 @@ jobs:
           set -euo pipefail
 
           case "$PYPI_WHEEL_SCOPE" in
-            all|macos)
+            all|non-cuda|macos)
               ;;
             *)
               echo "::error::Unsupported pypi-wheel-scope: $PYPI_WHEEL_SCOPE"
@@ -370,6 +370,9 @@ jobs:
                 ;;
               macos)
                 [[ "$wheel_name" == *macosx* ]]
+                ;;
+              non-cuda)
+                [[ "$wheel_name" != sipp_py_backend_cuda-* ]]
                 ;;
             esac
           }
