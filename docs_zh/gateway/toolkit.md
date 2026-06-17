@@ -8,7 +8,7 @@
 
 ## 分发方式
 
-对应 Rust crate `sipp-gateway`。crates.io 仅发布 `sipp` 与 `sipp-sys` 两个 crate；工具包本身有意以源码形式分发。直接依赖源码的方式见[源码构建](../maintainers/source-builds.md)。
+对应 Rust crate `sipp-gateway`。crates.io 发布 `sipp-rs` 与 `sipp-sys` 两个 crate；工具包本身有意以源码形式分发。直接依赖源码的方式见[源码构建](../maintainers/source-builds.md)。
 
 ## 适用场景
 
@@ -29,7 +29,7 @@ let response = client.query(decoded.request).await?;
 let bytes = codec.encode_text(&decoded.target, &response)?;
 ```
 
-自定义网关应用需自行实现套接字管理、路由分发、鉴权、配置文件解析、目标策略、CORS、日志及默认部署配置。在 Node 框架中实现官方网关规范时，可使用 `sipp-server` 导出的配套辅助函数。
+自定义网关应用需自行实现套接字管理、路由分发、鉴权、配置文件解析、目标策略、CORS、日志及默认部署配置。在 Node 框架中实现官方网关规范时，可使用 `@sipp/sipp-server` 导出的配套辅助函数。
 
 ## 职责边界
 

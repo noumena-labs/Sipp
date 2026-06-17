@@ -2,7 +2,7 @@
 
 `sipp` 是 Sipp 代码库的本地启动器。安装后将包装脚本存入 `.build/bin`，随后将所有命令转发给 `cargo xtask`。
 
-本地开发时，构建原生组件、运行示例、启动网关服务、管理 xtask 工具链、执行测试或构建文档，都应使用 `sipp`。已发布的包（如 `sipp`、`sipp-server`、Python wheel）无需 `sipp`。
+本地开发时，构建原生组件、运行示例、启动网关服务、管理 xtask 工具链、执行测试或构建文档，都应使用 `sipp`。已发布的包（如 `@sipp/sipp`、`@sipp/sipp-server`、`sipp-py`）无需 `sipp` 命令行。
 
 ## 命令格式
 

@@ -1,16 +1,16 @@
 # Rust 包
 
-Rust 包发布名称为 `sipp`。作为 Rust 应用的公共 Crate，负责客户端 API 以及运行时、后端、生命周期、分片、提供商和网关等核心类型。
+Rust 包发布名称为 `sipp-rs`，导入的库 crate 名仍然是 `sipp`。它作为 Rust 应用的公共 Crate，负责客户端 API 以及运行时、后端、生命周期、分片、提供商和网关等核心类型。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api)。
 
 ## 安装
 
 ```bash
-cargo add sipp
+cargo add sipp-rs
 ```
 
-发布流程目前打包 Rust 源码工件；`sipp` 与 `sipp-sys` 两个 crate 的 crates.io 发布流程尚待接通。需直接从源码使用该包时，见[源码构建](../maintainers/source-builds.md)。
+发布流程会先发布 `sipp-sys`，再发布 `sipp-rs`。应用依赖 `sipp-rs` 包，并在代码中导入 `sipp` crate。需直接从源码使用该包时，见[源码构建](../maintainers/source-builds.md)。
 
 ## 适用场景
 

@@ -9,6 +9,7 @@ Sipp 为浏览器、Node.js、Python、Rust 应用提供本地推理和网关推
 
 ## 从哪开始
 
+- [路线图](roadmap.md) — 工程里程碑、内存架构和长期愿景
 - [安装指南](getting-started/installation.md) — 各语言的安装命令
 - [快速上手](getting-started/quickstarts.md) — 浏览器、Node.js、Python、Rust、网关的最简示例
 - [使用核心库](packages/) — 各语言包的 API 详解
