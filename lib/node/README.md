@@ -1,12 +1,12 @@
 # Sipp Server for Node.js
 
-`lib/node` is the Node.js package source for the public `sipp-server`
+`lib/node` is the Node.js package source for the public `@sipp/sipp-server`
 package. It exposes Sipp's native client API to Node server processes for
 local GGUF inference, gateway-backed inference, provider descriptors, and token
 streaming.
 
 Source builds use the workspace manifest in this directory. Public docs use the
-`sipp-server` package target. Applications own framework routes and call
+`@sipp/sipp-server` package target. Applications own framework routes and call
 `client.query()`, `client.chat()`, or `client.embed()` inside those routes.
 
 ## Source Checkout
@@ -25,7 +25,7 @@ Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 ## Local GGUF Query
 
 ```ts
-import { SippClient } from 'sipp-server';
+import { SippClient } from '@sipp/sipp-server';
 
 const client = new SippClient();
 await client.add('default', {
@@ -70,7 +70,7 @@ import {
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'sipp-server';
+} from '@sipp/sipp-server';
 
 export async function handleQuery(request: Request): Promise<Response> {
   try {

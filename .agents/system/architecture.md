@@ -4,7 +4,8 @@ Sipp separates inference primitives from protocol and deployment policy.
 
 ## Published Crates
 
-- **`crates/sipp`**: The public `sipp` library published to crates.io.
+- **`crates/sipp`**: The public `sipp-rs` package published to crates.io with
+  library crate name `sipp`.
   Internal module folders keep the former crate boundaries:
   - **`core/`**: Low-level shared types (`sipp::core`).
   - **`shard/`**: GGUF cache planning and split-file utilities (`sipp::shard`).

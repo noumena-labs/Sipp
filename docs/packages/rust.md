@@ -1,8 +1,8 @@
 # Rust Package
 
-The Rust package target is `sipp`. It is the public facade crate for Rust
-applications and re-exports the high-level client API plus selected runtime,
-backend, lifecycle, shard, provider, and gateway types.
+The Rust package target is `sipp-rs`. It publishes the `sipp` library crate
+for Rust applications and re-exports the high-level client API plus selected
+runtime, backend, lifecycle, shard, provider, and gateway types.
 
 See the [Library API Overview](../api) for the shared `add`, `query`,
 `chat`, and `embed` contracts.
@@ -10,13 +10,11 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 ## Install
 
 ```bash
-cargo add sipp
+cargo add sipp-rs
 ```
 
-The release workflow packages a Rust source artifact; crates.io publishing of
-the `sipp` and `sipp-sys` crates is pending release wiring. Use
-[Source Builds](../maintainers/source-builds.md) when consuming the crate from
-this checkout.
+The release workflow publishes `sipp-sys` first, then publishes `sipp-rs`.
+Applications depend on the `sipp-rs` package and import the `sipp` crate.
 
 ## Use It For
 

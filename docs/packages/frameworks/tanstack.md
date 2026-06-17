@@ -16,7 +16,7 @@ they arrive.
 ## TanStack Start Server Function
 
 Server functions run on the server and can be called from loaders, components,
-hooks, or other server functions. Keep `sipp-server`, provider
+hooks, or other server functions. Keep `@sipp/sipp-server`, provider
 credentials, and gateway tokens in server-only functions.
 
 Use `OPENAI_API_KEY="<mock-openai-key>"` as a placeholder in examples. In a
@@ -25,7 +25,7 @@ real deployment, keep the key in your server environment or secret manager.
 ```ts
 // src/server/sipp.ts
 import { createServerFn } from '@tanstack/react-start';
-import { SippClient } from 'sipp-server';
+import { SippClient } from '@sipp/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -81,7 +81,7 @@ import {
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'sipp-server';
+} from '@sipp/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -198,13 +198,13 @@ export function StreamingAnswer(): JSX.Element {
 
 ## Browser Package
 
-Use browser `sipp` from components that run in the browser. That includes
+Use browser `@sipp/sipp` from components that run in the browser. That includes
 browser-local GGUF inference and gateway endpoints with short-lived tokens or
 same-origin server routes.
 
 ```ts
 import { useState } from 'react';
-import { SippClient } from 'sipp';
+import { SippClient } from '@sipp/sipp';
 
 export function LocalAnswer(): JSX.Element {
   const [text, setText] = useState('');
@@ -234,7 +234,7 @@ export function LocalAnswer(): JSX.Element {
 }
 ```
 
-Do not import `sipp-server` from browser modules.
+Do not import `@sipp/sipp-server` from browser modules.
 
 ## Browser Hybrid Endpoints
 
@@ -245,7 +245,7 @@ gateway profile to the browser client.
 
 ```ts
 import { useState } from 'react';
-import { SippClient, type EndpointRef } from 'sipp';
+import { SippClient, type EndpointRef } from '@sipp/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 

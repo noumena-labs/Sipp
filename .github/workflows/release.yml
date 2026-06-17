@@ -78,6 +78,37 @@ jobs:
             exit 1
           fi
 
+      - name: Require full public publish
+        if: ${{ inputs.dry_run == false && inputs.package != 'all' }}
+        shell: bash
+        run: |
+          echo "::error::Public registry publishing is full-release only. Run dry_run=true for package-specific validation, or dry_run=false with package=all."
+          exit 1
+
+      - name: Require registry credentials
+        if: ${{ inputs.dry_run == false }}
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN_PRESENT: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+          NPM_TOKEN_PRESENT: ${{ secrets.NPM_TOKEN != '' }}
+          PYPI_API_TOKEN_PRESENT: ${{ secrets.PYPI_API_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ "$NPM_TOKEN_PRESENT" != "true" ]; then
+            echo "::error::NPM_TOKEN is required to publish @sipp packages to npm."
+            missing=1
+          fi
+          if [ "$CARGO_REGISTRY_TOKEN_PRESENT" != "true" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is required to publish sipp-rs and sipp-sys to crates.io."
+            missing=1
+          fi
+          if [ "$PYPI_API_TOKEN_PRESENT" != "true" ]; then
+            echo "::error::PYPI_API_TOKEN is required for the first PyPI release."
+            missing=1
+          fi
+          exit "$missing"
+
       - name: Validate npm dist-tag
         shell: bash
         env:
@@ -88,13 +119,6 @@ jobs:
             echo "::error::npm_tag '$NPM_TAG' must be a lowercase dist-tag such as latest, next, or beta."
             exit 1
           fi
-
-      - name: Block unsupported Rust crates.io publish
-        if: ${{ inputs.dry_run == false && inputs.package == 'rust' }}
-        shell: bash
-        run: |
-          echo "::error::Rust crates.io publishing is pending publish wiring for the sipp and sipp-sys crates (vendored llama.cpp sign-off, registry credentials, and cargo publish ordering). Run a dry run to generate the Rust source artifact, or choose all, web-npm, node-npm, or python."
-          exit 1
 
       - name: Check out repository
         uses: actions/checkout@v6.0.2
@@ -144,8 +168,9 @@ jobs:
           conflicts=0
 
           check_npm() {
-            local name="$1" version="$2" status
-            status=$(curl -s -o /tmp/npm-package.json -w '%{http_code}' "https://registry.npmjs.org/$name")
+            local name="$1" version="$2" encoded status
+            encoded="$(jq -rn --arg value "$name" '$value|@uri')"
+            status=$(curl -s -o /tmp/npm-package.json -w '%{http_code}' "https://registry.npmjs.org/$encoded")
             if [ "$status" = "200" ] && jq -e --arg v "$version" '.versions[$v]' /tmp/npm-package.json > /dev/null; then
               echo "::${level}::$name@$version is already published to npm; bump the version before releasing."
               conflicts=1
@@ -165,21 +190,36 @@ jobs:
             fi
           }
 
+          check_crate() {
+            local name="$1" version="$2" status
+            status=$(curl -s -H "User-Agent: sipp-release" -o /tmp/crate-package.json -w '%{http_code}' "https://crates.io/api/v1/crates/$name")
+            if [ "$status" = "200" ] && jq -e --arg v "$version" '.versions[]? | select(.num == $v)' /tmp/crate-package.json > /dev/null; then
+              echo "::${level}::$name $version is already published to crates.io; bump the version before releasing."
+              conflicts=1
+            else
+              echo "$name $version is not yet on crates.io (status $status)."
+            fi
+          }
+
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "web-npm" ]; then
-            check_npm sipp "$VERSION"
+            check_npm @sipp/sipp "$VERSION"
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "node-npm" ]; then
-            check_npm sipp-server "$VERSION"
-            check_npm sipp-server-darwin-arm64 "$VERSION"
-            check_npm sipp-server-darwin-x64 "$VERSION"
-            check_npm sipp-server-linux-x64-gnu "$VERSION"
-            check_npm sipp-server-win32-x64-msvc "$VERSION"
+            check_npm @sipp/sipp-server "$VERSION"
+            check_npm @sipp/sipp-server-darwin-arm64 "$VERSION"
+            check_npm @sipp/sipp-server-darwin-x64 "$VERSION"
+            check_npm @sipp/sipp-server-linux-x64-gnu "$VERSION"
+            check_npm @sipp/sipp-server-win32-x64-msvc "$VERSION"
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "python" ]; then
-            check_pypi sipp "$VERSION"
-            check_pypi sipp-backend-cuda "$VERSION"
-            check_pypi sipp-backend-metal "$VERSION"
-            check_pypi sipp-backend-vulkan "$VERSION"
+            check_pypi sipp-py "$VERSION"
+            check_pypi sipp-py-backend-cuda "$VERSION"
+            check_pypi sipp-py-backend-metal "$VERSION"
+            check_pypi sipp-py-backend-vulkan "$VERSION"
+          fi
+          if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "rust" ]; then
+            check_crate sipp-sys "$VERSION"
+            check_crate sipp-rs "$VERSION"
           fi
 
           if [ "$conflicts" -eq 1 ] && [ "$DRY_RUN" != "true" ]; then
@@ -316,6 +356,21 @@ jobs:
       - name: Build staged web package
         run: cargo xtask --plain build wasm
 
+      - name: Require staged web WASM artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm; do
+            if [ ! -f "$artifact" ]; then
+              echo "::error::Missing staged web WASM artifact: $artifact"
+              exit 1
+            fi
+          done
+
       - name: Run web package import smoke
         run: |
           node --input-type=module <<'NODE'
@@ -331,7 +386,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-          pkg.name = 'sipp';
+          pkg.name = '@sipp/sipp';
           pkg.publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' };
           writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
@@ -399,7 +454,7 @@ jobs:
         working-directory: lib/node
         env:
           SIPP_NODE_PACKAGE_ACCESS: public
-          SIPP_NODE_PACKAGE_NAME: sipp-server
+          SIPP_NODE_PACKAGE_NAME: "@sipp/sipp-server"
           SIPP_NODE_PACKAGE_REGISTRY: https://registry.npmjs.org
         run: bun run build:stage
 
@@ -472,46 +527,69 @@ jobs:
           path: .build/artifacts/python/*.whl
 
   rust-source:
-    name: Package Rust source
+    name: Package Rust crates
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    needs: native
+    timeout-minutes: 120
+    needs:
+      - native
+      - preflight
     if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
         with:
-          # Keep the submodule out so the tarball stays facade-only; vendored
-          # llama.cpp ships only after sign-off.
-          submodules: false
+          submodules: recursive
 
-      - name: Package Rust facade source artifact
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Cache Cargo and native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-release-rust-package-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-release-rust-package-${{ runner.os }}-
+
+      - name: Validate and package Rust crates
         shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
+          cargo publish -p sipp-sys --dry-run
+          status=$(curl -s -H "User-Agent: sipp-release" -o /tmp/sipp-sys.json -w '%{http_code}' "https://crates.io/api/v1/crates/sipp-sys")
+          if [ "$status" = "200" ] && jq -e --arg v "$VERSION" '.versions[]? | select(.num == $v)' /tmp/sipp-sys.json > /dev/null; then
+            cargo publish -p sipp-rs --dry-run
+          else
+            echo "Skipping sipp-rs pre-publish packaging because sipp-sys $VERSION is not yet on crates.io."
+          fi
           mkdir -p .build/artifacts/rust
-          tar -czf .build/artifacts/rust/sipp-rust-source-${{ github.run_number }}.${{ github.run_attempt }}.tar.gz \
-            Cargo.toml \
-            Cargo.lock \
-            README.md \
-            LICENSE \
-            crates/sipp \
-            crates/sys \
-            lib/gateway \
-            lib/binding-dto
+          cp "target/package/sipp-sys-$VERSION.crate" .build/artifacts/rust/
+          if [ -f "target/package/sipp-rs-$VERSION.crate" ]; then
+            cp "target/package/sipp-rs-$VERSION.crate" .build/artifacts/rust/
+          fi
 
-      - name: Upload Rust crate artifact
+      - name: Upload Rust crate artifacts
         uses: actions/upload-artifact@v6.0.0
         with:
-          name: sipp-rust-source
-          path: .build/artifacts/rust/*.tar.gz
+          name: sipp-rust-crates
+          path: .build/artifacts/rust/*.crate
 
-  # Tag and cut the GitHub Release *before* anything is pushed to a public
-  # registry, so a published package always has a corresponding tag/Release.
-  tag-release:
-    name: Tag release and cut GitHub Release
+  publish-release:
+    name: Publish public release
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 180
     needs:
       - preflight
       - web-npm
@@ -521,23 +599,229 @@ jobs:
     if: ${{ inputs.dry_run == false && inputs.package == 'all' }}
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
         with:
-          submodules: false
+          submodules: recursive
+
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Cache Cargo and native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-release-final-publish-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-release-final-publish-${{ runner.os }}-
+
+      - name: Download web npm artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-web-npm
+          path: .build/artifacts/npm/sipp
+
+      - name: Download Node npm artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: sipp-server-npm
+          path: .build/artifacts/npm
 
       - name: Download Python wheels
         uses: actions/download-artifact@v8
         with:
           name: sipp-python-wheels
-          path: .build/release-assets
+          path: .build/artifacts/python
 
-      - name: Download Rust source tarball
+      - name: Download Rust crate packages
         uses: actions/download-artifact@v8
         with:
-          name: sipp-rust-source
+          name: sipp-rust-crates
           path: .build/release-assets
+
+      - name: Stage GitHub release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build/release-assets
+          cp .build/artifacts/python/*.whl .build/release-assets/
+
+      - name: Assert final artifact set
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          missing=0
+          require_file() {
+            local path="$1"
+            if [ ! -f "$path" ]; then
+              echo "::error::Missing release artifact: $path"
+              missing=1
+            fi
+          }
+          require_glob() {
+            local label="$1"; shift
+            local matches=("$@")
+            if [ "${#matches[@]}" -eq 0 ]; then
+              echo "::error::Missing release artifacts matching $label"
+              missing=1
+            fi
+          }
+
+          require_file .build/artifacts/npm/sipp/package.json
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm
+          require_file .build/artifacts/npm/sipp-server/package.json
+          require_glob "node platform packages" .build/artifacts/npm/sipp-server-*/package.json
+          require_glob "Python sipp-py wheels" .build/artifacts/python/sipp_py-*.whl
+          require_glob "Python CUDA backend wheels" .build/artifacts/python/sipp_py_backend_cuda-*.whl
+          require_glob "Python Vulkan backend wheels" .build/artifacts/python/sipp_py_backend_vulkan-*.whl
+          require_glob "Python Metal backend wheels" .build/artifacts/python/sipp_py_backend_metal-*.whl
+          require_glob "Rust sipp-sys crate package" .build/release-assets/sipp-sys-*.crate
+
+          exit "$missing"
+
+      - name: Publish Rust dependency crate
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          crate_version_exists() {
+            local crate="$1" version="$2" status
+            status=$(curl -s -H "User-Agent: sipp-release" -o /tmp/crate-version.json -w '%{http_code}' "https://crates.io/api/v1/crates/$crate")
+            [ "$status" = "200" ] && jq -e --arg v "$version" '.versions[]? | select(.num == $v)' /tmp/crate-version.json > /dev/null
+          }
+
+          wait_for_crate_version() {
+            local crate="$1" version="$2"
+            for attempt in {1..60}; do
+              if crate_version_exists "$crate" "$version"; then
+                return 0
+              fi
+              echo "Waiting for $crate $version to appear in crates.io index ($attempt/60)."
+              sleep 10
+            done
+            echo "::error::$crate $version did not appear in crates.io after publishing."
+            return 1
+          }
+
+          if crate_version_exists sipp-sys "$VERSION"; then
+            echo "sipp-sys $VERSION is already published; skipping."
+          else
+            cargo publish -p sipp-sys
+          fi
+          wait_for_crate_version sipp-sys "$VERSION"
+          cargo publish -p sipp-rs --dry-run
+
+      - name: Publish npm packages
+        shell: bash
+        env:
+          NPM_TAG: ${{ inputs.npm_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          npm_version_exists() {
+            local name="$1" version="$2" encoded status
+            encoded="$(jq -rn --arg value "$name" '$value|@uri')"
+            status=$(curl -s -o /tmp/npm-package.json -w '%{http_code}' "https://registry.npmjs.org/$encoded")
+            [ "$status" = "200" ] && jq -e --arg v "$version" '.versions[$v]' /tmp/npm-package.json > /dev/null
+          }
+
+          publish_npm_package() {
+            local package_dir="$1" name version
+            name="$(node -p "require('./$package_dir/package.json').name")"
+            version="$(node -p "require('./$package_dir/package.json').version")"
+            if npm_version_exists "$name" "$version"; then
+              echo "$name@$version is already published; skipping."
+              return
+            fi
+            npm publish "$package_dir" --registry https://registry.npmjs.org --tag "$NPM_TAG"
+          }
+
+          publish_npm_package .build/artifacts/npm/sipp
+          for package_dir in .build/artifacts/npm/sipp-server-*; do
+            publish_npm_package "$package_dir"
+          done
+          publish_npm_package .build/artifacts/npm/sipp-server
+
+      - name: Choose PyPI publish authentication
+        id: pypi-auth
+        shell: bash
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PYPI_API_TOKEN" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+            echo "Using PYPI_API_TOKEN for Python package publish."
+          else
+            echo "mode=trusted-publisher" >> "$GITHUB_OUTPUT"
+            echo "Using PyPI Trusted Publishing for Python package publish."
+          fi
+
+      - name: Publish Python packages to PyPI with API token
+        if: ${{ steps.pypi-auth.outputs.mode == 'token' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: .build/artifacts/python
+          skip-existing: true
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Publish Python packages to PyPI with Trusted Publishing
+        if: ${{ steps.pypi-auth.outputs.mode == 'trusted-publisher' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: .build/artifacts/python
+          skip-existing: true
+
+      - name: Publish Rust facade crate
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          crate_version_exists() {
+            local crate="$1" version="$2" status
+            status=$(curl -s -H "User-Agent: sipp-release" -o /tmp/crate-version.json -w '%{http_code}' "https://crates.io/api/v1/crates/$crate")
+            [ "$status" = "200" ] && jq -e --arg v "$version" '.versions[]? | select(.num == $v)' /tmp/crate-version.json > /dev/null
+          }
+
+          if crate_version_exists sipp-rs "$VERSION"; then
+            echo "sipp-rs $VERSION is already published; skipping."
+          else
+            cargo publish -p sipp-rs
+          fi
+          cargo package -p sipp-rs --allow-dirty --no-verify
+          cp "target/package/sipp-rs-$VERSION.crate" .build/release-assets/
 
       - name: Tag published version
         shell: bash
@@ -545,13 +829,18 @@ jobs:
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" > /dev/null 2>&1; then
-            echo "::error::Release tag $RELEASE_TAG already exists."
-            exit 1
+          remote_tag_sha="$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG" | awk '{ print $1 }' || true)"
+          if [ -n "$remote_tag_sha" ]; then
+            if [ "$remote_tag_sha" != "$GITHUB_SHA" ]; then
+              echo "::error::Release tag $RELEASE_TAG already exists at $remote_tag_sha, not $GITHUB_SHA."
+              exit 1
+            fi
+            echo "Release tag $RELEASE_TAG already exists at $GITHUB_SHA."
+          else
+            git tag "$RELEASE_TAG"
+            git push origin "$RELEASE_TAG"
+            echo "Tagged $GITHUB_SHA as $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
           fi
-          git tag "$RELEASE_TAG"
-          git push origin "$RELEASE_TAG"
-          echo "Tagged $GITHUB_SHA as $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -560,89 +849,3 @@ jobs:
           name: ${{ needs.preflight.outputs.tag }}
           generate_release_notes: true
           files: .build/release-assets/**
-
-  publish-web:
-    name: Publish web package to npm
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    needs:
-      - web-npm
-      - tag-release
-    # always() tolerates tag-release being skipped on partial-package publishes
-    # (e.g. package == web-npm), which deliberately do not cut a tag.
-    if: ${{ always() && inputs.dry_run == false && needs.web-npm.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
-    steps:
-      - name: Set up Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Download web npm artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: sipp-web-npm
-          path: .build/artifacts/npm/sipp
-
-      - name: Publish web package to npm
-        env:
-          NPM_TAG: ${{ inputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        working-directory: .build/artifacts/npm/sipp
-        run: npm publish --registry https://registry.npmjs.org --tag "$NPM_TAG"
-
-  publish-node:
-    name: Publish Node packages to npm
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    needs:
-      - node-npm
-      - tag-release
-    if: ${{ always() && inputs.dry_run == false && needs.node-npm.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
-    steps:
-      - name: Set up Node
-        uses: actions/setup-node@v6.4.0
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Download Node npm artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: sipp-server-npm
-          path: .build/artifacts/npm
-
-      - name: Publish Node packages to npm
-        shell: bash
-        env:
-          NPM_TAG: ${{ inputs.npm_tag }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          for package_dir in .build/artifacts/npm/sipp-server-* .build/artifacts/npm/sipp-server; do
-            [ -d "$package_dir" ] || continue
-            npm publish "$package_dir" --registry https://registry.npmjs.org --tag "$NPM_TAG"
-          done
-
-  publish-python:
-    name: Publish Python package to PyPI
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    needs:
-      - python
-      - tag-release
-    if: ${{ always() && inputs.dry_run == false && needs.python.result == 'success' && (needs.tag-release.result == 'success' || needs.tag-release.result == 'skipped') }}
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Download combined Python wheels
-        uses: actions/download-artifact@v8
-        with:
-          name: sipp-python-wheels
-          path: .build/artifacts/python
-
-      - name: Publish Python package to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: .build/artifacts/python

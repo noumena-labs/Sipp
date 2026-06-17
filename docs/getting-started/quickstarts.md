@@ -15,11 +15,11 @@ See [Examples And Demos](../examples-demos.md) for runnable end-to-end files.
 ## Browser Local
 
 ```bash
-npm install sipp
+npm install @sipp/sipp
 ```
 
 ```ts
-import { SippClient, type ChatMessage } from 'sipp';
+import { SippClient, type ChatMessage } from '@sipp/sipp';
 
 const client = new SippClient();
 const messages: readonly ChatMessage[] = [
@@ -77,11 +77,11 @@ await client.close();
 ## Node.js Local
 
 ```bash
-npm install sipp-server
+npm install @sipp/sipp-server
 ```
 
 ```ts
-import { SippClient } from 'sipp-server';
+import { SippClient } from '@sipp/sipp-server';
 
 const client = new SippClient();
 const messages = [
@@ -145,7 +145,7 @@ embeddings through this runtime.
 ## Python Local
 
 ```bash
-pip install sipp
+pip install sipp-py
 ```
 
 ```python
@@ -221,7 +221,7 @@ print(query["text"], chat["text"], len(embedding["values"]))
 ## Rust Local
 
 ```bash
-cargo add sipp
+cargo add sipp-rs
 ```
 
 ```rust
@@ -322,7 +322,7 @@ metrics in the gateway process. The example uses the browser package shape;
 Node.js uses the same request-object shape shown above.
 
 ```ts
-import { SippClient, type ChatMessage } from 'sipp';
+import { SippClient, type ChatMessage } from '@sipp/sipp';
 
 const client = new SippClient();
 const endpoint = await client.add('gateway', {
@@ -372,7 +372,7 @@ model-specific: `query` needs a completion-compatible provider or model,
 `chat` needs a chat model, and `embed` needs an embedding model.
 
 ```ts
-import { SippClient } from 'sipp-server';
+import { SippClient } from '@sipp/sipp-server';
 
 function env(name: string): string {
   const value = process.env[name];

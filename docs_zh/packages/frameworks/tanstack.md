@@ -10,14 +10,14 @@
 
 ## TanStack Start 服务端函数
 
-服务端函数运行在服务器上，可通过加载器、组件、Hook 或其他服务端函数调用。确保 `sipp-server` 库的导入、提供商密钥的获取和网关 Token 的管理仅局限于服务端函数内部。
+服务端函数运行在服务器上，可通过加载器、组件、Hook 或其他服务端函数调用。确保 `@sipp/sipp-server` 库的导入、提供商密钥的获取和网关 Token 的管理仅局限于服务端函数内部。
 
 示例代码中的 `OPENAI_API_KEY="<mock-openai-key>"` 仅为演示。实际部署时请务必从环境变量或安全密钥库中加载真实的凭证。
 
 ```ts
 // src/server/sipp.ts
 import { createServerFn } from '@tanstack/react-start';
-import { SippClient } from 'sipp-server';
+import { SippClient } from '@sipp/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -64,7 +64,7 @@ import {
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from 'sipp-server';
+} from '@sipp/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -174,11 +174,11 @@ export function StreamingAnswer(): JSX.Element {
 
 ## 浏览器包集成
 
-浏览器端执行的组件逻辑都必须引入浏览器版本的 `sipp` 包。无论是启动浏览器本地 GGUF 推理，还是利用短期 Token 和同源代理路由发起网关调用，都遵循这一原则。
+浏览器端执行的组件逻辑都必须引入浏览器版本的 `@sipp/sipp` 包。无论是启动浏览器本地 GGUF 推理，还是利用短期 Token 和同源代理路由发起网关调用，都遵循这一原则。
 
 ```ts
 import { useState } from 'react';
-import { SippClient } from 'sipp';
+import { SippClient } from '@sipp/sipp';
 
 export function LocalAnswer(): JSX.Element {
   const [text, setText] = useState('');
@@ -208,7 +208,7 @@ export function LocalAnswer(): JSX.Element {
 }
 ```
 
-切勿在任何面向浏览器的模块中导入 Node 专用的 `sipp-server`。
+切勿在任何面向浏览器的模块中导入 Node 专用的 `@sipp/sipp-server`。
 
 ## 浏览器混合端点调用
 
@@ -216,7 +216,7 @@ export function LocalAnswer(): JSX.Element {
 
 ```ts
 import { useState } from 'react';
-import { SippClient, type EndpointRef } from 'sipp';
+import { SippClient, type EndpointRef } from '@sipp/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 

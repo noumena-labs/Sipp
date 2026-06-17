@@ -201,7 +201,7 @@ Run deterministic tests through explicit suite and group namespaces.
 
 Examples:
   cargo xtask test unit suite xtask
-  cargo xtask test unit suite rust-crates --package sipp
+  cargo xtask test unit suite rust-crates --package sipp-rs
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test unit group whitebox
   cargo xtask test unit group interface
@@ -216,7 +216,7 @@ Suites and code locations:
   xtask             xtask CLI and orchestration tests under xtask/src/tests
   rust-crates       workspace crate unit tests under crates/, lib/gateway, and apps/
   rust-bindings     Rust tests for Node, Python, and WASM binding crates
-  browser-package   browser package TypeScript tests under lib/web/tests
+  browser           browser TypeScript tests under lib/web/tests
   demos             browser demo TypeScript tests under demos/
   api               crate-level public API integration tests
   cli               CLI black-box integration tests
@@ -227,7 +227,7 @@ const UNIT_GROUP_HELP: &str = "\
 Run a named bundle of deterministic unit suites.
 
 Groups:
-  whitebox   internal code-flow suites: xtask, rust-crates, rust-bindings, browser-package, demos
+  whitebox   internal code-flow suites: xtask, rust-crates, rust-bindings, browser, demos
   interface  public API and binding package suites: api, cli, node-package, python-package
   full       every deterministic unit suite";
 
@@ -239,7 +239,7 @@ Examples:
   cargo xtask test list --group unit --layer interface --cases --search router --format json
   cargo xtask test unit group full
   cargo xtask test unit group whitebox
-  cargo xtask test unit suite rust-crates --package sipp
+  cargo xtask test unit suite rust-crates --package sipp-rs
   cargo xtask test unit suite node-package --backend cpu
   cargo xtask test smoke suite example-node --backend cpu
   cargo xtask test smoke suite playground-browser
@@ -437,7 +437,7 @@ Build browser artifacts with Emscripten and stage the NPM browser package.
 
 The pipeline builds both single-threaded and pthread WASM outputs, then
 compiles and stages the TypeScript package wrappers.")]
-    Wasm,
+    Wasm(WasmBuildArgs),
 
     /// Build Python bindings.
     #[command(long_about = "\
@@ -449,8 +449,8 @@ Examples:
   cargo xtask build python --backend vulkan
   cargo xtask build python --backend all
 
-The default backend is CPU. `--backend all` builds the CPU-capable `sipp`
-wheel plus host-supported `sipp-backend-*` wheels for optional GPU extras.")]
+The default backend is CPU. `--backend all` builds the CPU-capable `sipp-py`
+wheel plus host-supported `sipp-py-backend-*` wheels for optional GPU extras.")]
     #[command(after_long_help = BACKEND_HELP)]
     Python(BackendArgs),
 
@@ -665,11 +665,11 @@ pub enum TestUnitSuiteTarget {
     /// Run Rust unit tests for language binding crates.
     #[command(name = "rust-bindings")]
     RustBindings,
-    /// Run browser package TypeScript tests.
-    #[command(name = "browser-package")]
-    BrowserPackage,
+    /// Run browser TypeScript tests.
+    #[command(name = "browser")]
+    Browser(TestUnitWasmArgs),
     /// Run browser demo TypeScript tests.
-    Demos,
+    Demos(TestUnitWasmArgs),
     /// Run crate-level public API integration tests.
     Api,
     /// Run CLI black-box integration tests.
@@ -717,6 +717,14 @@ pub struct TestUnitBackendArgs {
     /// Backend passed to backend-aware suites.
     #[arg(long, short, value_enum, default_value = "cpu")]
     pub backend: Backend,
+}
+
+/// Options for browser unit suites that build WASM artifacts.
+#[derive(Args)]
+pub struct TestUnitWasmArgs {
+    /// WASM runtime variant to build before running browser tests.
+    #[arg(long = "wasm-threading", value_enum, default_value = "all")]
+    pub wasm_threading: WasmThreading,
 }
 
 /// Options for smoke test workflows.
@@ -1051,8 +1059,9 @@ pub enum TestVerifyTarget {
     Rust,
     /// Verify binding crate unit coverage.
     Bindings,
-    /// Verify browser package unit coverage.
-    BrowserPackage,
+    /// Verify browser unit coverage.
+    #[value(name = "browser")]
+    Browser,
     /// Verify demo TypeScript unit coverage.
     Demos,
     /// Verify crate-level public API coverage.
@@ -1077,7 +1086,7 @@ impl TestVerifyTarget {
             TestVerifyTarget::Xtask => "xtask",
             TestVerifyTarget::Rust => "rust",
             TestVerifyTarget::Bindings => "bindings",
-            TestVerifyTarget::BrowserPackage => "browser-package",
+            TestVerifyTarget::Browser => "browser",
             TestVerifyTarget::Demos => "demos",
             TestVerifyTarget::Api => "api",
             TestVerifyTarget::Cli => "cli",
@@ -1143,7 +1152,7 @@ impl TestSuiteId {
             TestSuiteId::Xtask => "xtask",
             TestSuiteId::RustCrates => "rust-crates",
             TestSuiteId::RustBindings => "rust-bindings",
-            TestSuiteId::PackageTs => "package-ts",
+            TestSuiteId::PackageTs => "browser",
             TestSuiteId::DemoTs => "demo-ts",
             TestSuiteId::RustPublicApi => "rust-public-api",
             TestSuiteId::Cli => "cli",
@@ -1797,6 +1806,47 @@ pub struct BackendArgs {
     /// Computation backend to compile against.
     #[arg(long, short, value_enum)]
     pub backend: Option<Backend>,
+}
+
+/// Browser WASM build options.
+#[derive(Args)]
+pub struct WasmBuildArgs {
+    /// WASM runtime variant to build.
+    #[arg(long, value_enum, default_value = "all")]
+    pub threading: WasmThreading,
+}
+
+/// Browser WASM runtime variant selected for builds and browser tests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum WasmThreading {
+    /// Build every browser runtime variant.
+    All,
+    /// Build the standard single-thread runtime.
+    #[value(name = "single-thread")]
+    SingleThread,
+    /// Build the SharedArrayBuffer pthread runtime.
+    Pthread,
+}
+
+impl WasmThreading {
+    /// Converts the WASM threading variant into its CLI label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WasmThreading::All => "all",
+            WasmThreading::SingleThread => "single-thread",
+            WasmThreading::Pthread => "pthread",
+        }
+    }
+
+    /// Returns true when the single-thread artifact should be built.
+    pub fn includes_single_thread(&self) -> bool {
+        matches!(self, WasmThreading::All | WasmThreading::SingleThread)
+    }
+
+    /// Returns true when the pthread artifact should be built.
+    pub fn includes_pthread(&self) -> bool {
+        matches!(self, WasmThreading::All | WasmThreading::Pthread)
+    }
 }
 
 /// Hardware backend selected for native target builds.

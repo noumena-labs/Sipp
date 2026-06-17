@@ -1,9 +1,9 @@
 # Sipp Rust Library
 
-`crates/sipp` is the public Rust crate published as `sipp`. It is the
-Rust dependency for local GGUF inference,
-gateway-backed inference, provider descriptors, native runtime configuration,
-and shared Sipp value types.
+`crates/sipp` is the public Rust facade crate published as the `sipp-rs`
+package. Applications depend on `sipp-rs` and import the `sipp` crate for
+local GGUF inference, gateway-backed inference, provider descriptors, native
+runtime configuration, and shared Sipp value types.
 
 The crate exposes the high-level `SippClient` API at the root plus the
 `engine`, `backend`, `lifecycle`, `runtime`, `core`, `shard`, `error`,

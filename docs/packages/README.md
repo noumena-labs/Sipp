@@ -12,16 +12,16 @@ Most developers should start here instead of building from source.
 | Surface | Install | Primary use |
 | --- | --- | --- |
 | [Library API Overview](../api) | — | Shared `add`, `query`, `chat`, and `embed` contracts across all surfaces. |
-| [Browser](browser.md) | `npm install sipp` | Browser-local GGUF inference, WebGPU/WASM runtime, and browser gateway clients. |
-| [Node.js](node.md) | `npm install sipp-server` | Node server processes, route handlers, and backend services. |
-| [Python](python.md) | `pip install sipp` | Python services, scripts, and gateway clients. |
-| [Rust](rust.md) | `cargo add sipp` | Rust applications and services. |
+| [Browser](browser.md) | `npm install @sipp/sipp` | Browser-local GGUF inference, WebGPU/WASM runtime, and browser gateway clients. |
+| [Node.js](node.md) | `npm install @sipp/sipp-server` | Node server processes, route handlers, and backend services. |
+| [Python](python.md) | `pip install sipp-py` | Python services, scripts, and gateway clients. |
+| [Rust](rust.md) | `cargo add sipp-rs` | Rust applications and services. |
 | [Gateway Server](../gateway/server.md) | Source-built today | First-party HTTP gateway for local and provider targets. |
 | [Gateway Docker](../gateway/docker.md) | Docker from source | Local and production container workflows for the gateway server. |
-| [Gateway Toolkit](../gateway/toolkit.md) | Rust source artifact today | Rust toolkit for custom gateway applications. |
+| [Gateway Toolkit](../gateway/toolkit.md) | Source-built today | Rust toolkit for custom gateway applications. |
 
 The current release workflow publishes browser npm, Node npm, Python wheels,
-and Rust source artifacts. The gateway server is documented in the
+and Rust crates. The gateway server is documented in the
 [Gateway](../gateway/) section as a user-facing deployment surface, but it does
 not yet have a published binary or public image.
 

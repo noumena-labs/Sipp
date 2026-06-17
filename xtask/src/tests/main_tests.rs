@@ -9,7 +9,7 @@ use xtask::cli::{
     TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeCaseArgs, TestSmokeCommands,
     TestSmokeModelArgs, TestSmokePlaygroundBrowserArgs, TestSmokeSuiteArgs, TestSmokeSuiteTarget,
     TestUnitArgs, TestUnitCommands, TestUnitGroupArgs, TestUnitGroupTarget, TestVerifyArgs,
-    TestVerifyTarget,
+    TestVerifyTarget, WasmBuildArgs, WasmThreading,
 };
 
 use super::{
@@ -87,6 +87,12 @@ fn build_summary_labels_backend_defaults_and_explicit_backends() {
     assert_eq!(
         build_summary(&BuildCommands::Node(BackendArgs { backend: None })),
         "Build Node.js bindings (cpu)"
+    );
+    assert_eq!(
+        build_summary(&BuildCommands::Wasm(WasmBuildArgs {
+            threading: WasmThreading::SingleThread,
+        })),
+        "Build browser WASM/WebGPU package (single-thread)"
     );
     assert_eq!(
         build_summary(&BuildCommands::Python(BackendArgs {

@@ -28,7 +28,7 @@ clap = { version = "4.5", features = ["derive"] }
 cmake = "0.1"
 cxx = "1"
 cxx-build = "1"
-sipp = { path = "crates/sipp", version = "0.1.0", default-features = false }
+sipp = { path = "crates/sipp", version = "0.1.0", package = "sipp-rs", default-features = false }
 sipp-sys = { path = "crates/sys", version = "0.1.0" }
 sipp-gateway = { path = "lib/gateway", version = "0.1.0", default-features = false }
 sipp-binding-dto = { path = "lib/binding-dto", version = "0.1.0" }

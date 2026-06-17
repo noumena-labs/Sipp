@@ -46,12 +46,12 @@
 
 ## What is Sipp?
 
-Sipp is an all-in-one, high-performance AI framework for building web, desktop, and edge applications. It ships as a single, cohesive library called `sipp`, providing a unified, symmetric API for local, provider, and cloud gateway inference.
+Sipp is an all-in-one, high-performance AI framework for building web, desktop, and edge applications. It ships as a cohesive SDK with a unified, symmetric API for local, provider, and cloud gateway inference.
 
 At its core is **Sipp Engine**, a blazing-fast runtime built to run anywhere: in the browser, on the desktop, or on bare-metal cloud infrastructure. Written in Rust, C++, and `llama.cpp`, it delivers low startup times and a minimal memory footprint.
 
 ```javascript
-import { SippClient } from 'sipp';
+import { SippClient } from '@sipp/sipp';
 const blender = new SippClient();
 
 // 1. Initialize high-speed, local WebGPU or CUDA inference
@@ -65,7 +65,7 @@ const stream = await blender.chat([{ role: 'user', content: 'Explain Sipp.' }], 
 
 ```
 
-The unified SDK lets you dynamically partition and optimize complex application logic between local and cloud compute. Instead of wrestling with fragmented web runtimes, disconnected native wrappers for desktop, or custom middleware to protect API keys, you only need `sipp`.
+The unified SDK lets you dynamically partition and optimize complex application logic between local and cloud compute. Instead of wrestling with fragmented web runtimes, disconnected native wrappers for desktop, or custom middleware to protect API keys, you only need Sipp.
 
 It packages a **high-performance WebGPU engine**, with a secure container gateway proxy into a single, neat toolkit. Future releases will focus on embedded vector memory, on-device PII masking, and automated smart routing. See [Roadmap](docs/roadmap.md).
 
@@ -83,16 +83,16 @@ Sipp supports web browsers, desktop application wrappers, server environments, a
 
 ```sh
 # For Web Browsers, Next.js, and TanStack applications
-npm install sipp
+npm install @sipp/sipp
 
 # For Node.js backend deployments (with native CUDA/Metal compilation)
-npm install sipp-server
+npm install @sipp/sipp-server
 
 # For Python automation and data engineering pipelines
-pip install sipp
+pip install sipp-py
 
 # For native systems development and application embedding
-cargo add sipp
+cargo add sipp-rs
 
 # Deploy the secure cloud gateway server instance via Docker
 docker pull noumena/sipp-gateway
@@ -107,10 +107,10 @@ Most developers should start with our pre-built, published packages rather than 
 
 | Surface | Module | Install | Docs |
 | --- | --- | --- | --- |
-| **Browser** | Sipp Edge | `npm install sipp` | [Browser package](docs/packages/browser.md) |
-| **Node.js** | Sipp Core | `npm install sipp-server` | [Node.js package](docs/packages/node.md) |
-| **Python** | Sipp Core | `pip install sipp` | [Python package](docs/packages/python.md) |
-| **Rust** | Sipp Core | `cargo add sipp` | [Rust package](docs/packages/rust.md) |
+| **Browser** | Sipp Edge | `npm install @sipp/sipp` | [Browser package](docs/packages/browser.md) |
+| **Node.js** | Sipp Core | `npm install @sipp/sipp-server` | [Node.js package](docs/packages/node.md) |
+| **Python** | Sipp Core | `pip install sipp-py` | [Python package](docs/packages/python.md) |
+| **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust package](docs/packages/rust.md) |
 | **Gateway Server** | Sipp Cloud | Source-built | [Gateway Server](docs/gateway/server.md) |
 | **Gateway Toolkit** | Sipp Cloud | Source-built | [Gateway toolkit](docs/gateway/toolkit.md) |
 
@@ -123,12 +123,12 @@ Most developers should start with our pre-built, published packages rather than 
 Initialize the local engine client to execute model weights directly on the client machine's shader cores using WebGPU.
 
 ```bash
-npm install sipp
+npm install @sipp/sipp
 
 ```
 
 ```javascript
-import { Client } from 'sipp';
+import { Client } from '@sipp/sipp';
 
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
@@ -156,7 +156,7 @@ await client.close();
 Cloud gateway clients use the exact same `Client` API layout. The gateway owns model paths, provider credentials, access policies, and centralized metrics tracking; your client application code only needs the gateway routing target URL.
 
 ```javascript
-import { Client } from 'sipp';
+import { Client } from '@sipp/sipp';
 
 const client = new Client();
 const endpoint = await client.add('gateway', {
@@ -241,7 +241,7 @@ For thorough verification steps, consult the [Source Builds Documentation](docs%
 
 ## Repository Layout
 
-* [crates](crates%2FREADME.md): The published core `sipp` and low-level backend `sipp-sys` Rust crates.
+* [crates](crates%2FREADME.md): The published core `sipp-rs` and low-level backend `sipp-sys` Rust crates.
 * [lib](lib%2Fgateway%2FREADME.md): High-level language package surfaces and gateway proxy toolkit.
 * [bindings](bindings%2FREADME.md): Native Node.js bindings, Python extensions, and browser-compiled WASM targets.
 * [apps](apps%2FREADME.md): First-party user interfaces and monitoring implementations.
@@ -253,4 +253,3 @@ For thorough verification steps, consult the [Source Builds Documentation](docs%
 ## License
 
 Sipp is licensed under the Apache-2.0 License. Vendored third-party dependencies preserve their respective upstream open-source licensing constraints and documentation requirements.
-

@@ -4,7 +4,7 @@ Sipp 将推理与协议及部署解耦。公共 API 由底层 crate 组合而成
 
 ## 发布的 Crate
 
-- `crates/sipp`：公开发布的 `sipp` Rust 库。原有基础 crate 以模块目录的形式保留：
+- `crates/sipp`：公开发布为 `sipp-rs`，导入的 Rust 库 crate 名为 `sipp`。原有基础 crate 以模块目录的形式保留：
   - `core`：底层通用共享类型。
   - `shard`：GGUF 缓存规划与分片文件工具。
   - `backend`、`engine`、`lifecycle`、`runtime`：本地推理、调度、生命周期和内存管理。

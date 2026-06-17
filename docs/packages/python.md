@@ -1,7 +1,8 @@
 # Python Package
 
-The Python package target is `sipp`. It exposes native descriptor classes,
-run handles, token streaming, and the same endpoint model as the Rust client.
+The Python package target is `sipp-py`. It installs the import package
+`sipp` and exposes native descriptor classes, run handles, token streaming,
+and the same endpoint model as the Rust client.
 
 See the [Library API Overview](../api) for the shared `add`, `query`,
 `chat`, and `embed` contracts.
@@ -9,17 +10,22 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 ## Install
 
 ```bash
-pip install sipp
+pip install sipp-py
 ```
 
 The default wheel includes the CPU backend. Install GPU backends as extras:
 
 ```bash
-pip install "sipp[cuda]"
-pip install "sipp[vulkan]"
-pip install "sipp[metal]"
-pip install "sipp[all]"
+pip install "sipp-py[cuda]"
+pip install "sipp-py[vulkan]"
+pip install "sipp-py[metal]"
+pip install "sipp-py[all]"
 ```
+
+The backend wheels are separate PyPI distributions. For example,
+`sipp-py[cuda]` installs the main `sipp-py` wheel plus the matching
+`sipp-py-backend-cuda` wheel for the same release version. Python code still
+imports `sipp`.
 
 ## Use It For
 

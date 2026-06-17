@@ -1,8 +1,9 @@
 # Sipp Python Package
 
-`lib/python` is the Python package source for the public `sipp` package. It
-loads the best available native backend and exposes descriptor classes for
-local GGUF models, gateway endpoints, and provider endpoints.
+`lib/python` is the Python package source for the public `sipp-py`
+distribution. It installs the import package `sipp`, loads the best available
+native backend, and exposes descriptor classes for local GGUF models, gateway
+endpoints, and provider endpoints.
 
 Text and embedding calls return run handles. Call `.result()` for the final
 response and `.tokens()` for streamed text batches.
@@ -19,9 +20,9 @@ sipp build python --backend cpu && python examples/python/query.py <model.gguf> 
 if the launcher is not active.
 
 Set `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
-Published wheels install the CPU-capable `sipp` package by default. GPU
-backends are optional extras, for example `pip install "sipp[cuda]"` or
-`pip install "sipp[vulkan]"`.
+Published wheels install the CPU-capable `sipp-py` distribution by default.
+GPU backends are optional extras, for example `pip install "sipp-py[cuda]"`
+or `pip install "sipp-py[vulkan]"`.
 
 ## Local GGUF Query
 

@@ -7,7 +7,7 @@ forwards to `cargo xtask` after setup has installed wrapper scripts under
 Use `sipp` when you are working from the repository and need to build native
 artifacts, run demos, start the gateway server, manage xtask toolchains, or run
 cataloged tests, or build the documentation book. Published packages such as
-`sipp`, `sipp-server`, and the Python wheel do not require `sipp`.
+`@sipp/sipp`, `@sipp/sipp-server`, and the Python wheel do not require `sipp`.
 
 ## Command Shape
 

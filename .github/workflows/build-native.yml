@@ -305,10 +305,10 @@ jobs:
           backends = [backend.strip() for backend in os.environ["BACKENDS"].split(",") if backend.strip()]
           wheels = glob.glob(".build/artifacts/python/*.whl")
           expected = {
-              "cpu": ("sipp", "sipp/_native"),
-              "cuda": ("sipp_backend_cuda", "sipp_backend_cuda/_native"),
-              "metal": ("sipp_backend_metal", "sipp_backend_metal/_native"),
-              "vulkan": ("sipp_backend_vulkan", "sipp_backend_vulkan/_native"),
+              "cpu": ("sipp_py", "sipp/_native"),
+              "cuda": ("sipp_py_backend_cuda", "sipp_backend_cuda/_native"),
+              "metal": ("sipp_py_backend_metal", "sipp_backend_metal/_native"),
+              "vulkan": ("sipp_py_backend_vulkan", "sipp_backend_vulkan/_native"),
           }
           missing = []
           for backend in backends:
