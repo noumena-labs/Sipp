@@ -22,7 +22,7 @@ Sipp 网关在本地 GGUF 和服务商前面架一层统一的 HTTP 边界。应
 | 了解各层的边界 | [架构](architecture.md) |
 | 常见问题排查 | [故障排除](troubleshooting.md) |
 
-当前发布流程会发包（npm、PyPI、crates.io），但不发独立的 gateway-server 二进制和容器镜像。部署官方服务器目前请使用源码或用 Dockerfile 自行构建。
+当前发布流程会发包（npm、Python wheel、crates.io），但不发独立的 gateway-server 二进制和容器镜像。部署官方服务器目前请使用源码或用 Dockerfile 自行构建。
 
 ## 几种网关形态
 

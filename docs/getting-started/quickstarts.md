@@ -146,6 +146,9 @@ embeddings through this runtime.
 
 ```bash
 pip install sipp-py
+# The sipppy wheels ship from GitHub Releases today; a full PyPI build matrix is
+# in progress. Once published, this installs from PyPI directly.
+pip install sipppy
 ```
 
 ```python
