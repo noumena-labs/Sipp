@@ -2,6 +2,8 @@
 
 Python 包发布名称为 `sipp-py`。它安装的导入包名仍然是 `sipp`，并提供原生描述符类、运行句柄和 Token 流式传输，采用与 Rust 客户端相同的端点模型。
 
+已发布的 Wheel 需要 Python 3.11 或更新版本。
+
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api)。
 
 ## 安装

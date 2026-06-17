@@ -19,6 +19,7 @@
 ## 运行时要求
 
 - 本地推理需要兼容的 GGUF 模型文件或浏览器端提供的 GGUF 资源。
+- Python Wheel 需要 Python 3.11 或更新版本。
 - 浏览器本地推理需要支持 WebAssembly 的现代浏览器；WebGPU 加速取决于浏览器和设备支持。具体请查看 [设备支持](../references/device-support.md)。
 - Node 安装使用 `@sipp/sipp-server`，npm 会自动解析匹配的平台二进制包。Python CPU 包使用 `sipp-py`，CUDA、Vulkan、Metal 后端通过 `sipp-py[cuda]` 等 extras 拉取匹配的 `sipp-py-backend-*` 分发包；Python 代码仍然导入 `sipp`。如需强制指定 `cpu`、`vulkan`、`cuda` 或 `metal`，设置环境变量 `SIPP_NODE_BACKEND` 或 `SIPP_PYTHON_BACKEND`。
 - 网关客户端只需要网关基础 URL、公共目标名称和应用专属的认证凭据。

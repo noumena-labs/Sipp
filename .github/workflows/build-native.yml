@@ -47,9 +47,9 @@ on:
         default: true
         type: boolean
       cuda-architectures:
-        description: Optional semicolon-separated CMAKE_CUDA_ARCHITECTURES override
+        description: Semicolon-separated CMAKE_CUDA_ARCHITECTURES for CUDA native builds
         required: false
-        default: ""
+        default: "80-virtual;86-real;89-real;90-virtual"
         type: string
       release-lto:
         description: Cargo release-profile LTO setting for native package builds

@@ -90,7 +90,7 @@ fn wheel_discovery_matches_normalized_distribution_names() {
     let temp = TempDir::new("target-python-discovery");
     let sipp = temp.write("dist/sipp_py-0.1.0-py3-none-any.whl", "");
     let cuda = temp.write(
-        "dist/sipp_py_backend_cuda-0.1.0-cp39-abi3-win_amd64.whl",
+        "dist/sipp_py_backend_cuda-0.1.0-cp311-abi3-win_amd64.whl",
         "",
     );
     temp.write("dist/readme.txt", "");

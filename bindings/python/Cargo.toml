@@ -22,7 +22,7 @@ openmp = ["sipp/openmp"]
 sipp = { workspace = true, features = ["providers"] }
 sipp-binding-dto.workspace = true
 futures.workspace = true
-pyo3 = { workspace = true, features = ["abi3-py39", "extension-module"] }
+pyo3 = { workspace = true, features = ["abi3-py311", "extension-module"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
