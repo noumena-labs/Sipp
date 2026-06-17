@@ -25,6 +25,7 @@ mod python_tests;
 
 const PYTHON_PACKAGE_NAME: &str = "sipp-py";
 const PYTHON_BACKEND_PACKAGE_PREFIX: &str = "sipp-py-backend";
+const PYTHON_BUILD_VERSION: &str = "3.12";
 
 /// Builds the Python bindings for the selected backend.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {
@@ -36,8 +37,11 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
     let uv_exe = crate::toolchains::python::setup_uv(sh, ctx)?;
 
     output::run_build_command(
-        "Ensuring Python 3.12 is available through uv",
-        apply_uv_env(ctx, cmd!(sh, "{uv_exe} python install 3.12")),
+        format!("Ensuring Python {PYTHON_BUILD_VERSION} is available through uv"),
+        apply_uv_env(
+            ctx,
+            cmd!(sh, "{uv_exe} python install {PYTHON_BUILD_VERSION}"),
+        ),
     )?;
 
     if matches!(backend, Some(Backend::All)) {
@@ -63,7 +67,10 @@ fn build_develop(
     if !venv_dir.exists() {
         output::run_build_command(
             "Creating local Python virtual environment",
-            apply_uv_env(ctx, cmd!(sh, "{uv_exe} venv --python 3.12")),
+            apply_uv_env(
+                ctx,
+                cmd!(sh, "{uv_exe} venv --python {PYTHON_BUILD_VERSION}"),
+            ),
         )?;
     } else {
         output::success("Using existing Python virtual environment");
@@ -75,7 +82,10 @@ fn build_develop(
 
     let mut maturin_cmd = apply_uv_env(
         ctx,
-        cmd!(sh, "{uv_exe} tool run maturin develop --release --uv"),
+        cmd!(
+            sh,
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin develop --release --uv"
+        ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
@@ -185,7 +195,7 @@ fn build_sipp_wheel(
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run maturin build --release --out {dist_dir}"
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --out {dist_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
@@ -243,7 +253,7 @@ fn build_backend_package_wheel(
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run maturin build --release --out {wheel_dir}"
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --out {wheel_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);

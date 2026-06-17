@@ -3507,7 +3507,7 @@ fn build_python_test_wheel(sh: &Shell, ctx: &BuildContext, backend: &Backend) ->
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run maturin build --release --out {dist_dir}"
+            "{uv_exe} tool run --python 3.12 maturin build --release --out {dist_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
