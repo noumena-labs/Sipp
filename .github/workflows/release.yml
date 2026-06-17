@@ -356,6 +356,21 @@ jobs:
       - name: Build staged web package
         run: cargo xtask --plain build wasm
 
+      - name: Require staged web WASM artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          for artifact in \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm; do
+            if [ ! -f "$artifact" ]; then
+              echo "::error::Missing staged web WASM artifact: $artifact"
+              exit 1
+            fi
+          done
+
       - name: Run web package import smoke
         run: |
           node --input-type=module <<'NODE'
@@ -673,6 +688,10 @@ jobs:
           }
 
           require_file .build/artifacts/npm/sipp/package.json
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm
           require_file .build/artifacts/npm/sipp-server/package.json
           require_glob "node platform packages" .build/artifacts/npm/sipp-server-*/package.json
           require_glob "Python sipp-py wheels" .build/artifacts/python/sipp_py-*.whl
