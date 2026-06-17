@@ -54,19 +54,19 @@ runs:
             `version = "${process.env.DEV_VERSION}"`
           )
           .replace(
-            /(sipp = \{ path = "crates\/sipp", version = )".*"/,
+            /(sipp = \{ path = "crates\/sipp", version = )"[^"]+"/,
             `$1"${process.env.DEV_VERSION}"`
           )
           .replace(
-            /(sipp-sys = \{ path = "crates\/sys", version = )".*"/,
+            /(sipp-sys = \{ path = "crates\/sys", version = )"[^"]+"/,
             `$1"${process.env.DEV_VERSION}"`
           )
           .replace(
-            /(sipp-gateway = \{ path = "lib\/gateway", version = )".*"/,
+            /(sipp-gateway = \{ path = "lib\/gateway", version = )"[^"]+"/,
             `$1"${process.env.DEV_VERSION}"`
           )
           .replace(
-            /(sipp-binding-dto = \{ path = "lib\/binding-dto", version = )".*"/,
+            /(sipp-binding-dto = \{ path = "lib\/binding-dto", version = )"[^"]+"/,
             `$1"${process.env.DEV_VERSION}"`
           );
         writeFileSync(cargoPath, cargo);
