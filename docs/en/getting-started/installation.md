@@ -31,12 +31,12 @@ added.
 - Browser-local inference needs a modern browser with WebAssembly support;
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
 - Node installs use `@sipp/sipp-server`; npm resolves the matching optional
-  platform binary package automatically. Python installs use `sipppy` for CPU
-  and PyPI extras such as `sipppy[vulkan]` or `sipppy[metal]` to pull
-  matching backend distributions. CUDA backend wheels are attached to GitHub
-  releases until the PyPI file-size limit is raised. Python code still imports
-  `sipp`. Use `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you need to
-  force `cpu`, `vulkan`, `cuda`, or `metal`.
+  platform binary package automatically. Python installs use the `sipppy` wheel
+  (imported as `sipp`) for CPU and extras such as `sipppy[cuda]` for GPU backend
+  wheels; the `sipppy` wheels currently ship from GitHub Releases while the full
+  PyPI build matrix is in progress (see the [Python package](../packages/python.md)
+  page). Use `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you need to force
+  `cpu`, `vulkan`, `cuda`, or `metal`.
 - Gateway clients need only the gateway base URL, public target name, and
   application-owned authentication value.
 

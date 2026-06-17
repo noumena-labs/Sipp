@@ -1,8 +1,8 @@
 # Python Package
 
-The Python package target is `sipppy`. It installs the import package
-`sipp` and exposes native descriptor classes, run handles, token streaming,
-and the same endpoint model as the Rust client.
+The Python wheel is named `sipppy`. Python code imports the `sipp` module, which
+exposes native descriptor classes, run handles, token streaming, and the same
+endpoint model as the Rust client.
 
 Published wheels require Python 3.10 or newer.
 
@@ -10,6 +10,16 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 `chat`, and `embed` contracts.
 
 ## Install
+
+> [!NOTE]
+> Python wheels currently ship from the project's GitHub Releases, not PyPI.
+> A full PyPI release with a complete build matrix (CPU and GPU backends across
+> operating systems, architectures, and Python versions, in the style of
+> PyTorch's distribution matrix) is in progress. The package name `sipppy` import are stable; only the distribution channel will change.
+
+Download the `sipppy` wheel that matches your platform, Python version, and
+backend from the [GitHub Releases](https://github.com/noumena-labs/Sipp/releases)
+page, then install it with pip. The default wheel includes the CPU backend:
 
 ```bash
 pip install sipppy

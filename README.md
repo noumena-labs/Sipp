@@ -89,6 +89,7 @@ npm install @sipp/sipp
 npm install @sipp/sipp-server
 
 # For Python automation and data engineering pipelines
+# (sippy wheels ship from GitHub Releases today; full PyPI build matrix in progress)
 pip install sipppy
 
 # For native systems development and application embedding

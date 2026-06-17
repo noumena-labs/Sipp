@@ -145,6 +145,7 @@ embeddings through this runtime.
 ## Python Local
 
 ```bash
+# sippy cuda wheel is currently published via GitHub Releases ；full release matrix is on progress
 pip install sipppy
 ```
 
