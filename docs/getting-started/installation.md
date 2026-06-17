@@ -27,7 +27,7 @@ added.
 
 - Local inference needs a compatible GGUF model file or browser-served GGUF
   asset.
-- Python wheels require Python 3.11 or newer.
+- Python wheels require Python 3.10 or newer.
 - Browser-local inference needs a modern browser with WebAssembly support;
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
 - Node installs use `@sipp/sipp-server`; npm resolves the matching optional

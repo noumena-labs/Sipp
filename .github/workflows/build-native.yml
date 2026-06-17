@@ -368,7 +368,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then
             uv_exe=".build/toolchain/uv/uv.exe"
           fi
-          run_cmd=("$uv_exe" run --no-project --python 3.12)
+          run_cmd=("$uv_exe" run --no-project --python 3.10)
           for wheel in .build/artifacts/python/*.whl; do
             run_cmd+=(--with "$wheel")
           done

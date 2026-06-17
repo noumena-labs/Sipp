@@ -3,7 +3,7 @@
 use crate::cli::Backend;
 use crate::output;
 use crate::toolchains::env::apply_toolchains;
-use crate::toolchains::python::apply_uv_env;
+use crate::toolchains::python::{apply_uv_env, ensure_python, PYTHON_BUILD_VERSION};
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::env;
@@ -25,7 +25,6 @@ mod python_tests;
 
 const PYTHON_PACKAGE_NAME: &str = "sipp-py";
 const PYTHON_BACKEND_PACKAGE_PREFIX: &str = "sipp-py-backend";
-const PYTHON_BUILD_VERSION: &str = "3.12";
 
 /// Builds the Python bindings for the selected backend.
 pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Result<()> {
@@ -36,13 +35,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, backend: Option<&Backend>) -> Resul
 
     let uv_exe = crate::toolchains::python::setup_uv(sh, ctx)?;
 
-    output::run_build_command(
-        format!("Ensuring Python {PYTHON_BUILD_VERSION} is available through uv"),
-        apply_uv_env(
-            ctx,
-            cmd!(sh, "{uv_exe} python install {PYTHON_BUILD_VERSION}"),
-        ),
-    )?;
+    ensure_python(sh, ctx, &uv_exe)?;
 
     if matches!(backend, Some(Backend::All)) {
         return build_package_wheels(sh, ctx, &uv_exe);
@@ -195,7 +188,7 @@ fn build_sipp_wheel(
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --out {dist_dir}"
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --strip --out {dist_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
@@ -253,7 +246,7 @@ fn build_backend_package_wheel(
         ctx,
         cmd!(
             sh,
-            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --out {wheel_dir}"
+            "{uv_exe} tool run --python {PYTHON_BUILD_VERSION} maturin build --release --strip --out {wheel_dir}"
         ),
     )
     .env("CARGO_TARGET_DIR", &target_dir);
