@@ -10,7 +10,7 @@ Backend names are shared across build configuration and runtime selection. The s
 | --- | --- | --- | --- | --- | --- |
 | CPU | Supported | `native` | Yes | All | Portable fallback, no accelerator required |
 | CUDA | Supported | `cuda` | No | Linux, Windows | NVIDIA GPUs, compute capability 7.5+ |
-| Metal | Supported | `metal` | No | macOS | Apple Silicon and AMD GPUs |
+| Metal | Supported | `metal` | No | macOS | Apple Silicon and AMD GPUs; use CPU on Intel integrated GPUs |
 | Vulkan | Supported | `vulkan` | No | Linux, Windows | Vulkan 1.2+ GPU required |
 | WebGPU | Supported | `GGML_WEBGPU` (CMake) | No | WASM browsers | Browser-only, requires `shader-f16` |
 
@@ -184,7 +184,15 @@ Windows Docker Desktop does not support the Vulkan backend.
 * **Apple Silicon:** M1, M2, M3, M4 series
 * **AMD:** GPUs supported by macOS (Radeon Pro series)
 
-Metal is macOS-only and unavailable inside Docker containers.
+Metal is macOS-only and unavailable inside Docker containers. Intel integrated
+GPUs expose Metal, but llama.cpp's Metal path is not a reliable acceleration
+target for them; use the CPU backend on those Macs unless you have validated
+the exact model and device.
+
+Apple Silicon can run x64 processes through Rosetta 2. A `darwin-x64` Node or
+Python native package is only used by an x64 Node/Python process; native arm64
+Node/Python installations use the `darwin-arm64` packages and are the preferred
+path on Apple Silicon.
 
 ### WebGPU (Browser)
 
