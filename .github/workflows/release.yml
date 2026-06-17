@@ -405,7 +405,7 @@ jobs:
         run: npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
 
   native:
-    name: Build native packages
+    name: Run native artifact workflow
     needs: gate
     if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python' || inputs.package == 'rust' }}
     permissions:

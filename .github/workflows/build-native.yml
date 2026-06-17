@@ -1,4 +1,4 @@
-name: Build native packages
+name: Native artifact matrix
 
 # Reusable native build matrix shared by release.yml and publish-dev.yml.
 # Builds the Node addon, Python wheels, and Rust core across the four supported
@@ -77,7 +77,7 @@ env:
 
 jobs:
   native:
-    name: Build native ${{ matrix.id }} packages
+    name: Build ${{ matrix.id }} native artifacts
     if: ${{ inputs.package != 'rust' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 300
@@ -405,7 +405,7 @@ jobs:
           retention-days: ${{ inputs.artifact-retention-days }}
 
   rust-core:
-    name: Build Rust core
+    name: Build Rust core artifact check
     if: ${{ inputs.package == 'rust' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
