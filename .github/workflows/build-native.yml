@@ -77,7 +77,7 @@ env:
   CUDA_PACKAGE_SUFFIX: "13-3"
   CUDA_WINDOWS_INSTALLER_URL: https://developer.download.nvidia.com/compute/cuda/13.3.0/local_installers/cuda_13.3.0_windows.exe
   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  SIPP_MAX_GLIBC: "2.35"
+  SIPP_MAX_GLIBC: "2.28"
   SIPP_MAX_WHEEL_MB: "100"
 
 jobs:
@@ -85,6 +85,8 @@ jobs:
     name: Build ${{ matrix.id }} native artifacts
     if: ${{ inputs.package != 'rust' }}
     runs-on: ${{ matrix.os }}
+    container:
+      image: ${{ matrix.container_image || '' }}
     timeout-minutes: 300
     env:
       SIPP_CUDA_ARCHITECTURES: ${{ inputs.cuda-architectures }}
@@ -96,18 +98,24 @@ jobs:
         include:
           - id: linux-x64
             os: ubuntu-24.04
+            abi: manylinux_2_28
+            container_image: quay.io/pypa/manylinux_2_28_x86_64:latest
+            cuda_repo: rhel8
             backends: cpu,vulkan,cuda
             cuda: true
           - id: windows-x64
             os: windows-2022
+            abi: host
             backends: cpu,vulkan,cuda
             cuda: true
           - id: macos-x64
             os: macos-15-intel
+            abi: host
             backends: cpu,metal
             cuda: false
           - id: macos-arm64
             os: macos-14
+            abi: host
             backends: cpu,metal
             cuda: false
     steps:
@@ -145,7 +153,7 @@ jobs:
         if: ${{ runner.os != 'Windows' }}
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
-          key: build-native-${{ matrix.id }}
+          key: build-native-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}
           max-size: 3G
 
       - name: Cache Cargo and native build outputs
@@ -157,9 +165,9 @@ jobs:
             .build/cargo
             .build/cmake
             .build/c
-          key: cargo-build-native-${{ runner.os }}-${{ matrix.id }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          key: cargo-build-native-${{ runner.os }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
           restore-keys: |
-            cargo-build-native-${{ runner.os }}-${{ matrix.id }}-
+            cargo-build-native-${{ runner.os }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-
 
       - name: Cache hermetic build toolchains
         uses: actions/cache@v5.0.5
@@ -167,19 +175,24 @@ jobs:
           path: |
             .build/toolchain
             .build/uv-cache
-          key: sipp-toolchain-build-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          key: sipp-toolchain-build-native-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
           restore-keys: |
-            sipp-toolchain-build-native-${{ runner.os }}-${{ runner.arch }}-
+            sipp-toolchain-build-native-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-
 
       - name: Install Linux CUDA 13.3 and Vulkan development libraries
         if: ${{ runner.os == 'Linux' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
+        env:
+          CUDA_RPM_REPO: https://developer.download.nvidia.com/compute/cuda/repos/${{ matrix.cuda_repo }}/x86_64/cuda-${{ matrix.cuda_repo }}.repo
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i cuda-keyring_1.1-1_all.deb
-          sudo apt-get update
-          sudo apt-get install -y "cuda-compiler-${CUDA_PACKAGE_SUFFIX}" "cuda-libraries-dev-${CUDA_PACKAGE_SUFFIX}" libvulkan-dev
+          curl -fsSL "$CUDA_RPM_REPO" -o "/etc/yum.repos.d/cuda-${{ matrix.cuda_repo }}.repo"
+          dnf install -y \
+            "cuda-compiler-${CUDA_PACKAGE_SUFFIX}" \
+            "cuda-libraries-devel-${CUDA_PACKAGE_SUFFIX}" \
+            vulkan-loader-devel \
+            vulkan-headers
+          dnf clean all
           {
             echo "CUDA_HOME=/usr/local/cuda-${CUDA_VERSION}"
             echo "CUDA_PATH=/usr/local/cuda-${CUDA_VERSION}"

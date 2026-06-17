@@ -5,7 +5,7 @@ description: >-
   dependencies that end-user machines would have to provide.
 inputs:
   max-glibc:
-    description: Highest acceptable glibc symbol version (for example 2.35)
+    description: Highest acceptable glibc symbol version (for example 2.28)
     required: true
   enforce:
     description: Fail when the glibc baseline is exceeded (true) or warn only (false)
@@ -66,13 +66,13 @@ runs:
           if [ "$max_required" != "none" ]; then
             newest="$(printf '%s\n%s\n' "$max_required" "$MAX_GLIBC" | sort -V | tail -1)"
             if [ "$newest" != "$MAX_GLIBC" ]; then
-              echo "::${level}::$name requires glibc $max_required, above the $MAX_GLIBC baseline. Distros such as Ubuntu 22.04, Debian 12, and RHEL 9 cannot load it; build inside a manylinux-style image, or raise SIPP_MAX_GLIBC to accept the narrower support window."
+              echo "::${level}::$name requires glibc $max_required, above the $MAX_GLIBC baseline. Older supported glibc distros cannot load it; build inside the configured manylinux image, or raise SIPP_MAX_GLIBC to accept the narrower support window."
               exceeded=1
             fi
           fi
 
           if [ "$cuda_needed" != "none" ]; then
-            echo "::warning::$name dynamically links $cuda_needed. Machines without a local CUDA toolkit cannot load this backend (the loaders fall back silently); bundle the redistributable libraries or link them statically."
+            echo "::warning::$name dynamically links $cuda_needed. Machines without a compatible local CUDA runtime and driver cannot load this backend (the loaders fall back silently); bundle the redistributable libraries or link them statically."
           fi
         done
 

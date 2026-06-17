@@ -34,7 +34,7 @@ env:
   CUDA_PACKAGE_SUFFIX: "13-3"
   CUDA_WINDOWS_INSTALLER_URL: https://developer.download.nvidia.com/compute/cuda/13.3.0/local_installers/cuda_13.3.0_windows.exe
   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  SIPP_MAX_GLIBC: "2.35"
+  SIPP_MAX_GLIBC: "2.28"
   SIPP_MAX_WHEEL_MB: "100"
 
 jobs:
@@ -345,7 +345,7 @@ jobs:
       artifact-suffix: "-dev"
       enforce: false
       cuda-architectures: "86-real"
-      release-lto: "false"
+      release-lto: ${{ 'false' }}
       release-codegen-units: "16"
       artifact-retention-days: 7
 
