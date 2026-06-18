@@ -34,6 +34,7 @@ fn test_context(temp: &TempDir) -> BuildContext {
             cuda_architectures: None,
             vulkan_sdk: None,
             cmake_out_dir: None,
+            static_cxx_runtime_lib_dir: None,
         },
     }
 }

@@ -11,7 +11,7 @@ use crate::utils::BuildContext;
 use super::{
     backend_auditwheel_mode, backend_distribution_name, backend_label, backend_package_project_dir,
     backends_to_build, find_wheel_artifact_for_distribution, prepare_dist_dir, python_project_dir,
-    require_all_backends, wheel_matches_distribution,
+    require_all_backends, wheel_compatibility, wheel_matches_distribution,
 };
 
 #[test]
@@ -60,6 +60,20 @@ fn backend_package_names_match_python_packaging_conventions() {
         backend_distribution_name(&Backend::Cuda),
         "sipppy-backend-cuda"
     );
+}
+
+#[test]
+fn wheel_compatibility_uses_ci_manylinux_abi() {
+    let _env = EnvGuard::new(&[("SIPP_PYTHON_WHEEL_COMPATIBILITY", None)]);
+    assert_eq!(wheel_compatibility(), None);
+    drop(_env);
+
+    let _env = EnvGuard::new(&[("SIPP_PYTHON_WHEEL_COMPATIBILITY", Some("host"))]);
+    assert_eq!(wheel_compatibility(), None);
+    drop(_env);
+
+    let _env = EnvGuard::new(&[("SIPP_PYTHON_WHEEL_COMPATIBILITY", Some("manylinux_2_28"))]);
+    assert_eq!(wheel_compatibility().as_deref(), Some("manylinux_2_28"));
 }
 
 #[test]

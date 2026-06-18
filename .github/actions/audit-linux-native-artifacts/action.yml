@@ -50,8 +50,8 @@ runs:
         {
           echo "### Linux native artifact audit"
           echo ""
-          echo "| Artifact | Max required glibc | Dynamic CUDA libraries |"
-          echo "| --- | --- | --- |"
+          echo "| Artifact | Max required glibc | Dynamic C++ runtime | Dynamic CUDA libraries |"
+          echo "| --- | --- | --- | --- |"
         } >> "$GITHUB_STEP_SUMMARY"
 
         exceeded=0
@@ -59,9 +59,11 @@ runs:
           name="$(basename "$file")"
           max_required="$(objdump -T "$file" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1 || true)"
           max_required="${max_required:-none}"
+          cxx_needed="$(objdump -p "$file" 2>/dev/null | awk '/NEEDED/ { print $2 }' | grep -Ei 'libstdc\+\+|libc\+\+' | paste -sd ' ' - || true)"
+          cxx_needed="${cxx_needed:-none}"
           cuda_needed="$(objdump -p "$file" 2>/dev/null | awk '/NEEDED/ { print $2 }' | grep -Ei 'cuda|cublas|nvrtc|nvjitlink' | paste -sd ' ' - || true)"
           cuda_needed="${cuda_needed:-none}"
-          echo "| $name | $max_required | $cuda_needed |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| $name | $max_required | $cxx_needed | $cuda_needed |" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$max_required" != "none" ]; then
             newest="$(printf '%s\n%s\n' "$max_required" "$MAX_GLIBC" | sort -V | tail -1)"
@@ -69,6 +71,11 @@ runs:
               echo "::${level}::$name requires glibc $max_required, above the $MAX_GLIBC baseline. Older supported glibc distros cannot load it; build inside the configured manylinux image, or raise SIPP_MAX_GLIBC to accept the narrower support window."
               exceeded=1
             fi
+          fi
+
+          if [ "$cxx_needed" != "none" ]; then
+            echo "::${level}::$name dynamically links $cxx_needed. Linux release artifacts must statically link the C++ runtime so libstdc++ symbol versions cannot raise the distro floor."
+            exceeded=1
           fi
 
           if [ "$cuda_needed" != "none" ]; then

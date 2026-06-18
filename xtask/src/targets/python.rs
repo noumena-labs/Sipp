@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use xshell::{cmd, Shell};
+use xshell::{cmd, Cmd, Shell};
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -193,6 +193,7 @@ fn build_sipp_wheel(
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
+    maturin_cmd = apply_wheel_compatibility(maturin_cmd);
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, Some(&Backend::Cpu))?;
     output::run_build_command("Building Python sipppy wheel", maturin_cmd)
         .context("failed to build Python sipppy wheel")?;
@@ -251,6 +252,7 @@ fn build_backend_package_wheel(
     )
     .env("CARGO_TARGET_DIR", &target_dir);
 
+    maturin_cmd = apply_wheel_compatibility(maturin_cmd);
     maturin_cmd = apply_toolchains(sh, ctx, maturin_cmd, Some(backend))?;
     maturin_cmd = maturin_cmd.arg("--features").arg(feature);
     if let Some(auditwheel) = backend_auditwheel_mode(backend) {
@@ -301,6 +303,24 @@ fn backends_to_build() -> Vec<Backend> {
 
 fn backend_distribution_name(backend: &Backend) -> String {
     format!("{PYTHON_BACKEND_PACKAGE_PREFIX}-{}", backend.as_str())
+}
+
+fn apply_wheel_compatibility<'a>(command: Cmd<'a>) -> Cmd<'a> {
+    if let Some(compatibility) = wheel_compatibility() {
+        command.arg("--compatibility").arg(compatibility)
+    } else {
+        command
+    }
+}
+
+fn wheel_compatibility() -> Option<String> {
+    let compatibility = env::var("SIPP_PYTHON_WHEEL_COMPATIBILITY").ok()?;
+    let compatibility = compatibility.trim();
+    if compatibility.is_empty() || compatibility == "host" {
+        return None;
+    }
+
+    Some(compatibility.to_owned())
 }
 
 // Linux GPU backend wheels depend on the host driver/runtime stack. Repair mode

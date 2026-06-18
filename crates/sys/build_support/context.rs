@@ -67,6 +67,7 @@ impl BuildContext {
         println!("cargo:rerun-if-env-changed=EMSDK");
         println!("cargo:rerun-if-env-changed=SIPP_SYS_CMAKE_OUT_DIR");
         println!("cargo:rerun-if-env-changed=SIPP_CUDA_ARCHITECTURES");
+        println!("cargo:rerun-if-env-changed=SIPP_STATIC_CXX_RUNTIME_LIB_DIR");
     }
 
     pub(crate) fn workspace_build_dir(&self) -> PathBuf {
@@ -129,6 +130,7 @@ pub(crate) struct BuildEnv {
     pub(crate) cuda_architectures: Option<String>,
     pub(crate) vulkan_sdk: Option<PathBuf>,
     pub(crate) cmake_out_dir: Option<PathBuf>,
+    pub(crate) static_cxx_runtime_lib_dir: Option<PathBuf>,
 }
 
 impl BuildEnv {
@@ -143,10 +145,19 @@ impl BuildEnv {
                 .filter(|value| !value.is_empty()),
             vulkan_sdk: env::var_os("VULKAN_SDK").map(PathBuf::from),
             cmake_out_dir: env::var("SIPP_SYS_CMAKE_OUT_DIR").ok().map(sanitize_path),
+            static_cxx_runtime_lib_dir: env_path("SIPP_STATIC_CXX_RUNTIME_LIB_DIR"),
         }
     }
 }
 
 fn env_flag(name: &str) -> bool {
     env::var_os(name).is_some()
+}
+
+fn env_path(name: &str) -> Option<PathBuf> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(sanitize_path)
 }

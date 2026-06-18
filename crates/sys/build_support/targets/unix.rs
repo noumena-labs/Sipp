@@ -1,12 +1,17 @@
 use crate::build_support::context::BuildContext;
 use cmake::Config;
+use std::path::Path;
 
 pub(crate) fn apply_cuda_cmake_overrides(config: &mut Config) {
     config.define("CMAKE_CUDA_FLAGS", cuda_cmake_flags());
 }
 
 pub(crate) fn link_system_libraries(context: &BuildContext) {
-    println!("cargo:rustc-link-lib=dylib=stdc++");
+    if uses_static_stdcpp(context) {
+        let dir = static_stdcpp_lib_dir(context);
+        println!("cargo:rustc-link-search=native={}", dir.display());
+    }
+    println!("cargo:rustc-link-lib={}", stdcpp_link_kind(context));
     println!("cargo:rustc-link-lib=dylib=m");
     println!("cargo:rustc-link-lib=dylib=dl");
     println!("cargo:rustc-link-lib=dylib=pthread");
@@ -45,4 +50,27 @@ fn link_cuda_libraries(context: &BuildContext) {
 
 pub(super) fn cuda_cmake_flags() -> &'static str {
     "-Xcompiler=-fPIC"
+}
+
+pub(super) fn stdcpp_link_kind(context: &BuildContext) -> &'static str {
+    if uses_static_stdcpp(context) {
+        "static=stdc++"
+    } else {
+        "dylib=stdc++"
+    }
+}
+
+fn uses_static_stdcpp(context: &BuildContext) -> bool {
+    context.target.contains("linux") && context.env_vars.static_cxx_runtime_lib_dir.is_some()
+}
+
+pub(super) fn static_stdcpp_lib_dir(context: &BuildContext) -> &Path {
+    let Some(dir) = context.env_vars.static_cxx_runtime_lib_dir.as_deref() else {
+        panic!("SIPP_STATIC_CXX_RUNTIME_LIB_DIR is required for static libstdc++ linking");
+    };
+    let archive = dir.join("libstdc++.a");
+    if !archive.exists() {
+        panic!("SIPP_STATIC_CXX_RUNTIME_LIB_DIR does not contain libstdc++.a");
+    }
+    dir
 }
