@@ -48,7 +48,7 @@ pub(super) fn cuda_cmake_flags() -> &'static str {
 }
 
 pub(super) fn stdcpp_link_kind(context: &BuildContext) -> &'static str {
-    if context.target.contains("linux") {
+    if context.target.contains("linux") && context.env_vars.static_cxx_runtime {
         "static=stdc++"
     } else {
         "dylib=stdc++"

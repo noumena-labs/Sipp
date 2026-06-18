@@ -7,6 +7,10 @@ use super::*;
 use crate::build_support::context::{BuildContext, BuildEnv, FeatureFlags};
 
 fn target_context(target: &str) -> BuildContext {
+    target_context_with_static_cxx(target, false)
+}
+
+fn target_context_with_static_cxx(target: &str, static_cxx_runtime: bool) -> BuildContext {
     BuildContext {
         manifest_dir: "crates/sys".into(),
         llama_dir: "crates/sys/llama.cpp".into(),
@@ -26,6 +30,7 @@ fn target_context(target: &str) -> BuildContext {
             cuda_architectures: None,
             vulkan_sdk: None,
             cmake_out_dir: None,
+            static_cxx_runtime,
         },
     }
 }
@@ -82,13 +87,27 @@ fn unix_cuda_flags_compile_position_independent_objects() {
 }
 
 #[test]
-fn linux_links_static_cpp_runtime_for_portable_artifacts() {
+fn linux_links_dynamic_cpp_runtime_by_default() {
     assert_eq!(
         super::unix::stdcpp_link_kind(&target_context("x86_64-unknown-linux-gnu")),
+        "dylib=stdc++"
+    );
+}
+
+#[test]
+fn linux_links_static_cpp_runtime_for_portable_artifacts() {
+    assert_eq!(
+        super::unix::stdcpp_link_kind(&target_context_with_static_cxx(
+            "x86_64-unknown-linux-gnu",
+            true
+        )),
         "static=stdc++"
     );
     assert_eq!(
-        super::unix::stdcpp_link_kind(&target_context("x86_64-unknown-freebsd")),
+        super::unix::stdcpp_link_kind(&target_context_with_static_cxx(
+            "x86_64-unknown-freebsd",
+            true
+        )),
         "dylib=stdc++"
     );
 }

@@ -27,6 +27,7 @@ const CONTEXT_ENV_VARS: &[(&str, Option<&str>)] = &[
     ("SIPP_CUDA_ARCHITECTURES", None),
     ("VULKAN_SDK", None),
     ("SIPP_SYS_CMAKE_OUT_DIR", None),
+    ("SIPP_STATIC_CXX_RUNTIME", None),
 ];
 
 fn flags(backend_dl: bool, cuda: bool, metal: bool, vulkan: bool, openmp: bool) -> FeatureFlags {
@@ -53,6 +54,7 @@ fn context_for(manifest_dir: PathBuf, target: &str, features: FeatureFlags) -> B
             cuda_architectures: None,
             vulkan_sdk: None,
             cmake_out_dir: None,
+            static_cxx_runtime: false,
         },
     }
 }
@@ -121,6 +123,7 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
         ("SIPP_CUDA_ARCHITECTURES", Some(" 80;90 ")),
         ("VULKAN_SDK", Some("vulkan-sdk")),
         ("SIPP_SYS_CMAKE_OUT_DIR", Some(r"\\?\cmake-out")),
+        ("SIPP_STATIC_CXX_RUNTIME", Some("1")),
     ]);
 
     let env = BuildEnv::from_env();
@@ -128,6 +131,7 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
     assert_eq!(env.cuda_architectures, Some("80;90".to_owned()));
     assert_eq!(env.vulkan_sdk, Some(PathBuf::from("vulkan-sdk")));
     assert_eq!(env.cmake_out_dir, Some(PathBuf::from("cmake-out")));
+    assert!(env.static_cxx_runtime);
 }
 
 #[test]
@@ -138,6 +142,7 @@ fn build_env_falls_back_to_cuda_home() {
         ("SIPP_CUDA_ARCHITECTURES", None),
         ("VULKAN_SDK", None),
         ("SIPP_SYS_CMAKE_OUT_DIR", None),
+        ("SIPP_STATIC_CXX_RUNTIME", None),
     ]);
 
     let env = BuildEnv::from_env();
@@ -145,6 +150,7 @@ fn build_env_falls_back_to_cuda_home() {
     assert_eq!(env.cuda_architectures, None);
     assert_eq!(env.vulkan_sdk, None);
     assert_eq!(env.cmake_out_dir, None);
+    assert!(!env.static_cxx_runtime);
 }
 
 #[test]
@@ -155,6 +161,7 @@ fn build_env_treats_blank_cuda_architectures_as_unset() {
         ("SIPP_CUDA_ARCHITECTURES", Some("   ")),
         ("VULKAN_SDK", None),
         ("SIPP_SYS_CMAKE_OUT_DIR", None),
+        ("SIPP_STATIC_CXX_RUNTIME", None),
     ]);
 
     let env = BuildEnv::from_env();

@@ -67,6 +67,7 @@ impl BuildContext {
         println!("cargo:rerun-if-env-changed=EMSDK");
         println!("cargo:rerun-if-env-changed=SIPP_SYS_CMAKE_OUT_DIR");
         println!("cargo:rerun-if-env-changed=SIPP_CUDA_ARCHITECTURES");
+        println!("cargo:rerun-if-env-changed=SIPP_STATIC_CXX_RUNTIME");
     }
 
     pub(crate) fn workspace_build_dir(&self) -> PathBuf {
@@ -129,6 +130,7 @@ pub(crate) struct BuildEnv {
     pub(crate) cuda_architectures: Option<String>,
     pub(crate) vulkan_sdk: Option<PathBuf>,
     pub(crate) cmake_out_dir: Option<PathBuf>,
+    pub(crate) static_cxx_runtime: bool,
 }
 
 impl BuildEnv {
@@ -143,6 +145,7 @@ impl BuildEnv {
                 .filter(|value| !value.is_empty()),
             vulkan_sdk: env::var_os("VULKAN_SDK").map(PathBuf::from),
             cmake_out_dir: env::var("SIPP_SYS_CMAKE_OUT_DIR").ok().map(sanitize_path),
+            static_cxx_runtime: env_flag("SIPP_STATIC_CXX_RUNTIME"),
         }
     }
 }

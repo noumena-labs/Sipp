@@ -91,6 +91,7 @@ jobs:
     env:
       SIPP_CUDA_ARCHITECTURES: ${{ inputs.cuda-architectures }}
       SIPP_PYTHON_WHEEL_COMPATIBILITY: ${{ matrix.abi }}
+      SIPP_STATIC_CXX_RUNTIME: ${{ matrix.static_cxx_runtime && '1' || '' }}
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ inputs.release-codegen-units }}
     strategy:
@@ -104,21 +105,25 @@ jobs:
             cuda_repo: rhel8
             backends: cpu,vulkan,cuda
             cuda: true
+            static_cxx_runtime: true
           - id: windows-x64
             os: windows-2022
             abi: host
             backends: cpu,vulkan,cuda
             cuda: true
+            static_cxx_runtime: false
           - id: macos-x64
             os: macos-15-intel
             abi: host
             backends: cpu,metal
             cuda: false
+            static_cxx_runtime: false
           - id: macos-arm64
             os: macos-14
             abi: host
             backends: cpu,metal
             cuda: false
+            static_cxx_runtime: false
     steps:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
@@ -191,6 +196,7 @@ jobs:
           dnf install -y \
             "cuda-compiler-${CUDA_PACKAGE_SUFFIX}" \
             "cuda-libraries-devel-${CUDA_PACKAGE_SUFFIX}" \
+            libstdc++-static \
             vulkan-loader-devel \
             vulkan-headers
           dnf clean all
