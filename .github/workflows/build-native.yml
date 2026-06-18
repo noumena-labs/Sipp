@@ -174,11 +174,11 @@ jobs:
         uses: actions/cache@v5.0.5
         with:
           path: |
-            .build/toolchain
+            .build/toolchain/uv
             .build/uv-cache
-          key: sipp-toolchain-build-native-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          key: sipp-uv-toolchain-build-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
           restore-keys: |
-            sipp-toolchain-build-native-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-
+            sipp-uv-toolchain-build-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-
 
       - name: Install Linux CUDA 13.0 and Vulkan development libraries
         if: ${{ runner.os == 'Linux' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
