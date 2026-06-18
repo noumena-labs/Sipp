@@ -80,3 +80,15 @@ fn macos_deployment_target_supports_filesystem_floor() {
 fn unix_cuda_flags_compile_position_independent_objects() {
     assert!(super::unix::cuda_cmake_flags().contains("-fPIC"));
 }
+
+#[test]
+fn linux_links_static_cpp_runtime_for_portable_artifacts() {
+    assert_eq!(
+        super::unix::stdcpp_link_kind(&target_context("x86_64-unknown-linux-gnu")),
+        "static=stdc++"
+    );
+    assert_eq!(
+        super::unix::stdcpp_link_kind(&target_context("x86_64-unknown-freebsd")),
+        "dylib=stdc++"
+    );
+}

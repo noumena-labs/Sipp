@@ -6,7 +6,7 @@ pub(crate) fn apply_cuda_cmake_overrides(config: &mut Config) {
 }
 
 pub(crate) fn link_system_libraries(context: &BuildContext) {
-    println!("cargo:rustc-link-lib=dylib=stdc++");
+    println!("cargo:rustc-link-lib={}", stdcpp_link_kind(context));
     println!("cargo:rustc-link-lib=dylib=m");
     println!("cargo:rustc-link-lib=dylib=dl");
     println!("cargo:rustc-link-lib=dylib=pthread");
@@ -45,4 +45,12 @@ fn link_cuda_libraries(context: &BuildContext) {
 
 pub(super) fn cuda_cmake_flags() -> &'static str {
     "-Xcompiler=-fPIC"
+}
+
+pub(super) fn stdcpp_link_kind(context: &BuildContext) -> &'static str {
+    if context.target.contains("linux") {
+        "static=stdc++"
+    } else {
+        "dylib=stdc++"
+    }
 }
