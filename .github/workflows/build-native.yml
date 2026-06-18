@@ -1,9 +1,9 @@
 name: Native artifact matrix
 
 # Reusable native build matrix shared by release.yml and publish-dev.yml.
-# Builds the Node addon, Python wheels, and Rust core across the four supported
-# OS/arch targets, verifies backends, runs smoke tests, and uploads artifacts.
-# Publishing is intentionally left to the calling workflow.
+# Builds the Node addon and Python wheels across the four supported OS/arch
+# targets, verifies backends, runs smoke tests, and checks Rust core in a
+# separate Linux job. Publishing is intentionally left to the calling workflow.
 on:
   workflow_call:
     inputs:
@@ -450,10 +450,6 @@ jobs:
           max-glibc: ${{ env.SIPP_MAX_GLIBC }}
           enforce: ${{ inputs.enforce }}
 
-      - name: Build Rust core on host
-        if: ${{ inputs.package == 'all' && matrix.id == 'linux-x64' }}
-        run: cargo xtask --plain build core
-
       - name: Summarize native build logs on failure
         if: ${{ failure() }}
         shell: bash
@@ -520,7 +516,7 @@ jobs:
 
   rust-core:
     name: Build Rust core artifact check
-    if: ${{ inputs.package == 'rust' }}
+    if: ${{ inputs.package == 'all' || inputs.package == 'rust' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -536,6 +532,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rust-src
+
+      - name: Set up Node
+        if: ${{ inputs.apply-dev-versions }}
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
 
       - name: Set up CMake and Ninja
         uses: lukka/get-cmake@v4.3.1
@@ -567,6 +569,13 @@ jobs:
           key: sipp-toolchain-build-native-rust-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
           restore-keys: |
             sipp-toolchain-build-native-rust-core-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Apply dev package versions
+        if: ${{ inputs.apply-dev-versions }}
+        uses: ./.github/actions/apply-dev-versions
+        with:
+          npm-version: ${{ inputs.npm-version }}
+          python-version: ${{ inputs.python-version }}
 
       - name: Build Rust core on host
         run: cargo xtask --plain build core
