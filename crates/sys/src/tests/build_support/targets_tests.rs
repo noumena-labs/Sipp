@@ -7,12 +7,16 @@ use super::*;
 use crate::build_support::context::{BuildContext, BuildEnv, FeatureFlags};
 use crate::build_support_test_common::TempDir;
 use std::fs;
+use std::path::PathBuf;
 
 fn target_context(target: &str) -> BuildContext {
-    target_context_with_static_cxx(target, false)
+    target_context_with_static_cxx_lib_dir(target, None)
 }
 
-fn target_context_with_static_cxx(target: &str, static_cxx_runtime: bool) -> BuildContext {
+fn target_context_with_static_cxx_lib_dir(
+    target: &str,
+    static_cxx_runtime_lib_dir: Option<PathBuf>,
+) -> BuildContext {
     BuildContext {
         manifest_dir: "crates/sys".into(),
         llama_dir: "crates/sys/llama.cpp".into(),
@@ -32,7 +36,7 @@ fn target_context_with_static_cxx(target: &str, static_cxx_runtime: bool) -> Bui
             cuda_architectures: None,
             vulkan_sdk: None,
             cmake_out_dir: None,
-            static_cxx_runtime,
+            static_cxx_runtime_lib_dir,
         },
     }
 }
@@ -98,45 +102,24 @@ fn linux_links_dynamic_cpp_runtime_by_default() {
 
 #[test]
 fn linux_links_static_cpp_runtime_for_portable_artifacts() {
-    assert_eq!(
-        super::unix::stdcpp_link_kind(&target_context_with_static_cxx(
-            "x86_64-unknown-linux-gnu",
-            true
-        )),
-        "static=stdc++"
-    );
-    assert_eq!(
-        super::unix::stdcpp_link_kind(&target_context_with_static_cxx(
-            "x86_64-unknown-freebsd",
-            true
-        )),
-        "dylib=stdc++"
-    );
-}
-
-#[test]
-fn static_cpp_runtime_search_dir_uses_existing_archive_path() {
     let temp = TempDir::new("static-stdcpp");
     let lib_dir = temp.join("gcc");
     fs::create_dir_all(&lib_dir).expect("lib dir");
-    let archive = lib_dir.join("libstdc++.a");
-    fs::write(&archive, "").expect("archive");
+    fs::write(lib_dir.join("libstdc++.a"), "").expect("archive");
 
-    let output = format!("{}\n", archive.display());
-    assert_eq!(
-        super::unix::static_stdcpp_search_dir_from_output(output.as_bytes()),
-        Some(lib_dir)
-    );
-}
+    let linux_context =
+        target_context_with_static_cxx_lib_dir("x86_64-unknown-linux-gnu", Some(lib_dir.clone()));
 
-#[test]
-fn static_cpp_runtime_search_dir_rejects_unresolved_compiler_output() {
     assert_eq!(
-        super::unix::static_stdcpp_search_dir_from_output(b"libstdc++.a\n"),
-        None
+        super::unix::stdcpp_link_kind(&linux_context),
+        "static=stdc++"
     );
+    assert_eq!(super::unix::static_stdcpp_lib_dir(&linux_context), lib_dir);
     assert_eq!(
-        super::unix::static_stdcpp_search_dir_from_output(b"/missing/libstdc++.a\n"),
-        None
+        super::unix::stdcpp_link_kind(&target_context_with_static_cxx_lib_dir(
+            "x86_64-unknown-freebsd",
+            Some(lib_dir),
+        )),
+        "dylib=stdc++"
     );
 }

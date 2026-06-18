@@ -27,7 +27,7 @@ const CONTEXT_ENV_VARS: &[(&str, Option<&str>)] = &[
     ("SIPP_CUDA_ARCHITECTURES", None),
     ("VULKAN_SDK", None),
     ("SIPP_SYS_CMAKE_OUT_DIR", None),
-    ("SIPP_STATIC_CXX_RUNTIME", None),
+    ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", None),
 ];
 
 fn flags(backend_dl: bool, cuda: bool, metal: bool, vulkan: bool, openmp: bool) -> FeatureFlags {
@@ -54,7 +54,7 @@ fn context_for(manifest_dir: PathBuf, target: &str, features: FeatureFlags) -> B
             cuda_architectures: None,
             vulkan_sdk: None,
             cmake_out_dir: None,
-            static_cxx_runtime: false,
+            static_cxx_runtime_lib_dir: None,
         },
     }
 }
@@ -123,7 +123,7 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
         ("SIPP_CUDA_ARCHITECTURES", Some(" 80;90 ")),
         ("VULKAN_SDK", Some("vulkan-sdk")),
         ("SIPP_SYS_CMAKE_OUT_DIR", Some(r"\\?\cmake-out")),
-        ("SIPP_STATIC_CXX_RUNTIME", Some("1")),
+        ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", Some(r"\\?\stdcpp-lib")),
     ]);
 
     let env = BuildEnv::from_env();
@@ -131,24 +131,25 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
     assert_eq!(env.cuda_architectures, Some("80;90".to_owned()));
     assert_eq!(env.vulkan_sdk, Some(PathBuf::from("vulkan-sdk")));
     assert_eq!(env.cmake_out_dir, Some(PathBuf::from("cmake-out")));
-    assert!(env.static_cxx_runtime);
+    assert_eq!(
+        env.static_cxx_runtime_lib_dir,
+        Some(PathBuf::from("stdcpp-lib"))
+    );
 }
 
 #[test]
-fn build_env_treats_blank_static_cxx_runtime_as_disabled() {
-    for value in ["", "   ", "0", "false", "FALSE"] {
-        let _env = EnvGuard::new(&[
-            ("CUDA_PATH", None),
-            ("CUDA_HOME", None),
-            ("SIPP_CUDA_ARCHITECTURES", None),
-            ("VULKAN_SDK", None),
-            ("SIPP_SYS_CMAKE_OUT_DIR", None),
-            ("SIPP_STATIC_CXX_RUNTIME", Some(value)),
-        ]);
+fn build_env_treats_blank_static_cxx_runtime_lib_dir_as_unset() {
+    let _env = EnvGuard::new(&[
+        ("CUDA_PATH", None),
+        ("CUDA_HOME", None),
+        ("SIPP_CUDA_ARCHITECTURES", None),
+        ("VULKAN_SDK", None),
+        ("SIPP_SYS_CMAKE_OUT_DIR", None),
+        ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", Some("   ")),
+    ]);
 
-        let env = BuildEnv::from_env();
-        assert!(!env.static_cxx_runtime);
-    }
+    let env = BuildEnv::from_env();
+    assert_eq!(env.static_cxx_runtime_lib_dir, None);
 }
 
 #[test]
@@ -159,7 +160,7 @@ fn build_env_falls_back_to_cuda_home() {
         ("SIPP_CUDA_ARCHITECTURES", None),
         ("VULKAN_SDK", None),
         ("SIPP_SYS_CMAKE_OUT_DIR", None),
-        ("SIPP_STATIC_CXX_RUNTIME", None),
+        ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", None),
     ]);
 
     let env = BuildEnv::from_env();
@@ -167,7 +168,7 @@ fn build_env_falls_back_to_cuda_home() {
     assert_eq!(env.cuda_architectures, None);
     assert_eq!(env.vulkan_sdk, None);
     assert_eq!(env.cmake_out_dir, None);
-    assert!(!env.static_cxx_runtime);
+    assert_eq!(env.static_cxx_runtime_lib_dir, None);
 }
 
 #[test]
@@ -178,7 +179,7 @@ fn build_env_treats_blank_cuda_architectures_as_unset() {
         ("SIPP_CUDA_ARCHITECTURES", Some("   ")),
         ("VULKAN_SDK", None),
         ("SIPP_SYS_CMAKE_OUT_DIR", None),
-        ("SIPP_STATIC_CXX_RUNTIME", None),
+        ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", None),
     ]);
 
     let env = BuildEnv::from_env();

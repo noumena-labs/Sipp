@@ -91,7 +91,6 @@ jobs:
     env:
       SIPP_CUDA_ARCHITECTURES: ${{ inputs.cuda-architectures }}
       SIPP_PYTHON_WHEEL_COMPATIBILITY: ${{ matrix.abi }}
-      SIPP_STATIC_CXX_RUNTIME: ${{ matrix.static_cxx_runtime && '1' || '' }}
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ inputs.release-codegen-units }}
     strategy:
@@ -105,25 +104,21 @@ jobs:
             cuda_repo: rhel8
             backends: cpu,vulkan,cuda
             cuda: true
-            static_cxx_runtime: true
           - id: windows-x64
             os: windows-2022
             abi: host
             backends: cpu,vulkan,cuda
             cuda: true
-            static_cxx_runtime: false
           - id: macos-x64
             os: macos-15-intel
             abi: host
             backends: cpu,metal
             cuda: false
-            static_cxx_runtime: false
           - id: macos-arm64
             os: macos-14
             abi: host
             backends: cpu,metal
             cuda: false
-            static_cxx_runtime: false
     steps:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
@@ -206,10 +201,12 @@ jobs:
             echo "::error::$cxx cannot locate libstdc++.a after installing libstdc++-static"
             exit 1
           fi
+          stdcpp_dir="$(dirname "$stdcpp_archive")"
           echo "Static libstdc++: $stdcpp_archive"
           {
             echo "CUDA_HOME=/usr/local/cuda-${CUDA_VERSION}"
             echo "CUDA_PATH=/usr/local/cuda-${CUDA_VERSION}"
+            echo "SIPP_STATIC_CXX_RUNTIME_LIB_DIR=$stdcpp_dir"
             echo "LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION}/lib64:/usr/local/cuda-${CUDA_VERSION}/lib64/stubs:${LIBRARY_PATH:-}"
             echo "LD_LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION}/lib64:/usr/local/cuda-${CUDA_VERSION}/lib64/stubs:${LD_LIBRARY_PATH:-}"
           } >> "$GITHUB_ENV"
