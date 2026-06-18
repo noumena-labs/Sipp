@@ -31,7 +31,7 @@ fn command_summary_labels_top_level_workflows() {
         command_summary(&Commands::Build {
             target: BuildCommands::Core,
         }),
-        "Build native Rust libraries"
+        "Build public Rust crates"
     );
 }
 

@@ -412,7 +412,7 @@ pub enum BuildCommands {
     /// Build core, WASM, Python CPU, Node CPU, and CLI CPU targets.
     #[command(long_about = "\
 Build every target family in sequence:
-  1. Native Rust libraries
+  1. Public Rust crates
   2. Browser WASM/WebGPU package
   3. Python bindings with the default CPU backend
   4. Node bindings with the default CPU backend
@@ -425,12 +425,12 @@ backend wheels, or `cargo xtask build cli --backend all` when you need fat CLI
 native artifacts.")]
     All,
 
-    /// Build the native Rust library crates.
+    /// Build the public Rust crates.
     #[command(long_about = "\
-Build the native Rust library crates in release mode.
+Build the public Rust crates in release mode.
 
 Equivalent build step:
-  cargo build --release --package sipp-sys --package sipp-rs --package sipp-gateway --package sipp-binding-dto")]
+  cargo build --release --package sipp-sys --package sipp-rs")]
     Core,
 
     /// Build browser WASM/WebGPU artifacts and TypeScript wrappers.
@@ -1795,7 +1795,7 @@ impl fmt::Display for SetupProfile {
 pub enum DoctorTarget {
     /// Check the full developer build surface.
     All,
-    /// Check native Rust library prerequisites.
+    /// Check public Rust crate prerequisites.
     Core,
     /// Check WASM/browser package prerequisites.
     Wasm,
