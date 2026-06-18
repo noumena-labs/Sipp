@@ -200,6 +200,13 @@ jobs:
             vulkan-loader-devel \
             vulkan-headers
           dnf clean all
+          cxx="${CXX:-c++}"
+          stdcpp_archive="$("$cxx" -print-file-name=libstdc++.a)"
+          if [ ! -f "$stdcpp_archive" ]; then
+            echo "::error::$cxx cannot locate libstdc++.a after installing libstdc++-static"
+            exit 1
+          fi
+          echo "Static libstdc++: $stdcpp_archive"
           {
             echo "CUDA_HOME=/usr/local/cuda-${CUDA_VERSION}"
             echo "CUDA_PATH=/usr/local/cuda-${CUDA_VERSION}"

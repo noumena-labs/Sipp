@@ -135,6 +135,23 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
 }
 
 #[test]
+fn build_env_treats_blank_static_cxx_runtime_as_disabled() {
+    for value in ["", "   ", "0", "false", "FALSE"] {
+        let _env = EnvGuard::new(&[
+            ("CUDA_PATH", None),
+            ("CUDA_HOME", None),
+            ("SIPP_CUDA_ARCHITECTURES", None),
+            ("VULKAN_SDK", None),
+            ("SIPP_SYS_CMAKE_OUT_DIR", None),
+            ("SIPP_STATIC_CXX_RUNTIME", Some(value)),
+        ]);
+
+        let env = BuildEnv::from_env();
+        assert!(!env.static_cxx_runtime);
+    }
+}
+
+#[test]
 fn build_env_falls_back_to_cuda_home() {
     let _env = EnvGuard::new(&[
         ("CUDA_PATH", None),

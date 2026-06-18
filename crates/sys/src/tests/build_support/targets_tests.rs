@@ -5,6 +5,8 @@
 
 use super::*;
 use crate::build_support::context::{BuildContext, BuildEnv, FeatureFlags};
+use crate::build_support_test_common::TempDir;
+use std::fs;
 
 fn target_context(target: &str) -> BuildContext {
     target_context_with_static_cxx(target, false)
@@ -109,5 +111,32 @@ fn linux_links_static_cpp_runtime_for_portable_artifacts() {
             true
         )),
         "dylib=stdc++"
+    );
+}
+
+#[test]
+fn static_cpp_runtime_search_dir_uses_existing_archive_path() {
+    let temp = TempDir::new("static-stdcpp");
+    let lib_dir = temp.join("gcc");
+    fs::create_dir_all(&lib_dir).expect("lib dir");
+    let archive = lib_dir.join("libstdc++.a");
+    fs::write(&archive, "").expect("archive");
+
+    let output = format!("{}\n", archive.display());
+    assert_eq!(
+        super::unix::static_stdcpp_search_dir_from_output(output.as_bytes()),
+        Some(lib_dir)
+    );
+}
+
+#[test]
+fn static_cpp_runtime_search_dir_rejects_unresolved_compiler_output() {
+    assert_eq!(
+        super::unix::static_stdcpp_search_dir_from_output(b"libstdc++.a\n"),
+        None
+    );
+    assert_eq!(
+        super::unix::static_stdcpp_search_dir_from_output(b"/missing/libstdc++.a\n"),
+        None
     );
 }
