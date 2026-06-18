@@ -445,51 +445,58 @@ jobs:
 
       - name: Summarize native build logs on failure
         if: ${{ failure() }}
-        shell: pwsh
+        shell: bash
         run: |
-          $ErrorActionPreference = "Stop"
-          $summary = $env:GITHUB_STEP_SUMMARY
-          Add-Content -Path $summary -Value "### Native build logs (${{ matrix.id }})"
-          if (!(Test-Path ".build/logs")) {
-            Add-Content -Path $summary -Value ""
-            Add-Content -Path $summary -Value "No .build/logs directory was produced."
+          set -euo pipefail
+
+          {
+            echo "### Native build logs (${{ matrix.id }})"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ ! -d ".build/logs" ]; then
+            echo "No .build/logs directory was produced." >> "$GITHUB_STEP_SUMMARY"
             exit 0
-          }
+          fi
 
-          $logs = Get-ChildItem ".build/logs" -File |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 5
-
-          if ($logs.Count -eq 0) {
-            Add-Content -Path $summary -Value ""
-            Add-Content -Path $summary -Value "No native log files were produced."
+          log_list="${RUNNER_TEMP:-.}/sipp-native-build-logs.txt"
+          ls -1t .build/logs 2>/dev/null | head -n 5 > "$log_list"
+          if [ ! -s "$log_list" ]; then
+            echo "No native log files were produced." >> "$GITHUB_STEP_SUMMARY"
             exit 0
-          }
+          fi
 
-          foreach ($log in $logs) {
-            Add-Content -Path $summary -Value ""
-            Add-Content -Path $summary -Value "#### $($log.Name)"
-            $matches = Select-String `
-              -Path $log.FullName `
-              -Pattern "error:|CMake Error|FAILED:|fatal error|Traceback|Exception|panic" |
-              Select-Object -Last 20
-            if ($matches) {
-              Add-Content -Path $summary -Value ""
-              Add-Content -Path $summary -Value "Matched failure lines:"
-              Add-Content -Path $summary -Value '```text'
-              foreach ($match in $matches) {
-                Add-Content -Path $summary -Value $match.Line
-              }
-              Add-Content -Path $summary -Value '```'
-            }
-            Add-Content -Path $summary -Value ""
-            Add-Content -Path $summary -Value "Last 60 lines:"
-            Add-Content -Path $summary -Value '```text'
-            Get-Content -Path $log.FullName -Tail 60 | ForEach-Object {
-              Add-Content -Path $summary -Value $_
-            }
-            Add-Content -Path $summary -Value '```'
-          }
+          while IFS= read -r log_name; do
+            log_path=".build/logs/$log_name"
+            [ -f "$log_path" ] || continue
+            {
+              echo ""
+              echo "#### $log_name"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            matches="$(
+              grep -Ei "error:|CMake Error|FAILED:|fatal error|Traceback|Exception|panic" "$log_path" |
+                tail -n 20 ||
+                true
+            )"
+            if [ -n "$matches" ]; then
+              {
+                echo ""
+                echo "Matched failure lines:"
+                echo '```text'
+                printf '%s\n' "$matches"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+            {
+              echo ""
+              echo "Last 60 lines:"
+              echo '```text'
+              tail -n 60 "$log_path"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          done < "$log_list"
 
       - name: Upload native build logs on failure
         if: ${{ failure() }}
