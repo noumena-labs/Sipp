@@ -43,8 +43,6 @@ path = "src/gateway_embed.rs"
 required-features = ["gateway"]
 
 [features]
-default = ["native"]
-native = ["sipp/native"]
 gateway = ["sipp/gateway"]
 backend-dl = ["sipp/backend-dl"]
 cuda = ["sipp/cuda"]

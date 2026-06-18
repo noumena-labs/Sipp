@@ -11,8 +11,6 @@ name = "sipp_node"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["native"]
-native = ["sipp/native"]
 cuda = ["sipp/cuda"]
 metal = ["sipp/metal"]
 vulkan = ["sipp/vulkan"]

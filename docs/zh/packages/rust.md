@@ -26,7 +26,7 @@ cargo add sipp-rs
 - Ninja，或兼容的 CMake generator。
 - 所选后端需要的平台 SDK。
 
-默认构建包含 CPU 后端。其他后端特性有额外要求：
+CPU 原生后端是基础能力，不需要 Cargo feature。其他后端特性有额外要求：
 
 - `cuda`：CUDA Toolkit 以及兼容的 NVIDIA 驱动。
 - `metal`：macOS 以及 Xcode command line tools。

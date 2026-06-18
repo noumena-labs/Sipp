@@ -30,8 +30,8 @@ the native build tools used by `sipp-sys`:
 - Ninja or a compatible CMake generator.
 - Platform SDKs required by the selected backend.
 
-The default build includes the CPU backend. Backend features add their own
-requirements:
+The CPU native backend is the baseline and does not require a Cargo feature.
+Backend features add their own requirements:
 
 - `cuda`: CUDA Toolkit plus a compatible NVIDIA driver.
 - `metal`: macOS with Xcode command line tools.

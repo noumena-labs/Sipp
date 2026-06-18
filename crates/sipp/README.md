@@ -7,7 +7,8 @@ runtime configuration, and shared Sipp value types.
 
 `sipp-rs` depends on `sipp-sys`, the native llama.cpp FFI crate. A downstream
 `cargo add sipp-rs` build therefore needs Rust, a C/C++ compiler, CMake, and a
-CMake generator such as Ninja. Optional backend features require their platform
+CMake generator such as Ninja. The CPU native backend is the baseline and does
+not require a Cargo feature. Optional backend features require their platform
 SDKs: CUDA Toolkit for `cuda`, Xcode command line tools on macOS for `metal`,
 Vulkan development libraries for `vulkan`, and OpenMP support for `openmp`.
 
