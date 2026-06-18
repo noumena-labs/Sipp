@@ -30,9 +30,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CUDA_VERSION: "13.3"
-  CUDA_PACKAGE_SUFFIX: "13-3"
-  CUDA_WINDOWS_INSTALLER_URL: https://developer.download.nvidia.com/compute/cuda/13.3.0/local_installers/cuda_13.3.0_windows.exe
+  CUDA_VERSION: "13.0"
+  CUDA_PACKAGE_SUFFIX: "13-0"
+  CUDA_WINDOWS_INSTALLER_URL: https://developer.download.nvidia.com/compute/cuda/13.0.3/local_installers/cuda_13.0.3_windows.exe
   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SIPP_MAX_GLIBC: "2.28"
   SIPP_MAX_WHEEL_MB: "100"

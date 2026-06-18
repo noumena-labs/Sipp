@@ -31,8 +31,8 @@ jobs:
             tag_suffix: vulkan
             cuda_architectures: ""
           - backend: cuda
-            builder: nvidia/cuda:13.3.0-devel-ubuntu24.04
-            runtime: nvidia/cuda:13.3.0-runtime-ubuntu24.04
+            builder: nvidia/cuda:13.0.3-devel-ubuntu24.04
+            runtime: nvidia/cuda:13.0.3-runtime-ubuntu24.04
             rustup: "1"
             tag_suffix: cuda
             # Portable cloud GPU architectures for CUDA 13 release images.

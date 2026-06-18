@@ -53,8 +53,8 @@ services:
       dockerfile: apps/gateway-server/Dockerfile
       args:
         SIPP_GATEWAY_BACKEND: cuda
-        SIPP_GATEWAY_BUILDER_IMAGE: nvidia/cuda:13.3.0-devel-ubuntu24.04
-        SIPP_GATEWAY_RUNTIME_IMAGE: nvidia/cuda:13.3.0-runtime-ubuntu24.04
+        SIPP_GATEWAY_BUILDER_IMAGE: nvidia/cuda:13.0.3-devel-ubuntu24.04
+        SIPP_GATEWAY_RUNTIME_IMAGE: nvidia/cuda:13.0.3-runtime-ubuntu24.04
         SIPP_GATEWAY_INSTALL_RUSTUP: "1"
         # Portable cloud GPU list. Narrow to one architecture for faster
         # builds; when empty, xtask applies this same portable default.
