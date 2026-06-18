@@ -253,4 +253,7 @@ For thorough verification steps, consult the [Source Builds Documentation](docs%
 
 ## License
 
-Sipp is licensed under the Apache-2.0 License. Vendored third-party dependencies preserve their respective upstream open-source licensing constraints and documentation requirements.
+Sipp is licensed under the Apache-2.0 License. Vendored third-party
+dependencies preserve their respective upstream open-source licensing
+constraints and documentation requirements; see the
+[third-party notices](THIRD_PARTY_NOTICES.md).
