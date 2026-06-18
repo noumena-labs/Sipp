@@ -27,8 +27,7 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md",
-    "THIRD_PARTY_NOTICES.md"
+    "README.md"
   ],
   "scripts": {
     "clean:ts": "node -e \"const fs=require('node:fs'); for (const p of ['../../.build/artifacts/npm/sipp/dist/esm','../../.build/artifacts/npm/sipp/dist/types','dist/esm','dist/types']) fs.rmSync(p,{recursive:true,force:true});\"",

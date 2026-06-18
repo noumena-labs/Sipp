@@ -31,4 +31,3 @@ sipppy-backend-metal = { path = "backends/metal" }
 module-name = "sipp._native"
 manifest-path = "../../bindings/python/Cargo.toml"
 python-source = "python"
-include = [{ path = "../../THIRD_PARTY_NOTICES.md", format = "wheel" }]

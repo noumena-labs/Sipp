@@ -13,4 +13,3 @@ license = { text = "Apache-2.0" }
 module-name = "sipp_backend_vulkan._native"
 manifest-path = "../../../../bindings/python/Cargo.toml"
 python-source = "python"
-include = [{ path = "../../../../THIRD_PARTY_NOTICES.md", format = "wheel" }]
