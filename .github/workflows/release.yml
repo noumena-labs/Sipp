@@ -762,12 +762,17 @@ jobs:
           }
 
           require_file .build/artifacts/npm/sipp/package.json
+          require_file .build/artifacts/npm/sipp/THIRD_PARTY_NOTICES.md
           require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js
           require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm
           require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js
           require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm
           require_file .build/artifacts/npm/sipp-server/package.json
+          require_file .build/artifacts/npm/sipp-server/THIRD_PARTY_NOTICES.md
           require_glob "node platform packages" .build/artifacts/npm/sipp-server-*/package.json
+          for node_package_json in .build/artifacts/npm/sipp-server-*/package.json; do
+            require_file "$(dirname "$node_package_json")/THIRD_PARTY_NOTICES.md"
+          done
           require_glob "Python sipppy wheels" .build/artifacts/python/sipppy-*.whl
           require_glob "Python CUDA backend wheels" .build/artifacts/python/sipppy_backend_cuda-*.whl
           require_glob "Python Vulkan backend wheels" .build/artifacts/python/sipppy_backend_vulkan-*.whl

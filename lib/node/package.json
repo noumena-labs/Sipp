@@ -17,6 +17,7 @@
     "gateway-profile.js",
     "LICENSE",
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
     "router.d.ts",
     "router.js"
   ],

@@ -12,8 +12,6 @@ name = "sipp-gateway-example"
 path = "src/main.rs"
 
 [features]
-default = ["native"]
-native = ["sipp/native", "sipp-gateway/native"]
 backend-dl = ["sipp-gateway/backend-dl"]
 cuda = ["sipp-gateway/cuda"]
 metal = ["sipp-gateway/metal"]

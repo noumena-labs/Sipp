@@ -488,9 +488,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
         with:
-          # Keep the submodule out so the tarball stays facade-only; vendored
-          # llama.cpp ships only after sign-off.
-          submodules: false
+          submodules: recursive
 
       - name: Apply dev package versions
         uses: ./.github/actions/apply-dev-versions
@@ -498,7 +496,7 @@ jobs:
           npm-version: ${{ needs.prepare-dev.outputs.version }}
           python-version: ${{ needs.prepare-dev.outputs.python_version }}
 
-      - name: Package Rust facade source artifact
+      - name: Package Rust source artifact
         shell: bash
         run: |
           set -euo pipefail

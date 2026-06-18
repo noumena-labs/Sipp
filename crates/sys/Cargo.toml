@@ -32,13 +32,11 @@ include = [
 ]
 
 [features]
-default = ["native"]
-native = []
-backend-dl = ["native"]
-cuda = ["native"]
-metal = ["native"]
-vulkan = ["native"]
-openmp = ["native"]
+backend-dl = []
+cuda = []
+metal = []
+vulkan = []
+openmp = []
 
 [build-dependencies]
 cc = "1.0"

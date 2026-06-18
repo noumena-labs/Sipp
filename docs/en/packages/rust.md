@@ -4,6 +4,10 @@ The Rust package target is `sipp-rs`. It publishes the `sipp` library crate
 for Rust applications and re-exports the high-level client API plus selected
 runtime, backend, lifecycle, shard, provider, and gateway types.
 
+`sipp-rs` depends on `sipp-sys`, the native llama.cpp FFI crate. Installing
+`sipp-rs` from crates.io builds the native backend from source on the target
+machine; it is not a binary wheel-style package.
+
 See the [Library API Overview](../api) for the shared `add`, `query`,
 `chat`, and `embed` contracts.
 
@@ -15,6 +19,24 @@ cargo add sipp-rs
 
 The release workflow publishes `sipp-sys` first, then publishes `sipp-rs`.
 Applications depend on the `sipp-rs` package and import the `sipp` crate.
+
+## Build Requirements
+
+Rust applications that depend on `sipp-rs` need the normal Rust toolchain plus
+the native build tools used by `sipp-sys`:
+
+- A C/C++ compiler for the target platform.
+- CMake.
+- Ninja or a compatible CMake generator.
+- Platform SDKs required by the selected backend.
+
+The CPU native backend is the baseline and does not require a Cargo feature.
+Backend features add their own requirements:
+
+- `cuda`: CUDA Toolkit plus a compatible NVIDIA driver.
+- `metal`: macOS with Xcode command line tools.
+- `vulkan`: Vulkan SDK or system Vulkan development libraries.
+- `openmp`: OpenMP compiler/runtime support for the target platform.
 
 ## Use It For
 

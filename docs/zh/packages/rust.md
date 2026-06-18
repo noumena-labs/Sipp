@@ -2,6 +2,10 @@
 
 Rust 包发布名称为 `sipp-rs`，导入的库 crate 名仍然是 `sipp`。它作为 Rust 应用的公共 Crate，负责客户端 API 以及运行时、后端、生命周期、分片、提供商和网关等核心类型。
 
+`sipp-rs` 依赖 `sipp-sys`，也就是 llama.cpp 原生 FFI crate。从 crates.io
+安装 `sipp-rs` 时，会在目标机器上从源码编译原生后端；它不是类似二进制
+Wheel 的预编译包。
+
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api)。
 
 ## 安装
@@ -11,6 +15,23 @@ cargo add sipp-rs
 ```
 
 发布流程会先发布 `sipp-sys`，再发布 `sipp-rs`。应用依赖 `sipp-rs` 包，并在代码中导入 `sipp` crate。需直接从源码使用该包时，见[源码构建](../maintainers/source-builds.md)。
+
+## 构建要求
+
+依赖 `sipp-rs` 的 Rust 应用需要常规 Rust 工具链，以及 `sipp-sys` 使用的原生
+构建工具：
+
+- 目标平台可用的 C/C++ 编译器。
+- CMake。
+- Ninja，或兼容的 CMake generator。
+- 所选后端需要的平台 SDK。
+
+CPU 原生后端是基础能力，不需要 Cargo feature。其他后端特性有额外要求：
+
+- `cuda`：CUDA Toolkit 以及兼容的 NVIDIA 驱动。
+- `metal`：macOS 以及 Xcode command line tools。
+- `vulkan`：Vulkan SDK 或系统 Vulkan 开发库。
+- `openmp`：目标平台上的 OpenMP 编译器/运行时支持。
 
 ## 适用场景
 

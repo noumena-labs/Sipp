@@ -9,8 +9,6 @@ readme = "README.md"
 publish = false
 
 [features]
-default = ["native"]
-native = ["sipp/native"]
 backend-dl = ["sipp/backend-dl"]
 cuda = ["sipp/cuda"]
 metal = ["sipp/metal"]

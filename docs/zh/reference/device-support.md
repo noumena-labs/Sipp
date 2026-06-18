@@ -218,7 +218,7 @@ Python 原生包只会被 x64 Node/Python 进程使用；原生 arm64 Node/Pytho
 | 浏览器 (`@sipp/sipp`) | `npm install @sipp/sipp` | 已发布 (npm) | WASM / WebGPU | 浏览器本地 GGUF 推理、网关客户端 |
 | Node.js (`@sipp/sipp-server`) | `npm install @sipp/sipp-server` | 已发布 (npm) | N-API 原生 | 服务器进程、路由处理程序、后端服务 |
 | Python (`sipppy`) | `pip install sipppy` | 已发布 (PyPI) | PyO3 原生 | Python 服务、脚本、网关客户端 |
-| Rust (`sipp-rs`) | `cargo add sipp-rs` | 已发布 (crates.io) | 纯 Rust 门面 | Rust 应用程序和服务 |
+| Rust (`sipp-rs`) | `cargo add sipp-rs` | 已发布 (crates.io) | 原生后端 Rust crate | Rust 应用程序和服务 |
 | 网关服务器 | 源码构建 | 仅限源码 | Axum 二进制文件 | 本地和提供商目标的 HTTP 网关 |
 | 网关 Docker | 从源码构建 Docker 镜像 | 仅限源码 | 容器 | 生产环境容器工作流 |
 | 网关工具包 | 源码制品 | 仅限源码 | Rust crate | 自定义网关应用 |
@@ -227,7 +227,6 @@ Python 原生包只会被 x64 Node/Python 进程使用；原生 arm64 Node/Pytho
 
 ## 局限性与待办事项
 
-* **Rust crates.io 发布**：由于 `sipp-sys` 依赖于私有 llama.cpp 子模块，目前处于阻塞状态。仅发布了源码制品。
 * **网关服务器**：尚未提供预编译的二进制文件或公共容器镜像。必须从源码构建。
 * **Windows Docker Vulkan**：暂不支持。在开启了 WSL2 的 Windows 上请改用 CUDA 或 CPU 配置文件。
 * **macOS Docker**：仅支持 CPU。Linux Docker 容器内无法运行 Metal。

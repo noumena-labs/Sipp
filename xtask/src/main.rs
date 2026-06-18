@@ -107,7 +107,7 @@ fn test_summary(command: &TestCommands) -> String {
 fn build_summary(target: &BuildCommands) -> String {
     match target {
         BuildCommands::All => "Build all default targets".to_owned(),
-        BuildCommands::Core => "Build native Rust workspace".to_owned(),
+        BuildCommands::Core => "Build public Rust crates".to_owned(),
         BuildCommands::Wasm(args) => {
             format!(
                 "Build browser WASM/WebGPU package ({})",

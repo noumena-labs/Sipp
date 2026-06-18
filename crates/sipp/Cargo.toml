@@ -13,15 +13,14 @@ categories = ["api-bindings", "science"]
 name = "sipp"
 
 [features]
-default = ["native", "gateway", "providers"]
-native = ["sipp-sys/native"]
+default = ["gateway", "providers"]
 gateway = ["dep:futures-util"]
 providers = ["dep:async-trait", "dep:bytes", "dep:futures-util"]
-backend-dl = ["native", "sipp-sys/backend-dl"]
-cuda = ["native", "sipp-sys/cuda"]
-metal = ["native", "sipp-sys/metal"]
-vulkan = ["native", "sipp-sys/vulkan"]
-openmp = ["native", "sipp-sys/openmp"]
+backend-dl = ["sipp-sys/backend-dl"]
+cuda = ["sipp-sys/cuda"]
+metal = ["sipp-sys/metal"]
+vulkan = ["sipp-sys/vulkan"]
+openmp = ["sipp-sys/openmp"]
 
 [dependencies]
 async-trait = { version = "0.1", optional = true }
