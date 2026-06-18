@@ -597,17 +597,26 @@ jobs:
           VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           set -euo pipefail
+          target_dir="$(cargo metadata --no-deps --format-version 1 | jq -r '.target_directory')"
+          package_dir="$target_dir/package"
+          mkdir -p "$package_dir"
+          rm -f "$package_dir/sipp-sys-$VERSION.crate" "$package_dir/sipp-rs-$VERSION.crate"
+
           cargo publish -p sipp-sys --dry-run
+          cargo package -p sipp-sys --allow-dirty --no-verify
+
           status=$(curl -s -H "User-Agent: sipp-release" -o /tmp/sipp-sys.json -w '%{http_code}' "https://crates.io/api/v1/crates/sipp-sys")
           if [ "$status" = "200" ] && jq -e --arg v "$VERSION" '.versions[]? | select(.num == $v)' /tmp/sipp-sys.json > /dev/null; then
             cargo publish -p sipp-rs --dry-run
+            cargo package -p sipp-rs --allow-dirty --no-verify
           else
-            echo "Skipping sipp-rs pre-publish packaging because sipp-sys $VERSION is not yet on crates.io."
+            echo "Skipping sipp-rs dry-run publish validation and packaging because sipp-sys $VERSION is not yet on crates.io."
           fi
+
           mkdir -p .build/artifacts/rust
-          cp "target/package/sipp-sys-$VERSION.crate" .build/artifacts/rust/
-          if [ -f "target/package/sipp-rs-$VERSION.crate" ]; then
-            cp "target/package/sipp-rs-$VERSION.crate" .build/artifacts/rust/
+          cp "$package_dir/sipp-sys-$VERSION.crate" .build/artifacts/rust/
+          if [ -f "$package_dir/sipp-rs-$VERSION.crate" ]; then
+            cp "$package_dir/sipp-rs-$VERSION.crate" .build/artifacts/rust/
           fi
 
       - name: Upload Rust crate artifacts
@@ -917,8 +926,9 @@ jobs:
           else
             cargo publish -p sipp-rs
           fi
+          target_dir="$(cargo metadata --no-deps --format-version 1 | jq -r '.target_directory')"
           cargo package -p sipp-rs --allow-dirty --no-verify
-          cp "target/package/sipp-rs-$VERSION.crate" .build/release-assets/
+          cp "$target_dir/package/sipp-rs-$VERSION.crate" .build/release-assets/
 
       - name: Tag published version
         shell: bash
