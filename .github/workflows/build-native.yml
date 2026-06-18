@@ -90,6 +90,7 @@ jobs:
     timeout-minutes: 300
     env:
       SIPP_CUDA_ARCHITECTURES: ${{ inputs.cuda-architectures }}
+      SIPP_PYTHON_WHEEL_COMPATIBILITY: ${{ matrix.abi }}
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ inputs.release-codegen-units }}
     strategy:
