@@ -61,8 +61,10 @@ const juice = await blender.add('edge', { kind: 'local', source: '/models/llama3
 const ice = await blender.add('cloud', { kind: 'gateway', baseUrl: 'https://gateway.example.com/v1/' });
 
 // Run inference on either endpoint seamlessly with a symmetric API
-const stream = await blender.chat([{ role: 'user', content: 'Explain Sipp.' }], { endpoint: juice });
-
+const [smoothie, snowcone] = await Promise.all([
+  blender.chat([{ role: 'user', content: 'Explain Sipp.' }], { endpoint: juice }),
+  blender.chat([{ role: 'user', content: 'Create a Sipp app.' }], { endpoint: ice })
+]);
 ```
 
 The unified SDK lets you dynamically partition and optimize complex application logic between local and cloud compute. Instead of wrestling with fragmented web runtimes, disconnected native wrappers for desktop, or custom middleware to protect API keys, you only need Sipp.
@@ -75,7 +77,26 @@ sipp run demos serve chat      # Launch a local, hardware-accelerated test canva
 
 ```
 
+
+## Performance Benchmarks
+
+Run them yourself here: [benchmark.sipp.sh/benchmark](https://benchmark.sipp.sh/benchmark)
+
+| Runtime / Framework | TTFT (ms) ↓ | Decode (tok/s) ↑ | E2E Latency (ms) ↓ |
+| --- | --- | --- | --- |
+| **Sipp** | **24.3** *(Best)* | **77.07** *(Best)* | **6,655** *(Best)* |
+| **WebLLM** | 160.0 *(6.55x)* | 25.80 *(2.99x)* | 19,930 *(2.99x)* |
+| **Transformers.js** | 301.0 *(12.38x)* | 33.25 *(2.32x)* | 15,670 *(2.35x)* |
+
 ---
+
+> **Disclaimer & Metric Notes:**
+> * **TTFT (Time to First Token):** Measured in milliseconds (ms). **Lower is better**.
+> * **Decode:** Measured in tokens per second (tok/s). **Higher is better**.
+> * **E2E Latency (End-to-End Latency):** Measured in milliseconds (ms). **Lower is better**.
+> * *Performed on a Nvidia GTX 3080, 1 warm up, 3 measured runs. Results avg. of all measured runs.*
+
+
 
 ## Install
 
@@ -88,15 +109,16 @@ npm install @sipp/sipp
 # For Node.js backend deployments (with native CUDA/Metal compilation)
 npm install @sipp/sipp-server
 
-# For Python automation and data engineering pipelines
-# (sippy wheels ship from GitHub Releases today; full PyPI build matrix in progress)
-pip install sipppy
-
 # For native systems development and application embedding
 cargo add sipp-rs
 
+# For Python automation and data engineering pipelines
+# (sippy wheels ship from GitHub Releases today; full PyPI build matrix in progress)
+# pip install sipppy
+
 # Deploy the secure cloud gateway server instance via Docker
-docker pull noumena/sipp-gateway
+# (cloud gateway will be available in the future, currently building from source)
+# docker pull noumena/sipp-gateway
 
 ```
 
@@ -110,8 +132,8 @@ Most developers should start with our pre-built, published packages rather than 
 | --- | --- | --- | --- |
 | **Browser** | Sipp Edge | `npm install @sipp/sipp` | [Browser package](docs/en/packages/browser.md) |
 | **Node.js** | Sipp Core | `npm install @sipp/sipp-server` | [Node.js package](docs/en/packages/node.md) |
-| **Python** | Sipp Core | `pip install sipppy` | [Python package](docs/en/packages/python.md) |
 | **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust package](docs/en/packages/rust.md) |
+| **Python** | Sipp Core | Wheels available on release page | [Python package](docs/en/packages/python.md) |
 | **Gateway Server** | Sipp Cloud | Source-built | [Gateway Server](docs/en/gateway/server.md) |
 | **Gateway Toolkit** | Sipp Cloud | Source-built | [Gateway toolkit](docs/en/gateway/toolkit.md) |
 
