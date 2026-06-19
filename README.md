@@ -48,7 +48,7 @@
 
 Sipp is an all-in-one, high-performance AI framework for building web, desktop, and edge applications. It ships as a cohesive SDK with a unified, symmetric API for local, provider, and cloud gateway inference.
 
-At its core is **Sipp Engine**, a blazing-fast runtime built to run anywhere: in the browser, on the desktop, or on bare-metal cloud infrastructure. Written in Rust, C++, and `llama.cpp`, it delivers low startup times and a minimal memory footprint.
+At its core is **Sipp Engine**, a blazing-fast runtime built to run anywhere: in the browser, on the desktop, or on bare-metal cloud infrastructure. Written in Rust, C++, and `ggml`, it delivers low startup times and a minimal memory footprint.
 
 ```javascript
 import { SippClient } from '@sipp/sipp';
