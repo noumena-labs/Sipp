@@ -35,6 +35,8 @@
   <span>&nbsp;&nbsp;•&nbsp;&nbsp;</span>
   <a href="docs/en/roadmap.md">Roadmap</a>
   <br />
+  <a href="README_zh.md">中文介绍</a>
+  <br />
 </div>
 
 
@@ -43,12 +45,13 @@
 > Sipp is under active development. Breaking changes are expected as we optimize the runtime layers. It might not be suitable for mission-critical production environments yet. If you find issues, bugs, or missing features, please open a GitHub issue.
 
 ### [Read the documentation →](docs/en/README.md)
+### [中文文档 →](docs/zh/README.md)
 
 ## What is Sipp?
 
 Sipp is an all-in-one, high-performance AI framework for building web, desktop, and edge applications. It ships as a cohesive SDK with a unified, symmetric API for local, provider, and cloud gateway inference.
 
-At its core is **Sipp Engine**, a blazing-fast runtime built to run anywhere: in the browser, on the desktop, or on bare-metal cloud infrastructure. Written in Rust, C++, and `ggml`, it delivers low startup times and a minimal memory footprint.
+At its core is **Sipp Engine**, a blazing-fast runtime built to run anywhere: in the browser, on the desktop, or on bare-metal cloud infrastructure, that delivers low startup times and a minimal memory footprint.
 
 ```javascript
 import { SippClient } from '@sipp/sipp';
