@@ -1,12 +1,6 @@
 name: Docs
 
 on:
-  pull_request:
-    branches:
-      - master
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 permissions:
@@ -46,7 +40,7 @@ jobs:
         run: cargo xtask docs build
 
       - name: Upload Pages artifact
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' }}
         uses: actions/upload-pages-artifact@v4
         with:
           path: book
@@ -54,7 +48,7 @@ jobs:
   deploy:
     name: Deploy GitHub Pages
     needs: build
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     permissions:
       pages: write
