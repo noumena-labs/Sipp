@@ -105,7 +105,7 @@ jobs:
           set -euo pipefail
           missing=0
           if [ "$NPM_TOKEN_PRESENT" != "true" ]; then
-            echo "::error::NPM_TOKEN is required to publish @sipp packages to npm."
+            echo "::error::NPM_TOKEN is required to publish @sipphq packages to npm."
             missing=1
           fi
           if [ "$CARGO_REGISTRY_TOKEN_PRESENT" != "true" ]; then
@@ -212,22 +212,21 @@ jobs:
             local name="$1" version="$2" status
             status=$(curl -s -H "User-Agent: sipp-release" -o /tmp/crate-package.json -w '%{http_code}' "https://crates.io/api/v1/crates/$name")
             if [ "$status" = "200" ] && jq -e --arg v "$version" '.versions[]? | select(.num == $v)' /tmp/crate-package.json > /dev/null; then
-              echo "::${level}::$name $version is already published to crates.io; bump the version before releasing."
-              conflicts=1
+              echo "::warning::$name $version is already published to crates.io; the publish step will skip it."
             else
               echo "$name $version is not yet on crates.io (status $status)."
             fi
           }
 
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "web-npm" ]; then
-            check_npm @sipp/sipp "$VERSION"
+            check_npm @sipphq/sipp "$VERSION"
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "node-npm" ]; then
-            check_npm @sipp/sipp-server "$VERSION"
-            check_npm @sipp/sipp-server-darwin-arm64 "$VERSION"
-            check_npm @sipp/sipp-server-darwin-x64 "$VERSION"
-            check_npm @sipp/sipp-server-linux-x64-gnu "$VERSION"
-            check_npm @sipp/sipp-server-win32-x64-msvc "$VERSION"
+            check_npm @sipphq/sipp-server "$VERSION"
+            check_npm @sipphq/sipp-server-darwin-arm64 "$VERSION"
+            check_npm @sipphq/sipp-server-darwin-x64 "$VERSION"
+            check_npm @sipphq/sipp-server-linux-x64-gnu "$VERSION"
+            check_npm @sipphq/sipp-server-win32-x64-msvc "$VERSION"
           fi
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "python" ]; then
             check_pypi sipppy "$VERSION"
@@ -415,7 +414,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-          pkg.name = '@sipp/sipp';
+          pkg.name = '@sipphq/sipp';
           pkg.publishConfig = { registry: 'https://registry.npmjs.org', access: 'public' };
           writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`);
           NODE
@@ -431,7 +430,7 @@ jobs:
           NPM_TAG: ${{ inputs.npm_tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         working-directory: .build/artifacts/npm/sipp
-        run: npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
+        run: npm publish --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG" --access public
 
   native:
     name: Run native artifact workflow
@@ -484,7 +483,7 @@ jobs:
         working-directory: lib/node
         env:
           SIPP_NODE_PACKAGE_ACCESS: public
-          SIPP_NODE_PACKAGE_NAME: "@sipp/sipp-server"
+          SIPP_NODE_PACKAGE_NAME: "@sipphq/sipp-server"
           SIPP_NODE_PACKAGE_REGISTRY: https://registry.npmjs.org
         run: bun run build:stage
 
@@ -533,7 +532,7 @@ jobs:
           set -euo pipefail
           for package_dir in .build/artifacts/npm/sipp-server-* .build/artifacts/npm/sipp-server; do
             [ -d "$package_dir" ] || continue
-            npm publish "$package_dir" --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG"
+            npm publish "$package_dir" --dry-run --registry https://registry.npmjs.org --tag "$NPM_TAG" --access public
           done
 
   python:
@@ -867,7 +866,7 @@ jobs:
               echo "$name@$version is already published; skipping."
               return
             fi
-            npm publish "$package_dir" --registry https://registry.npmjs.org --tag "$NPM_TAG"
+            npm publish "$package_dir" --registry https://registry.npmjs.org --tag "$NPM_TAG" --access public
           }
 
           publish_npm_package .build/artifacts/npm/sipp
