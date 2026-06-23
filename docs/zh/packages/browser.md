@@ -1,16 +1,16 @@
 # 浏览器包
 
-浏览器包发布名称为 `@sipp/sipp`。提供 `SippClient` 客户端，支持浏览器本地 GGUF 推理、网关调用、提供商描述符、Token 流式传输、基于 OPFS 的模型缓存以及浏览器运行时生命周期管理。
+浏览器包发布名称为 `@sipphq/sipp`。提供 `SippClient` 客户端，支持浏览器本地 GGUF 推理、网关调用、提供商描述符、Token 流式传输、基于 OPFS 的模型缓存以及浏览器运行时生命周期管理。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api/)。
 
 ## 安装
 
 ```bash
-npm install @sipp/sipp
+npm install @sipphq/sipp
 ```
 
-在浏览器环境中使用此包。服务器路由或 Node 服务改用 [`@sipp/sipp-server`](node.md)。
+在浏览器环境中使用此包。服务器路由或 Node 服务改用 [`@sipphq/sipp-server`](node.md)。
 
 ## 适用场景
 
@@ -23,7 +23,7 @@ npm install @sipp/sipp
 ## 本地推理
 
 ```ts
-import { SippClient, type ChatMessage } from '@sipp/sipp';
+import { SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
 const endpoint = await client.add('default', {

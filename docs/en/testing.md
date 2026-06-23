@@ -124,7 +124,7 @@ and existing coverage artifacts.
 
 ## Package Locations
 
-- `lib/web` publishes `@noumena-labs/sipp` and public `@sipp/sipp`.
-- `lib/node` publishes `@noumena-labs/sipp-server` and public `@sipp/sipp-server`.
+- `lib/web` publishes `@noumena-labs/sipp` and public `@sipphq/sipp`.
+- `lib/node` publishes `@noumena-labs/sipp-server` and public `@sipphq/sipp-server`.
 - `lib/python` publishes Python `sipp`.
 - `crates/sipp` publishes the Rust package `sipp-rs` with library crate `sipp`.

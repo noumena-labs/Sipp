@@ -15,7 +15,7 @@ credential lifecycle and application policy. This is the recommended framework
 route pattern for Next.js and TanStack server code.
 
 ```ts
-import { SippClient } from '@sipp/sipp-server';
+import { SippClient } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];

@@ -1,14 +1,14 @@
 # Next.js
 
-Node.js 环境下运行的 App Router 路由处理器中，使用 `@sipp/sipp-server`。客户端组件或纯浏览器模块中，改用 `@sipp/sipp`。
+Node.js 环境下运行的 App Router 路由处理器中，使用 `@sipphq/sipp-server`。客户端组件或纯浏览器模块中，改用 `@sipphq/sipp`。
 
 Next.js App Router 默认将页面和布局视为服务端组件。只有模块需要访问浏览器 API、组件状态、事件监听器或浏览器本地的 Sipp 引擎时，才在文件顶部添加 `'use client'`。
 
 ## 兼容网关 Profile 路由
 
-通过路由处理器可有效防止提供商凭证泄露到客户端。引入 `@sipp/sipp-server` 的路由文件，请确保声明 `export const runtime = 'nodejs';`。
+通过路由处理器可有效防止提供商凭证泄露到客户端。引入 `@sipphq/sipp-server` 的路由文件，请确保声明 `export const runtime = 'nodejs';`。
 
-要把某个路由作为浏览器的 `kind: 'gateway'` 端点使用，该路由必须兼容网关的 Profile 格式。可利用 `@sipp/sipp-server` 提供的网关 Profile 助手解析请求体，返回标准 JSON 或 SSE 响应。路由内部可继续向直接提供商端点发起请求。
+要把某个路由作为浏览器的 `kind: 'gateway'` 端点使用，该路由必须兼容网关的 Profile 格式。可利用 `@sipphq/sipp-server` 提供的网关 Profile 助手解析请求体，返回标准 JSON 或 SSE 响应。路由内部可继续向直接提供商端点发起请求。
 
 代码示例中的 `OPENAI_API_KEY="<mock-openai-key>"` 仅为演示。实际部署时，请务必从服务器环境变量或密钥管理服务中读取密钥。
 
@@ -20,7 +20,7 @@ import {
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from '@sipp/sipp-server';
+} from '@sipphq/sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -69,7 +69,7 @@ export async function POST(request: Request): Promise<Response> {
 
 ```ts
 // app/api/sipp/stream/route.ts
-import { SippClient } from '@sipp/sipp-server';
+import { SippClient } from '@sipphq/sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -135,7 +135,7 @@ export async function POST(request: Request): Promise<Response> {
 'use client';
 
 import { useState } from 'react';
-import { SippClient } from '@sipp/sipp';
+import { SippClient } from '@sipphq/sipp';
 
 export function LocalChat(): JSX.Element {
   const [text, setText] = useState('');
@@ -176,7 +176,7 @@ export function LocalChat(): JSX.Element {
 'use client';
 
 import { useState } from 'react';
-import { SippClient, type EndpointRef } from '@sipp/sipp';
+import { SippClient, type EndpointRef } from '@sipphq/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 

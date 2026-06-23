@@ -215,8 +215,8 @@ Python 原生包只会被 x64 Node/Python 进程使用；原生 arm64 Node/Pytho
 
 | 软件包 | 安装命令 | 状态 | 运行时 | 主要用途 |
 | --- | --- | --- | --- | --- |
-| 浏览器 (`@sipp/sipp`) | `npm install @sipp/sipp` | 已发布 (npm) | WASM / WebGPU | 浏览器本地 GGUF 推理、网关客户端 |
-| Node.js (`@sipp/sipp-server`) | `npm install @sipp/sipp-server` | 已发布 (npm) | N-API 原生 | 服务器进程、路由处理程序、后端服务 |
+| 浏览器 (`@sipphq/sipp`) | `npm install @sipphq/sipp` | 已发布 (npm) | WASM / WebGPU | 浏览器本地 GGUF 推理、网关客户端 |
+| Node.js (`@sipphq/sipp-server`) | `npm install @sipphq/sipp-server` | 已发布 (npm) | N-API 原生 | 服务器进程、路由处理程序、后端服务 |
 | Python (`sipppy`) | `pip install sipppy` | 已发布 (PyPI) | PyO3 原生 | Python 服务、脚本、网关客户端 |
 | Rust (`sipp-rs`) | `cargo add sipp-rs` | 已发布 (crates.io) | 原生后端 Rust crate | Rust 应用程序和服务 |
 | 网关服务器 | 源码构建 | 仅限源码 | Axum 二进制文件 | 本地和提供商目标的 HTTP 网关 |

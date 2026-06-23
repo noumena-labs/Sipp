@@ -40,7 +40,7 @@ let bytes = codec.encode_text(&decoded.target, &response)?;
 Custom gateway applications own sockets, route layout, authentication,
 configuration files, target policy, CORS, logging, and deployment defaults.
 Node route handlers can use the matching gateway profile helpers exported by
-`@sipp/sipp-server` when implementing the same first-party profile in framework
+`@sipphq/sipp-server` when implementing the same first-party profile in framework
 routes.
 
 ## Boundaries

@@ -13,7 +13,7 @@ during generation.
 
 Affected surface:
 
-- Browser-local inference through the `@sipp/sipp` browser package.
+- Browser-local inference through the `@sipphq/sipp` browser package.
 - Demos or applications that keep pulse animations active while the model is
   decoding.
 

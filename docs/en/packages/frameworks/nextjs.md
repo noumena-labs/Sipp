@@ -1,7 +1,7 @@
 # Next.js
 
-Use `@sipp/sipp-server` in App Router route handlers that run in the Node.js
-runtime. Use `@sipp/sipp` only in Client Components or browser-only modules.
+Use `@sipphq/sipp-server` in App Router route handlers that run in the Node.js
+runtime. Use `@sipphq/sipp` only in Client Components or browser-only modules.
 
 Next.js App Router pages and layouts are Server Components by default. Add
 `'use client'` only to modules that need browser APIs, state, event handlers,
@@ -10,11 +10,11 @@ or browser-local Sipp runtime access.
 ## Profile-Compatible Provider Route
 
 Route handlers are a good place to keep provider credentials off the client.
-Set `runtime = 'nodejs'` for routes that import `@sipp/sipp-server`.
+Set `runtime = 'nodejs'` for routes that import `@sipphq/sipp-server`.
 
 Routes that are registered from a browser `kind: 'gateway'` endpoint must speak
 the first-party gateway profile. Use the gateway profile helpers from
-`@sipp/sipp-server` to decode the incoming body and format JSON or SSE
+`@sipphq/sipp-server` to decode the incoming body and format JSON or SSE
 responses. The route can still execute the request against a direct provider
 endpoint.
 
@@ -29,7 +29,7 @@ import {
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from '@sipp/sipp-server';
+} from '@sipphq/sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -85,7 +85,7 @@ server should keep the provider credential.
 
 ```ts
 // app/api/sipp/stream/route.ts
-import { SippClient } from '@sipp/sipp-server';
+import { SippClient } from '@sipphq/sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -152,7 +152,7 @@ Component boundary.
 'use client';
 
 import { useState } from 'react';
-import { SippClient } from '@sipp/sipp';
+import { SippClient } from '@sipphq/sipp';
 
 export function LocalChat(): JSX.Element {
   const [text, setText] = useState('');
@@ -198,7 +198,7 @@ reference at request time; the `query` call stays the same.
 'use client';
 
 import { useState } from 'react';
-import { SippClient, type EndpointRef } from '@sipp/sipp';
+import { SippClient, type EndpointRef } from '@sipphq/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
