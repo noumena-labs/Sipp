@@ -22,7 +22,7 @@ test('getOptimizedDefaultWorkerUrl maps Vite optimized deps back to the package 
 
 test('getOptimizedDefaultWorkerUrl maps public Vite optimized deps back to the worker entry', () => {
   assert.equal(
-    getOptimizedDefaultWorkerUrl('https://app.test/node_modules/.vite/deps/@sipp_sipp.js?v=123'),
-    'https://app.test/node_modules/@sipp/sipp/dist/esm/worker/model-service-entry.js'
+    getOptimizedDefaultWorkerUrl('https://app.test/node_modules/.vite/deps/@sipphq_sipp.js?v=123'),
+    'https://app.test/node_modules/@sipphq/sipp/dist/esm/worker/model-service-entry.js'
   );
 });

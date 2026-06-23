@@ -3,7 +3,7 @@ import { currentLocationOrigin, resolveUrl } from '../utils/url.js';
 
 const VITE_OPTIMIZED_DEPS_SEGMENT = '/node_modules/.vite/deps/';
 const INTERNAL_PACKAGE_ROOT = 'node_modules/@noumena-labs/sipp';
-const PUBLIC_PACKAGE_ROOT = 'node_modules/@sipp/sipp';
+const PUBLIC_PACKAGE_ROOT = 'node_modules/@sipphq/sipp';
 
 export interface RuntimeUrls {
   moduleUrl: string;
@@ -61,7 +61,7 @@ function packageRootForOptimizedDependency(optimizedPath: string): string | null
   if (fileName.startsWith('@noumena-labs_sipp')) {
     return INTERNAL_PACKAGE_ROOT;
   }
-  if (fileName.startsWith('@sipp_sipp')) {
+  if (fileName.startsWith('@sipphq_sipp')) {
     return PUBLIC_PACKAGE_ROOT;
   }
   return null;
