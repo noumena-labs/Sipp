@@ -218,8 +218,8 @@ Any GPU that the host browser exposes as a WebGPU adapter may work, but Sipp req
 
 | Package | Install command | Status | Run time | Primary use |
 | --- | --- | --- | --- | --- |
-| Browser (`@sipp/sipp`) | `npm install @sipp/sipp` | Published (npm) | WASM / WebGPU | Browser-local GGUF inference, gateway clients |
-| Node.js (`@sipp/sipp-server`) | `npm install @sipp/sipp-server` | Published (npm) | N-API native | Server processes, route handlers, backend services |
+| Browser (`@sipphq/sipp`) | `npm install @sipphq/sipp` | Published (npm) | WASM / WebGPU | Browser-local GGUF inference, gateway clients |
+| Node.js (`@sipphq/sipp-server`) | `npm install @sipphq/sipp-server` | Published (npm) | N-API native | Server processes, route handlers, backend services |
 | Python (`sipppy`) | `pip install sipppy` | Published (PyPI) | PyO3 native | Python services, scripts, gateway clients |
 | Rust (`sipp-rs`) | `cargo add sipp-rs` | Published (crates.io) | Native-backed Rust crate | Rust applications and services |
 | Gateway server | Source-built | Source only | Axum binary | HTTP gateway for local and provider targets |

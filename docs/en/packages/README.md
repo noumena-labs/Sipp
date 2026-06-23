@@ -12,8 +12,8 @@ Most developers should start here instead of building from source.
 | Surface | Install | Primary use |
 | --- | --- | --- |
 | [Library API Overview](../api) | — | Shared `add`, `query`, `chat`, and `embed` contracts across all surfaces. |
-| [Browser](browser.md) | `npm install @sipp/sipp` | Browser-local GGUF inference, WebGPU/WASM runtime, and browser gateway clients. |
-| [Node.js](node.md) | `npm install @sipp/sipp-server` | Node server processes, route handlers, and backend services. |
+| [Browser](browser.md) | `npm install @sipphq/sipp` | Browser-local GGUF inference, WebGPU/WASM runtime, and browser gateway clients. |
+| [Node.js](node.md) | `npm install @sipphq/sipp-server` | Node server processes, route handlers, and backend services. |
 | [Python](python.md) | `pip install sipppy` | Python services, scripts, and gateway clients. |
 | [Rust](rust.md) | `cargo add sipp-rs` | Rust applications and services. |
 | [Gateway Server](../gateway/server.md) | Source-built today | First-party HTTP gateway for local and provider targets. |

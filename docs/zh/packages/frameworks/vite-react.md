@@ -1,22 +1,22 @@
 # React 与 Vite
 
-React 和 Vite 是 `@sipp/sipp` 浏览器包的基础集成环境。本指南介绍 Vite 配置方法、本地开发 HTTP 头设置、运行时资源覆写机制以及浏览器示例。
+React 和 Vite 是 `@sipphq/sipp` 浏览器包的基础集成环境。本指南介绍 Vite 配置方法、本地开发 HTTP 头设置、运行时资源覆写机制以及浏览器示例。
 
 要全面了解本地推理选项的配置，请参阅[本地推理](../../guides/local-inference.md)和[运行时选项](../../reference/runtime-options.md)。
 
 ## 安装
 
 ```bash
-npm install @sipp/sipp
+npm install @sipphq/sipp
 ```
 
 ## 浏览器本地推理
 
-仅在浏览器端代码中使用 `@sipp/sipp`。本地端点的 `source` 可以是应用服务器提供的模型 URL、用户上传的 `File` 对象、已缓存的模型 ID，或者是分块下载的数据源。
+仅在浏览器端代码中使用 `@sipphq/sipp`。本地端点的 `source` 可以是应用服务器提供的模型 URL、用户上传的 `File` 对象、已缓存的模型 ID，或者是分块下载的数据源。
 
 ```ts
 import { useState } from 'react';
-import { SippClient } from '@sipp/sipp';
+import { SippClient } from '@sipphq/sipp';
 
 export function LocalQuery(): JSX.Element {
   const [text, setText] = useState('');

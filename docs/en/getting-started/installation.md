@@ -9,8 +9,8 @@ or `embed`.
 
 | Surface | Install | Use for |
 | --- | --- | --- |
-| Browser | `npm install @sipp/sipp` | Browser-local GGUF inference and browser gateway clients. |
-| Node.js | `npm install @sipp/sipp-server` | Server-side local inference and framework route handlers. |
+| Browser | `npm install @sipphq/sipp` | Browser-local GGUF inference and browser gateway clients. |
+| Node.js | `npm install @sipphq/sipp-server` | Server-side local inference and framework route handlers. |
 | Python | `pip install sipppy` | Python scripts, services, and gateway clients. |
 | Python CUDA | GitHub release wheel | Python local inference with CUDA backend wheels. |
 | Python Vulkan | `pip install "sipppy[vulkan]"` | Python local inference with Vulkan backend wheels. |
@@ -30,7 +30,7 @@ added.
 - Python wheels require Python 3.10 or newer.
 - Browser-local inference needs a modern browser with WebAssembly support;
   WebGPU acceleration depends on the browser and device. For details, please refer to [Gateway](../reference/device-support.md).
-- Node installs use `@sipp/sipp-server`; npm resolves the matching optional
+- Node installs use `@sipphq/sipp-server`; npm resolves the matching optional
   platform binary package automatically. Python installs use the `sipppy` wheel
   (imported as `sipp`) for CPU and extras such as `sipppy[cuda]` for GPU backend
   wheels; the `sipppy` wheels currently ship from GitHub Releases while the full

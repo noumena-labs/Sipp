@@ -1,6 +1,6 @@
 # React And Vite
 
-React and Vite are the baseline browser integration for the `@sipp/sipp`
+React and Vite are the baseline browser integration for the `@sipphq/sipp`
 package. Use this guide for Vite-specific setup, local development headers,
 runtime asset overrides, and the source browser examples.
 
@@ -11,18 +11,18 @@ For the full local inference option map, see
 ## Install
 
 ```bash
-npm install @sipp/sipp
+npm install @sipphq/sipp
 ```
 
 ## Browser Local Query
 
-Use `@sipp/sipp` only in browser code. A local endpoint `source` can be a model
+Use `@sipphq/sipp` only in browser code. A local endpoint `source` can be a model
 URL served by the app, a user-provided `File`, an installed model id, or shard
 sources.
 
 ```ts
 import { useState } from 'react';
-import { SippClient } from '@sipp/sipp';
+import { SippClient } from '@sipphq/sipp';
 
 export function LocalQuery(): JSX.Element {
   const [text, setText] = useState('');

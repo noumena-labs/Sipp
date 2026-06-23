@@ -6,8 +6,8 @@
 
 | 平台 | 安装命令 | 适用场景 |
 | --- | --- | --- |
-| 浏览器 | `npm install @sipp/sipp` | 浏览器本地 GGUF 推理及网关客户端。 |
-| Node.js | `npm install @sipp/sipp-server` | Node.js 本地推理及网关客户端。 |
+| 浏览器 | `npm install @sipphq/sipp` | 浏览器本地 GGUF 推理及网关客户端。 |
+| Node.js | `npm install @sipphq/sipp-server` | Node.js 本地推理及网关客户端。 |
 | Python | `pip install sipppy` | Python 本地推理及网关客户端。 |
 | Python CUDA | GitHub Release Wheel | 使用 CUDA 后端 Wheel 的 Python 本地推理。 |
 | Python Vulkan | `pip install "sipppy[vulkan]"` | 使用 Vulkan 后端 Wheel 的 Python 本地推理。 |
@@ -21,7 +21,7 @@
 - 本地推理需要兼容的 GGUF 模型文件或浏览器端提供的 GGUF 资源。
 - Python Wheel 需要 Python 3.10 或更新版本。
 - 浏览器本地推理需要支持 WebAssembly 的现代浏览器；WebGPU 加速取决于浏览器和设备支持。具体请查看 [设备支持](../references/device-support.md)。
-- Node 安装使用 `@sipp/sipp-server`，npm 会自动解析匹配的平台二进制包。Python
+- Node 安装使用 `@sipphq/sipp-server`，npm 会自动解析匹配的平台二进制包。Python
   CPU 包使用 `sipppy`，Vulkan、Metal 后端通过 `sipppy[vulkan]`、
   `sipppy[metal]` 等 PyPI extras 拉取匹配的 `sipppy-backend-*`
   分发包；CUDA 后端 Wheel 暂时附在 GitHub Release 中，待 PyPI

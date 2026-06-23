@@ -15,11 +15,11 @@ See [Examples And Demos](../examples-demos.md) for runnable end-to-end files.
 ## Browser Local
 
 ```bash
-npm install @sipp/sipp
+npm install @sipphq/sipp
 ```
 
 ```ts
-import { SippClient, type ChatMessage } from '@sipp/sipp';
+import { SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
 const messages: readonly ChatMessage[] = [
@@ -77,11 +77,11 @@ await client.close();
 ## Node.js Local
 
 ```bash
-npm install @sipp/sipp-server
+npm install @sipphq/sipp-server
 ```
 
 ```ts
-import { SippClient } from '@sipp/sipp-server';
+import { SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 const messages = [
@@ -323,7 +323,7 @@ metrics in the gateway process. The example uses the browser package shape;
 Node.js uses the same request-object shape shown above.
 
 ```ts
-import { SippClient, type ChatMessage } from '@sipp/sipp';
+import { SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
 const endpoint = await client.add('gateway', {
@@ -373,7 +373,7 @@ model-specific: `query` needs a completion-compatible provider or model,
 `chat` needs a chat model, and `embed` needs an embedding model.
 
 ```ts
-import { SippClient } from '@sipp/sipp-server';
+import { SippClient } from '@sipphq/sipp-server';
 
 function env(name: string): string {
   const value = process.env[name];

@@ -29,7 +29,7 @@ let response = client.query(decoded.request).await?;
 let bytes = codec.encode_text(&decoded.target, &response)?;
 ```
 
-自定义网关应用需自行实现套接字管理、路由分发、鉴权、配置文件解析、目标策略、CORS、日志及默认部署配置。在 Node 框架中实现官方网关规范时，可使用 `@sipp/sipp-server` 导出的配套辅助函数。
+自定义网关应用需自行实现套接字管理、路由分发、鉴权、配置文件解析、目标策略、CORS、日志及默认部署配置。在 Node 框架中实现官方网关规范时，可使用 `@sipphq/sipp-server` 导出的配套辅助函数。
 
 ## 职责边界
 

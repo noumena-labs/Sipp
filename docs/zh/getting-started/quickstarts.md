@@ -9,11 +9,11 @@
 ## 浏览器本地推理
 
 ```bash
-npm install @sipp/sipp
+npm install @sipphq/sipp
 ```
 
 ```ts
-import { SippClient, type ChatMessage } from '@sipp/sipp';
+import { SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
 const messages: readonly ChatMessage[] = [
@@ -71,11 +71,11 @@ await client.close();
 ## Node.js 本地推理
 
 ```bash
-npm install @sipp/sipp-server
+npm install @sipphq/sipp-server
 ```
 
 ```ts
-import { SippClient } from '@sipp/sipp-server';
+import { SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 const messages = [
@@ -312,7 +312,7 @@ fn embed_config() -> NativeRuntimeConfig {
 网关客户端会在网关服务端进程内安全托管模型路径、服务商凭证、请求路由策略及各项性能指标。以下代码片段演示了浏览器端的网关调用，Node.js 同样可复用这套统一的请求对象结构。
 
 ```ts
-import { SippClient, type ChatMessage } from '@sipp/sipp';
+import { SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
 const endpoint = await client.add('gateway', {
@@ -358,7 +358,7 @@ await client.close();
 除非在绝对安全可控的服务端代码中 (比如自建本地服务)，否则请勿直连第三方服务商的端点。服务商的能力支持情况取决于你选用的具体模型：`query` 接口要求服务商或模型兼容补全（completion）模式，`chat` 支持大部分服务商chat模型端口，而 `embed` 则必须调用专门的嵌入模型。
 
 ```ts
-import { SippClient } from '@sipp/sipp-server';
+import { SippClient } from '@sipphq/sipp-server';
 
 function env(name: string): string {
   const value = process.env[name];

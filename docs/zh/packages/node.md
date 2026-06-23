@@ -1,16 +1,16 @@
 # Node.js 包
 
-Node.js 包发布名称为 `@sipp/sipp-server`。为 Node 服务器进程、路由处理器和框架服务端函数提供 Sipp 客户端 API。使用该包时，应用全权负责管理框架的路由、请求校验、身份验证和部署策略。
+Node.js 包发布名称为 `@sipphq/sipp-server`。为 Node 服务器进程、路由处理器和框架服务端函数提供 Sipp 客户端 API。使用该包时，应用全权负责管理框架的路由、请求校验、身份验证和部署策略。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api)。
 
 ## 安装
 
 ```bash
-npm install @sipp/sipp-server
+npm install @sipphq/sipp-server
 ```
 
-仅在 Node 运行时代码中使用此包。浏览器组件改用 [`@sipp/sipp`](browser.md)。
+仅在 Node 运行时代码中使用此包。浏览器组件改用 [`@sipphq/sipp`](browser.md)。
 
 ## 适用场景
 
@@ -23,7 +23,7 @@ npm install @sipp/sipp-server
 ## 本地推理 (Query)
 
 ```ts
-import { SippClient } from '@sipp/sipp-server';
+import { SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 const endpoint = await client.add('default', {
@@ -146,7 +146,7 @@ import {
   gatewayErrorResponse,
   gatewayTextResponseBody,
   gatewayTextStreamResponse,
-} from '@sipp/sipp-server';
+} from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -183,7 +183,7 @@ export async function handleQuery(request: Request): Promise<Response> {
 
 ## 框架路由集成
 
-只在服务端代码中使用 `@sipp/sipp-server`。典型场景包括配置了 `runtime = 'nodejs'` 的 Next.js App Router 路由处理器、TanStack Start 服务端函数、Express 路由或后台工作进程。切勿将其引入浏览器包。
+只在服务端代码中使用 `@sipphq/sipp-server`。典型场景包括配置了 `runtime = 'nodejs'` 的 Next.js App Router 路由处理器、TanStack Start 服务端函数、Express 路由或后台工作进程。切勿将其引入浏览器包。
 
 ## 相关文档
 

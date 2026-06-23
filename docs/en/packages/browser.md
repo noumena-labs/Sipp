@@ -1,6 +1,6 @@
 # Browser Package
 
-The browser package target is `@sipp/sipp`. It exposes `SippClient` for
+The browser package target is `@sipphq/sipp`. It exposes `SippClient` for
 browser-local GGUF inference, gateway calls, provider descriptors where
 supported, token streaming, OPFS-backed model caching, and browser runtime
 lifecycle management.
@@ -11,11 +11,11 @@ See the [Library API Overview](../api/) for the shared `add`, `query`,
 ## Install
 
 ```bash
-npm install @sipp/sipp
+npm install @sipphq/sipp
 ```
 
 Use this package in browser code. For server routes or Node services, use
-[`@sipp/sipp-server`](node.md).
+[`@sipphq/sipp-server`](node.md).
 
 ## Use It For
 
@@ -28,7 +28,7 @@ Use this package in browser code. For server routes or Node services, use
 ## Local GGUF Chat
 
 ```ts
-import { SippClient, type ChatMessage } from '@sipp/sipp';
+import { SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
 const endpoint = await client.add('default', {
