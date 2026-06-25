@@ -30,10 +30,14 @@ set(SHARED_MTMD_SOURCES
     ${SIPP_MTMD_MODEL_DIR}/cogvlm.cpp
     ${SIPP_MTMD_MODEL_DIR}/conformer.cpp
     ${SIPP_MTMD_MODEL_DIR}/dotsocr.cpp
+    ${SIPP_MTMD_MODEL_DIR}/exaone4_5.cpp
     ${SIPP_MTMD_MODEL_DIR}/gemma4a.cpp
     ${SIPP_MTMD_MODEL_DIR}/gemma4v.cpp
+    ${SIPP_MTMD_MODEL_DIR}/gemma4ua.cpp
+    ${SIPP_MTMD_MODEL_DIR}/gemma4uv.cpp
     ${SIPP_MTMD_MODEL_DIR}/glm4v.cpp
     ${SIPP_MTMD_MODEL_DIR}/granite-speech.cpp
+    ${SIPP_MTMD_MODEL_DIR}/granite4-vision.cpp
     ${SIPP_MTMD_MODEL_DIR}/hunyuanvl.cpp
     ${SIPP_MTMD_MODEL_DIR}/internvl.cpp
     ${SIPP_MTMD_MODEL_DIR}/kimivl.cpp

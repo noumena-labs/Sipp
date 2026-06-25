@@ -55,6 +55,7 @@ struct sipp_mtmd_context {
 
 struct sipp_mtmd_bitmap {
     mtmd_bitmap * inner;
+    mtmd_helper_video * video_inner;
 };
 
 struct sipp_mtmd_input_chunks {
@@ -135,7 +136,7 @@ void apply_sampling_json(
                 }
                 names.push_back(std::move(name));
             }
-            sampling.samplers = common_sampler_types_from_names(names, true);
+            sampling.samplers = common_sampler_types_from_names(names);
         }
 
         set_if_present(parsed, "seed", sampling.seed);
@@ -1132,12 +1133,14 @@ sipp_mtmd_bitmap * sipp_mtmd_bitmap_init_from_buf(
         return nullptr;
     }
 
-    mtmd_bitmap * inner = mtmd_helper_bitmap_init_from_buf(context->inner, data, len);
-    if (inner == nullptr) {
+    const mtmd_helper_bitmap_wrapper inner =
+        mtmd_helper_bitmap_init_from_buf(context->inner, data, len, false);
+    if (inner.bitmap == nullptr) {
         return nullptr;
     }
     auto * bitmap = new sipp_mtmd_bitmap();
-    bitmap->inner = inner;
+    bitmap->inner = inner.bitmap;
+    bitmap->video_inner = inner.video_ctx;
     return bitmap;
 }
 
@@ -1147,6 +1150,9 @@ void sipp_mtmd_bitmap_free(sipp_mtmd_bitmap * bitmap) {
     }
     if (bitmap->inner != nullptr) {
         mtmd_bitmap_free(bitmap->inner);
+    }
+    if (bitmap->video_inner != nullptr) {
+        mtmd_helper_video_free(bitmap->video_inner);
     }
     delete bitmap;
 }
