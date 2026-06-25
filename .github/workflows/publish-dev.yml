@@ -62,21 +62,23 @@ jobs:
         shell: bash
         env:
           BASE_VERSION: ${{ steps.resolve.outputs.version }}
+          PACKAGE: ${{ inputs.package }}
         run: |
           set -euo pipefail
           dev_versions="$(node --input-type=module <<'NODE'
           const base = process.env.BASE_VERSION;
+          const packageName = process.env.PACKAGE;
           const match = base.match(/^(\d+)\.(\d+)\.(\d+)$/);
           if (!match) {
             throw new Error(`Dev builds must start from a stable x.y.z version, got ${base}`);
           }
           const dev = Number(process.env.GITHUB_RUN_NUMBER) * 100 + Number(process.env.GITHUB_RUN_ATTEMPT);
-          // Keep the Cargo/npm dev version parseable by maturin when it reads
-          // the Rust crate version. `-devN` is also a PEP 440-compatible dev
-          // release after normalization; multi-part `-dev.N.M` is not.
-          const npmVersion = `${match[1]}.${match[2]}.${Number(match[3]) + 1}-dev${dev}`;
-          const pythonVersion = `${match[1]}.${match[2]}.${Number(match[3]) + 1}.dev${dev}`;
-          const tag = `sipp-dev-v${npmVersion}`;
+          // Keep dev builds on the resolved base version. npm/Cargo use a
+          // SemVer prerelease while Python uses the matching PEP 440 form.
+          const npmVersion = `${match[1]}.${match[2]}.${match[3]}-dev${dev}`;
+          const pythonVersion = `${match[1]}.${match[2]}.${match[3]}.dev${dev}`;
+          const tagScope = packageName === 'all' ? '' : `-${packageName}`;
+          const tag = `sipp-dev${tagScope}-v${npmVersion}`;
           console.error(`Base version ${base} -> npm/cargo ${npmVersion}, python ${pythonVersion}, tag ${tag}`);
           console.log(`${npmVersion}|${pythonVersion}|${tag}`);
           NODE
@@ -92,8 +94,18 @@ jobs:
               exit 1
             fi
           fi
-          latest_dev_tag="$(git ls-remote --tags --refs origin 'sipp-dev-v*' | awk -F/ '{ print $NF }' | sort -V | tail -1 || true)"
-          echo "Latest remote Sipp dev tag: ${latest_dev_tag:-none}"
+          latest_tag_pattern="sipp-dev-v*"
+          if [ "${{ inputs.package }}" != "all" ]; then
+            latest_tag_pattern="sipp-dev-${{ inputs.package }}-v*"
+          fi
+          latest_dev_tag="$(
+            git ls-remote --tags --refs origin "$latest_tag_pattern" |
+              awk -F/ '{ print $NF }' |
+              sort -V |
+              tail -1 ||
+              true
+          )"
+          echo "Latest remote Sipp dev tag for ${{ inputs.package }}: ${latest_dev_tag:-none}"
           echo "version=$NPM_VERSION" >> "$GITHUB_OUTPUT"
           echo "python_version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$DEV_TAG" >> "$GITHUB_OUTPUT"
@@ -528,7 +540,39 @@ jobs:
       - native
       - node-npm
       - rust-source
-    if: ${{ inputs.dry_run == false && inputs.package == 'all' }}
+    if: >-
+      ${{
+        always() &&
+        inputs.dry_run == false &&
+        needs.prepare-dev.result == 'success' &&
+        (
+          (
+            inputs.package == 'all' &&
+            needs.web-npm.result == 'success' &&
+            needs.native.result == 'success' &&
+            needs.node-npm.result == 'success' &&
+            needs.rust-source.result == 'success'
+          ) ||
+          (
+            inputs.package == 'web-npm' &&
+            needs.web-npm.result == 'success'
+          ) ||
+          (
+            inputs.package == 'node-npm' &&
+            needs.native.result == 'success' &&
+            needs.node-npm.result == 'success'
+          ) ||
+          (
+            inputs.package == 'python' &&
+            needs.native.result == 'success'
+          ) ||
+          (
+            inputs.package == 'rust' &&
+            needs.native.result == 'success' &&
+            needs.rust-source.result == 'success'
+          )
+        )
+      }}
     permissions:
       contents: write
     steps:
