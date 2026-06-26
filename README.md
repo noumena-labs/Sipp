@@ -54,7 +54,7 @@ Sipp is an all-in-one, high-performance AI framework for building web, desktop, 
 At its core is **Sipp Engine**, a blazing-fast runtime built to run anywhere: in the browser, on the desktop, or on bare-metal cloud infrastructure, that delivers low startup times and a minimal memory footprint.
 
 ```javascript
-import { SippClient } from '@sipp/sipp';
+import { SippClient } from '@sipphq/sipp';
 const blender = new SippClient();
 
 // 1. Initialize high-speed, local WebGPU or CUDA inference
@@ -107,10 +107,10 @@ Sipp supports web browsers, desktop application wrappers, server environments, a
 
 ```sh
 # For Web Browsers, Next.js, and TanStack applications
-npm install @sipp/sipp
+npm install @sipphq/sipp
 
 # For Node.js backend deployments (with native CUDA/Metal compilation)
-npm install @sipp/sipp-server
+npm install @sipphq/sipp-server
 
 # For native systems development and application embedding
 cargo add sipp-rs
@@ -133,8 +133,8 @@ Most developers should start with our pre-built, published packages rather than 
 
 | Surface | Module | Install | Docs |
 | --- | --- | --- | --- |
-| **Browser** | Sipp Edge | `npm install @sipp/sipp` | [Browser package](docs/en/packages/browser.md) |
-| **Node.js** | Sipp Core | `npm install @sipp/sipp-server` | [Node.js package](docs/en/packages/node.md) |
+| **Browser** | Sipp Edge | `npm install @sipphq/sipp` | [Browser package](docs/en/packages/browser.md) |
+| **Node.js** | Sipp Core | `npm install @sipphq/sipp-server` | [Node.js package](docs/en/packages/node.md) |
 | **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust package](docs/en/packages/rust.md) |
 | **Python** | Sipp Core | Wheels available on release page | [Python package](docs/en/packages/python.md) |
 | **Gateway Server** | Sipp Cloud | Source-built | [Gateway Server](docs/en/gateway/server.md) |
@@ -149,19 +149,19 @@ Most developers should start with our pre-built, published packages rather than 
 Initialize the local engine client to execute model weights directly on the client machine's shader cores using WebGPU.
 
 ```bash
-npm install @sipp/sipp
+npm install @sipphq/sipp
 
 ```
 
 ```javascript
-import { Client } from '@sipp/sipp';
+import { SippClient } from '@sipphq/sipp';
 
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain Sipp in one sentence.' },
 ];
 
-const client = new Client();
+const client = new SippClient();
 const endpoint = await client.add('default', {
   kind: 'local',
   source: '/models/model.gguf',
@@ -179,12 +179,12 @@ await client.close();
 
 ### 2. Cloud Gateway Quick Start (Preemptive Cloud Proxying)
 
-Cloud gateway clients use the exact same `Client` API layout. The gateway owns model paths, provider credentials, access policies, and centralized metrics tracking; your client application code only needs the gateway routing target URL.
+Cloud gateway clients use the exact same `SippClient` API layout. The gateway owns model paths, provider credentials, access policies, and centralized metrics tracking; your client application code only needs the gateway routing target URL.
 
 ```javascript
-import { Client } from '@sipp/sipp';
+import { SippClient } from '@sipphq/sipp';
 
-const client = new Client();
+const client = new SippClient();
 const endpoint = await client.add('gateway', {
   kind: 'gateway',
   target: 'upstream-cluster',
