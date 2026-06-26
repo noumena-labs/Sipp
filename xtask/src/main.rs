@@ -2,7 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use xshell::Shell;
 use xtask::cli::{
-    Backend, BuildCommands, Cli, Commands, DocsCommands, DocsLanguage, TestCommands, WasmThreading,
+    Backend, BuildCommands, Cli, Commands, DocsCommands, DocsLanguage, TestCommands, WasmRuntime,
+    WasmThreading,
 };
 use xtask::targets;
 use xtask::utils::BuildContext;
@@ -110,8 +111,9 @@ fn build_summary(target: &BuildCommands) -> String {
         BuildCommands::Core => "Build public Rust crates".to_owned(),
         BuildCommands::Wasm(args) => {
             format!(
-                "Build browser WASM/WebGPU package ({})",
-                args.threading.as_str()
+                "Build browser WASM/WebGPU package ({}, {})",
+                args.threading.as_str(),
+                args.runtime.as_str()
             )
         }
         BuildCommands::Python(args) => {
@@ -152,13 +154,13 @@ fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()
     match target {
         BuildCommands::All => {
             targets::core::build(sh, ctx)?;
-            targets::wasm::build(sh, ctx, WasmThreading::All)?;
+            targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
             targets::python::build(sh, ctx, None)?;
             targets::node::build(sh, ctx, None)?;
             targets::cli::build(sh, ctx, None)?;
         }
         BuildCommands::Core => targets::core::build(sh, ctx)?,
-        BuildCommands::Wasm(args) => targets::wasm::build(sh, ctx, args.threading)?,
+        BuildCommands::Wasm(args) => targets::wasm::build(sh, ctx, args.threading, args.runtime)?,
         BuildCommands::Python(args) => targets::python::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Node(args) => targets::node::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Cli(args) => targets::cli::build(sh, ctx, args.backend.as_ref())?,

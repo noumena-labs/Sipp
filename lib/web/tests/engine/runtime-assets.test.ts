@@ -3,10 +3,15 @@ import assert from 'node:assert/strict';
 import {
   getDefaultRuntimeUrls,
   resolveOptimizedPackageAssetUrl,
+  resolveRuntimeBackendOverride,
   resolveRuntimeThreadingMode,
   resolveRuntimeUrls,
   supportsWasmPthreads,
 } from '../../src/engine/runtime-assets.js';
+import {
+  withNavigatorUserAgent,
+  withWasmPthreadSupport,
+} from '../support/browser-env.js';
 
 interface LocationStub {
   href: string;
@@ -36,36 +41,6 @@ function withLocation<T>(href: string | undefined, callback: () => T): T {
       Reflect.deleteProperty(globalThis, 'location');
     } else {
       Object.defineProperty(globalThis, 'location', descriptor);
-    }
-  }
-}
-
-function withWasmPthreadSupport<T>(callback: () => T): T {
-  const crossOriginIsolatedDescriptor = Object.getOwnPropertyDescriptor(
-    globalThis,
-    'crossOriginIsolated'
-  );
-  const workerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Worker');
-  Object.defineProperty(globalThis, 'crossOriginIsolated', {
-    configurable: true,
-    value: true,
-  });
-  Object.defineProperty(globalThis, 'Worker', {
-    configurable: true,
-    value: class FakeWorker {},
-  });
-  try {
-    return callback();
-  } finally {
-    if (crossOriginIsolatedDescriptor == null) {
-      Reflect.deleteProperty(globalThis, 'crossOriginIsolated');
-    } else {
-      Object.defineProperty(globalThis, 'crossOriginIsolated', crossOriginIsolatedDescriptor);
-    }
-    if (workerDescriptor == null) {
-      Reflect.deleteProperty(globalThis, 'Worker');
-    } else {
-      Object.defineProperty(globalThis, 'Worker', workerDescriptor);
     }
   }
 }
@@ -145,6 +120,41 @@ test('resolveRuntimeUrls selects the pthread artifact when explicitly requested'
     assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
     assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
     assert.equal(resolved.threading, 'pthread');
+  });
+});
+
+test('resolveRuntimeUrls auto-selects CPU non-JSPI on Firefox pthread runtime', () => {
+  withNavigatorUserAgent('Mozilla/5.0 Firefox/152.0.2', () => {
+    withWasmPthreadSupport(() => {
+      assert.equal(resolveRuntimeThreadingMode({ wasmThreading: 'pthread' }), 'pthread');
+      const resolved = resolveRuntimeUrls({ wasmThreading: 'pthread' });
+      assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
+      assert.match(resolved.wasmUrl, /sipp-wasm-pthread-cpu-nojspi\.wasm$/);
+      assert.equal(resolved.threading, 'pthread');
+    });
+  });
+});
+
+test('resolveRuntimeBackendOverride forces CPU for bundled Firefox pthread runtime', () => {
+  withNavigatorUserAgent('Mozilla/5.0 Firefox/152.0.2', () => {
+    withWasmPthreadSupport(() => {
+      assert.equal(resolveRuntimeBackendOverride({ wasmThreading: 'pthread' }), 'cpu');
+    });
+  });
+});
+
+test('resolveRuntimeBackendOverride does not force CPU for custom runtime URLs', () => {
+  withNavigatorUserAgent('Mozilla/5.0 Firefox/152.0.2', () => {
+    withWasmPthreadSupport(() => {
+      assert.equal(
+        resolveRuntimeBackendOverride({
+          wasmThreading: 'pthread',
+          pthreadModuleUrl: '/custom.js',
+          pthreadWasmUrl: '/custom.wasm',
+        }),
+        null
+      );
+    });
   });
 });
 

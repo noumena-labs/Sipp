@@ -26,6 +26,7 @@ function buildServiceConfig(config: WorkerRuntimeConfig) {
     moduleUrl: runtimeUrls.moduleUrl,
     wasmUrl: runtimeUrls.wasmUrl,
     wasmThreading: runtimeUrls.threading,
+    defaultBackendOverride: config.defaultBackendOverride,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     browserCache: config.browserCache,
@@ -34,17 +35,29 @@ function buildServiceConfig(config: WorkerRuntimeConfig) {
 }
 
 function ensureService(config: WorkerRuntimeConfig): ModelService {
-  const fingerprint = JSON.stringify(buildServiceConfig(config));
+  const serviceConfig = buildServiceConfig(config);
+  const fingerprint = JSON.stringify(serviceConfig);
   if (service != null) {
     if (serviceConfigFingerprint !== fingerprint) {
       throw new Error('Worker model service was initialized with different runtime options.');
     }
     return service;
   }
-  runtime = new MainThreadEngineRuntime({
-    ...buildServiceConfig(config),
-    executionMode: 'worker',
-  });
+  runtime = new MainThreadEngineRuntime(
+    {
+      moduleUrl: serviceConfig.moduleUrl,
+      wasmUrl: serviceConfig.wasmUrl,
+      wasmThreading: serviceConfig.wasmThreading,
+      moduleOptions: serviceConfig.moduleOptions,
+      maxModelBytes: serviceConfig.maxModelBytes,
+      browserCache: serviceConfig.browserCache,
+      trustedOrigins: serviceConfig.trustedOrigins,
+      executionMode: 'worker',
+    },
+    {
+      defaultBackendOverride: serviceConfig.defaultBackendOverride,
+    }
+  );
   service = new ModelService(runtime, undefined, new AssetStore(undefined, config.browserCache));
   service.subscribeObservability((event) => {
     post({ kind: 'observability-event', event });

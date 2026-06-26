@@ -13,6 +13,8 @@ export interface RuntimeUrls {
 
 export type WasmThreadingPreference = 'single-thread' | 'pthread';
 export type WasmThreadingMode = 'single-thread' | 'pthread';
+export type RuntimeBackendOverride = 'cpu';
+type BundledRuntimeFlavor = 'webgpu-jspi' | 'cpu-nojspi';
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -106,6 +108,19 @@ export function resolveRuntimeThreadingMode(
   }
 }
 
+export function resolveRuntimeBackendOverride(
+  config: Pick<
+    SippClientOptions,
+    'moduleUrl' | 'wasmUrl' | 'pthreadModuleUrl' | 'pthreadWasmUrl' | 'wasmThreading'
+  >
+): RuntimeBackendOverride | null {
+  if (hasRuntimeUrlOverride(config)) {
+    return null;
+  }
+  const threading = resolveRuntimeThreadingMode(config);
+  return defaultBundledRuntimeFlavor(threading) === 'cpu-nojspi' ? 'cpu' : null;
+}
+
 function assertWasmPthreadsSupported(): void {
   if (supportsWasmPthreads()) {
     return;
@@ -123,7 +138,10 @@ function getDefaultRuntimeUrlsForThreading(
     'dist/esm/engine/runtime-assets.js',
     importerUrl
   );
-  const artifactPrefix = threading === 'pthread' ? 'sipp-wasm-pthread' : 'sipp-wasm';
+  const baseArtifactPrefix = threading === 'pthread' ? 'sipp-wasm-pthread' : 'sipp-wasm';
+  const artifactPrefix = `${baseArtifactPrefix}${runtimeArtifactSuffix(
+    defaultBundledRuntimeFlavor(threading)
+  )}`;
 
   const urls = optimizedRuntimeAssetsUrl == null
     ? {
@@ -139,6 +157,40 @@ function getDefaultRuntimeUrlsForThreading(
     ...urls,
     threading,
   };
+}
+
+function runtimeArtifactSuffix(runtimeFlavor: BundledRuntimeFlavor): string {
+  switch (runtimeFlavor) {
+    case 'webgpu-jspi':
+      return '';
+    case 'cpu-nojspi':
+      return '-cpu-nojspi';
+  }
+}
+
+function defaultBundledRuntimeFlavor(threading: WasmThreadingMode): BundledRuntimeFlavor {
+  return threading === 'pthread' && isFirefoxLikeRuntime() ? 'cpu-nojspi' : 'webgpu-jspi';
+}
+
+function isFirefoxLikeRuntime(): boolean {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+  return /\b(?:Firefox|FxiOS)\//.test(navigator.userAgent);
+}
+
+function hasRuntimeUrlOverride(
+  config: Pick<
+    SippClientOptions,
+    'moduleUrl' | 'wasmUrl' | 'pthreadModuleUrl' | 'pthreadWasmUrl'
+  >
+): boolean {
+  return (
+    normalizeOptionalString(config.moduleUrl) != null ||
+    normalizeOptionalString(config.wasmUrl) != null ||
+    normalizeOptionalString(config.pthreadModuleUrl) != null ||
+    normalizeOptionalString(config.pthreadWasmUrl) != null
+  );
 }
 
 function resolveTrustedOrigins(configuredOrigins: SippClientOptions['trustedOrigins']): Set<string> {

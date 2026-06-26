@@ -1,6 +1,7 @@
 import type { SippClientOptions } from '../engine/browser-client.js';
 import {
   resolveOptimizedPackageAssetUrl,
+  resolveRuntimeBackendOverride,
   resolveRuntimeUrls,
   supportsWasmPthreads,
   type WasmThreadingMode,
@@ -96,11 +97,16 @@ function toWorkerRuntimeConfig(config: SippClientOptions): WorkerRuntimeConfig {
     runtimeUrls?.threading ??
     config.wasmThreading ??
     defaultWorkerThreadingMode();
+  const defaultBackendOverride = resolveRuntimeBackendOverride({
+    ...config,
+    wasmThreading,
+  });
 
   return {
     moduleUrl: runtimeUrls?.moduleUrl,
     wasmUrl: runtimeUrls?.wasmUrl,
     wasmThreading,
+    defaultBackendOverride,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     browserCache: config.browserCache,

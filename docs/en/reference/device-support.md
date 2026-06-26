@@ -57,9 +57,9 @@ The table below shows the first browser version where each feature is available 
 
 | Browser | Support | WASM st | WASM pthread¹ | WebGPU | WebGPU + f16² | OPFS³ | Workers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Chrome (Win, Mac, Linux) | ✅ Tested | 57 | 92⁴ | 113 | 113 | 86 | 4 |
-| Edge (Win, Mac, Linux) | ❌ Untested | 79⁵ | 92⁴ | 113 | 113 | 86 | 79⁵ |
-| Firefox (Windows) | ❌ Untested | 52 | 79⁴ | 141 | 141 | 111 | 3.5 |
+| Chrome (Windows) | ✅ Tested 149.0.7827.200 | 57 | 92⁴ | 113 | 113 | 86 | 4 |
+| Edge (Windows) | ✅ Tested 149.0.4022.80 | 79⁵ | 92⁴ | 113 | 113 | 86 | 79⁵ |
+| Firefox (Windows) | 🟡 CPU tested 152.0.2 | 52 | 79⁴ | 141 | 141 | 111 | 3.5 |
 | Firefox (macOS) | ❌ Untested | 52 | 79⁴ | 145⁶ | 145⁶ | 111 | 3.5 |
 | Firefox (Linux) | ❌ Untested | 52 | 79⁴ | ⚠ Nightly | ⚠ Nightly | 111 | 3.5 |
 | Safari (macOS) | ❌ Untested | 11 | 15.2⁴ | 26 | 26 | 16.4 | 4 |
@@ -104,16 +104,18 @@ The table below shows the first browser version where each feature is available 
 
 ## WASM Threading
 
-Sipp ships two WASM runtime artifacts:
+Sipp ships pthread WASM runtime artifacts by default:
 
-| Artifact | Thread count | Token streaming | Requirements |
-| --- | --- | --- | --- |
-| `sipp-wasm.js` (single-thread) | 1 | `postMessage` | None |
-| `sipp-wasm-pthread.js` (pthread) | up to 4⁷ | `SharedArrayBuffer` ring | COOP + COEP headers, secure context |
+| Artifact | Backend/runtime | Thread count | Token streaming | Requirements |
+| --- | --- | --- | --- | --- |
+| `sipp-wasm-pthread.js` | WebGPU + JSPI | up to 4⁷ | `SharedArrayBuffer` ring | COOP + COEP headers, secure context |
+| `sipp-wasm-pthread-cpu-nojspi.js` | CPU-only, no JSPI | up to 4⁷ | `SharedArrayBuffer` ring | COOP + COEP headers, secure context |
 
 > ⁷ Defaults to `min(4, navigator.hardwareConcurrency)`. Override with `runtime.context.n_threads` in model load options.
 
-The client auto-detects pthread availability at runtime:
+The client auto-selects the CPU non-JSPI artifact for Firefox-like runtimes and
+the WebGPU+JSPI artifact elsewhere. The bundled runtime requires pthread
+availability:
 
 ```ts
 function supportsWasmPthreads(): boolean {
@@ -126,7 +128,9 @@ function supportsWasmPthreads(): boolean {
 
 ```
 
-Set `wasmThreading: 'single-thread'` in client options when the hosting environment cannot serve COOP/COEP headers (for example, GitHub Pages or shared hosting without header control).
+Single-thread artifacts are not included in the default browser package. Hosts
+that cannot serve COOP/COEP headers must provide a custom single-thread
+`moduleUrl` and `wasmUrl`.
 
 ---
 
@@ -211,6 +215,17 @@ Any GPU that the host browser exposes as a WebGPU adapter may work, but Sipp req
 | Apple Silicon | — | — | Yes | Yes |
 | Qualcomm (Android) | Yes | — | — | — |
 | ARM Mali | Yes (Android) | — | — | — |
+
+#### Firefox Runtime Findings
+
+Firefox 152.0.2 exposes the required WASM pthread, worker, WebGPU, and
+`shader-f16` capabilities on tested Windows configurations. With Firefox's
+experimental JSPI support enabled, the JSPI runtime path was functional: models
+loaded and generated tokens. It was not performant enough to ship. The Firefox
+browser runtime uses the pthread CPU no-JSPI artifact.
+
+This is a browser-runtime routing decision, not a single-thread fallback. The
+Firefox path still requires `SharedArrayBuffer`, workers, and COOP/COEP headers.
 
 ---
 
