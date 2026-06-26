@@ -14,7 +14,20 @@ export interface RuntimeUrls {
 export type WasmThreadingPreference = 'single-thread' | 'pthread';
 export type WasmThreadingMode = 'single-thread' | 'pthread';
 export type RuntimeBackendOverride = 'cpu';
-type BundledRuntimeFlavor = 'webgpu-jspi' | 'cpu-nojspi';
+
+interface BundledRuntimeAsset {
+  readonly artifactName: string;
+  readonly backendOverride: RuntimeBackendOverride | null;
+}
+
+const DEFAULT_BUNDLED_RUNTIME: BundledRuntimeAsset = {
+  artifactName: 'sipp-wasm-pthread',
+  backendOverride: null,
+};
+const FIREFOX_BUNDLED_RUNTIME: BundledRuntimeAsset = {
+  artifactName: 'sipp-wasm-pthread-cpu-nojspi',
+  backendOverride: 'cpu',
+};
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -70,8 +83,8 @@ function packageRootForOptimizedDependency(optimizedPath: string): string | null
 }
 
 export function getDefaultRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls {
-  const threading = resolveRuntimeThreadingMode({});
-  return getDefaultRuntimeUrlsForThreading(threading, importerUrl);
+  assertWasmPthreadsSupported();
+  return bundledRuntimeUrls(importerUrl);
 }
 
 export function supportsWasmPthreads(): boolean {
@@ -85,7 +98,11 @@ export function supportsWasmPthreads(): boolean {
 export function resolveRuntimeThreadingMode(
   config: Pick<
     SippClientOptions,
-    'moduleUrl' | 'wasmUrl' | 'pthreadModuleUrl' | 'pthreadWasmUrl' | 'wasmThreading'
+    | 'moduleUrl'
+    | 'wasmUrl'
+    | 'pthreadModuleUrl'
+    | 'pthreadWasmUrl'
+    | 'wasmThreading'
   >
 ): WasmThreadingMode {
   const configuredSingleThread =
@@ -99,26 +116,31 @@ export function resolveRuntimeThreadingMode(
     return 'single-thread';
   }
 
-  switch (config.wasmThreading ?? 'single-thread') {
-    case 'single-thread':
-      return 'single-thread';
-    case 'pthread':
-      assertWasmPthreadsSupported();
-      return 'pthread';
+  if (config.wasmThreading === 'single-thread') {
+    throw new Error(
+      'The bundled Sipp browser runtime is pthread-only. Serve with COOP/COEP headers for SharedArrayBuffer support, or provide explicit moduleUrl and wasmUrl for a custom single-thread runtime.'
+    );
   }
+
+  assertWasmPthreadsSupported();
+  return 'pthread';
 }
 
 export function resolveRuntimeBackendOverride(
   config: Pick<
     SippClientOptions,
-    'moduleUrl' | 'wasmUrl' | 'pthreadModuleUrl' | 'pthreadWasmUrl' | 'wasmThreading'
+    | 'moduleUrl'
+    | 'wasmUrl'
+    | 'pthreadModuleUrl'
+    | 'pthreadWasmUrl'
+    | 'wasmThreading'
   >
 ): RuntimeBackendOverride | null {
   if (hasRuntimeUrlOverride(config)) {
     return null;
   }
-  const threading = resolveRuntimeThreadingMode(config);
-  return defaultBundledRuntimeFlavor(threading) === 'cpu-nojspi' ? 'cpu' : null;
+  resolveRuntimeThreadingMode(config);
+  return selectBundledRuntime().backendOverride;
 }
 
 function assertWasmPthreadsSupported(): void {
@@ -126,50 +148,33 @@ function assertWasmPthreadsSupported(): void {
     return;
   }
   throw new Error(
-    'The pthread wasm runtime requires SharedArrayBuffer and cross-origin isolation. Serve the app with COOP/COEP headers or use wasmThreading: "single-thread".'
+    'The bundled Sipp browser runtime requires SharedArrayBuffer and cross-origin isolation. Serve the app with COOP/COEP headers or provide explicit moduleUrl and wasmUrl for a custom single-thread runtime.'
   );
 }
 
-function getDefaultRuntimeUrlsForThreading(
-  threading: WasmThreadingMode,
-  importerUrl: string = import.meta.url
-): RuntimeUrls {
+function bundledRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls {
+  const runtime = selectBundledRuntime();
   const optimizedRuntimeAssetsUrl = resolveOptimizedPackageAssetUrl(
     'dist/esm/engine/runtime-assets.js',
     importerUrl
   );
-  const baseArtifactPrefix = threading === 'pthread' ? 'sipp-wasm-pthread' : 'sipp-wasm';
-  const artifactPrefix = `${baseArtifactPrefix}${runtimeArtifactSuffix(
-    defaultBundledRuntimeFlavor(threading)
-  )}`;
-
-  const urls = optimizedRuntimeAssetsUrl == null
-    ? {
-      moduleUrl: new URL(`../../wasm/${artifactPrefix}.js`, import.meta.url).toString(),
-      wasmUrl: new URL(`../../wasm/${artifactPrefix}.wasm`, import.meta.url).toString(),
-    }
-    : {
-      moduleUrl: new URL(`../../wasm/${artifactPrefix}.js`, optimizedRuntimeAssetsUrl).toString(),
-      wasmUrl: new URL(`../../wasm/${artifactPrefix}.wasm`, optimizedRuntimeAssetsUrl).toString(),
-    };
+  const runtimeAssetsBaseUrl = optimizedRuntimeAssetsUrl ?? import.meta.url;
 
   return {
-    ...urls,
-    threading,
+    moduleUrl: new URL(
+      `../../wasm/${runtime.artifactName}.js`,
+      runtimeAssetsBaseUrl
+    ).toString(),
+    wasmUrl: new URL(
+      `../../wasm/${runtime.artifactName}.wasm`,
+      runtimeAssetsBaseUrl
+    ).toString(),
+    threading: 'pthread',
   };
 }
 
-function runtimeArtifactSuffix(runtimeFlavor: BundledRuntimeFlavor): string {
-  switch (runtimeFlavor) {
-    case 'webgpu-jspi':
-      return '';
-    case 'cpu-nojspi':
-      return '-cpu-nojspi';
-  }
-}
-
-function defaultBundledRuntimeFlavor(threading: WasmThreadingMode): BundledRuntimeFlavor {
-  return threading === 'pthread' && isFirefoxLikeRuntime() ? 'cpu-nojspi' : 'webgpu-jspi';
+function selectBundledRuntime(): BundledRuntimeAsset {
+  return isFirefoxLikeRuntime() ? FIREFOX_BUNDLED_RUNTIME : DEFAULT_BUNDLED_RUNTIME;
 }
 
 function isFirefoxLikeRuntime(): boolean {
@@ -235,37 +240,29 @@ export function resolveRuntimeUrls(
   }
 
   const threading = resolveRuntimeThreadingMode(config);
-  const resolved =
-    threading === 'pthread'
-      ? configuredPthreadModuleUrl == null
-        ? configuredModuleUrl != null && config.wasmThreading === 'pthread'
-          ? {
-            moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
-            wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
-          }
-          : (() => {
-            const defaults = getDefaultRuntimeUrlsForThreading('pthread');
-            return {
-              moduleUrl: new URL(defaults.moduleUrl),
-              wasmUrl: new URL(defaults.wasmUrl),
-            };
-          })()
-        : {
-          moduleUrl: parseConfiguredUrl(configuredPthreadModuleUrl, 'pthreadModuleUrl'),
-          wasmUrl: parseConfiguredUrl(configuredPthreadWasmUrl!, 'pthreadWasmUrl'),
-        }
-      : configuredModuleUrl == null
-        ? (() => {
-          const defaults = getDefaultRuntimeUrlsForThreading('single-thread');
-          return {
-            moduleUrl: new URL(defaults.moduleUrl),
-            wasmUrl: new URL(defaults.wasmUrl),
-          };
-        })()
-        : {
-          moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
-          wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
-        };
+  let resolved: { moduleUrl: URL; wasmUrl: URL };
+  if (threading === 'single-thread') {
+    resolved = {
+      moduleUrl: parseConfiguredUrl(configuredModuleUrl!, 'moduleUrl'),
+      wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
+    };
+  } else if (configuredPthreadModuleUrl != null) {
+    resolved = {
+      moduleUrl: parseConfiguredUrl(configuredPthreadModuleUrl, 'pthreadModuleUrl'),
+      wasmUrl: parseConfiguredUrl(configuredPthreadWasmUrl!, 'pthreadWasmUrl'),
+    };
+  } else if (configuredModuleUrl != null && config.wasmThreading === 'pthread') {
+    resolved = {
+      moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
+      wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
+    };
+  } else {
+    const defaults = bundledRuntimeUrls();
+    resolved = {
+      moduleUrl: new URL(defaults.moduleUrl),
+      wasmUrl: new URL(defaults.wasmUrl),
+    };
+  }
 
   const trustedOrigins = resolveTrustedOrigins(config.trustedOrigins);
   if (trustedOrigins.size > 0) {

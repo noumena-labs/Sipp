@@ -46,30 +46,36 @@ function withLocation<T>(href: string | undefined, callback: () => T): T {
 }
 
 test('resolveRuntimeUrls uses bundled runtime assets when no overrides are provided', () => {
-  const resolved = withLocation(undefined, () => resolveRuntimeUrls({}));
-  assert.deepEqual(resolved, getDefaultRuntimeUrls());
+  withWasmPthreadSupport(() => {
+    const resolved = withLocation(undefined, () => resolveRuntimeUrls({}));
+    assert.deepEqual(resolved, getDefaultRuntimeUrls());
+  });
 });
 
 test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets', () => {
-  assert.deepEqual(
-    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@noumena-labs_sipp.js?v=123'),
-    {
-      moduleUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm.js',
-      wasmUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm.wasm',
-      threading: 'single-thread',
-    }
-  );
+  withWasmPthreadSupport(() => {
+    assert.deepEqual(
+      getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@noumena-labs_sipp.js?v=123'),
+      {
+        moduleUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm-pthread.js',
+        wasmUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm-pthread.wasm',
+        threading: 'pthread',
+      }
+    );
+  });
 });
 
 test('getDefaultRuntimeUrls maps public Vite optimized deps back to package wasm assets', () => {
-  assert.deepEqual(
-    getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@sipphq_sipp.js?v=123'),
-    {
-      moduleUrl: 'https://app.test/node_modules/@sipphq/sipp/dist/wasm/sipp-wasm.js',
-      wasmUrl: 'https://app.test/node_modules/@sipphq/sipp/dist/wasm/sipp-wasm.wasm',
-      threading: 'single-thread',
-    }
-  );
+  withWasmPthreadSupport(() => {
+    assert.deepEqual(
+      getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@sipphq_sipp.js?v=123'),
+      {
+        moduleUrl: 'https://app.test/node_modules/@sipphq/sipp/dist/wasm/sipp-wasm-pthread.js',
+        wasmUrl: 'https://app.test/node_modules/@sipphq/sipp/dist/wasm/sipp-wasm-pthread.wasm',
+        threading: 'pthread',
+      }
+    );
+  });
 });
 
 test('resolveOptimizedPackageAssetUrl returns null for normal module URLs', () => {
@@ -102,15 +108,22 @@ test('resolveOptimizedPackageAssetUrl preserves a Vite dev base path', () => {
   );
 });
 
-test('resolveRuntimeUrls defaults to the single-thread artifact when wasm pthreads are available', () => {
+test('resolveRuntimeUrls defaults to the pthread artifact when wasm pthreads are available', () => {
   withWasmPthreadSupport(() => {
     assert.equal(supportsWasmPthreads(), true);
-    assert.equal(resolveRuntimeThreadingMode({}), 'single-thread');
+    assert.equal(resolveRuntimeThreadingMode({}), 'pthread');
     const resolved = resolveRuntimeUrls({});
-    assert.match(resolved.moduleUrl, /sipp-wasm\.js$/);
-    assert.match(resolved.wasmUrl, /sipp-wasm\.wasm$/);
-    assert.equal(resolved.threading, 'single-thread');
+    assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
+    assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
+    assert.equal(resolved.threading, 'pthread');
   });
+});
+
+test('resolveRuntimeUrls rejects bundled runtimes without wasm pthread support', () => {
+  assert.throws(
+    () => resolveRuntimeUrls({}),
+    /requires SharedArrayBuffer and cross-origin isolation/
+  );
 });
 
 test('resolveRuntimeUrls selects the pthread artifact when explicitly requested', () => {
@@ -123,11 +136,11 @@ test('resolveRuntimeUrls selects the pthread artifact when explicitly requested'
   });
 });
 
-test('resolveRuntimeUrls auto-selects CPU non-JSPI on Firefox pthread runtime', () => {
-  withNavigatorUserAgent('Mozilla/5.0 Firefox/152.0.2', () => {
+test('resolveRuntimeUrls auto-selects CPU non-JSPI on Firefox', () => {
+  withNavigatorUserAgent('Mozilla/5.0 Firefox/127.0', () => {
     withWasmPthreadSupport(() => {
-      assert.equal(resolveRuntimeThreadingMode({ wasmThreading: 'pthread' }), 'pthread');
-      const resolved = resolveRuntimeUrls({ wasmThreading: 'pthread' });
+      assert.equal(resolveRuntimeThreadingMode({}), 'pthread');
+      const resolved = resolveRuntimeUrls({});
       assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
       assert.match(resolved.wasmUrl, /sipp-wasm-pthread-cpu-nojspi\.wasm$/);
       assert.equal(resolved.threading, 'pthread');
@@ -158,12 +171,12 @@ test('resolveRuntimeBackendOverride does not force CPU for custom runtime URLs',
   });
 });
 
-test('resolveRuntimeUrls honors the single-thread runtime preference', () => {
+test('resolveRuntimeUrls rejects bundled single-thread runtime preference', () => {
   withWasmPthreadSupport(() => {
-    const resolved = resolveRuntimeUrls({ wasmThreading: 'single-thread' });
-    assert.match(resolved.moduleUrl, /sipp-wasm\.js$/);
-    assert.match(resolved.wasmUrl, /sipp-wasm\.wasm$/);
-    assert.equal(resolved.threading, 'single-thread');
+    assert.throws(
+      () => resolveRuntimeUrls({ wasmThreading: 'single-thread' }),
+      /bundled Sipp browser runtime is pthread-only/
+    );
   });
 });
 
