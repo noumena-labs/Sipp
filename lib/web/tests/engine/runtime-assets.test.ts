@@ -162,8 +162,8 @@ test('resolveRuntimeBackendOverride does not force CPU for custom runtime URLs',
       assert.equal(
         resolveRuntimeBackendOverride({
           wasmThreading: 'pthread',
-          pthreadModuleUrl: '/custom.js',
-          pthreadWasmUrl: '/custom.wasm',
+          moduleUrl: '/custom.js',
+          wasmUrl: '/custom.wasm',
         }),
         null
       );
@@ -181,8 +181,43 @@ test('resolveRuntimeUrls rejects bundled single-thread runtime preference', () =
 });
 
 test('resolveRuntimeUrls uses the current window-like location for relative overrides', () => {
+  withWasmPthreadSupport(() => {
+    const resolved = withLocation('https://app.test/ui/index.html', () =>
+      resolveRuntimeUrls({
+        moduleUrl: './assets/runtime.js',
+        wasmUrl: './assets/runtime.wasm',
+      })
+    );
+
+    assert.deepEqual(resolved, {
+      moduleUrl: 'https://app.test/ui/assets/runtime.js',
+      wasmUrl: 'https://app.test/ui/assets/runtime.wasm',
+      threading: 'pthread',
+    });
+  });
+});
+
+test('resolveRuntimeUrls uses the current worker-like location for relative overrides', () => {
+  withWasmPthreadSupport(() => {
+    const resolved = withLocation('https://app.test/pkg/worker/model-service-entry.js', () =>
+      resolveRuntimeUrls({
+        moduleUrl: '../wasm/custom-runtime.js',
+        wasmUrl: '../wasm/custom-runtime.wasm',
+      })
+    );
+
+    assert.deepEqual(resolved, {
+      moduleUrl: 'https://app.test/pkg/wasm/custom-runtime.js',
+      wasmUrl: 'https://app.test/pkg/wasm/custom-runtime.wasm',
+      threading: 'pthread',
+    });
+  });
+});
+
+test('resolveRuntimeUrls uses moduleUrl and wasmUrl for custom single-thread runtime when selected', () => {
   const resolved = withLocation('https://app.test/ui/index.html', () =>
     resolveRuntimeUrls({
+      wasmThreading: 'single-thread',
       moduleUrl: './assets/runtime.js',
       wasmUrl: './assets/runtime.wasm',
     })
@@ -195,18 +230,20 @@ test('resolveRuntimeUrls uses the current window-like location for relative over
   });
 });
 
-test('resolveRuntimeUrls uses the current worker-like location for relative overrides', () => {
-  const resolved = withLocation('https://app.test/pkg/worker/model-service-entry.js', () =>
-    resolveRuntimeUrls({
-      moduleUrl: '../wasm/custom-runtime.js',
-      wasmUrl: '../wasm/custom-runtime.wasm',
-    })
-  );
+test('resolveRuntimeUrls accepts legacy pthread runtime aliases', () => {
+  withWasmPthreadSupport(() => {
+    const resolved = withLocation('https://app.test/ui/index.html', () =>
+      resolveRuntimeUrls({
+        pthreadModuleUrl: './assets/runtime.js',
+        pthreadWasmUrl: './assets/runtime.wasm',
+      })
+    );
 
-  assert.deepEqual(resolved, {
-    moduleUrl: 'https://app.test/pkg/wasm/custom-runtime.js',
-    wasmUrl: 'https://app.test/pkg/wasm/custom-runtime.wasm',
-    threading: 'single-thread',
+    assert.deepEqual(resolved, {
+      moduleUrl: 'https://app.test/ui/assets/runtime.js',
+      wasmUrl: 'https://app.test/ui/assets/runtime.wasm',
+      threading: 'pthread',
+    });
   });
 });
 
@@ -215,6 +252,7 @@ test('resolveRuntimeUrls blocks cross-origin overrides when trustedOrigins are n
     assert.throws(
       () =>
         resolveRuntimeUrls({
+          wasmThreading: 'single-thread',
           moduleUrl: 'https://cdn.test/runtime.js',
           wasmUrl: 'https://cdn.test/runtime.wasm',
         }),

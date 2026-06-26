@@ -98,27 +98,20 @@ export function supportsWasmPthreads(): boolean {
 export function resolveRuntimeThreadingMode(
   config: Pick<
     SippClientOptions,
-    | 'moduleUrl'
-    | 'wasmUrl'
-    | 'pthreadModuleUrl'
-    | 'pthreadWasmUrl'
-    | 'wasmThreading'
+    'moduleUrl' | 'wasmUrl' | 'wasmThreading'
   >
 ): WasmThreadingMode {
-  const configuredSingleThread =
+  const hasSelectedRuntimeOverride =
     normalizeOptionalString(config.moduleUrl) != null ||
     normalizeOptionalString(config.wasmUrl) != null;
-  const configuredPthread =
-    normalizeOptionalString(config.pthreadModuleUrl) != null ||
-    normalizeOptionalString(config.pthreadWasmUrl) != null;
 
-  if (configuredSingleThread && !configuredPthread && config.wasmThreading !== 'pthread') {
+  if (config.wasmThreading === 'single-thread' && hasSelectedRuntimeOverride) {
     return 'single-thread';
   }
 
   if (config.wasmThreading === 'single-thread') {
     throw new Error(
-      'The bundled Sipp browser runtime is pthread-only. Serve with COOP/COEP headers for SharedArrayBuffer support, or provide explicit moduleUrl and wasmUrl for a custom single-thread runtime.'
+      'The bundled Sipp browser runtime is pthread-only. Provide moduleUrl and wasmUrl for a custom single-thread runtime.'
     );
   }
 
@@ -148,7 +141,7 @@ function assertWasmPthreadsSupported(): void {
     return;
   }
   throw new Error(
-    'The bundled Sipp browser runtime requires SharedArrayBuffer and cross-origin isolation. Serve the app with COOP/COEP headers or provide explicit moduleUrl and wasmUrl for a custom single-thread runtime.'
+    'The bundled Sipp browser runtime requires SharedArrayBuffer and cross-origin isolation. Serve the app with COOP/COEP headers, or set wasmThreading: "single-thread" with moduleUrl and wasmUrl for a custom single-thread runtime.'
   );
 }
 
@@ -246,15 +239,15 @@ export function resolveRuntimeUrls(
       moduleUrl: parseConfiguredUrl(configuredModuleUrl!, 'moduleUrl'),
       wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
     };
+  } else if (configuredModuleUrl != null) {
+    resolved = {
+      moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
+      wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
+    };
   } else if (configuredPthreadModuleUrl != null) {
     resolved = {
       moduleUrl: parseConfiguredUrl(configuredPthreadModuleUrl, 'pthreadModuleUrl'),
       wasmUrl: parseConfiguredUrl(configuredPthreadWasmUrl!, 'pthreadWasmUrl'),
-    };
-  } else if (configuredModuleUrl != null && config.wasmThreading === 'pthread') {
-    resolved = {
-      moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
-      wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
     };
   } else {
     const defaults = bundledRuntimeUrls();
