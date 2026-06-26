@@ -22,8 +22,8 @@ cargo xtask test unit group whitebox
 cargo xtask test unit group interface
 cargo xtask test unit suite xtask
 cargo xtask test unit suite rust-crates --package sipp-rs
-cargo xtask test unit suite browser --wasm-threading single-thread
-cargo xtask test unit suite demos --wasm-threading single-thread
+cargo xtask test unit suite browser --wasm-threading pthread
+cargo xtask test unit suite demos --wasm-threading pthread
 cargo xtask test unit suite node-package --backend cpu
 cargo xtask test unit suite python-package --backend cpu
 cargo xtask test smoke suite example-node --backend cpu
@@ -67,9 +67,10 @@ Unit suite names expose suite-specific options, such as
 | `cargo xtask test unit group interface` | `api`, `cli`, `node-package`, and `python-package` |
 | `cargo xtask test unit group full` | Every deterministic unit suite |
 
-Browser and demo unit suites accept `--wasm-threading single-thread|pthread|all`.
-CI uses `single-thread` to keep source validation fast. Release package builds
-continue to use `cargo xtask build wasm`, whose default is `all`.
+Browser and demo unit suites accept `--wasm-threading single-thread|pthread|all`
+for explicit compatibility testing. The default is `pthread`, matching the
+bundled browser package. Release package builds use `cargo xtask build wasm`,
+which stages the pthread WebGPU+JSPI and pthread CPU non-JSPI artifacts.
 
 `test smoke` owns holistic integration checks. It is split into explicit
 namespaces:

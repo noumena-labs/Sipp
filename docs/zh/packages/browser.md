@@ -89,9 +89,11 @@ const run = client.chat(messages, {
 
 ## 浏览器运行时选项
 
-浏览器运行时通过 Emscripten 将 Sipp 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器支持兼容适配器时，引擎优先使用 WebGPU 运行 GGUF 文本和视觉模型；WebGPU 不可用时自动回退到 CPU。首次下载模型或导入文件后，基于 OPFS 的模型缓存可加速后续加载。
+浏览器运行时通过 Emscripten 将 Sipp 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器暴露所需适配器时，引擎使用 WebGPU 运行 GGUF 文本和视觉模型；选择 CPU 后端时则使用 CPU 执行。首次下载模型或导入文件后，基于 OPFS 的模型缓存可加速后续加载。
 
 该包在运行时自动解析其打包的 JavaScript 和 WASM 资源，通常无需手动覆盖资源 URL。只有应用需要精细控制浏览器的执行、存储或本地运行时行为时，才需要配置 `executionMode`、`wasmThreading`、`browserCache` 以及本地端点的 `options.runtime`。
+
+打包提供的浏览器运行时使用 pthread，因此浏览器本地推理需要 `SharedArrayBuffer` 与跨源隔离响应头。无法提供这些响应头的宿主必须设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。
 
 `SippClient` 选项、WebGPU 和后端选择、Worker 模式、pthread 要求及本地运行时配置组的详情，见[运行时选项](../reference/runtime-options.md)。
 

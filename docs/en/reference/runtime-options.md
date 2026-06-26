@@ -27,21 +27,21 @@ and browser storage. They do not select a model by themselves.
 | Option | Use |
 | --- | --- |
 | `executionMode` | `auto` uses a worker when available. `worker` forces worker transport. `main-thread` is useful for debugging or constrained hosts. |
-| `wasmThreading` | `single-thread` loads the single-thread WASM runtime. `pthread` loads the pthread runtime. |
-| `moduleUrl`, `wasmUrl` | Override single-thread runtime asset URLs when a bundler or deployment moves package assets. Provide both together. |
-| `pthreadModuleUrl`, `pthreadWasmUrl` | Override pthread runtime asset URLs. Provide both together. |
+| `wasmThreading` | `pthread` loads the bundled pthread runtime. `single-thread` is only valid with explicit custom `moduleUrl` and `wasmUrl` assets. |
+| `moduleUrl`, `wasmUrl` | Override the selected runtime asset URLs. Provide both together. |
 | `browserCache` | Tune OPFS split thresholds and direct-load behavior for browser GGUF storage. |
 | `trustedOrigins` | Allow runtime asset URLs from additional origins. Defaults allow same-origin package assets. |
 | `workerUrl` | Override the worker entry URL when the bundler cannot resolve the packaged worker. |
 
-`wasmThreading: 'pthread'` requires `SharedArrayBuffer`, cross-origin
-isolation, and COOP/COEP headers. Use `single-thread` when the application
-cannot serve those headers.
+The bundled browser runtime requires `SharedArrayBuffer`, cross-origin
+isolation, and COOP/COEP headers. Applications that cannot serve those headers
+must set `wasmThreading: 'single-thread'` and provide custom single-thread
+assets with `moduleUrl` and `wasmUrl`.
 
 ```ts
 const client = new SippClient({
   executionMode: 'worker',
-  wasmThreading: 'single-thread',
+  wasmThreading: 'pthread',
 });
 ```
 
