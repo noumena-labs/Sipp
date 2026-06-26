@@ -12,7 +12,7 @@ use super::{
     RunGatewayServerCommand, RunLlamaCommands, RunToolsCommands, SetupProfile, TestCommands,
     TestGroupFilter, TestListFormat, TestSmokeCommands, TestSmokeGroupTarget, TestSmokeSuiteTarget,
     TestSuiteId, TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget,
-    ToolName, ToolchainCommands, ToolchainComponent, WasmThreading,
+    ToolName, ToolchainCommands, ToolchainComponent, WasmRuntime, WasmThreading,
 };
 
 #[test]
@@ -52,6 +52,25 @@ fn build_commands_parse_backend_defaults_and_overrides() {
         panic!("expected wasm build");
     };
     assert_eq!(args.threading, WasmThreading::Pthread);
+    assert_eq!(args.runtime, WasmRuntime::Auto);
+
+    let cli = Cli::parse_from([
+        "xtask",
+        "build",
+        "wasm",
+        "--threading",
+        "pthread",
+        "--runtime",
+        "cpu-nojspi",
+    ]);
+    let Commands::Build { target } = cli.command else {
+        panic!("expected build command");
+    };
+    let super::BuildCommands::Wasm(args) = target else {
+        panic!("expected wasm build");
+    };
+    assert_eq!(args.threading, WasmThreading::Pthread);
+    assert_eq!(args.runtime, WasmRuntime::CpuNoJspi);
 }
 
 #[test]

@@ -63,7 +63,7 @@ import {
   toBackendProfileObservation,
   toRuntimeObservation,
 } from './observability-controller.js';
-import type { WasmThreadingMode } from '../engine/runtime-assets.js';
+import type { RuntimeBackendOverride, WasmThreadingMode } from '../engine/runtime-assets.js';
 
 interface InstalledAsset {
   record: AssetRecord;
@@ -130,15 +130,20 @@ function isSourceObject(source: ModelSource): source is Extract<ModelSource, { m
 }
 
 async function resolveBrowserBackend(
-  backend: BrowserBackendPreference | undefined
+  backend: BrowserBackendPreference | undefined,
+  defaultBackendOverride: RuntimeBackendOverride | null
 ): Promise<ResolvedBrowserBackend> {
-  if (backend === 'cpu') {
-    return { backend, webgpuAdapter: null };
+  const requestedBackend = backend === 'auto' ? undefined : backend;
+  if (requestedBackend === 'cpu') {
+    return { backend: requestedBackend, webgpuAdapter: null };
+  }
+  if (requestedBackend == null && defaultBackendOverride === 'cpu') {
+    return { backend: 'cpu', webgpuAdapter: null };
   }
   const gpu = (globalThis.navigator as NavigatorWithGpu | undefined)?.gpu;
   const adapter = gpu == null ? null : await gpu.requestAdapter();
-  if (backend === 'webgpu') {
-    return { backend, webgpuAdapter: await readWebGpuAdapterInfo(adapter) };
+  if (requestedBackend === 'webgpu') {
+    return { backend: requestedBackend, webgpuAdapter: await readWebGpuAdapterInfo(adapter) };
   }
   if (adapter?.features?.has('shader-f16') !== true) {
     return { backend: 'cpu', webgpuAdapter: null };
@@ -673,7 +678,11 @@ export class ModelService implements ModelLifecycleService {
     const observabilityMode = options.observability ?? 'off';
     const manifest = await this.registry.read();
     const rustPromise = this.getRustLifecycle(manifest);
-    const backendPromise = resolveBrowserBackend(options.backend);
+    const wasmThreading = this.runtime.getWasmThreadingMode();
+    const backendPromise = resolveBrowserBackend(
+      options.backend,
+      this.runtime.getDefaultBackendOverride()
+    );
     let prepared: RustLifecyclePrepareLoadValue | null = null;
     let rust: RustLifecycleBridge | null = null;
     try {
@@ -682,7 +691,7 @@ export class ModelService implements ModelLifecycleService {
       rust = resolvedRust;
       const runtimeConfig = applyBrowserRuntimeDefaults(
         options.runtime,
-        this.runtime.getWasmThreadingMode()
+        wasmThreading
       );
       prepared = rust.prepareLoad(rustSource, {
         backend: resolvedBackend.backend,

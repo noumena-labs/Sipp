@@ -12,12 +12,14 @@ import type {
   TokenBatch,
 } from '../models/types.js';
 import type { BrowserCachePolicyOptions } from '../models/asset-store.js';
+import type { RuntimeBackendOverride } from '../engine/runtime-assets.js';
 import type { SharedTokenRingDescriptor } from '../runtime/shared-token-ring.js';
 
 export interface WorkerRuntimeConfig {
   moduleUrl?: string;
   wasmUrl?: string;
   wasmThreading?: 'single-thread' | 'pthread';
+  defaultBackendOverride?: RuntimeBackendOverride | null;
   moduleOptions?: Record<string, unknown>;
   maxModelBytes?: number;
   browserCache?: BrowserCachePolicyOptions;

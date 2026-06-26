@@ -40,8 +40,10 @@ import { createAbortError } from '../../utils/abort.js';
 import { QueuedRequestScheduler } from '../scheduler.js';
 import { hasSamplingRuntimeOverrideFields } from '../../engine/inference-types.js';
 import {
+  resolveRuntimeBackendOverride,
   resolveRuntimeThreadingMode,
   resolveRuntimeUrls,
+  type RuntimeBackendOverride,
   type WasmThreadingMode,
 } from '../../engine/runtime-assets.js';
 import { RuntimePairingValidationError } from '../../models/types.js';
@@ -78,6 +80,10 @@ const DEFAULT_MAIN_THREAD_TRANSPORT_OBSERVABILITY: TransportObservability = {
   tokenDrainCalls: 0,
   tokenDrainMs: 0,
 };
+
+interface MainThreadEngineRuntimeOptions {
+  readonly defaultBackendOverride?: RuntimeBackendOverride | null;
+}
 
 function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -120,10 +126,15 @@ export class MainThreadEngineRuntime implements EngineRuntime {
   private readonly scheduler: QueuedRequestScheduler;
   private runtimeObservabilityEnabled = false;
   private backendProfilingEnabled = false;
+  private readonly defaultBackendOverride: RuntimeBackendOverride | null;
   private transportObservability: TransportObservability;
   private wasmBridgeOperationTail: Promise<void> = Promise.resolve();
 
-  constructor(private config: SippClientOptions = {}) {
+  constructor(
+    private readonly config: SippClientOptions = {},
+    options: MainThreadEngineRuntimeOptions = {}
+  ) {
+    this.defaultBackendOverride = options.defaultBackendOverride ?? null;
     this.executionMode = config.executionMode === 'worker' ? 'worker' : 'main-thread';
     this.transportObservability = this.createTransportObservability();
     this.modelLoader = new MainThreadModelLoader(this.config);
@@ -147,6 +158,10 @@ export class MainThreadEngineRuntime implements EngineRuntime {
 
   public getWasmThreadingMode(): WasmThreadingMode {
     return resolveRuntimeThreadingMode(this.config);
+  }
+
+  public getDefaultBackendOverride(): RuntimeBackendOverride | null {
+    return this.defaultBackendOverride ?? resolveRuntimeBackendOverride(this.config);
   }
 
   public getTransportObservability(): TransportObservability {

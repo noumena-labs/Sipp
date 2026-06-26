@@ -7,7 +7,7 @@ use crate::cli::{
     TestSmokeFullGroupArgs, TestSmokeGroupTarget, TestSmokeLlamaArgs, TestSmokeModelArgs,
     TestSmokePlaygroundBrowserArgs, TestSmokeSuiteTarget, TestSuiteId, TestUnitArgs,
     TestUnitCommands, TestUnitGroupTarget, TestUnitLayer, TestUnitSuiteTarget, TestVerifyArgs,
-    TestVerifyTarget, WasmThreading,
+    TestVerifyTarget, WasmRuntime, WasmThreading,
 };
 use crate::javascript;
 use crate::output;
@@ -966,7 +966,7 @@ fn run_package_ts_tests(
     wasm_threading: WasmThreading,
 ) -> Result<()> {
     output::phase("White-box browser TypeScript tests");
-    targets::wasm::build(sh, ctx, wasm_threading)?;
+    targets::wasm::build(sh, ctx, wasm_threading, WasmRuntime::Auto)?;
     let browser_package_dir = ctx.browser_package_dir();
     let junit_path = suite_case_report_file(ctx, TestSuiteId::PackageTs, "bun-package.xml");
     let _dir = sh.push_dir(&browser_package_dir);
@@ -989,7 +989,7 @@ fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext, wasm_threading: WasmThreadi
 
     let workspaces = demo_test_workspaces(ctx, &tests)?;
     ensure_javascript_workspace_dependencies(sh, ctx, &workspaces)?;
-    targets::wasm::build(sh, ctx, wasm_threading)?;
+    targets::wasm::build(sh, ctx, wasm_threading, WasmRuntime::Auto)?;
 
     output::detail("Test files", tests.len());
     for (index, test) in tests.into_iter().enumerate() {
@@ -1170,7 +1170,7 @@ fn run_browser_example_smoke(
     output::path("Model", &model);
     let example_dir = ctx.browser_example_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, &[example_dir.clone()])?;
-    targets::wasm::build(sh, ctx, WasmThreading::All)?;
+    targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
     ensure_playwright_chromium(sh, ctx)?;
 
     output::path("Example workspace", &example_dir);
@@ -1208,7 +1208,7 @@ fn run_playground_browser_runtime_smoke(
     output::phase("Playground browser runtime smoke");
     let playground_dir = ctx.playground_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, &[playground_dir.clone()])?;
-    targets::wasm::build(sh, ctx, WasmThreading::All)?;
+    targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
     ensure_playwright_chromium(sh, ctx)?;
 
     output::path("Playground workspace", &playground_dir);

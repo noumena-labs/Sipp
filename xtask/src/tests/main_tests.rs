@@ -9,7 +9,7 @@ use xtask::cli::{
     TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeCaseArgs, TestSmokeCommands,
     TestSmokeModelArgs, TestSmokePlaygroundBrowserArgs, TestSmokeSuiteArgs, TestSmokeSuiteTarget,
     TestUnitArgs, TestUnitCommands, TestUnitGroupArgs, TestUnitGroupTarget, TestVerifyArgs,
-    TestVerifyTarget, WasmBuildArgs, WasmThreading,
+    TestVerifyTarget, WasmBuildArgs, WasmRuntime, WasmThreading,
 };
 
 use super::{
@@ -91,8 +91,9 @@ fn build_summary_labels_backend_defaults_and_explicit_backends() {
     assert_eq!(
         build_summary(&BuildCommands::Wasm(WasmBuildArgs {
             threading: WasmThreading::SingleThread,
+            runtime: WasmRuntime::CpuNoJspi,
         })),
-        "Build browser WASM/WebGPU package (single-thread)"
+        "Build browser WASM/WebGPU package (single-thread, cpu-nojspi)"
     );
     assert_eq!(
         build_summary(&BuildCommands::Python(BackendArgs {

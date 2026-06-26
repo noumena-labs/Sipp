@@ -26,11 +26,12 @@ import type {
   GgufSplitStreamCallbacks,
   RustLifecycleBridge,
 } from '../wasm/wasm-bridge.js';
-import type { WasmThreadingMode } from '../engine/runtime-assets.js';
+import type { RuntimeBackendOverride, WasmThreadingMode } from '../engine/runtime-assets.js';
 
 export interface EngineRuntime {
   getExecutionMode(): EngineExecutionMode;
   getWasmThreadingMode(): WasmThreadingMode;
+  getDefaultBackendOverride(): RuntimeBackendOverride | null;
   getTransportObservability(): TransportObservability;
   initModule(): Promise<void>;
   stageModelBundle(

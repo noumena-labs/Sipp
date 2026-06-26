@@ -1,6 +1,6 @@
 //! WebAssembly/WebGPU browser build target.
 
-use crate::cli::WasmThreading;
+use crate::cli::{WasmRuntime, WasmThreading};
 use crate::javascript;
 use crate::output;
 use crate::toolchains::emsdk::{run_with_emsdk, setup_emsdk};
@@ -12,7 +12,12 @@ use std::time::Instant;
 use xshell::{cmd, Shell};
 
 /// Builds the browser WASM artifacts and TypeScript package wrappers.
-pub fn build(sh: &Shell, ctx: &BuildContext, threading: WasmThreading) -> Result<()> {
+pub fn build(
+    sh: &Shell,
+    ctx: &BuildContext,
+    threading: WasmThreading,
+    runtime: WasmRuntime,
+) -> Result<()> {
     let started_at = Instant::now();
     let root = ctx.workspace_root();
     output::phase("Browser WASM/WebGPU package");
@@ -28,30 +33,38 @@ pub fn build(sh: &Shell, ctx: &BuildContext, threading: WasmThreading) -> Result
     }
     sh.create_dir(&npm_dist_wasm)?;
 
-    if threading.includes_single_thread() {
-        output::phase("WASM single-thread build");
-        build_target(
-            sh,
-            ctx,
-            root,
-            &emsdk_dir,
-            ninja_dir.as_deref(),
-            false,
-            &npm_dist_wasm,
-        )?;
-    }
+    for runtime_flavor in runtime_flavors(runtime) {
+        let include_single_thread = threading.includes_single_thread()
+            && (runtime_flavor.enable_webgpu || matches!(runtime, WasmRuntime::CpuNoJspi));
+        if include_single_thread {
+            let phase = format!("WASM {} single-thread build", runtime_flavor.label);
+            output::phase(&phase);
+            build_target(
+                sh,
+                ctx,
+                root,
+                &emsdk_dir,
+                ninja_dir.as_deref(),
+                false,
+                runtime_flavor,
+                &npm_dist_wasm,
+            )?;
+        }
 
-    if threading.includes_pthread() {
-        output::phase("WASM pthread build");
-        build_target(
-            sh,
-            ctx,
-            root,
-            &emsdk_dir,
-            ninja_dir.as_deref(),
-            true,
-            &npm_dist_wasm,
-        )?;
+        if threading.includes_pthread() {
+            let phase = format!("WASM {} pthread build", runtime_flavor.label);
+            output::phase(&phase);
+            build_target(
+                sh,
+                ctx,
+                root,
+                &emsdk_dir,
+                ninja_dir.as_deref(),
+                true,
+                runtime_flavor,
+                &npm_dist_wasm,
+            )?;
+        }
     }
 
     output::phase("TypeScript browser package");
@@ -80,6 +93,42 @@ pub fn build(sh: &Shell, ctx: &BuildContext, threading: WasmThreading) -> Result
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct WasmRuntimeFlavor {
+    label: &'static str,
+    artifact_suffix: &'static str,
+    build_tag: &'static str,
+    enable_webgpu: bool,
+    use_jspi: bool,
+}
+
+const WEBGPU_JSPI: WasmRuntimeFlavor = WasmRuntimeFlavor {
+    label: "WebGPU+JSPI",
+    artifact_suffix: "",
+    build_tag: "",
+    enable_webgpu: true,
+    use_jspi: true,
+};
+
+const CPU_NO_JSPI: WasmRuntimeFlavor = WasmRuntimeFlavor {
+    label: "CPU-only non-JSPI",
+    artifact_suffix: "-cpu-nojspi",
+    build_tag: "cpu-nojspi",
+    enable_webgpu: false,
+    use_jspi: false,
+};
+
+fn runtime_flavors(runtime: WasmRuntime) -> Vec<WasmRuntimeFlavor> {
+    let mut flavors = Vec::new();
+    if runtime.includes_webgpu_jspi() {
+        flavors.push(WEBGPU_JSPI);
+    }
+    if runtime.includes_cpu_nojspi() {
+        flavors.push(CPU_NO_JSPI);
+    }
+    flavors
+}
+
 fn build_target(
     sh: &Shell,
     ctx: &BuildContext,
@@ -87,12 +136,16 @@ fn build_target(
     emsdk_dir: &Path,
     ninja_dir: Option<&Path>,
     use_pthreads: bool,
+    runtime_flavor: WasmRuntimeFlavor,
     npm_dist_wasm: &Path,
 ) -> Result<()> {
     let _root_dir = sh.push_dir(root);
 
-    let suffix = if use_pthreads { "-pthread" } else { "" };
-    let artifact_name = format!("sipp-wasm{}", suffix);
+    let threading_suffix = if use_pthreads { "-pthread" } else { "" };
+    let artifact_name = format!(
+        "sipp-wasm{}{}",
+        threading_suffix, runtime_flavor.artifact_suffix
+    );
     let js_file = format!("{}.js", artifact_name);
     let wasm_file = format!("{}.wasm", artifact_name);
     let cargo_target_dir = ctx.cargo_wasm_target_dir(use_pthreads);
@@ -135,7 +188,7 @@ fn build_target(
     let wasm_dir = root.join("bindings").join("wasm");
     let wasm_source_dir = ctx.cmake_file_path(&wasm_dir);
     let rust_staticlib_cmake = ctx.cmake_file_path(&rust_staticlib);
-    let build_dir = ctx.cmake_wasm_build_dir(use_pthreads);
+    let build_dir = cmake_build_dir(ctx, use_pthreads, runtime_flavor);
     sh.create_dir(&build_dir)?;
     output::path("CMake build directory", &build_dir);
 
@@ -146,9 +199,23 @@ fn build_target(
     } else {
         "-DCE_USE_PTHREADS=OFF"
     };
+    let cmake_webgpu_flag = if runtime_flavor.enable_webgpu {
+        "-DCE_WASM_ENABLE_WEBGPU=ON"
+    } else {
+        "-DCE_WASM_ENABLE_WEBGPU=OFF"
+    };
+    let cmake_jspi_flag = if runtime_flavor.use_jspi {
+        "-DCE_WASM_USE_JSPI=ON"
+    } else {
+        "-DCE_WASM_USE_JSPI=OFF"
+    };
     let emcmake_cmd = format!(
-        "emcmake cmake \"{}\" -G Ninja -DCMAKE_BUILD_TYPE=Release {} -DCE_WASM_RUST_STATICLIB=\"{}\"",
-        wasm_source_dir, cmake_thread_flag, rust_staticlib_cmake
+        "emcmake cmake \"{}\" -G Ninja -DCMAKE_BUILD_TYPE=Release {} {} {} -DCE_WASM_RUST_STATICLIB=\"{}\"",
+        wasm_source_dir,
+        cmake_thread_flag,
+        cmake_webgpu_flag,
+        cmake_jspi_flag,
+        rust_staticlib_cmake
     );
     run_with_emsdk(
         sh,
@@ -179,4 +246,20 @@ fn build_target(
     output::artifact(&staged_wasm);
 
     Ok(())
+}
+
+fn cmake_build_dir(
+    ctx: &BuildContext,
+    use_pthreads: bool,
+    runtime_flavor: WasmRuntimeFlavor,
+) -> std::path::PathBuf {
+    if runtime_flavor.build_tag.is_empty() {
+        return ctx.cmake_wasm_build_dir(use_pthreads);
+    }
+
+    ctx.build_root().join("cmake").join("wasm").join(format!(
+        "{}-{}",
+        BuildContext::wasm_build_tag(use_pthreads),
+        runtime_flavor.build_tag
+    ))
 }

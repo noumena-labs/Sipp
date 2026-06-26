@@ -437,8 +437,11 @@ Equivalent build step:
     #[command(long_about = "\
 Build browser artifacts with Emscripten and stage the NPM browser package.
 
-The pipeline builds both single-threaded and pthread WASM outputs, then
-compiles and stages the TypeScript package wrappers.")]
+The pipeline builds the selected WASM threading outputs, then compiles and
+stages the TypeScript package wrappers.
+
+The default `--runtime auto` stages the Chromium WebGPU+JSPI artifacts and
+the Firefox CPU non-JSPI artifacts.")]
     Wasm(WasmBuildArgs),
 
     /// Build Python bindings.
@@ -1819,6 +1822,9 @@ pub struct WasmBuildArgs {
     /// WASM runtime variant to build.
     #[arg(long, value_enum, default_value = "all")]
     pub threading: WasmThreading,
+    /// Browser runtime backend/async flavor to build.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub runtime: WasmRuntime,
 }
 
 /// Browser WASM runtime variant selected for builds and browser tests.
@@ -1851,6 +1857,40 @@ impl WasmThreading {
     /// Returns true when the pthread artifact should be built.
     pub fn includes_pthread(&self) -> bool {
         matches!(self, WasmThreading::All | WasmThreading::Pthread)
+    }
+}
+
+/// Browser WASM backend and async runtime flavor selected for builds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum WasmRuntime {
+    /// Build artifacts needed by automatic browser runtime selection.
+    Auto,
+    /// Build the default WebGPU runtime that uses JSPI for browser waits.
+    #[value(name = "webgpu-jspi")]
+    WebGpuJspi,
+    /// Build CPU-only without JSPI or WebGPU.
+    #[value(name = "cpu-nojspi")]
+    CpuNoJspi,
+}
+
+impl WasmRuntime {
+    /// Converts the WASM runtime flavor into its CLI label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WasmRuntime::Auto => "auto",
+            WasmRuntime::WebGpuJspi => "webgpu-jspi",
+            WasmRuntime::CpuNoJspi => "cpu-nojspi",
+        }
+    }
+
+    /// Returns true when the default WebGPU+JSPI runtime should be built.
+    pub fn includes_webgpu_jspi(&self) -> bool {
+        matches!(self, WasmRuntime::Auto | WasmRuntime::WebGpuJspi)
+    }
+
+    /// Returns true when the CPU-only non-JSPI runtime should be built.
+    pub fn includes_cpu_nojspi(&self) -> bool {
+        matches!(self, WasmRuntime::Auto | WasmRuntime::CpuNoJspi)
     }
 }
 

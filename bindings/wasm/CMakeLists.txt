@@ -20,6 +20,7 @@ set(CMAKE_CXX_EXTENSIONS ON)
 
 option(CE_BUILD_WEBGPU_TEST_BACKEND_OPS "Build llama.cpp test-backend-ops for browser-hosted WebGPU execution" OFF)
 option(CE_USE_PTHREADS "Build WebAssembly with pthread (SharedArrayBuffer) support" OFF)
+option(CE_WASM_ENABLE_WEBGPU "Enable WebGPU backend for Sipp browser builds" ON)
 option(MTMD_NO_LOGGING "Suppress all multimodal logging" OFF)
 
 set(CE_WASM_PTHREADS ${CE_USE_PTHREADS} CACHE BOOL "Enable pthreads support in WASM builds" FORCE)
@@ -40,8 +41,12 @@ set(SIPP_LLAMA_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../crates/sys/llama.cpp")
 
 # llama.cpp Wasm subproject
 set(LLAMA_WASM_MEM64 ${CE_WASM_MEM64} CACHE BOOL "Use wasm64 memory model for sipp" FORCE)
-set(GGML_WEBGPU ON CACHE BOOL "Enable WebGPU backend for Sipp browser builds" FORCE)
-set(GGML_WEBGPU_JSPI ${CE_WASM_USE_JSPI} CACHE BOOL "Use JSPI for ggml WebGPU waits" FORCE)
+set(GGML_WEBGPU ${CE_WASM_ENABLE_WEBGPU} CACHE BOOL "Enable WebGPU backend for Sipp browser builds" FORCE)
+if(CE_WASM_ENABLE_WEBGPU)
+  set(GGML_WEBGPU_JSPI ${CE_WASM_USE_JSPI} CACHE BOOL "Use JSPI for ggml WebGPU waits" FORCE)
+else()
+  set(GGML_WEBGPU_JSPI OFF CACHE BOOL "Use JSPI for ggml WebGPU waits" FORCE)
+endif()
 
 if(CE_BUILD_WEBGPU_TEST_BACKEND_OPS)
   set(LLAMA_BUILD_TESTS ON CACHE BOOL "Build llama.cpp tests" FORCE)
