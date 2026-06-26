@@ -415,7 +415,7 @@ fn run_smoke(sh: &Shell, ctx: &BuildContext, args: &TestSmokeArgs) -> Result<()>
     };
     let options = SuiteRunOptions {
         backend: selection.backend,
-        wasm_threading: WasmThreading::All,
+        wasm_threading: WasmThreading::Pthread,
         coverage: false,
         model: selection.model.as_deref(),
         offline: selection.offline,
@@ -1170,7 +1170,7 @@ fn run_browser_example_smoke(
     output::path("Model", &model);
     let example_dir = ctx.browser_example_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, &[example_dir.clone()])?;
-    targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+    targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
     ensure_playwright_chromium(sh, ctx)?;
 
     output::path("Example workspace", &example_dir);
@@ -1208,7 +1208,7 @@ fn run_playground_browser_runtime_smoke(
     output::phase("Playground browser runtime smoke");
     let playground_dir = ctx.playground_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, &[playground_dir.clone()])?;
-    targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+    targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
     ensure_playwright_chromium(sh, ctx)?;
 
     output::path("Playground workspace", &playground_dir);
@@ -4232,7 +4232,7 @@ impl Default for UnitSelection {
             suites: Vec::new(),
             package: None,
             backend: Backend::Cpu,
-            wasm_threading: WasmThreading::All,
+            wasm_threading: WasmThreading::Pthread,
             filters: json!({}),
         }
     }
