@@ -9,7 +9,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { SippClient } from '@noumena-labs/sipp';
+import { SippClient, type ModelLoadProgress, type NativeRuntimeConfig } from '@noumena-labs/sipp';
 import {
   CharacterEventBus,
   createCharacterFromConfigUrl,
@@ -33,6 +33,29 @@ import type { ChatMessage } from './components/chat-types';
 const DEFAULT_CHARACTER_URL = '/characters/aria/character.json';
 const DEFAULT_MODEL_URL =
   'https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf';
+const AVATAR_RUNTIME: NativeRuntimeConfig = {
+  placement: {
+    gpu_layers: 'all',
+  },
+  context: {
+    n_ctx: 4096,
+    n_parallel: 1,
+    n_threads: 2,
+    n_threads_batch: 4,
+  },
+  cache: {
+    mode: 'live_slot_and_snapshot',
+    retained_prefix_tokens: 256,
+    snapshot_interval_tokens: 32,
+  },
+  sampling: {
+    temperature: 0.6,
+    top_p: 0.9,
+    top_k: 40,
+    min_p: 0.05,
+    repeat_penalty: 1.05,
+  },
+};
 
 const SUGGESTED_PROMPTS = [
   'Who are you, Aria?',
@@ -149,22 +172,14 @@ export default function App() {
         kind: 'local',
         source: args.modelUrl,
         options: {
-          onProgress: (progress: { phase: string; percent: any; }) => {
+          onProgress: (progress: ModelLoadProgress) => {
             if (progress.phase === 'download') {
               setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);
             } else if (progress.phase === 'load') {
               setStatus('Loading into memory...');
             }
           },
-          runtime: {
-            sampling: {
-              temperature: 0.6,
-              top_p: 0.9,
-              top_k: 40,
-              min_p: 0.05,
-              repeat_penalty: 1.05,
-            },
-          },
+          runtime: AVATAR_RUNTIME,
         },
       });
 

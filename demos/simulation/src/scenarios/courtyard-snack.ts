@@ -65,6 +65,9 @@ const MIN_FREE_COMPONENT_SIZE = 120;
 const GENERATION_ATTEMPTS = 40;
 const OBSTACLE_GROUP_COUNT_RANGE = { min: 3, max: 6 } as const;
 const GROUP_LENGTH_RANGE = { min: 2, max: 5 } as const;
+const REFEREE_TIMEOUT_MS = 90_000;
+const AGENT_QUERY_TIMEOUT_MS = 90_000;
+const NARRATION_TIMEOUT_MS = 120_000;
 const DEFAULT_COUNT_OPTIONS = {
   obstacles: { enabled: true, target: 12 },
   bats: { enabled: true, target: 1 },
@@ -154,9 +157,9 @@ export function createCourtyardScenario(options: CourtyardScenarioOptions = {}):
     directorCadenceTicks: 12,
     resolveRefereeTask: 'resolve_referee_event',
     narrateTask: 'narrate_scene',
-    refereeTimeoutMs: 30000,
-    agentQueryTimeoutMs: 30000,
-    narrationTimeoutMs: 15000,
+    refereeTimeoutMs: REFEREE_TIMEOUT_MS,
+    agentQueryTimeoutMs: AGENT_QUERY_TIMEOUT_MS,
+    narrationTimeoutMs: NARRATION_TIMEOUT_MS,
     maxMoveTicksBeforeReevaluation: 15,
   };
 }
