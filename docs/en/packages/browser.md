@@ -101,15 +101,20 @@ gateway tokens in browser bundles.
 
 The browser runtime links Sipp's Rust WASM ABI with llama.cpp and ggml
 through Emscripten. It runs GGUF text and vision models with WebGPU when the
-browser exposes a compatible adapter, and falls back to CPU execution for
-compatible local workflows. OPFS-backed model caching keeps repeated browser
-loads local after the first model fetch or file import.
+browser exposes the required adapter, or with CPU execution when CPU is the
+selected backend. OPFS-backed model caching keeps repeated browser loads local
+after the first model fetch or file import.
 
 The package resolves its packaged JavaScript and WASM assets at runtime. Most
 apps should not override asset URLs. Use `executionMode`, `wasmThreading`,
 `browserCache`, and local endpoint `options.runtime` only when the application
 needs explicit control over browser execution, storage, or local runtime
 behavior.
+
+Packaged browser runtime assets use pthreads, so browser-local inference needs
+`SharedArrayBuffer` and cross-origin isolation headers. Hosts that cannot serve
+those headers must set `wasmThreading: 'single-thread'` and provide custom
+single-thread `moduleUrl` and `wasmUrl` assets.
 
 See [Runtime Options](../reference/runtime-options.md) for `SippClient`
 options, WebGPU/backend selection, worker mode, pthread requirements, and

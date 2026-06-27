@@ -22,9 +22,8 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 | 选项 | 说明 |
 | --- | --- |
 | `executionMode` | `auto` 优先使用 Worker；`worker` 强制 Worker 传输；`main-thread` 用于调试或受限环境。 |
-| `wasmThreading` | `single-thread` 加载单线程 WASM；`pthread` 加载多线程版本。 |
-| `moduleUrl`, `wasmUrl` | 打包工具或部署改了资源路径时，重写单线程运行时的资源 URL。两个必须一起设。 |
-| `pthreadModuleUrl`, `pthreadWasmUrl` | 同上，用于多线程运行时。两个必须一起设。 |
+| `wasmThreading` | `pthread` 加载内置多线程运行时。`single-thread` 仅在显式提供自定义 `moduleUrl` 和 `wasmUrl` 资源时有效。 |
+| `moduleUrl`, `wasmUrl` | 重写当前选择的运行时资源 URL。两个必须一起设。 |
 | `browserCache` | 控制浏览器 GGUF 缓存的 OPFS 分片阈值和加载行为。 |
 | `trustedOrigins` | 允许跨域加载运行时资源。默认只允许同源。 |
 | `workerUrl` | 打包工具找不到 Worker 时手动指定入口 URL。 |
@@ -60,8 +59,8 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 | 模式 | 说明 |
 | --- | --- |
-| `single-thread`（默认） | 加载单线程 WASM 运行时。兼容性最好，不需要跨域隔离头。 |
-| `pthread` | 加载多线程 WASM 运行时。需要 `SharedArrayBuffer` 和 COOP/COEP 响应头。 |
+| `pthread`（默认） | 加载内置多线程 WASM 运行时。需要 `SharedArrayBuffer` 和 COOP/COEP 响应头。 |
+| `single-thread` | 仅用于显式提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源的场景。 |
 
 ### `browserCache`
 

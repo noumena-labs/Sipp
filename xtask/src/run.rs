@@ -171,7 +171,7 @@ fn prepend_path(path: &str, current: &str) -> String {
 fn build_one_demo(sh: &Shell, ctx: &BuildContext, demo: DemoName) -> Result<()> {
     output::phase(&format!("Build browser demo: {}", demo.slug()));
     ensure_javascript_workspace_dependencies(sh, ctx, &ctx.demo_dir(demo.slug()))?;
-    targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+    targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
     build_demo_only(sh, ctx, demo)
 }
 
@@ -196,7 +196,7 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
 
     if !args.no_build {
         ensure_javascript_workspace_dependencies(sh, ctx, &ctx.demo_dir(args.demo.slug()))?;
-        targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+        targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_demo_only(sh, ctx, args.demo)?;
         }
@@ -232,7 +232,7 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
 fn build_one_tool(sh: &Shell, ctx: &BuildContext, tool: ToolName) -> Result<()> {
     output::phase(&format!("Build tool: {}", tool.slug()));
     ensure_javascript_workspace_dependencies(sh, ctx, &tool_dir(ctx, tool))?;
-    targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+    targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
     build_tool_only(sh, ctx, tool)
 }
 
@@ -257,7 +257,7 @@ fn serve_tool(sh: &Shell, ctx: &BuildContext, args: &RunToolServeArgs) -> Result
 
     if !args.no_build {
         ensure_javascript_workspace_dependencies(sh, ctx, &tool_dir(ctx, args.tool))?;
-        targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+        targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_tool_only(sh, ctx, args.tool)?;
         }
@@ -300,7 +300,7 @@ fn serve_browser_example(
 
     if !args.no_build {
         ensure_javascript_workspace_dependencies(sh, ctx, &example_dir(ctx, example))?;
-        targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+        targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_example_only(sh, ctx, example)?;
         }
@@ -517,7 +517,7 @@ fn run_web_gateway_example(
     let example = ExampleName::Browser;
     if !args.no_build {
         ensure_javascript_workspace_dependencies(sh, ctx, &example_dir(ctx, example))?;
-        targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+        targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
         if matches!(args.mode, DemoServeMode::Preview) {
             build_example_only(sh, ctx, example)?;
         }

@@ -2,9 +2,8 @@ import type { SippClientOptions } from '../engine/browser-client.js';
 import {
   resolveOptimizedPackageAssetUrl,
   resolveRuntimeBackendOverride,
+  resolveRuntimeThreadingMode,
   resolveRuntimeUrls,
-  supportsWasmPthreads,
-  type WasmThreadingMode,
 } from '../engine/runtime-assets.js';
 import { ObservabilityController } from '../models/observability-controller.js';
 import { observabilitySnapshotToEngineState } from '../models/observability-controller.js';
@@ -93,10 +92,7 @@ function toWorkerRuntimeConfig(config: SippClientOptions): WorkerRuntimeConfig {
     !hasRuntimeUrlOverride
       ? null
       : resolveRuntimeUrls(config);
-  const wasmThreading =
-    runtimeUrls?.threading ??
-    config.wasmThreading ??
-    defaultWorkerThreadingMode();
+  const wasmThreading = runtimeUrls?.threading ?? resolveRuntimeThreadingMode(config);
   const defaultBackendOverride = resolveRuntimeBackendOverride({
     ...config,
     wasmThreading,
@@ -112,10 +108,6 @@ function toWorkerRuntimeConfig(config: SippClientOptions): WorkerRuntimeConfig {
     browserCache: config.browserCache,
     trustedOrigins: config.trustedOrigins,
   };
-}
-
-function defaultWorkerThreadingMode(): WasmThreadingMode {
-  return supportsWasmPthreads() ? 'pthread' : 'single-thread';
 }
 
 function toWorkerQueryOptions(

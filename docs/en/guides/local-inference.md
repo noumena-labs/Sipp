@@ -63,9 +63,10 @@ Browser execution has two separate choices:
 - `wasmThreading: 'pthread'` enables the pthread WASM runtime and requires
   `SharedArrayBuffer` plus cross-origin isolation headers.
 
-Use `wasmThreading: 'single-thread'` when the app cannot serve COOP/COEP
-headers. Use `executionMode: 'main-thread'` mainly for debugging or constrained
-hosts.
+The bundled browser runtime requires COOP/COEP headers. Apps that cannot serve
+those headers must set `wasmThreading: 'single-thread'` and provide custom
+single-thread `moduleUrl` and `wasmUrl` assets. Use
+`executionMode: 'main-thread'` mainly for debugging or constrained hosts.
 
 Native Node.js, Python, and Rust local endpoints can tune CPU thread counts
 with `context.n_threads` and `context.n_threads_batch`. Leave them unset for

@@ -154,7 +154,7 @@ fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()
     match target {
         BuildCommands::All => {
             targets::core::build(sh, ctx)?;
-            targets::wasm::build(sh, ctx, WasmThreading::All, WasmRuntime::Auto)?;
+            targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
             targets::python::build(sh, ctx, None)?;
             targets::node::build(sh, ctx, None)?;
             targets::cli::build(sh, ctx, None)?;

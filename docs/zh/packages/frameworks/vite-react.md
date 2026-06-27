@@ -52,11 +52,11 @@ export function LocalQuery(): JSX.Element {
 }
 ```
 
-省略 `backend` 时，浏览器运行时会自动选择最合适的后端引擎。如果 UI 需要强制 WebGPU 并由应用层处理错误及回退，请显式设置 `backend: 'webgpu'`。
+省略 `backend` 时，浏览器运行时会选择后端引擎。如果 UI 需要明确请求 WebGPU 并由应用层处理后端错误，请显式设置 `backend: 'webgpu'`。
 
 ## Vite 配置
 
-pthread 支持的 WASM 运行时必须依赖 `SharedArrayBuffer` 和跨源隔离。开启 `wasmThreading: 'pthread'` 前，先配置 Vite 的开发与预览服务器请求头：
+打包提供的 WASM 运行时使用 pthread，必须依赖 `SharedArrayBuffer` 和跨源隔离。使用默认浏览器运行时前，先配置 Vite 的开发与预览服务器请求头：
 
 ```ts
 // vite.config.ts
@@ -78,7 +78,7 @@ export default defineConfig({
 });
 ```
 
-应用无法配置这些响应头时，设置 `wasmThreading: 'single-thread'`。仅在调试或受限主机环境中使用 `executionMode: 'main-thread'`。
+应用无法配置这些响应头时，需要设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。仅在调试或受限主机环境中使用 `executionMode: 'main-thread'`。
 
 ## 运行时资源覆盖
 
@@ -88,12 +88,12 @@ export default defineConfig({
 
 ```ts
 const client = new SippClient({
-  moduleUrl: '/assets/sipp-wasm.js',
-  wasmUrl: '/assets/sipp-wasm.wasm',
+  moduleUrl: '/assets/sipp-wasm-pthread.js',
+  wasmUrl: '/assets/sipp-wasm-pthread.wasm',
 });
 ```
 
-覆盖资源时必须成对提供 `moduleUrl` 和 `wasmUrl`。pthread 运行时需同时提供 `pthreadModuleUrl` 和 `pthreadWasmUrl`。
+`moduleUrl` 和 `wasmUrl` 覆盖当前选择的运行时。默认选择 pthread。自定义单线程构建还必须设置 `wasmThreading: 'single-thread'`。
 
 ## 模型文件与缓存
 

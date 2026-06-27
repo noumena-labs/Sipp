@@ -130,7 +130,7 @@ function supportsWasmPthreads(): boolean {
 
 Single-thread artifacts are not included in the default browser package. Hosts
 that cannot serve COOP/COEP headers must provide a custom single-thread
-`moduleUrl` and `wasmUrl`.
+runtime with `wasmThreading: 'single-thread'`, `moduleUrl`, and `wasmUrl`.
 
 ---
 
@@ -224,8 +224,8 @@ experimental JSPI support enabled, the JSPI runtime path was functional: models
 loaded and generated tokens. It was not performant enough to ship. The Firefox
 browser runtime uses the pthread CPU no-JSPI artifact.
 
-This is a browser-runtime routing decision, not a single-thread fallback. The
-Firefox path still requires `SharedArrayBuffer`, workers, and COOP/COEP headers.
+The Firefox browser path is pthread CPU no-JSPI. It still requires
+`SharedArrayBuffer`, workers, and COOP/COEP headers.
 
 ---
 

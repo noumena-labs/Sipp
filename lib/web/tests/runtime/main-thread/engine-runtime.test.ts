@@ -91,6 +91,7 @@ test('MainThreadEngineRuntime points pthread workers at the selected runtime mod
 test('MainThreadEngineRuntime rejects stale browser runtime ABI artifacts', async () => {
   const runtime = new MainThreadEngineRuntime({
     executionMode: 'main-thread',
+    wasmThreading: 'single-thread',
     moduleUrl: 'https://example.test/runtime.js',
     wasmUrl: 'https://example.test/runtime.wasm',
   });

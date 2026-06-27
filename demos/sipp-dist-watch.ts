@@ -37,7 +37,7 @@ const sippClientArtifactDir = path.join(
 const sippClientSrcDir = path.join(sippClientPackageDir, 'src');
 const sippClientWasmDir = path.join(sippClientArtifactDir, 'dist', 'wasm');
 const sourceFilePattern = /\.tsx?$/;
-const wasmArtifactPattern = /sipp-wasm(?:-pthread)?(?:-cpu-nojspi)?\.(?:js|wasm)$/;
+const wasmArtifactPattern = /sipp-wasm-pthread(?:-cpu-nojspi)?\.(?:js|wasm)$/;
 const rebuildArgs = ['run', '--filter=@noumena-labs/sipp', 'build:ts'];
 
 function isSippClientSourceFile(filePath: string): boolean {

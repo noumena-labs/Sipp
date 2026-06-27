@@ -46,7 +46,7 @@ Node.js、Python、Rust 和 CLI 的本地端点使用文件系统路径。通过
 - `executionMode: 'worker'` 或 `auto`：环境支持 Worker 时，将推理计算移出 UI 主线程。
 - `wasmThreading: 'pthread'`：启用多线程 WASM 运行时，需浏览器支持 `SharedArrayBuffer` 并配置跨源隔离响应头。
 
-应用无法提供 COOP/COEP 响应头时，使用 `wasmThreading: 'single-thread'`。`executionMode: 'main-thread'` 通常仅用于调试或受限宿主环境。
+内置浏览器运行时要求提供 COOP/COEP 响应头。应用无法提供这些响应头时，需要设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。`executionMode: 'main-thread'` 通常仅用于调试或受限宿主环境。
 
 原生 Node.js、Python 和 Rust 端点可通过 `context.n_threads` 和 `context.n_threads_batch` 手动指定 CPU 线程数。除非有确切性能数据，否则建议留空使用默认值。
 

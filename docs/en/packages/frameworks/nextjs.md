@@ -182,10 +182,12 @@ export function LocalChat(): JSX.Element {
 }
 ```
 
-If you override `moduleUrl`, `wasmUrl`, `pthreadModuleUrl`, or
-`pthreadWasmUrl`, provide both the JavaScript and WASM asset URLs for the
-selected runtime. Use `wasmThreading: 'pthread'` only when the app is served
-with cross-origin isolation headers that enable `SharedArrayBuffer`.
+Override runtime assets with `moduleUrl` and `wasmUrl`; provide both the
+JavaScript and WASM asset URLs for the selected runtime. The packaged browser
+runtime uses pthreads, so browser-local inference requires cross-origin
+isolation headers that enable `SharedArrayBuffer`. Apps that cannot serve
+those headers must provide custom single-thread assets with
+`wasmThreading: 'single-thread'`, `moduleUrl`, and `wasmUrl`.
 
 ## Hybrid Client Component
 

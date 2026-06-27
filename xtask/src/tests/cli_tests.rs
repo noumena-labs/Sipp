@@ -44,7 +44,7 @@ fn build_commands_parse_backend_defaults_and_overrides() {
     };
     assert_eq!(args.backend, Some(Backend::Vulkan));
 
-    let cli = Cli::parse_from(["xtask", "build", "wasm", "--threading", "pthread"]);
+    let cli = Cli::parse_from(["xtask", "build", "wasm"]);
     let Commands::Build { target } = cli.command else {
         panic!("expected build command");
     };
@@ -481,6 +481,21 @@ fn test_unit_and_smoke_targets_parse() {
         panic!("expected rust unit target");
     };
     assert_eq!(args.package.as_deref(), Some("sipp-sys"));
+
+    let cli = Cli::parse_from(["xtask", "test", "unit", "suite", "browser"]);
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Unit(args) = command else {
+        panic!("expected unit command");
+    };
+    let TestUnitCommands::Suite(args) = args.command else {
+        panic!("expected unit suite command");
+    };
+    let TestUnitSuiteTarget::Browser(args) = args.target else {
+        panic!("expected browser package unit target");
+    };
+    assert_eq!(args.wasm_threading, WasmThreading::Pthread);
 
     let cli = Cli::parse_from([
         "xtask",

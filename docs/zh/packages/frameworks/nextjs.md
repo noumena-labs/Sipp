@@ -165,7 +165,7 @@ export function LocalChat(): JSX.Element {
 }
 ```
 
-如果覆盖了默认的资源路径（`moduleUrl`、`wasmUrl`、`pthreadModuleUrl` 或 `pthreadWasmUrl`），请务必成对提供对应运行时的 JavaScript 和 WASM 资源 URL。并且，只有在应用正确配置了跨源隔离头并开启 `SharedArrayBuffer` 支持的情况下，才能设置 `wasmThreading: 'pthread'`。
+使用 `moduleUrl` 和 `wasmUrl` 覆盖运行时资源时，请务必成对提供当前选择运行时的 JavaScript 和 WASM 资源 URL。打包提供的浏览器运行时使用 pthread，因此浏览器本地推理需要配置跨源隔离头并开启 `SharedArrayBuffer`。无法提供这些响应头的应用必须设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。
 
 ## 混合模式客户端组件
 

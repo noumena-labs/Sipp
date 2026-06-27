@@ -141,7 +141,7 @@ function tokenEmissionOptionsFor(
   if (!postTokenRingReady()) {
     throw new QueryError(
       'STREAMING_UNAVAILABLE',
-      'Pthread worker token streaming requires shared wasm memory. Serve the page with cross-origin isolation or use wasmThreading: "single-thread".'
+      'Pthread worker token streaming requires shared wasm memory. Serve the page with cross-origin isolation.'
     );
   }
   return {

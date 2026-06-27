@@ -125,7 +125,7 @@ function supportsWasmPthreads(): boolean {
 }
 ```
 
-默认浏览器包不包含单线程产物。托管环境（如 GitHub Pages 或无法控制响应头的共享主机）无法返回 COOP/COEP 响应头时，需要提供自定义的单线程 `moduleUrl` 和 `wasmUrl`。
+默认浏览器包不包含单线程产物。托管环境（如 GitHub Pages 或无法控制响应头的共享主机）无法返回 COOP/COEP 响应头时，需要设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl`。
 
 ---
 
@@ -216,7 +216,7 @@ WebGPU 和 `shader-f16` 能力。启用 Firefox 的实验性 JSPI 后，JSPI 运
 路径可以正常工作：模型可以加载并生成 token。但该路径性能不足以作为发布
 路径。因此 Firefox 浏览器运行时选择 pthread CPU no-JSPI 产物。
 
-这是浏览器运行时路由决策，不是单线程 fallback。Firefox 路径仍然需要
+Firefox 浏览器路径是 pthread CPU no-JSPI。该路径仍然需要
 `SharedArrayBuffer`、Worker，以及 COOP/COEP 响应头。
 
 ---

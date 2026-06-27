@@ -58,15 +58,15 @@ export function LocalQuery(): JSX.Element {
 }
 ```
 
-Omit `backend` to let the browser runtime choose a compatible backend. Use
+Omit `backend` to let the browser runtime choose the backend. Use
 `backend: 'webgpu'` when the UI should explicitly request WebGPU and surface
-errors or fallbacks itself.
+backend errors itself.
 
 ## Local Development Headers
 
-The pthread WASM runtime requires `SharedArrayBuffer` and cross-origin
-isolation. Configure Vite dev and preview headers before using
-`wasmThreading: 'pthread'`:
+The packaged WASM runtime uses pthreads and requires `SharedArrayBuffer` plus
+cross-origin isolation. Configure Vite dev and preview headers before using the
+default browser runtime:
 
 ```ts
 // vite.config.ts
@@ -88,8 +88,9 @@ export default defineConfig({
 });
 ```
 
-Use `wasmThreading: 'single-thread'` when the app cannot serve those headers.
-Use `executionMode: 'main-thread'` only for debugging or constrained hosts.
+Apps that cannot serve those headers must provide custom single-thread
+assets with `wasmThreading: 'single-thread'`, `moduleUrl`, and `wasmUrl`. Use
+`executionMode: 'main-thread'` only for debugging or constrained hosts.
 
 ## Runtime Asset Overrides
 
@@ -102,13 +103,14 @@ assets:
 
 ```ts
 const client = new SippClient({
-  moduleUrl: '/assets/sipp-wasm.js',
-  wasmUrl: '/assets/sipp-wasm.wasm',
+  moduleUrl: '/assets/sipp-wasm-pthread.js',
+  wasmUrl: '/assets/sipp-wasm-pthread.wasm',
 });
 ```
 
-When overriding assets, provide both `moduleUrl` and `wasmUrl`. For pthread
-runtime assets, provide both `pthreadModuleUrl` and `pthreadWasmUrl`.
+`moduleUrl` and `wasmUrl` override the selected runtime. The selected runtime
+defaults to pthread. Custom single-thread builds must also set
+`wasmThreading: 'single-thread'`.
 
 ## Model Files And Cache
 

@@ -728,7 +728,7 @@ pub struct TestUnitBackendArgs {
 #[derive(Args)]
 pub struct TestUnitWasmArgs {
     /// WASM runtime variant to build before running browser tests.
-    #[arg(long = "wasm-threading", value_enum, default_value = "all")]
+    #[arg(long = "wasm-threading", value_enum, default_value = "pthread")]
     pub wasm_threading: WasmThreading,
 }
 
@@ -1820,7 +1820,7 @@ pub struct BackendArgs {
 #[derive(Args)]
 pub struct WasmBuildArgs {
     /// WASM runtime variant to build.
-    #[arg(long, value_enum, default_value = "all")]
+    #[arg(long, value_enum, default_value = "pthread")]
     pub threading: WasmThreading,
     /// Browser runtime backend/async flavor to build.
     #[arg(long, value_enum, default_value = "auto")]
