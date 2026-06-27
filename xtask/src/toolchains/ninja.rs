@@ -2,7 +2,7 @@
 
 use crate::output;
 use crate::utils::BuildContext;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use xshell::{cmd, Shell};
 
@@ -10,7 +10,7 @@ const NINJA_VERSION: &str = "1.13.2";
 
 /// Ensures Ninja is available when the host platform needs a hermetic copy.
 pub(crate) fn setup_ninja(sh: &Shell, ctx: &BuildContext) -> Result<Option<PathBuf>> {
-    let ninja_dir = ctx.toolchain_dir().join("ninja");
+    let ninja_dir = ctx.ninja_toolchain_dir();
     let ninja_exe = ctx.ninja_exe();
 
     if !ninja_exe.exists() {
@@ -24,11 +24,27 @@ pub(crate) fn setup_ninja(sh: &Shell, ctx: &BuildContext) -> Result<Option<PathB
         );
         let zip_path = ninja_dir.join(filename);
 
-        output::run_command("Downloading Ninja", cmd!(sh, "curl -L -o {zip_path} {url}"))?;
         output::run_command(
-            "Extracting Ninja",
-            cmd!(sh, "tar -xf {zip_path} -C {ninja_dir}"),
+            "Downloading Ninja",
+            cmd!(sh, "curl -f -L -o {zip_path} {url}"),
         )?;
+        if cfg!(windows) {
+            output::run_command(
+                "Extracting Ninja",
+                cmd!(sh, "tar -xf {zip_path} -C {ninja_dir}"),
+            )?;
+        } else {
+            output::run_command(
+                "Extracting Ninja",
+                cmd!(sh, "unzip -oq {zip_path} -d {ninja_dir}"),
+            )?;
+        }
+        if !ninja_exe.exists() {
+            anyhow::bail!(
+                "Ninja archive did not contain expected executable {}",
+                ninja_exe.display()
+            );
+        }
         make_unix_executable(&ninja_exe)?;
         sh.remove_path(zip_path)?;
     } else {
@@ -54,10 +70,12 @@ fn ninja_filename() -> Result<&'static str> {
 fn make_unix_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    let mut permissions = std::fs::metadata(path)?.permissions();
+    let mut permissions = std::fs::metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?
+        .permissions();
     permissions.set_mode(0o755);
-    std::fs::set_permissions(path, permissions)?;
-    Ok(())
+    std::fs::set_permissions(path, permissions)
+        .with_context(|| format!("failed to mark {} executable", path.display()))
 }
 
 #[cfg(not(unix))]
