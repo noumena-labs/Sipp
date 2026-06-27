@@ -13,7 +13,7 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { SippClient } from '@noumena-labs/sipp';
+import { SippClient, type ModelLoadProgress, type NativeRuntimeConfig } from '@noumena-labs/sipp';
 import { createCharacterFromConfigUrl } from '@noumena-labs/sipp/character';
 import { createDirectorFromConfigUrl } from '@noumena-labs/sipp/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
@@ -95,6 +95,33 @@ const BRAIN_DEFINITIONS: readonly BrainDefinition[] = [
 ];
 
 const DEFAULT_MODEL_URL = 'https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/main/LFM2.5-350M-Q8_0.gguf';
+const SIMULATION_RUNTIME: NativeRuntimeConfig = {
+  placement: {
+    gpu_layers: 'all',
+  },
+  context: {
+    n_ctx: 4096,
+    n_parallel: 1,
+  },
+  cache: {
+    mode: 'live_slot_and_snapshot',
+    retained_prefix_tokens: 256,
+    snapshot_interval_tokens: 64,
+    max_snapshot_entries: 64,
+  },
+  scheduler: {
+    policy: {
+      mode: 'latency_first',
+    },
+  },
+  sampling: {
+    temperature: 0.5,
+    top_p: 0.9,
+    top_k: 40,
+    min_p: 0.05,
+    repeat_penalty: 1.05,
+  },
+};
 const SIMULATION_STEP_SECONDS = 0.15;
 const SIMULATION_STEP_DELAY_MS = SIMULATION_STEP_SECONDS * 1000;
 const DEFAULT_SCENARIO_SETTINGS: StartScenarioSettings = {
@@ -576,32 +603,15 @@ export default function App() {
           kind: 'local',
           source: url,
           options: {
-            onProgress: (progress: any) => {
+            onProgress: (progress: ModelLoadProgress) => {
               if (progress.phase === 'download') {
                 setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
               } else if (progress.phase === 'load') {
                 setStatus('Loading into memory');
               }
             },
-            observability: 'profile',
-            runtime: {
-              cache: {
-                snapshot_interval_tokens: 64,
-                max_snapshot_entries: 64,
-              },
-              scheduler: {
-                policy: {
-                  mode: 'latency_first' as const,
-                },
-              },
-              sampling: {
-                temperature: 0.5,
-                top_p: 0.9,
-                top_k: 40,
-                min_p: 0.05,
-                repeat_penalty: 1.05,
-              },
-            },
+            observability: 'runtime',
+            runtime: SIMULATION_RUNTIME,
           },
         });
 
