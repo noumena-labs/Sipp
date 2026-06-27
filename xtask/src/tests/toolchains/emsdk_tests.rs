@@ -6,7 +6,8 @@
 use crate::test_support::TempDir;
 
 use super::{
-    emsdk_is_active, emsdk_is_installed, expected_emsdk_tool_id, patch_emsdk_windows, EMSDK_VERSION,
+    emsdk_is_active, emsdk_is_installed, expected_emsdk_tool_id, patch_emsdk_windows,
+    rust_target_list_contains, EMSDK_VERSION,
 };
 
 #[test]
@@ -53,6 +54,17 @@ fn installed_check_rejects_wrong_version_marker() {
     temp.write("upstream/.emsdk_version", "other\n");
 
     assert!(!emsdk_is_installed(temp.path()).unwrap());
+}
+
+#[test]
+fn rust_target_list_matching_requires_exact_line() {
+    let installed = "aarch64-apple-darwin\nwasm32-unknown-emscripten\n";
+
+    assert!(rust_target_list_contains(
+        installed,
+        "wasm32-unknown-emscripten"
+    ));
+    assert!(!rust_target_list_contains(installed, "wasm32-unknown"));
 }
 
 #[test]

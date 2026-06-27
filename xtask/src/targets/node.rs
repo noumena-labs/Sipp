@@ -3,6 +3,7 @@
 use crate::cli::Backend;
 use crate::javascript;
 use crate::output;
+use crate::toolchains::bun::setup_bun;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
@@ -145,9 +146,10 @@ fn build_backend_variant(
     output::path("Cargo target dir", &target_dir);
     output::path("Staging directory", &staging_dir);
 
+    let bun_exe = setup_bun(sh, ctx)?;
     let mut napi_cmd = cmd!(
         sh,
-        "bunx napi build --platform --release --no-js --output-dir {staging_dir} --target-dir {target_dir}"
+        "{bun_exe} x napi build --platform --release --no-js --output-dir {staging_dir} --target-dir {target_dir}"
     );
     napi_cmd = apply_toolchains(sh, ctx, napi_cmd, Some(backend))?;
 

@@ -11,9 +11,8 @@ set "SETUP_EXIT=%ERRORLEVEL%"
 endlocal & set "SETUP_EXIT=%SETUP_EXIT%" & set "SIPP_BIN=%ROOT%\.build\bin"
 
 if "%SETUP_EXIT%"=="0" (
-  if exist "%SIPP_BIN%\sipp.cmd" (
-    echo ;%PATH%; | find /I ";%SIPP_BIN%;" >nul
-    if errorlevel 1 set "PATH=%SIPP_BIN%;%PATH%"
+  if exist "%SIPP_BIN%\sipp-env.cmd" (
+    call "%SIPP_BIN%\sipp-env.cmd"
     echo.
     echo sipp is active in this CMD session.
   )

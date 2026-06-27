@@ -8,7 +8,7 @@ use crate::toolchain::ToolStatus;
 
 use super::{
     doctor_target_label, includes_core, includes_native_backend, includes_node, includes_python,
-    includes_wasm, metal_status, optional_command_status, required_command_status,
+    includes_wasm, metal_status, required_command_status,
 };
 
 #[test]
@@ -35,10 +35,9 @@ fn doctor_labels_are_stable() {
 }
 
 #[test]
-fn command_status_helpers_distinguish_required_and_optional_missing_tools() {
+fn required_command_status_reports_missing_tools() {
     let missing = "sipp-definitely-not-installed-command";
     let required = required_command_status("Required", missing, "fix required");
-    let optional = optional_command_status("Optional", missing, "fix optional");
 
     assert!(matches!(
         required,
@@ -48,14 +47,6 @@ fn command_status_helpers_distinguish_required_and_optional_missing_tools() {
         }
     ));
     assert!(required.is_missing());
-    assert!(matches!(
-        optional,
-        ToolStatus::Warn {
-            name: "Optional",
-            ..
-        }
-    ));
-    assert!(!optional.is_missing());
 }
 
 #[test]

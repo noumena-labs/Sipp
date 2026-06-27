@@ -3,6 +3,7 @@
 use crate::cli::Backend;
 use crate::javascript;
 use crate::output;
+use crate::toolchains::bun::setup_bun;
 use crate::toolchains::env::apply_toolchains;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
@@ -108,10 +109,11 @@ fn build_admin_ui(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
         "Installing gateway Admin Dashboard dependencies",
         std::slice::from_ref(&admin_ui_dir),
     )?;
+    let bun_exe = setup_bun(sh, ctx)?;
     let _dir = sh.push_dir(ctx.workspace_root());
     output::run_build_command(
         "Building gateway Admin Dashboard",
-        cmd!(sh, "bun run --filter sipp-gateway-admin-ui build"),
+        cmd!(sh, "{bun_exe} run --filter sipp-gateway-admin-ui build"),
     )?;
     if !dist.join("index.html").is_file() {
         anyhow::bail!(

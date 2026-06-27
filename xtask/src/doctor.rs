@@ -82,7 +82,7 @@ fn print_core_statuses() -> usize {
 
 fn print_node_statuses(ctx: &BuildContext) {
     output::phase("Node binding readiness");
-    optional_command_status("Bun", "bun", "Install Bun from https://bun.sh/").print();
+    toolchain::bun_status(ctx).print();
     toolchain::node_workspace_status(ctx).print();
     output::detail(
         "Recovery",
@@ -99,8 +99,9 @@ fn print_python_statuses(ctx: &BuildContext) {
 fn print_wasm_statuses(ctx: &BuildContext, include_js_workspace: bool) {
     output::phase("WASM/browser readiness");
     if include_js_workspace {
-        optional_command_status("Bun", "bun", "Install Bun from https://bun.sh/").print();
+        toolchain::bun_status(ctx).print();
     }
+    toolchain::cmake_status(ctx).print();
     toolchain::ninja_status(ctx).print();
     toolchain::emsdk_status(ctx).print();
     if include_js_workspace {
@@ -144,26 +145,6 @@ fn required_command_status(
         }
     } else {
         ToolStatus::Missing {
-            name,
-            detail: format!("{command} is not available on PATH"),
-            fix,
-        }
-    }
-}
-
-fn optional_command_status(
-    name: &'static str,
-    command: &'static str,
-    fix: &'static str,
-) -> ToolStatus {
-    if toolchain::has_command(command) {
-        ToolStatus::Ready {
-            name,
-            detail: format!("{command} is available"),
-            path: None,
-        }
-    } else {
-        ToolStatus::Warn {
             name,
             detail: format!("{command} is not available on PATH"),
             fix,

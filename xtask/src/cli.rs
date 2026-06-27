@@ -337,6 +337,8 @@ Inspect, bootstrap, or configure developer toolchains.
 
 Examples:
   cargo xtask toolchain status
+  cargo xtask toolchain install bun
+  cargo xtask toolchain install cmake
   cargo xtask toolchain install uv
   cargo xtask toolchain install all
   cargo xtask toolchain setup cuda
@@ -1667,6 +1669,10 @@ pub enum ToolchainCommands {
 pub enum ToolchainComponent {
     /// Install every xtask-managed toolchain.
     All,
+    /// Install the hermetic Bun executable.
+    Bun,
+    /// Install the hermetic CMake executable.
+    Cmake,
     /// Install the hermetic uv executable.
     Uv,
     /// Install Ninja on platforms where xtask manages it.
