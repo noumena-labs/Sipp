@@ -10,8 +10,8 @@ use crate::toolchains::vulkan::VULKAN_VERSION;
 use crate::utils::BuildContext;
 
 use super::{
-    component_label, cuda_status, emsdk_status, node_modules_roots, node_workspace_status,
-    uv_status, vulkan_glslc_path, vulkan_status, ToolStatus,
+    bun_status, cmake_status, component_label, cuda_status, emsdk_status, node_modules_roots,
+    node_workspace_status, uv_status, vulkan_glslc_path, vulkan_status, ToolStatus,
 };
 
 #[test]
@@ -19,6 +19,14 @@ fn managed_statuses_report_missing_fake_toolchains() {
     let temp = TempDir::new("toolchain-missing");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
 
+    assert!(matches!(
+        bun_status(&ctx),
+        ToolStatus::Missing { name: "Bun", .. }
+    ));
+    assert!(matches!(
+        cmake_status(&ctx),
+        ToolStatus::Missing { name: "CMake", .. }
+    ));
     assert!(matches!(
         uv_status(&ctx),
         ToolStatus::Missing { name: "uv", .. }
@@ -139,6 +147,8 @@ fn node_workspace_status_checks_every_workspace_node_modules_root() {
 #[test]
 fn component_labels_match_cli_values() {
     assert_eq!(component_label(&ToolchainComponent::All), "all");
+    assert_eq!(component_label(&ToolchainComponent::Bun), "bun");
+    assert_eq!(component_label(&ToolchainComponent::Cmake), "cmake");
     assert_eq!(component_label(&ToolchainComponent::Uv), "uv");
     assert_eq!(component_label(&ToolchainComponent::Ninja), "ninja");
     assert_eq!(component_label(&ToolchainComponent::Emsdk), "emsdk");

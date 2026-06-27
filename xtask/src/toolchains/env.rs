@@ -46,6 +46,16 @@ pub(crate) fn apply_toolchains<'a>(
         path_additions.push(uv_dir.display().to_string());
     }
 
+    let bun_dir = ctx.bun_toolchain_dir();
+    if bun_dir.exists() {
+        path_additions.push(bun_dir.display().to_string());
+    }
+
+    let cmake_bin_dir = ctx.cmake_bin_dir()?;
+    if cmake_bin_dir.exists() {
+        path_additions.push(cmake_bin_dir.display().to_string());
+    }
+
     if let Some(deployment_target) = macos_deployment_target() {
         output::detail("macOS deployment target", deployment_target);
         command = command.env("MACOSX_DEPLOYMENT_TARGET", deployment_target);

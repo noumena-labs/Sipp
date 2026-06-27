@@ -2,7 +2,7 @@
 
 use crate::cli::{ToolchainCommands, ToolchainComponent, ToolchainSetupComponent};
 use crate::output;
-use crate::toolchains::{cuda, emsdk, ninja, python, vulkan};
+use crate::toolchains::{bun, cmake, cuda, emsdk, ninja, python, vulkan};
 use crate::utils::BuildContext;
 use anyhow::Result;
 use std::env;
@@ -97,10 +97,18 @@ fn install(sh: &Shell, ctx: &BuildContext, component: ToolchainComponent) -> Res
 
     match component {
         ToolchainComponent::All => {
+            bun::setup_bun(sh, ctx)?;
+            cmake::setup_cmake(sh, ctx)?;
             python::setup_uv(sh, ctx)?;
             ninja::setup_ninja(sh, ctx)?;
             emsdk::setup_emsdk(sh, ctx)?;
             vulkan::setup_vulkan(sh, ctx)?;
+        }
+        ToolchainComponent::Bun => {
+            bun::setup_bun(sh, ctx)?;
+        }
+        ToolchainComponent::Cmake => {
+            cmake::setup_cmake(sh, ctx)?;
         }
         ToolchainComponent::Uv => {
             python::setup_uv(sh, ctx)?;
@@ -122,6 +130,8 @@ fn install(sh: &Shell, ctx: &BuildContext, component: ToolchainComponent) -> Res
 
 pub(crate) fn managed_statuses(ctx: &BuildContext) -> Vec<ToolStatus> {
     vec![
+        bun_status(ctx),
+        cmake_status(ctx),
         uv_status(ctx),
         ninja_status(ctx),
         emsdk_status(ctx),
@@ -143,16 +153,71 @@ pub(crate) fn external_statuses(ctx: &BuildContext) -> Vec<ToolStatus> {
             ["--version"],
             "Install Rust from https://rustup.rs/",
         ),
-        command_status(
-            "Bun",
-            "bun",
-            ["--version"],
-            "Install Bun from https://bun.sh/",
-        ),
         cuda_status(ctx),
         node_workspace_status(ctx),
         docker_status(),
     ]
+}
+
+pub(crate) fn cmake_status(ctx: &BuildContext) -> ToolStatus {
+    let cmake_exe = match ctx.cmake_exe() {
+        Ok(cmake_exe) => cmake_exe,
+        Err(error) => {
+            return ToolStatus::Missing {
+                name: "CMake",
+                detail: error.to_string(),
+                fix: "Run `cargo xtask toolchain install cmake`",
+            };
+        }
+    };
+    if cmake_exe.exists() {
+        return command_path_status(
+            "CMake",
+            &cmake_exe,
+            ["--version"],
+            "Run `cargo xtask toolchain install cmake`",
+        );
+    }
+
+    ToolStatus::Missing {
+        name: "CMake",
+        detail: "managed CMake executable is missing".to_owned(),
+        fix: "Run `cargo xtask toolchain install cmake`",
+    }
+}
+
+pub(crate) fn bun_status(ctx: &BuildContext) -> ToolStatus {
+    let bun_exe = ctx.bun_exe();
+    if bun_exe.exists() {
+        let Some(version) = bun::bun_version(&bun_exe) else {
+            return ToolStatus::Missing {
+                name: "Bun",
+                detail: format!("{} exists but did not run successfully", bun_exe.display()),
+                fix: "Run `cargo xtask toolchain install bun`",
+            };
+        };
+        if version == bun::BUN_VERSION {
+            return ToolStatus::Ready {
+                name: "Bun",
+                detail: version,
+                path: Some(bun_exe),
+            };
+        }
+        return ToolStatus::Missing {
+            name: "Bun",
+            detail: format!(
+                "managed Bun version is {version}; expected {}",
+                bun::BUN_VERSION
+            ),
+            fix: "Run `cargo xtask toolchain install bun`",
+        };
+    }
+
+    ToolStatus::Missing {
+        name: "Bun",
+        detail: "managed Bun executable is missing".to_owned(),
+        fix: "Run `cargo xtask toolchain install bun`",
+    }
 }
 
 pub(crate) fn uv_status(ctx: &BuildContext) -> ToolStatus {
@@ -174,30 +239,21 @@ pub(crate) fn uv_status(ctx: &BuildContext) -> ToolStatus {
 }
 
 pub(crate) fn ninja_status(ctx: &BuildContext) -> ToolStatus {
-    if cfg!(windows) {
-        let ninja_exe = ctx.ninja_exe();
-        if ninja_exe.exists() {
-            return command_path_status(
-                "Ninja",
-                &ninja_exe,
-                ["--version"],
-                "Run `cargo xtask toolchain install ninja`",
-            );
-        }
-
-        return ToolStatus::Missing {
-            name: "Ninja",
-            detail: "managed Windows Ninja executable is missing".to_owned(),
-            fix: "Run `cargo xtask toolchain install ninja`",
-        };
+    let ninja_exe = ctx.ninja_exe();
+    if ninja_exe.exists() {
+        return command_path_status(
+            "Ninja",
+            &ninja_exe,
+            ["--version"],
+            "Run `cargo xtask toolchain install ninja`",
+        );
     }
 
-    command_status(
-        "Ninja",
-        "ninja",
-        ["--version"],
-        "Install Ninja with the host package manager",
-    )
+    ToolStatus::Missing {
+        name: "Ninja",
+        detail: "managed Ninja executable is missing".to_owned(),
+        fix: "Run `cargo xtask toolchain install ninja`",
+    }
 }
 
 pub(crate) fn emsdk_status(ctx: &BuildContext) -> ToolStatus {
@@ -452,6 +508,8 @@ fn setup_component(ctx: &BuildContext, component: ToolchainSetupComponent) -> Re
 fn component_label(component: &ToolchainComponent) -> &'static str {
     match component {
         ToolchainComponent::All => "all",
+        ToolchainComponent::Bun => "bun",
+        ToolchainComponent::Cmake => "cmake",
         ToolchainComponent::Uv => "uv",
         ToolchainComponent::Ninja => "ninja",
         ToolchainComponent::Emsdk => "emsdk",

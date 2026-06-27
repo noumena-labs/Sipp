@@ -13,6 +13,7 @@ use crate::javascript;
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::targets;
+use crate::toolchains::bun::setup_bun;
 use crate::toolchains::env::apply_toolchains;
 use crate::toolchains::python::{apply_uv_env, ensure_python, setup_uv, PYTHON_BUILD_VERSION};
 use crate::utils::{ensure_playwright_chromium, BuildContext};
@@ -1026,6 +1027,7 @@ fn run_node_package_tests(
 
     let node_dir = ctx.node_package_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, &[node_dir.clone()])?;
+    let bun_exe = setup_bun(sh, ctx)?;
     let _node = sh.push_dir(&node_dir);
     for backend in node_test_backends(ctx, backend)? {
         let report_path = suite_case_report_file(
@@ -1036,7 +1038,7 @@ fn run_node_package_tests(
         let mut test_cmd = if coverage_enabled {
             cmd!(
                 sh,
-                "bunx c8 --reporter=lcov --reports-dir {coverage_dir} node --test --test-reporter=tap --test-reporter-destination {report_path} tests/router.test.mjs"
+                "{bun_exe} x c8 --reporter=lcov --reports-dir {coverage_dir} node --test --test-reporter=tap --test-reporter-destination {report_path} tests/router.test.mjs"
             )
         } else {
             cmd!(

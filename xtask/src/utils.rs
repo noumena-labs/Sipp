@@ -350,6 +350,29 @@ impl BuildContext {
             .join(if cfg!(windows) { "uv.exe" } else { "uv" })
     }
 
+    pub(crate) fn bun_toolchain_dir(&self) -> PathBuf {
+        self.toolchain_dir().join("bun")
+    }
+
+    pub(crate) fn bun_exe(&self) -> PathBuf {
+        self.bun_toolchain_dir()
+            .join(if cfg!(windows) { "bun.exe" } else { "bun" })
+    }
+
+    pub(crate) fn cmake_toolchain_dir(&self) -> PathBuf {
+        self.toolchain_dir().join("cmake")
+    }
+
+    pub(crate) fn cmake_bin_dir(&self) -> Result<PathBuf> {
+        crate::toolchains::cmake::cmake_bin_dir(&self.cmake_toolchain_dir())
+    }
+
+    pub(crate) fn cmake_exe(&self) -> Result<PathBuf> {
+        Ok(self
+            .cmake_bin_dir()?
+            .join(if cfg!(windows) { "cmake.exe" } else { "cmake" }))
+    }
+
     pub(crate) fn ninja_toolchain_dir(&self) -> PathBuf {
         self.toolchain_dir().join("ninja")
     }

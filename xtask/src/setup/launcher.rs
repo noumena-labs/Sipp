@@ -1,6 +1,7 @@
 //! Cached launcher installer for the short `sipp` developer command.
 
 use crate::output;
+use crate::toolchains::cmake;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use std::env;
@@ -112,12 +113,12 @@ pub(crate) fn install(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     write_launcher(&bin_dir.join("sipp"), &UNIX_LAUNCHER.replace("\r\n", "\n"))?;
     write_launcher(&bin_dir.join("sipp.cmd"), WINDOWS_CMD_LAUNCHER)?;
     write_launcher(&bin_dir.join("sipp.ps1"), WINDOWS_PS_LAUNCHER)?;
-    write_launcher(&bin_dir.join("sipp-env.sh"), &unix_env_script(&bin_dir))?;
+    write_launcher(&bin_dir.join("sipp-env.sh"), &unix_env_script(&bin_dir)?)?;
     write_launcher(
         &bin_dir.join("sipp-env.ps1"),
-        &powershell_env_script(&bin_dir),
+        &powershell_env_script(&bin_dir)?,
     )?;
-    write_launcher(&bin_dir.join("sipp-env.cmd"), &cmd_env_script(&bin_dir))?;
+    write_launcher(&bin_dir.join("sipp-env.cmd"), &cmd_env_script(&bin_dir)?)?;
     make_unix_launcher_executable(&bin_dir.join("sipp"))?;
     make_unix_launcher_executable(&bin_dir.join("sipp-env.sh"))?;
 
@@ -180,26 +181,52 @@ fn path_string_eq(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn unix_env_script(bin_dir: &Path) -> String {
-    // Utilize the updated shell_quote that handles the drive letter conversion
+fn unix_env_script(bin_dir: &Path) -> Result<String> {
     let bin_dir_quoted = shell_quote(bin_dir);
+    let bun_dir_quoted = shell_quote(&toolchain_sibling_dir(bin_dir, "bun"));
+    let ninja_dir_quoted = shell_quote(&toolchain_sibling_dir(bin_dir, "ninja"));
+    let cmake_bin_dir_quoted = shell_quote(&cmake_bin_dir(bin_dir)?);
 
-    format!(
+    Ok(format!(
         r#"#!/usr/bin/env sh
 SIPP_BIN={bin_dir_quoted}
+SIPP_BUN={bun_dir_quoted}
+SIPP_NINJA={ninja_dir_quoted}
+SIPP_CMAKE_BIN={cmake_bin_dir_quoted}
 case ":${{PATH:-}}:" in
   *:"$SIPP_BIN":*) ;;
   *) export PATH="$SIPP_BIN${{PATH:+:$PATH}}" ;;
 esac
+case ":${{PATH:-}}:" in
+  *:"$SIPP_BUN":*) ;;
+  *) export PATH="$SIPP_BUN${{PATH:+:$PATH}}" ;;
+esac
+case ":${{PATH:-}}:" in
+  *:"$SIPP_NINJA":*) ;;
+  *) export PATH="$SIPP_NINJA${{PATH:+:$PATH}}" ;;
+esac
+case ":${{PATH:-}}:" in
+  *:"$SIPP_CMAKE_BIN":*) ;;
+  *) export PATH="$SIPP_CMAKE_BIN${{PATH:+:$PATH}}" ;;
+esac
 "#
     )
-    .replace("\r\n", "\n") // Force Unix line endings
+    .replace("\r\n", "\n"))
 }
 
-fn powershell_env_script(bin_dir: &Path) -> String {
+fn powershell_env_script(bin_dir: &Path) -> Result<String> {
+    let bun_dir = toolchain_sibling_dir(bin_dir, "bun");
+    let ninja_dir = toolchain_sibling_dir(bin_dir, "ninja");
+    let cmake_bin_dir = cmake_bin_dir(bin_dir)?;
     let bin_dir = powershell_quote_str(&bin_dir.display().to_string());
-    format!(
+    let bun_dir = powershell_quote_str(&bun_dir.display().to_string());
+    let ninja_dir = powershell_quote_str(&ninja_dir.display().to_string());
+    let cmake_bin_dir = powershell_quote_str(&cmake_bin_dir.display().to_string());
+    Ok(format!(
         r#"$SippBin = {bin_dir}
+$SippBun = {bun_dir}
+$SippNinja = {ninja_dir}
+$SippCmakeBin = {cmake_bin_dir}
 $PathParts = @()
 if ($env:Path) {{
   $PathParts = $env:Path -split [System.IO.Path]::PathSeparator
@@ -207,19 +234,55 @@ if ($env:Path) {{
 if ($PathParts -notcontains $SippBin) {{
   $env:Path = "$SippBin$([System.IO.Path]::PathSeparator)$env:Path"
 }}
+if ($PathParts -notcontains $SippBun) {{
+  $env:Path = "$SippBun$([System.IO.Path]::PathSeparator)$env:Path"
+}}
+if ($PathParts -notcontains $SippNinja) {{
+  $env:Path = "$SippNinja$([System.IO.Path]::PathSeparator)$env:Path"
+}}
+if ($PathParts -notcontains $SippCmakeBin) {{
+  $env:Path = "$SippCmakeBin$([System.IO.Path]::PathSeparator)$env:Path"
+}}
 "#
-    )
+    ))
 }
 
-fn cmd_env_script(bin_dir: &Path) -> String {
+fn cmd_env_script(bin_dir: &Path) -> Result<String> {
+    let bun_dir = toolchain_sibling_dir(bin_dir, "bun");
+    let ninja_dir = toolchain_sibling_dir(bin_dir, "ninja");
+    let cmake_bin_dir = cmake_bin_dir(bin_dir)?;
     let bin_dir = bin_dir.display().to_string().replace('%', "%%");
-    format!(
+    let bun_dir = bun_dir.display().to_string().replace('%', "%%");
+    let ninja_dir = ninja_dir.display().to_string().replace('%', "%%");
+    let cmake_bin_dir = cmake_bin_dir.display().to_string().replace('%', "%%");
+    Ok(format!(
         r#"@echo off
 set "SIPP_BIN={bin_dir}"
+set "SIPP_BUN={bun_dir}"
+set "SIPP_NINJA={ninja_dir}"
+set "SIPP_CMAKE_BIN={cmake_bin_dir}"
 echo ;%PATH%; | find /I ";%SIPP_BIN%;" >nul
 if errorlevel 1 set "PATH=%SIPP_BIN%;%PATH%"
+echo ;%PATH%; | find /I ";%SIPP_BUN%;" >nul
+if errorlevel 1 set "PATH=%SIPP_BUN%;%PATH%"
+echo ;%PATH%; | find /I ";%SIPP_NINJA%;" >nul
+if errorlevel 1 set "PATH=%SIPP_NINJA%;%PATH%"
+echo ;%PATH%; | find /I ";%SIPP_CMAKE_BIN%;" >nul
+if errorlevel 1 set "PATH=%SIPP_CMAKE_BIN%;%PATH%"
 "#
-    )
+    ))
+}
+
+fn toolchain_sibling_dir(bin_dir: &Path, name: &str) -> std::path::PathBuf {
+    bin_dir
+        .parent()
+        .map(|build_dir| build_dir.join("toolchain").join(name))
+        .unwrap_or_else(|| bin_dir.join("..").join("toolchain").join(name))
+}
+
+fn cmake_bin_dir(bin_dir: &Path) -> Result<std::path::PathBuf> {
+    let cmake_dir = toolchain_sibling_dir(bin_dir, "cmake");
+    cmake::cmake_bin_dir(&cmake_dir)
 }
 
 fn shell_quote(path: &Path) -> String {
