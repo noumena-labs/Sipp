@@ -389,10 +389,10 @@ jobs:
         run: |
           set -euo pipefail
           for artifact in \
-            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js \
-            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm \
             .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js \
-            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm; do
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread-cpu-nojspi.js \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread-cpu-nojspi.wasm; do
             if [ ! -f "$artifact" ]; then
               echo "::error::Missing staged web WASM artifact: $artifact"
               exit 1
@@ -770,10 +770,10 @@ jobs:
           }
 
           require_file .build/artifacts/npm/sipp/package.json
-          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js
-          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm
           require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js
           require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread-cpu-nojspi.js
+          require_file .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread-cpu-nojspi.wasm
           require_file .build/artifacts/npm/sipp-server/package.json
           require_glob "node platform packages" .build/artifacts/npm/sipp-server-*/package.json
           require_glob "Python sipppy wheels" .build/artifacts/python/sipppy-*.whl
