@@ -10,8 +10,12 @@ import {
 } from '../../src/engine/runtime-assets.js';
 import {
   withNavigatorUserAgent,
+  withoutWasmJspiSupport,
   withWasmPthreadSupport,
 } from '../support/browser-env.js';
+
+const SAFARI_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15';
 
 interface LocationStub {
   href: string;
@@ -150,6 +154,37 @@ test('resolveRuntimeUrls auto-selects CPU non-JSPI on Firefox', () => {
 
 test('resolveRuntimeBackendOverride forces CPU for bundled Firefox pthread runtime', () => {
   withNavigatorUserAgent('Mozilla/5.0 Firefox/152.0.2', () => {
+    withWasmPthreadSupport(() => {
+      assert.equal(resolveRuntimeBackendOverride({ wasmThreading: 'pthread' }), 'cpu');
+    });
+  });
+});
+
+test('resolveRuntimeUrls auto-selects CPU non-JSPI when JSPI is unavailable (e.g. Safari)', () => {
+  withNavigatorUserAgent(SAFARI_USER_AGENT, () => {
+    withoutWasmJspiSupport(() => {
+      withWasmPthreadSupport(() => {
+        const resolved = resolveRuntimeUrls({});
+        assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
+        assert.match(resolved.wasmUrl, /sipp-wasm-pthread-cpu-nojspi\.wasm$/);
+        assert.equal(resolved.threading, 'pthread');
+      });
+    });
+  });
+});
+
+test('resolveRuntimeUrls keeps the WebGPU+JSPI artifact on Safari once JSPI is exposed', () => {
+  withNavigatorUserAgent(SAFARI_USER_AGENT, () => {
+    withWasmPthreadSupport(() => {
+      const resolved = resolveRuntimeUrls({});
+      assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
+      assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
+    });
+  });
+});
+
+test('resolveRuntimeBackendOverride forces CPU when JSPI is unavailable', () => {
+  withoutWasmJspiSupport(() => {
     withWasmPthreadSupport(() => {
       assert.equal(resolveRuntimeBackendOverride({ wasmThreading: 'pthread' }), 'cpu');
     });
