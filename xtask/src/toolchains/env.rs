@@ -3,7 +3,6 @@
 use crate::cli::Backend;
 use crate::output;
 use crate::toolchains::cuda::{cuda_architectures, setup_cuda};
-use crate::toolchains::ninja::setup_ninja;
 use crate::toolchains::vulkan::{setup_vulkan, VULKAN_VERSION};
 use crate::utils::BuildContext;
 use anyhow::Result;
@@ -29,10 +28,10 @@ pub(crate) fn apply_toolchains<'a>(
     mut command: Cmd<'a>,
     backend: Option<&Backend>,
 ) -> Result<Cmd<'a>> {
-    let ninja_dir = setup_ninja(sh, ctx)?;
     let mut path_additions = Vec::new();
 
-    if let Some(ninja_dir) = &ninja_dir {
+    let ninja_dir = ctx.ninja_toolchain_dir();
+    if ctx.ninja_exe().exists() {
         path_additions.push(ninja_dir.display().to_string());
         command = command.env("CMAKE_GENERATOR", "Ninja");
     }
@@ -44,6 +43,16 @@ pub(crate) fn apply_toolchains<'a>(
         .join("uv");
     if uv_dir.exists() {
         path_additions.push(uv_dir.display().to_string());
+    }
+
+    let bun_dir = ctx.bun_toolchain_dir();
+    if bun_dir.exists() {
+        path_additions.push(bun_dir.display().to_string());
+    }
+
+    let cmake_bin_dir = ctx.cmake_bin_dir()?;
+    if cmake_bin_dir.exists() {
+        path_additions.push(cmake_bin_dir.display().to_string());
     }
 
     if let Some(deployment_target) = macos_deployment_target() {

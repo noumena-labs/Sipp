@@ -589,6 +589,24 @@ fn toolchain_doctor_and_setup_commands_parse() {
     };
     assert_eq!(component, ToolchainComponent::Vulkan);
 
+    let cli = Cli::parse_from(["xtask", "toolchain", "install", "bun"]);
+    let Commands::Toolchain { command } = cli.command else {
+        panic!("expected toolchain command");
+    };
+    let ToolchainCommands::Install { component } = command else {
+        panic!("expected toolchain install command");
+    };
+    assert_eq!(component, ToolchainComponent::Bun);
+
+    let cli = Cli::parse_from(["xtask", "toolchain", "install", "cmake"]);
+    let Commands::Toolchain { command } = cli.command else {
+        panic!("expected toolchain command");
+    };
+    let ToolchainCommands::Install { component } = command else {
+        panic!("expected toolchain install command");
+    };
+    assert_eq!(component, ToolchainComponent::Cmake);
+
     let cli = Cli::parse_from(["xtask", "doctor", "--target", "python", "--backend", "all"]);
     let Commands::Doctor(args) = cli.command else {
         panic!("expected doctor command");

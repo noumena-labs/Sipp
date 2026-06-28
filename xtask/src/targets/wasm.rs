@@ -3,8 +3,11 @@
 use crate::cli::{WasmRuntime, WasmThreading};
 use crate::javascript;
 use crate::output;
+use crate::toolchains::bun::setup_bun;
+use crate::toolchains::cmake::setup_cmake;
 use crate::toolchains::emsdk::{run_with_emsdk, setup_emsdk};
 use crate::toolchains::ninja::setup_ninja;
+use crate::toolchains::source::ensure_llama_cpp_submodule;
 use crate::utils::BuildContext;
 use anyhow::Result;
 use std::path::Path;
@@ -24,7 +27,9 @@ pub fn build(
     output::path("Workspace", root);
     output::path("WASM artifact directory", &ctx.npm_browser_wasm_dir());
 
+    ensure_llama_cpp_submodule(sh, ctx)?;
     let emsdk_dir = setup_emsdk(sh, ctx)?;
+    let cmake_bin_dir = setup_cmake(sh, ctx)?;
     let ninja_dir = setup_ninja(sh, ctx)?;
 
     let npm_dist_wasm = ctx.npm_browser_wasm_dir();
@@ -44,6 +49,7 @@ pub fn build(
                 ctx,
                 root,
                 &emsdk_dir,
+                &cmake_bin_dir,
                 ninja_dir.as_deref(),
                 false,
                 runtime_flavor,
@@ -59,6 +65,7 @@ pub fn build(
                 ctx,
                 root,
                 &emsdk_dir,
+                &cmake_bin_dir,
                 ninja_dir.as_deref(),
                 true,
                 runtime_flavor,
@@ -69,6 +76,7 @@ pub fn build(
 
     output::phase("TypeScript browser package");
     let npm_workspace = ctx.browser_package_dir();
+    let bun_exe = setup_bun(sh, ctx)?;
     output::path("Browser package workspace", &npm_workspace);
 
     javascript::install_root_workspace_dependencies(
@@ -81,9 +89,12 @@ pub fn build(
     let _npm_dir = sh.push_dir(&npm_workspace);
     output::run_build_command(
         "Compiling TypeScript wrappers",
-        cmd!(sh, "bun run build:ts"),
+        cmd!(sh, "{bun_exe} run build:ts"),
     )?;
-    output::run_build_command("Staging browser package", cmd!(sh, "bun run build:stage"))?;
+    output::run_build_command(
+        "Staging browser package",
+        cmd!(sh, "{bun_exe} run build:stage"),
+    )?;
 
     output::success(format!(
         "WASM pipeline complete in {}",
@@ -134,6 +145,7 @@ fn build_target(
     ctx: &BuildContext,
     root: &Path,
     emsdk_dir: &Path,
+    cmake_bin_dir: &Path,
     ninja_dir: Option<&Path>,
     use_pthreads: bool,
     runtime_flavor: WasmRuntimeFlavor,
@@ -179,6 +191,7 @@ fn build_target(
     run_with_emsdk(
         sh,
         emsdk_dir,
+        Some(cmake_bin_dir),
         ninja_dir,
         &format!("Compiling Rust staticlib for {js_file}"),
         &cargo_cmd,
@@ -220,6 +233,7 @@ fn build_target(
     run_with_emsdk(
         sh,
         emsdk_dir,
+        Some(cmake_bin_dir),
         ninja_dir,
         &format!("Configuring CMake for {artifact_name}"),
         &emcmake_cmd,
@@ -229,6 +243,7 @@ fn build_target(
     run_with_emsdk(
         sh,
         emsdk_dir,
+        Some(cmake_bin_dir),
         ninja_dir,
         &format!("Building browser runtime for {artifact_name}"),
         build_cmd,

@@ -13,6 +13,7 @@ use crate::javascript;
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::targets;
+use crate::toolchains::bun::setup_bun;
 use crate::toolchains::env::apply_toolchains;
 use crate::toolchains::python::{apply_uv_env, ensure_python, setup_uv, PYTHON_BUILD_VERSION};
 use crate::utils::BuildContext;
@@ -181,10 +182,11 @@ fn build_demo_only(sh: &Shell, ctx: &BuildContext, demo: DemoName) -> Result<()>
     output::path("Demo workspace", &demo_dir);
     output::path("Artifact directory", &ctx.demo_artifacts_dir(demo.slug()));
 
+    let bun_exe = setup_bun(sh, ctx)?;
     let _dir = sh.push_dir(&demo_dir);
     output::run_build_command(
         format!("Building {} demo", demo.slug()),
-        cmd!(sh, "bun run build"),
+        cmd!(sh, "{bun_exe} run build"),
     )
     .with_context(|| format!("failed to build {} demo", demo.slug()))
 }
@@ -206,9 +208,10 @@ fn serve_demo(sh: &Shell, ctx: &BuildContext, args: &RunDemoServeArgs) -> Result
 
     let demo_dir = ctx.demo_dir(args.demo.slug());
     let _dir = sh.push_dir(&demo_dir);
+    let bun_exe = setup_bun(sh, ctx)?;
     let mut serve_cmd = match args.mode {
-        DemoServeMode::Dev => cmd!(sh, "bunx --bun vite"),
-        DemoServeMode::Preview => cmd!(sh, "bunx --bun vite preview"),
+        DemoServeMode::Dev => cmd!(sh, "{bun_exe} x --bun vite"),
+        DemoServeMode::Preview => cmd!(sh, "{bun_exe} x --bun vite preview"),
     };
 
     if let Some(host) = &args.host {
@@ -242,10 +245,11 @@ fn build_tool_only(sh: &Shell, ctx: &BuildContext, tool: ToolName) -> Result<()>
     output::path("Tool workspace", &tool_dir);
     output::path("Artifact directory", &ctx.tool_artifacts_dir(tool.slug()));
 
+    let bun_exe = setup_bun(sh, ctx)?;
     let _dir = sh.push_dir(&tool_dir);
     output::run_build_command(
         format!("Building {} tool", tool.slug()),
-        cmd!(sh, "bun run build"),
+        cmd!(sh, "{bun_exe} run build"),
     )
     .with_context(|| format!("failed to build {} tool", tool.slug()))
 }
@@ -267,6 +271,7 @@ fn serve_tool(sh: &Shell, ctx: &BuildContext, args: &RunToolServeArgs) -> Result
 
     serve_vite_workspace(
         sh,
+        ctx,
         &tool_dir(ctx, args.tool),
         args.mode,
         args.host.as_deref(),
@@ -310,6 +315,7 @@ fn serve_browser_example(
 
     serve_vite_workspace(
         sh,
+        ctx,
         &example_dir(ctx, example),
         args.mode,
         args.host.as_deref(),
@@ -535,6 +541,7 @@ fn run_web_gateway_example(
 
     serve_vite_workspace(
         sh,
+        ctx,
         &example_dir(ctx, example),
         args.mode,
         Some(&args.host),
@@ -556,10 +563,11 @@ fn build_example_only(sh: &Shell, ctx: &BuildContext, example: ExampleName) -> R
         &ctx.example_artifacts_dir(example.dir_name()),
     );
 
+    let bun_exe = setup_bun(sh, ctx)?;
     let _dir = sh.push_dir(&example_dir);
     output::run_build_command(
         format!("Building {} example", example.label()),
-        cmd!(sh, "bun run build"),
+        cmd!(sh, "{bun_exe} run build"),
     )
     .with_context(|| format!("failed to build {} example", example.label()))
 }
@@ -1011,6 +1019,7 @@ fn format_temperature(temperature: f32) -> String {
 
 fn serve_vite_workspace(
     sh: &Shell,
+    ctx: &BuildContext,
     workspace: &Path,
     mode: DemoServeMode,
     host: Option<&str>,
@@ -1019,9 +1028,10 @@ fn serve_vite_workspace(
     error_context: String,
 ) -> Result<()> {
     let _dir = sh.push_dir(workspace);
+    let bun_exe = setup_bun(sh, ctx)?;
     let mut serve_cmd = match mode {
-        DemoServeMode::Dev => cmd!(sh, "bunx --bun vite"),
-        DemoServeMode::Preview => cmd!(sh, "bunx --bun vite preview"),
+        DemoServeMode::Dev => cmd!(sh, "{bun_exe} x --bun vite"),
+        DemoServeMode::Preview => cmd!(sh, "{bun_exe} x --bun vite preview"),
     };
 
     if let Some(host) = host {

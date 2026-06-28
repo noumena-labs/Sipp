@@ -4,6 +4,7 @@ use crate::output;
 use crate::utils::BuildContext;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
+use std::process::Command;
 use std::thread;
 use std::time::Duration;
 use xshell::{cmd, Cmd, Shell};
@@ -21,6 +22,7 @@ mod emsdk_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 const EMSDK_VERSION: &str = "4.0.23";
+const RUST_EMSCRIPTEN_TARGET: &str = "wasm32-unknown-emscripten";
 
 /// Ensures the configured Emscripten SDK is cloned, installed, and active.
 pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<std::path::PathBuf> {
@@ -61,6 +63,8 @@ pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<std::path::P
         )?;
     }
 
+    ensure_rust_emscripten_target(sh)?;
+
     Ok(emsdk_dir)
 }
 
@@ -68,6 +72,7 @@ pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<std::path::P
 pub(crate) fn run_with_emsdk(
     sh: &Shell,
     emsdk_dir: &Path,
+    cmake_bin_dir: Option<&Path>,
     ninja_dir: Option<&Path>,
     label: &str,
     command: &str,
@@ -76,11 +81,13 @@ pub(crate) fn run_with_emsdk(
         let bat = emsdk_dir.join("emsdk_env.bat");
         let temp_script = sh.current_dir().join(".run_emsdk_wrapper.bat");
 
-        let path_injection = if let Some(ninja_dir) = ninja_dir {
-            format!("set PATH={};%PATH%\r\n", ninja_dir.display())
-        } else {
-            String::new()
-        };
+        let mut path_injection = String::new();
+        if let Some(cmake_bin_dir) = cmake_bin_dir {
+            path_injection.push_str(&format!("set PATH={};%PATH%\r\n", cmake_bin_dir.display()));
+        }
+        if let Some(ninja_dir) = ninja_dir {
+            path_injection.push_str(&format!("set PATH={};%PATH%\r\n", ninja_dir.display()));
+        }
 
         let emcmake = emsdk_dir
             .join("upstream")
@@ -121,9 +128,24 @@ pub(crate) fn run_with_emsdk(
             .join("emcmake");
         let emmake = emsdk_dir.join("upstream").join("emscripten").join("emmake");
 
+        let mut path_exports = String::new();
+        if let Some(cmake_bin_dir) = cmake_bin_dir {
+            path_exports.push_str(&format!(
+                "export PATH=\"{}:$PATH\" && ",
+                cmake_bin_dir.display()
+            ));
+        }
+        if let Some(ninja_dir) = ninja_dir {
+            path_exports.push_str(&format!(
+                "export PATH=\"{}:$PATH\" && ",
+                ninja_dir.display()
+            ));
+        }
+
         let full_cmd = format!(
-            "source \"{}\" && export EMCMAKE=\"{}\" && export EMMAKE=\"{}\" && {}",
+            "source \"{}\" && {}export EMCMAKE=\"{}\" && export EMMAKE=\"{}\" && {}",
             script,
+            path_exports,
             emcmake.display(),
             emmake.display(),
             command
@@ -220,6 +242,38 @@ fn expected_emsdk_tool_id(emsdk_dir: &Path) -> Result<String> {
         .with_context(|| format!("emsdk release {EMSDK_VERSION} is not listed"))?;
 
     Ok(format!("releases-{release_hash}-64bit"))
+}
+
+fn ensure_rust_emscripten_target(sh: &Shell) -> Result<()> {
+    if rust_target_is_installed(RUST_EMSCRIPTEN_TARGET)? {
+        output::success(format!("Using Rust target {RUST_EMSCRIPTEN_TARGET}"));
+        return Ok(());
+    }
+
+    output::run_command(
+        format!("Installing Rust target {RUST_EMSCRIPTEN_TARGET}"),
+        cmd!(sh, "rustup target add {RUST_EMSCRIPTEN_TARGET}"),
+    )
+}
+
+fn rust_target_is_installed(target: &str) -> Result<bool> {
+    let output = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .with_context(|| {
+            format!("failed to check installed Rust targets with `rustup`; install {target}")
+        })?;
+
+    if !output.status.success() {
+        bail!("failed to check installed Rust targets with `rustup`; install {target}");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(rust_target_list_contains(&stdout, target))
+}
+
+fn rust_target_list_contains(installed_targets: &str, target: &str) -> bool {
+    installed_targets.lines().any(|line| line.trim() == target)
 }
 
 fn patch_emsdk_windows(emsdk_dir: &Path) -> Result<()> {

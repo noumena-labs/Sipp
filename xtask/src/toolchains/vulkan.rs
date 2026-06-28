@@ -64,7 +64,7 @@ pub(crate) fn setup_vulkan(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
         } else if cfg!(target_os = "macos") {
             output::run_command(
                 "Extracting Vulkan SDK",
-                cmd!(sh, "unzip -q {archive_path} -d {vulkan_dir}"),
+                cmd!(sh, "unzip -oq {archive_path} -d {vulkan_dir}"),
             )?;
         } else {
             output::run_command(

@@ -8,7 +8,7 @@ use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::terminal::splash;
 use crate::toolchain;
-use crate::toolchains::{emsdk, ninja, python, vulkan};
+use crate::toolchains::{bun, cmake, emsdk, ninja, python, source, vulkan};
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use console::Term;
@@ -212,6 +212,7 @@ fn run_downloads(
     }
 
     if downloads.contains(&SetupDownload::ManagedToolchains) {
+        source::ensure_llama_cpp_submodule(sh, ctx)?;
         install_managed_toolchains(sh, ctx, profile)?;
     }
     if downloads.contains(&SetupDownload::JavaScriptDependencies) {
@@ -228,14 +229,20 @@ fn install_managed_toolchains(sh: &Shell, ctx: &BuildContext, profile: SetupProf
     output::phase("Managed toolchains");
     match profile {
         SetupProfile::Browser => {
+            bun::setup_bun(sh, ctx)?;
+            cmake::setup_cmake(sh, ctx)?;
             ninja::setup_ninja(sh, ctx)?;
             emsdk::setup_emsdk(sh, ctx)?;
         }
         SetupProfile::Bindings => {
+            bun::setup_bun(sh, ctx)?;
+            cmake::setup_cmake(sh, ctx)?;
             python::setup_uv(sh, ctx)?;
             vulkan::setup_vulkan(sh, ctx)?;
         }
         SetupProfile::Full => {
+            bun::setup_bun(sh, ctx)?;
+            cmake::setup_cmake(sh, ctx)?;
             python::setup_uv(sh, ctx)?;
             ninja::setup_ninja(sh, ctx)?;
             emsdk::setup_emsdk(sh, ctx)?;

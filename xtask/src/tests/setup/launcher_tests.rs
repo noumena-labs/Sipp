@@ -31,18 +31,33 @@ fn powershell_and_cmd_quotes_escape_shell_specific_characters() {
 
 #[test]
 fn env_scripts_prepend_launcher_directory_once() {
-    let bin = Path::new("D:\\Sipp\\.build\\bin");
-    let unix = unix_env_script(bin);
+    let bin = Path::new("/tmp/Sipp/.build/bin");
+    let unix = unix_env_script(bin).unwrap();
     assert!(unix.contains("SIPP_BIN="));
+    assert!(unix.contains("SIPP_BUN="));
+    assert!(unix.contains("SIPP_NINJA="));
+    assert!(unix.contains("SIPP_CMAKE_BIN="));
+    assert!(unix.contains(".build/toolchain/bun"));
+    assert!(unix.contains(".build/toolchain/ninja"));
+    assert!(unix.contains(".build/toolchain/cmake"));
     assert!(unix.contains("export PATH="));
     assert!(!unix.contains("\r\n"));
 
-    let powershell = powershell_env_script(bin);
+    let powershell = powershell_env_script(bin).unwrap();
     assert!(powershell.contains("$SippBin"));
+    assert!(powershell.contains("$SippBun"));
+    assert!(powershell.contains("$SippNinja"));
+    assert!(powershell.contains("$SippCmakeBin"));
+    assert!(powershell.contains(".build/toolchain/bun"));
+    assert!(powershell.contains(".build/toolchain/ninja"));
+    assert!(powershell.contains(".build/toolchain/cmake"));
     assert!(powershell.contains("[System.IO.Path]::PathSeparator"));
 
-    let cmd = cmd_env_script(Path::new("C:\\100%\\bin"));
+    let cmd = cmd_env_script(Path::new("C:\\100%\\bin")).unwrap();
     assert!(cmd.contains("C:\\100%%\\bin"));
+    assert!(cmd.contains("SIPP_BUN"));
+    assert!(cmd.contains("SIPP_NINJA"));
+    assert!(cmd.contains("SIPP_CMAKE_BIN"));
     assert!(cmd.contains("PATH=%SIPP_BIN%;%PATH%"));
 }
 

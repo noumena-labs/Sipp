@@ -1,6 +1,7 @@
 //! JavaScript package-manager helpers for xtask workflows.
 
 use crate::output;
+use crate::toolchains::bun::setup_bun;
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -25,9 +26,10 @@ pub(crate) fn install_root_workspace_dependencies(
     label: impl Into<String>,
     package_dirs: &[PathBuf],
 ) -> Result<()> {
+    let bun_exe = setup_bun(sh, ctx)?;
     let filters = root_workspace_package_filters(package_dirs)?;
     let _dir = sh.push_dir(ctx.workspace_root());
-    let mut install_cmd = cmd!(sh, "bun install --frozen-lockfile");
+    let mut install_cmd = cmd!(sh, "{bun_exe} install --frozen-lockfile");
     for filter in &filters {
         install_cmd = install_cmd.arg("--filter").arg(filter);
     }
@@ -35,10 +37,11 @@ pub(crate) fn install_root_workspace_dependencies(
 }
 
 pub(crate) fn install_node_binding_dependencies(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+    let bun_exe = setup_bun(sh, ctx)?;
     let _dir = sh.push_dir(ctx.bindings_node_dir());
     output::run_build_command(
         "Installing Node binding JavaScript dependencies",
-        cmd!(sh, "bun install --frozen-lockfile"),
+        cmd!(sh, "{bun_exe} install --frozen-lockfile"),
     )
 }
 
