@@ -298,10 +298,10 @@ jobs:
         run: |
           set -euo pipefail
           for artifact in \
-            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.js \
-            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm.wasm \
             .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.js \
-            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm; do
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread.wasm \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread-cpu-nojspi.js \
+            .build/artifacts/npm/sipp/dist/wasm/sipp-wasm-pthread-cpu-nojspi.wasm; do
             if [ ! -f "$artifact" ]; then
               echo "::error::Missing staged web WASM artifact: $artifact"
               exit 1
