@@ -21,6 +21,19 @@ export function withNavigatorUserAgent<T>(userAgent: string, callback: () => T):
   }
 }
 
+export function withoutWasmJspiSupport<T>(callback: () => T): T {
+  const target = WebAssembly as object;
+  const descriptor = Object.getOwnPropertyDescriptor(target, 'Suspending');
+  Reflect.deleteProperty(target, 'Suspending');
+  try {
+    return callback();
+  } finally {
+    if (descriptor != null) {
+      Object.defineProperty(target, 'Suspending', descriptor);
+    }
+  }
+}
+
 export function withWasmPthreadSupport<T>(callback: () => T): T {
   const crossOriginIsolatedDescriptor = Object.getOwnPropertyDescriptor(
     globalThis,

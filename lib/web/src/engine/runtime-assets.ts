@@ -24,7 +24,7 @@ const DEFAULT_BUNDLED_RUNTIME: BundledRuntimeAsset = {
   artifactName: 'sipp-wasm-pthread',
   backendOverride: null,
 };
-const FIREFOX_BUNDLED_RUNTIME: BundledRuntimeAsset = {
+const CPU_NOJSPI_BUNDLED_RUNTIME: BundledRuntimeAsset = {
   artifactName: 'sipp-wasm-pthread-cpu-nojspi',
   backendOverride: 'cpu',
 };
@@ -167,7 +167,14 @@ function bundledRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls 
 }
 
 function selectBundledRuntime(): BundledRuntimeAsset {
-  return isFirefoxLikeRuntime() ? FIREFOX_BUNDLED_RUNTIME : DEFAULT_BUNDLED_RUNTIME;
+  return isFirefoxLikeRuntime() || !supportsWasmJspi() ? CPU_NOJSPI_BUNDLED_RUNTIME : DEFAULT_BUNDLED_RUNTIME;
+}
+
+function supportsWasmJspi(): boolean {
+  return (
+    typeof WebAssembly !== 'undefined' &&
+    typeof (WebAssembly as { Suspending?: unknown }).Suspending === 'function'
+  );
 }
 
 function isFirefoxLikeRuntime(): boolean {

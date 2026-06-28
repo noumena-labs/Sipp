@@ -58,11 +58,12 @@ The table below shows the first browser version where each feature is available 
 | Browser | Support | WASM st | WASM pthread¹ | WebGPU | WebGPU + f16² | OPFS³ | Workers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Chrome (Windows) | ✅ Tested 149.0.7827.200 | 57 | 92⁴ | 113 | 113 | 86 | 4 |
+| Chrome (macOS) | ✅ Tested 149.0.7827.199 | 57 | 92⁴ | 113 | 113 | 86 | 4 |
 | Edge (Windows) | ✅ Tested 149.0.4022.80 | 79⁵ | 92⁴ | 113 | 113 | 86 | 79⁵ |
 | Firefox (Windows) | 🟡 CPU tested 152.0.2 | 52 | 79⁴ | 141 | 141 | 111 | 3.5 |
-| Firefox (macOS) | ❌ Untested | 52 | 79⁴ | 145⁶ | 145⁶ | 111 | 3.5 |
+| Firefox (macOS) | 🟡 CPU tested 152.0.3 | 52 | 79⁴ | 145⁶ | 145⁶ | 111 | 3.5 |
 | Firefox (Linux) | ❌ Untested | 52 | 79⁴ | ⚠ Nightly | ⚠ Nightly | 111 | 3.5 |
-| Safari (macOS) | ❌ Untested | 11 | 15.2⁴ | 26 | 26 | 16.4 | 4 |
+| Safari (macOS) | ✅ Tested 26.4 (CPU) · STP (WebGPU) | 11 | 15.2⁴ | 26 | 26 | 16.4 | 4 |
 | Opera (Win, Mac, Linux) | ❌ Untested | 44 | 78⁴ | 99 | 99 | 72 | 11.5 |
 | ChromeOS | ❌ Untested | 57 | 92⁴ | 113 | 113 | 86 | 4 |
 | Other Chromium-based⁷ | ❌ Untested | 57+ | 92⁴ | 113 | 113 | 86+ | 4+ |
@@ -114,7 +115,11 @@ Sipp ships pthread WASM runtime artifacts by default:
 > ⁷ Defaults to `min(4, navigator.hardwareConcurrency)`. Override with `runtime.context.n_threads` in model load options.
 
 The client auto-selects the CPU non-JSPI artifact for Firefox-like runtimes and
-the WebGPU+JSPI artifact elsewhere. The bundled runtime requires pthread
+for any runtime that does not expose JSPI (`WebAssembly.Suspending`), and the
+WebGPU+JSPI artifact elsewhere. Current Safari lacks JSPI, so it loads the CPU
+non-JSPI artifact; a Safari build that ships JSPI (Safari Technology Preview /
+27 beta, or 26.4+ with the experimental flag enabled) is detected at runtime and
+upgraded to the WebGPU+JSPI artifact. The bundled runtime requires pthread
 availability:
 
 ```ts
@@ -226,6 +231,10 @@ browser runtime uses the pthread CPU no-JSPI artifact.
 
 The Firefox browser path is pthread CPU no-JSPI. It still requires
 `SharedArrayBuffer`, workers, and COOP/COEP headers.
+
+#### Safari Runtime Findings
+
+Most shipping Safari versions do not expose JSPI. The client detects this and selects the pthread CPU no-JSPI artifact instead, so Safari runs on the CPU backend rather than failing to boot. JSPI is being introduced experimentally (Safari 26.4 behind a flag, Safari Technology Preview / 27 beta) Safari still requires `SharedArrayBuffer`, workers, and COOP/COEP headers.
 
 ---
 
