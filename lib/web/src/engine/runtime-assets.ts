@@ -20,6 +20,10 @@ interface BundledRuntimeAsset {
   readonly backendOverride: RuntimeBackendOverride | null;
 }
 
+interface RuntimeUrlResolutionOptions {
+  readonly bundledRuntimeUrls?: () => RuntimeUrls;
+}
+
 const DEFAULT_BUNDLED_RUNTIME: BundledRuntimeAsset = {
   artifactName: 'sipp-wasm-pthread',
   backendOverride: null,
@@ -220,7 +224,8 @@ export function resolveRuntimeUrls(
     | 'pthreadWasmUrl'
     | 'trustedOrigins'
     | 'wasmThreading'
-  >
+  >,
+  options: RuntimeUrlResolutionOptions = {}
 ): RuntimeUrls {
   const configuredModuleUrl = normalizeOptionalString(config.moduleUrl);
   const configuredWasmUrl = normalizeOptionalString(config.wasmUrl);
@@ -257,10 +262,10 @@ export function resolveRuntimeUrls(
       wasmUrl: parseConfiguredUrl(configuredPthreadWasmUrl!, 'pthreadWasmUrl'),
     };
   } else {
-    const defaults = bundledRuntimeUrls();
+    const defaults = (options.bundledRuntimeUrls ?? bundledRuntimeUrls)();
     resolved = {
-      moduleUrl: new URL(defaults.moduleUrl),
-      wasmUrl: new URL(defaults.wasmUrl),
+      moduleUrl: parseConfiguredUrl(defaults.moduleUrl, 'moduleUrl'),
+      wasmUrl: parseConfiguredUrl(defaults.wasmUrl, 'wasmUrl'),
     };
   }
 
