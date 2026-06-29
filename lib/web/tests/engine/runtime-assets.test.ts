@@ -56,6 +56,29 @@ test('resolveRuntimeUrls uses bundled runtime assets when no overrides are provi
   });
 });
 
+test('resolveRuntimeUrls accepts root-relative bundled runtime assets', () => {
+  withWasmPthreadSupport(() => {
+    const resolved = withLocation('https://app.test/_next/static/chunks/model-service-entry.js', () =>
+      resolveRuntimeUrls(
+        {},
+        {
+          bundledRuntimeUrls: () => ({
+            moduleUrl: '/_next/static/media/sipp-wasm-pthread.41xk03exto5xs.js',
+            wasmUrl: '/_next/static/media/sipp-wasm-pthread.0vprqr1jq_rfe.wasm',
+            threading: 'pthread',
+          }),
+        }
+      )
+    );
+
+    assert.deepEqual(resolved, {
+      moduleUrl: 'https://app.test/_next/static/media/sipp-wasm-pthread.41xk03exto5xs.js',
+      wasmUrl: 'https://app.test/_next/static/media/sipp-wasm-pthread.0vprqr1jq_rfe.wasm',
+      threading: 'pthread',
+    });
+  });
+});
+
 test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets', () => {
   withWasmPthreadSupport(() => {
     assert.deepEqual(
