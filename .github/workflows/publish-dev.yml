@@ -61,25 +61,72 @@ jobs:
         id: dev
         shell: bash
         env:
-          BASE_VERSION: ${{ steps.resolve.outputs.version }}
+          SOURCE_BASE_VERSION: ${{ steps.resolve.outputs.version }}
           PACKAGE: ${{ inputs.package }}
         run: |
           set -euo pipefail
-          dev_versions="$(node --input-type=module <<'NODE'
-          const base = process.env.BASE_VERSION;
+          dev_tag_pattern="sipp-dev-v*"
+          if [ "$PACKAGE" != "all" ]; then
+            dev_tag_pattern="sipp-dev-$PACKAGE-v*"
+          fi
+          remote_release_tags="$(
+            git ls-remote --tags --refs origin 'sipp-v*' |
+              awk -F/ '{ print $NF }' ||
+              true
+          )"
+          remote_dev_tags="$(
+            git ls-remote --tags --refs origin "$dev_tag_pattern" |
+              awk -F/ '{ print $NF }' ||
+              true
+          )"
+          dev_versions="$(
+            REMOTE_RELEASE_TAGS="$remote_release_tags" REMOTE_DEV_TAGS="$remote_dev_tags" node --input-type=module <<'NODE'
+          const sourceBase = process.env.SOURCE_BASE_VERSION;
           const packageName = process.env.PACKAGE;
-          const match = base.match(/^(\d+)\.(\d+)\.(\d+)$/);
-          if (!match) {
+          const releaseTags = process.env.REMOTE_RELEASE_TAGS
+            .split(/\r?\n/)
+            .map((tag) => tag.trim())
+            .filter(Boolean)
+            .map((tag) => /^sipp-v(\d+)\.(\d+)\.(\d+)$/.exec(tag))
+            .filter((match) => match != null)
+            .map((match) => ({
+              tag: match[0],
+              major: Number(match[1]),
+              minor: Number(match[2]),
+              patch: Number(match[3]),
+            }))
+            .sort((left, right) =>
+              left.major - right.major ||
+              left.minor - right.minor ||
+              left.patch - right.patch
+            );
+          const base =
+            releaseTags.length > 0
+              ? `${releaseTags.at(-1).major}.${releaseTags.at(-1).minor}.${releaseTags.at(-1).patch}`
+              : sourceBase;
+          if (!/^\d+\.\d+\.\d+$/.test(base)) {
             throw new Error(`Dev builds must start from a stable x.y.z version, got ${base}`);
           }
-          const dev = Number(process.env.GITHUB_RUN_NUMBER) * 100 + Number(process.env.GITHUB_RUN_ATTEMPT);
-          // Keep dev builds on the resolved base version. npm/Cargo use a
-          // SemVer prerelease while Python uses the matching PEP 440 form.
-          const npmVersion = `${match[1]}.${match[2]}.${match[3]}-dev${dev}`;
-          const pythonVersion = `${match[1]}.${match[2]}.${match[3]}.dev${dev}`;
           const tagScope = packageName === 'all' ? '' : `-${packageName}`;
+          const devPrefix = `sipp-dev${tagScope}-v${base}-dev`;
+          const existingDevNumbers = process.env.REMOTE_DEV_TAGS
+            .split(/\r?\n/)
+            .map((tag) => tag.trim())
+            .filter((tag) => tag.startsWith(devPrefix))
+            .map((tag) => Number(tag.slice(devPrefix.length)))
+            .filter((value) => Number.isInteger(value) && value > 0);
+          const dev =
+            existingDevNumbers.length > 0 ? Math.max(...existingDevNumbers) + 1 : 1;
+
+          // npm/Cargo use a SemVer prerelease while Python uses the matching
+          // PEP 440 form.
+          const npmVersion = `${base}-dev${dev}`;
+          const pythonVersion = `${base}.dev${dev}`;
           const tag = `sipp-dev${tagScope}-v${npmVersion}`;
-          console.error(`Base version ${base} -> npm/cargo ${npmVersion}, python ${pythonVersion}, tag ${tag}`);
+          const latestReleaseTag = releaseTags.at(-1)?.tag ?? 'none';
+          console.error(
+            `Latest stable tag ${latestReleaseTag}; base ${base}; next dev ${dev}; tag ${tag}`
+          );
           console.log(`${npmVersion}|${pythonVersion}|${tag}`);
           NODE
           )"
@@ -88,24 +135,17 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             level="warning"
           fi
-          if git ls-remote --exit-code --tags origin "refs/tags/$DEV_TAG" > /dev/null 2>&1; then
+          if printf '%s\n' "$remote_dev_tags" | grep -Fx "$DEV_TAG" > /dev/null; then
             echo "::${level}::Dev tag $DEV_TAG already exists."
             if [ "${{ inputs.dry_run }}" != "true" ]; then
               exit 1
             fi
           fi
-          latest_tag_pattern="sipp-dev-v*"
-          if [ "${{ inputs.package }}" != "all" ]; then
-            latest_tag_pattern="sipp-dev-${{ inputs.package }}-v*"
-          fi
-          latest_dev_tag="$(
-            git ls-remote --tags --refs origin "$latest_tag_pattern" |
-              awk -F/ '{ print $NF }' |
-              sort -V |
-              tail -1 ||
-              true
-          )"
-          echo "Latest remote Sipp dev tag for ${{ inputs.package }}: ${latest_dev_tag:-none}"
+          latest_release_tag="$(printf '%s\n' "$remote_release_tags" | grep -E '^sipp-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+          latest_dev_tag="$(printf '%s\n' "$remote_dev_tags" | sort -V | tail -1 || true)"
+          echo "Source manifest version: $SOURCE_BASE_VERSION"
+          echo "Latest remote Sipp release tag: ${latest_release_tag:-none}"
+          echo "Latest remote Sipp dev tag for $PACKAGE: ${latest_dev_tag:-none}"
           echo "version=$NPM_VERSION" >> "$GITHUB_OUTPUT"
           echo "python_version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$DEV_TAG" >> "$GITHUB_OUTPUT"
@@ -171,7 +211,7 @@ jobs:
             sipp-toolchain-devpublish-gate-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Apply dev package versions
-        uses: ./.github/actions/apply-dev-versions
+        uses: ./.github/actions/apply-package-versions
         with:
           npm-version: ${{ needs.prepare-dev.outputs.version }}
           python-version: ${{ needs.prepare-dev.outputs.python_version }}
@@ -267,7 +307,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Apply dev package versions
-        uses: ./.github/actions/apply-dev-versions
+        uses: ./.github/actions/apply-package-versions
         with:
           npm-version: ${{ needs.prepare-dev.outputs.version }}
           python-version: ${{ needs.prepare-dev.outputs.python_version }}
@@ -351,7 +391,7 @@ jobs:
       package: ${{ inputs.package }}
       node-registry: https://npm.pkg.github.com
       node-scope: "@noumena-labs"
-      apply-dev-versions: true
+      apply-package-versions: true
       npm-version: ${{ needs.prepare-dev.outputs.version }}
       python-version: ${{ needs.prepare-dev.outputs.python_version }}
       artifact-suffix: "-dev"
@@ -394,7 +434,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Apply dev package versions
-        uses: ./.github/actions/apply-dev-versions
+        uses: ./.github/actions/apply-package-versions
         with:
           npm-version: ${{ needs.prepare-dev.outputs.version }}
           python-version: ${{ needs.prepare-dev.outputs.python_version }}
@@ -503,7 +543,7 @@ jobs:
           submodules: recursive
 
       - name: Apply dev package versions
-        uses: ./.github/actions/apply-dev-versions
+        uses: ./.github/actions/apply-package-versions
         with:
           npm-version: ${{ needs.prepare-dev.outputs.version }}
           python-version: ${{ needs.prepare-dev.outputs.python_version }}

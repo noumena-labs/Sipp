@@ -14,6 +14,11 @@ on:
           - node-npm
           - python
           - rust
+      release_version:
+        description: Release version to publish; use auto for the next patch after the latest sipp-v* tag
+        required: true
+        default: auto
+        type: string
       npm_tag:
         description: npm dist-tag to publish
         required: true
@@ -138,27 +143,79 @@ jobs:
         id: resolve
         uses: ./.github/actions/resolve-version
 
-      - name: Check release tag
+      - name: Determine release version
         id: versions
         shell: bash
         env:
-          VERSION: ${{ steps.resolve.outputs.version }}
+          BASE_VERSION: ${{ steps.resolve.outputs.version }}
+          REQUESTED_VERSION: ${{ inputs.release_version }}
         run: |
           set -euo pipefail
-          RELEASE_TAG="sipp-v$VERSION"
+          remote_release_tags="$(
+            git ls-remote --tags --refs origin 'sipp-v*' |
+              awk -F/ '{ print $NF }' ||
+              true
+          )"
+          version="$(
+            REMOTE_RELEASE_TAGS="$remote_release_tags" node --input-type=module <<'NODE'
+            const base = process.env.BASE_VERSION;
+            const requested = process.env.REQUESTED_VERSION.trim();
+            const tags = process.env.REMOTE_RELEASE_TAGS
+              .split(/\r?\n/)
+              .map((tag) => tag.trim())
+              .filter(Boolean)
+              .map((tag) => /^sipp-v(\d+)\.(\d+)\.(\d+)$/.exec(tag))
+              .filter((match) => match != null)
+              .map((match) => ({
+                tag: match[0],
+                major: Number(match[1]),
+                minor: Number(match[2]),
+                patch: Number(match[3]),
+              }))
+              .sort((left, right) =>
+                left.major - right.major ||
+                left.minor - right.minor ||
+                left.patch - right.patch
+              );
+
+            if (requested === 'auto' && tags.length > 0) {
+              const latest = tags.at(-1);
+              const next = `${latest.major}.${latest.minor}.${latest.patch + 1}`;
+              console.error(`Latest remote Sipp release tag is ${latest.tag}; auto-selected ${next}.`);
+              console.log(next);
+            } else if (requested === 'auto') {
+              if (!/^\d+\.\d+\.\d+$/.test(base)) {
+                throw new Error(`Source version must be a stable x.y.z value, got ${base}`);
+              }
+              console.error(`No remote Sipp release tags found; using source version ${base}.`);
+              console.log(base);
+            } else {
+              if (!/^\d+\.\d+\.\d+$/.test(requested)) {
+                throw new Error(
+                  `release_version must be "auto" or a stable x.y.z value, got ${requested}`
+                );
+              }
+              console.error(`Using manually requested release version ${requested}.`);
+              console.log(requested);
+            }
+          NODE
+          )"
+          RELEASE_TAG="sipp-v$version"
           level="error"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             level="warning"
           fi
-          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" > /dev/null 2>&1; then
+          if printf '%s\n' "$remote_release_tags" | grep -Fx "$RELEASE_TAG" > /dev/null; then
             echo "::${level}::Release tag $RELEASE_TAG already exists."
             if [ "${{ inputs.dry_run }}" != "true" ]; then
               exit 1
             fi
           fi
-          latest_release_tag="$(git ls-remote --tags --refs origin 'sipp-v*' | awk -F/ '{ print $NF }' | sort -V | tail -1 || true)"
+          latest_release_tag="$(printf '%s\n' "$remote_release_tags" | grep -E '^sipp-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+          echo "Source manifest version: $BASE_VERSION"
           echo "Latest remote Sipp release tag: ${latest_release_tag:-none}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Selected release version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Check for already-published versions
@@ -273,6 +330,11 @@ jobs:
           targets: wasm32-unknown-emscripten
           components: rust-src
 
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+
       - name: Set up CMake and Ninja
         uses: lukka/get-cmake@v4.3.1
 
@@ -306,6 +368,12 @@ jobs:
           restore-keys: |
             sipp-toolchain-release-gate-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Apply release package versions
+        uses: ./.github/actions/apply-package-versions
+        with:
+          npm-version: ${{ needs.preflight.outputs.version }}
+          python-version: ${{ needs.preflight.outputs.version }}
+
       - name: Run release source gate
         run: |
           cargo xtask --plain test unit --no-coverage suite xtask
@@ -318,7 +386,9 @@ jobs:
     name: Build web npm package
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    needs: gate
+    needs:
+      - gate
+      - preflight
     if: ${{ inputs.package == 'all' || inputs.package == 'web-npm' }}
     env:
       CE_WASM_BUILD_PARALLEL_LEVEL: "2"
@@ -381,6 +451,12 @@ jobs:
       - name: Install JavaScript workspace dependencies
         run: bun install --frozen-lockfile
 
+      - name: Apply release package versions
+        uses: ./.github/actions/apply-package-versions
+        with:
+          npm-version: ${{ needs.preflight.outputs.version }}
+          python-version: ${{ needs.preflight.outputs.version }}
+
       - name: Build staged web package
         run: cargo xtask --plain build wasm
 
@@ -434,7 +510,9 @@ jobs:
 
   native:
     name: Run native artifact workflow
-    needs: gate
+    needs:
+      - gate
+      - preflight
     if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python' || inputs.package == 'rust' }}
     permissions:
       contents: read
@@ -443,6 +521,9 @@ jobs:
     with:
       package: ${{ inputs.package }}
       node-registry: https://registry.npmjs.org
+      apply-package-versions: true
+      npm-version: ${{ needs.preflight.outputs.version }}
+      python-version: ${{ needs.preflight.outputs.version }}
       enforce: true
       pypi-wheel-scope: ${{ inputs.pypi_wheel_scope }}
 
@@ -450,7 +531,9 @@ jobs:
     name: Assemble Node npm packages
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    needs: native
+    needs:
+      - native
+      - preflight
     if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
     steps:
       - name: Check out repository
@@ -471,6 +554,12 @@ jobs:
 
       - name: Install JavaScript workspace dependencies
         run: bun install --frozen-lockfile
+
+      - name: Apply release package versions
+        uses: ./.github/actions/apply-package-versions
+        with:
+          npm-version: ${{ needs.preflight.outputs.version }}
+          python-version: ${{ needs.preflight.outputs.version }}
 
       - name: Download Node native artifacts
         uses: actions/download-artifact@v8
@@ -574,6 +663,11 @@ jobs:
         with:
           components: rust-src
 
+      - name: Set up Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+
       - name: Set up CMake and Ninja
         uses: lukka/get-cmake@v4.3.1
 
@@ -589,6 +683,12 @@ jobs:
           key: cargo-release-rust-package-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
           restore-keys: |
             cargo-release-rust-package-${{ runner.os }}-
+
+      - name: Apply release package versions
+        uses: ./.github/actions/apply-package-versions
+        with:
+          npm-version: ${{ needs.preflight.outputs.version }}
+          python-version: ${{ needs.preflight.outputs.version }}
 
       - name: Validate and package Rust crates
         shell: bash
@@ -649,6 +749,12 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - name: Apply release package versions
+        uses: ./.github/actions/apply-package-versions
+        with:
+          npm-version: ${{ needs.preflight.outputs.version }}
+          python-version: ${{ needs.preflight.outputs.version }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
