@@ -80,57 +80,10 @@ jobs:
               true
           )"
           dev_versions="$(
-            REMOTE_RELEASE_TAGS="$remote_release_tags" REMOTE_DEV_TAGS="$remote_dev_tags" node --input-type=module <<'NODE'
-          const sourceBase = process.env.SOURCE_BASE_VERSION;
-          const packageName = process.env.PACKAGE;
-          const releaseTags = process.env.REMOTE_RELEASE_TAGS
-            .split(/\r?\n/)
-            .map((tag) => tag.trim())
-            .filter(Boolean)
-            .map((tag) => /^sipp-v(\d+)\.(\d+)\.(\d+)$/.exec(tag))
-            .filter((match) => match != null)
-            .map((match) => ({
-              tag: match[0],
-              major: Number(match[1]),
-              minor: Number(match[2]),
-              patch: Number(match[3]),
-            }))
-            .sort((left, right) =>
-              left.major - right.major ||
-              left.minor - right.minor ||
-              left.patch - right.patch
-            );
-          const base =
-            releaseTags.length > 0
-              ? `${releaseTags.at(-1).major}.${releaseTags.at(-1).minor}.${releaseTags.at(-1).patch}`
-              : sourceBase;
-          if (!/^\d+\.\d+\.\d+$/.test(base)) {
-            throw new Error(`Dev builds must start from a stable x.y.z version, got ${base}`);
-          }
-          const tagScope = packageName === 'all' ? '' : `-${packageName}`;
-          const devPrefix = `sipp-dev${tagScope}-v${base}-dev`;
-          const existingDevNumbers = process.env.REMOTE_DEV_TAGS
-            .split(/\r?\n/)
-            .map((tag) => tag.trim())
-            .filter((tag) => tag.startsWith(devPrefix))
-            .map((tag) => Number(tag.slice(devPrefix.length)))
-            .filter((value) => Number.isInteger(value) && value > 0);
-          const dev =
-            existingDevNumbers.length > 0 ? Math.max(...existingDevNumbers) + 1 : 1;
-
-          // npm/Cargo use a SemVer prerelease while Python uses the matching
-          // PEP 440 form.
-          const npmVersion = `${base}-dev${dev}`;
-          const pythonVersion = `${base}.dev${dev}`;
-          const tag = `sipp-dev${tagScope}-v${npmVersion}`;
-          const latestReleaseTag = releaseTags.at(-1)?.tag ?? 'none';
-          console.error(
-            `Latest stable tag ${latestReleaseTag}; base ${base}; next dev ${dev}; tag ${tag}`
-          );
-          console.log(`${npmVersion}|${pythonVersion}|${tag}`);
-          NODE
+            REMOTE_RELEASE_TAGS="$remote_release_tags" REMOTE_DEV_TAGS="$remote_dev_tags" \
+              node .github/scripts/release-versions.mjs select-dev
           )"
-          IFS='|' read -r NPM_VERSION PYTHON_VERSION DEV_TAG <<< "$dev_versions"
+          IFS='|' read -r NPM_VERSION PYTHON_VERSION DEV_TAG LATEST_RELEASE_TAG LATEST_DEV_TAG <<< "$dev_versions"
           level="error"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             level="warning"
@@ -141,11 +94,9 @@ jobs:
               exit 1
             fi
           fi
-          latest_release_tag="$(printf '%s\n' "$remote_release_tags" | grep -E '^sipp-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
-          latest_dev_tag="$(printf '%s\n' "$remote_dev_tags" | sort -V | tail -1 || true)"
           echo "Source manifest version: $SOURCE_BASE_VERSION"
-          echo "Latest remote Sipp release tag: ${latest_release_tag:-none}"
-          echo "Latest remote Sipp dev tag for $PACKAGE: ${latest_dev_tag:-none}"
+          echo "Latest remote Sipp release tag: ${LATEST_RELEASE_TAG:-none}"
+          echo "Latest remote Sipp dev tag for $PACKAGE base: ${LATEST_DEV_TAG:-none}"
           echo "version=$NPM_VERSION" >> "$GITHUB_OUTPUT"
           echo "python_version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$DEV_TAG" >> "$GITHUB_OUTPUT"

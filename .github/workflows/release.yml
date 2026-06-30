@@ -156,50 +156,11 @@ jobs:
               awk -F/ '{ print $NF }' ||
               true
           )"
-          version="$(
-            REMOTE_RELEASE_TAGS="$remote_release_tags" node --input-type=module <<'NODE'
-            const base = process.env.BASE_VERSION;
-            const requested = process.env.REQUESTED_VERSION.trim();
-            const tags = process.env.REMOTE_RELEASE_TAGS
-              .split(/\r?\n/)
-              .map((tag) => tag.trim())
-              .filter(Boolean)
-              .map((tag) => /^sipp-v(\d+)\.(\d+)\.(\d+)$/.exec(tag))
-              .filter((match) => match != null)
-              .map((match) => ({
-                tag: match[0],
-                major: Number(match[1]),
-                minor: Number(match[2]),
-                patch: Number(match[3]),
-              }))
-              .sort((left, right) =>
-                left.major - right.major ||
-                left.minor - right.minor ||
-                left.patch - right.patch
-              );
-
-            if (requested === 'auto' && tags.length > 0) {
-              const latest = tags.at(-1);
-              const next = `${latest.major}.${latest.minor}.${latest.patch + 1}`;
-              console.error(`Latest remote Sipp release tag is ${latest.tag}; auto-selected ${next}.`);
-              console.log(next);
-            } else if (requested === 'auto') {
-              if (!/^\d+\.\d+\.\d+$/.test(base)) {
-                throw new Error(`Source version must be a stable x.y.z value, got ${base}`);
-              }
-              console.error(`No remote Sipp release tags found; using source version ${base}.`);
-              console.log(base);
-            } else {
-              if (!/^\d+\.\d+\.\d+$/.test(requested)) {
-                throw new Error(
-                  `release_version must be "auto" or a stable x.y.z value, got ${requested}`
-                );
-              }
-              console.error(`Using manually requested release version ${requested}.`);
-              console.log(requested);
-            }
-          NODE
+          release_version_info="$(
+            REMOTE_RELEASE_TAGS="$remote_release_tags" \
+              node .github/scripts/release-versions.mjs select-release
           )"
+          IFS='|' read -r version latest_release_tag <<< "$release_version_info"
           RELEASE_TAG="sipp-v$version"
           level="error"
           if [ "${{ inputs.dry_run }}" = "true" ]; then
@@ -211,7 +172,6 @@ jobs:
               exit 1
             fi
           fi
-          latest_release_tag="$(printf '%s\n' "$remote_release_tags" | grep -E '^sipp-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
           echo "Source manifest version: $BASE_VERSION"
           echo "Latest remote Sipp release tag: ${latest_release_tag:-none}"
           echo "Selected release version: $version"
