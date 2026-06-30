@@ -1,0 +1,22 @@
+name: Apply package versions
+description: >-
+  Writes computed versions into Cargo, npm package manifests, and Python
+  pyproject files so staged artifacts carry the intended publish version.
+inputs:
+  npm-version:
+    description: SemVer version for Cargo and JavaScript package manifests
+    required: true
+  python-version:
+    description: PEP 440 version for Python package manifests
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Rewrite package versions
+      shell: bash
+      env:
+        PACKAGE_VERSION: ${{ inputs.npm-version }}
+        PYTHON_PACKAGE_VERSION: ${{ inputs.python-version }}
+      run: |
+        set -euo pipefail
+        node .github/scripts/package-versions.mjs apply

@@ -21,18 +21,18 @@ on:
         required: false
         default: ""
         type: string
-      apply-dev-versions:
-        description: Rewrite manifests with dev channel versions before building
+      apply-package-versions:
+        description: Rewrite manifests with computed package versions before building
         required: false
         default: false
         type: boolean
       npm-version:
-        description: Dev npm/cargo version (only used when apply-dev-versions is true)
+        description: npm/cargo version (only used when apply-package-versions is true)
         required: false
         default: ""
         type: string
       python-version:
-        description: Dev PEP 440 version (only used when apply-dev-versions is true)
+        description: PEP 440 version (only used when apply-package-versions is true)
         required: false
         default: ""
         type: string
@@ -131,7 +131,7 @@ jobs:
           components: rust-src
 
       - name: Set up Node
-        if: ${{ inputs.apply-dev-versions || inputs.package == 'all' || inputs.package == 'node-npm' }}
+        if: ${{ inputs.apply-package-versions || inputs.package == 'all' || inputs.package == 'node-npm' }}
         uses: actions/setup-node@v6.4.0
         with:
           node-version: 22
@@ -251,9 +251,9 @@ jobs:
         if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}
         run: bun install --frozen-lockfile
 
-      - name: Apply dev package versions
-        if: ${{ inputs.apply-dev-versions }}
-        uses: ./.github/actions/apply-dev-versions
+      - name: Apply package versions
+        if: ${{ inputs.apply-package-versions }}
+        uses: ./.github/actions/apply-package-versions
         with:
           npm-version: ${{ inputs.npm-version }}
           python-version: ${{ inputs.python-version }}
@@ -534,7 +534,7 @@ jobs:
           components: rust-src
 
       - name: Set up Node
-        if: ${{ inputs.apply-dev-versions }}
+        if: ${{ inputs.apply-package-versions }}
         uses: actions/setup-node@v6.4.0
         with:
           node-version: 22
@@ -570,9 +570,9 @@ jobs:
           restore-keys: |
             sipp-toolchain-build-native-rust-core-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Apply dev package versions
-        if: ${{ inputs.apply-dev-versions }}
-        uses: ./.github/actions/apply-dev-versions
+      - name: Apply package versions
+        if: ${{ inputs.apply-package-versions }}
+        uses: ./.github/actions/apply-package-versions
         with:
           npm-version: ${{ inputs.npm-version }}
           python-version: ${{ inputs.python-version }}
