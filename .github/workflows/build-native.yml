@@ -91,6 +91,7 @@ jobs:
     env:
       SIPP_CUDA_ARCHITECTURES: ${{ inputs.cuda-architectures }}
       SIPP_PYTHON_WHEEL_COMPATIBILITY: ${{ matrix.abi }}
+      SIPP_USE_SYSTEM_VULKAN: ${{ matrix.system_vulkan }}
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ inputs.release-codegen-units }}
     strategy:
@@ -104,6 +105,7 @@ jobs:
             cuda_repo: rhel8
             backends: cpu,vulkan,cuda
             cuda: true
+            system_vulkan: "1"
           - id: windows-x64
             os: windows-2022
             abi: host
@@ -194,7 +196,12 @@ jobs:
             libstdc++-static \
             vulkan-loader-devel \
             vulkan-headers
+          dnf install -y glslc || dnf install -y shaderc
           dnf clean all
+          if ! command -v glslc >/dev/null 2>&1; then
+            echo "::error::Linux Vulkan builds require a system glslc that runs on manylinux_2_28."
+            exit 1
+          fi
           cxx="${CXX:-c++}"
           stdcpp_archive="$("$cxx" -print-file-name=libstdc++.a)"
           if [ ! -f "$stdcpp_archive" ]; then
@@ -212,6 +219,7 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "/usr/local/cuda-${CUDA_VERSION}/bin" >> "$GITHUB_PATH"
           "/usr/local/cuda-${CUDA_VERSION}/bin/nvcc" --version
+          glslc --version
 
       - name: Install Windows CUDA 13.0 compiler and development libraries
         if: ${{ runner.os == 'Windows' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
@@ -263,6 +271,9 @@ jobs:
         run: |
           echo "OS package set: ${{ matrix.id }}"
           echo "Native backends: ${{ matrix.backends }}"
+          if [ "${{ matrix.cuda }}" = "true" ]; then
+            echo "CUDA architectures: $SIPP_CUDA_ARCHITECTURES"
+          fi
 
       - name: Build Node native artifacts
         if: ${{ inputs.package == 'all' || inputs.package == 'node-npm' }}

@@ -38,6 +38,11 @@ on:
           - non-cuda
           - macos
           - all
+      cuda_architectures:
+        description: CUDA arch list for release wheels; 86-real keeps the first PyPI CUDA upload small
+        required: true
+        default: "86-real"
+        type: string
 
 permissions:
   actions: read
@@ -486,6 +491,7 @@ jobs:
       python-version: ${{ needs.preflight.outputs.version }}
       enforce: true
       pypi-wheel-scope: ${{ inputs.pypi_wheel_scope }}
+      cuda-architectures: ${{ inputs.cuda_architectures }}
 
   node-npm:
     name: Assemble Node npm packages
