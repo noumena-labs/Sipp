@@ -26,6 +26,7 @@ const CONTEXT_ENV_VARS: &[(&str, Option<&str>)] = &[
     ("CUDA_HOME", None),
     ("SIPP_CUDA_ARCHITECTURES", None),
     ("VULKAN_SDK", None),
+    ("SIPP_GLSLC", None),
     ("SIPP_SYS_CMAKE_OUT_DIR", None),
     ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", None),
 ];
@@ -53,6 +54,7 @@ fn context_for(manifest_dir: PathBuf, target: &str, features: FeatureFlags) -> B
             cuda_path: None,
             cuda_architectures: None,
             vulkan_sdk: None,
+            glslc: None,
             cmake_out_dir: None,
             static_cxx_runtime_lib_dir: None,
         },
@@ -122,6 +124,7 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
         ("CUDA_HOME", Some("cuda-home")),
         ("SIPP_CUDA_ARCHITECTURES", Some(" 80;90 ")),
         ("VULKAN_SDK", Some("vulkan-sdk")),
+        ("SIPP_GLSLC", Some(r"\\?\toolchain\glslc")),
         ("SIPP_SYS_CMAKE_OUT_DIR", Some(r"\\?\cmake-out")),
         ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", Some(r"\\?\stdcpp-lib")),
     ]);
@@ -130,6 +133,7 @@ fn build_env_prefers_cuda_path_and_sanitizes_cmake_output() {
     assert_eq!(env.cuda_path, Some(PathBuf::from("cuda-path")));
     assert_eq!(env.cuda_architectures, Some("80;90".to_owned()));
     assert_eq!(env.vulkan_sdk, Some(PathBuf::from("vulkan-sdk")));
+    assert_eq!(env.glslc, Some(PathBuf::from(r"toolchain\glslc")));
     assert_eq!(env.cmake_out_dir, Some(PathBuf::from("cmake-out")));
     assert_eq!(
         env.static_cxx_runtime_lib_dir,
@@ -144,11 +148,13 @@ fn build_env_treats_blank_static_cxx_runtime_lib_dir_as_unset() {
         ("CUDA_HOME", None),
         ("SIPP_CUDA_ARCHITECTURES", None),
         ("VULKAN_SDK", None),
+        ("SIPP_GLSLC", Some("   ")),
         ("SIPP_SYS_CMAKE_OUT_DIR", None),
         ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", Some("   ")),
     ]);
 
     let env = BuildEnv::from_env();
+    assert_eq!(env.glslc, None);
     assert_eq!(env.static_cxx_runtime_lib_dir, None);
 }
 
@@ -159,6 +165,7 @@ fn build_env_falls_back_to_cuda_home() {
         ("CUDA_HOME", Some("cuda-home")),
         ("SIPP_CUDA_ARCHITECTURES", None),
         ("VULKAN_SDK", None),
+        ("SIPP_GLSLC", None),
         ("SIPP_SYS_CMAKE_OUT_DIR", None),
         ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", None),
     ]);
@@ -167,6 +174,7 @@ fn build_env_falls_back_to_cuda_home() {
     assert_eq!(env.cuda_path, Some(PathBuf::from("cuda-home")));
     assert_eq!(env.cuda_architectures, None);
     assert_eq!(env.vulkan_sdk, None);
+    assert_eq!(env.glslc, None);
     assert_eq!(env.cmake_out_dir, None);
     assert_eq!(env.static_cxx_runtime_lib_dir, None);
 }
@@ -178,6 +186,7 @@ fn build_env_treats_blank_cuda_architectures_as_unset() {
         ("CUDA_HOME", None),
         ("SIPP_CUDA_ARCHITECTURES", Some("   ")),
         ("VULKAN_SDK", None),
+        ("SIPP_GLSLC", None),
         ("SIPP_SYS_CMAKE_OUT_DIR", None),
         ("SIPP_STATIC_CXX_RUNTIME_LIB_DIR", None),
     ]);
@@ -199,6 +208,7 @@ fn build_context_new_reads_manifest_target_features_and_env() {
         ("CARGO_CFG_TARGET_OS", Some("unknown")),
         ("CARGO_FEATURE_VULKAN", Some("1")),
         ("VULKAN_SDK", Some("sdk")),
+        ("SIPP_GLSLC", Some("glslc")),
     ]);
     let _env = EnvGuard::new(&vars);
 
@@ -209,6 +219,7 @@ fn build_context_new_reads_manifest_target_features_and_env() {
     assert_eq!(context.target_kind, TargetKind::Emscripten);
     assert!(context.features.vulkan);
     assert_eq!(context.env_vars.vulkan_sdk, Some(PathBuf::from("sdk")));
+    assert_eq!(context.env_vars.glslc, Some(PathBuf::from("glslc")));
 }
 
 #[test]

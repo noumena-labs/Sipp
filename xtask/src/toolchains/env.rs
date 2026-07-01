@@ -63,41 +63,37 @@ pub(crate) fn apply_toolchains<'a>(
     match backend {
         Some(Backend::Vulkan) => {
             output::detail("Toolchain", "Vulkan");
-            if use_system_vulkan() {
-                output::detail("Vulkan SDK", "system");
+            let vulkan_dir = setup_vulkan(sh, ctx)?;
+            let bin_path = if cfg!(windows) {
+                vulkan_dir.join("Bin")
+            } else if cfg!(target_os = "macos") {
+                vulkan_dir.join("macOS").join("bin")
             } else {
-                let vulkan_dir = setup_vulkan(sh, ctx)?;
-                let bin_path = if cfg!(windows) {
-                    vulkan_dir.join("Bin")
-                } else if cfg!(target_os = "macos") {
-                    vulkan_dir.join("macOS").join("bin")
-                } else {
-                    vulkan_dir.join(VULKAN_VERSION).join("x86_64").join("bin")
-                };
-                path_additions.push(bin_path.display().to_string());
+                vulkan_dir.join(VULKAN_VERSION).join("x86_64").join("bin")
+            };
+            path_additions.push(bin_path.display().to_string());
 
-                let vulkan_sdk_path = if cfg!(windows) {
-                    vulkan_dir.to_path_buf()
-                } else if cfg!(target_os = "macos") {
-                    vulkan_dir.join("macOS")
-                } else {
-                    vulkan_dir.join(VULKAN_VERSION).join("x86_64")
-                };
-                command = command.env("VULKAN_SDK", &vulkan_sdk_path);
+            let vulkan_sdk_path = if cfg!(windows) {
+                vulkan_dir.to_path_buf()
+            } else if cfg!(target_os = "macos") {
+                vulkan_dir.join("macOS")
+            } else {
+                vulkan_dir.join(VULKAN_VERSION).join("x86_64")
+            };
+            command = command.env("VULKAN_SDK", &vulkan_sdk_path);
 
-                let current_cmake_prefix = std_env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
-                let separator = path_separator();
-                let new_cmake_prefix = if current_cmake_prefix.is_empty() {
-                    vulkan_sdk_path.display().to_string()
-                } else {
-                    format!(
-                        "{}{separator}{}",
-                        vulkan_sdk_path.display(),
-                        current_cmake_prefix
-                    )
-                };
-                command = command.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
-            }
+            let current_cmake_prefix = std_env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
+            let separator = path_separator();
+            let new_cmake_prefix = if current_cmake_prefix.is_empty() {
+                vulkan_sdk_path.display().to_string()
+            } else {
+                format!(
+                    "{}{separator}{}",
+                    vulkan_sdk_path.display(),
+                    current_cmake_prefix
+                )
+            };
+            command = command.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
         }
         Some(Backend::Cuda) => {
             output::detail("Toolchain", "CUDA");
@@ -140,16 +136,6 @@ fn path_separator() -> &'static str {
     } else {
         ":"
     }
-}
-
-fn use_system_vulkan() -> bool {
-    let Some(value) = std_env::var_os("SIPP_USE_SYSTEM_VULKAN") else {
-        return false;
-    };
-    matches!(
-        value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
 }
 
 fn macos_deployment_target() -> Option<&'static str> {

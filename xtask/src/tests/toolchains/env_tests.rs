@@ -3,8 +3,7 @@
 //! Covers deterministic platform path-separator selection and native command
 //! environment setup without downloading external toolchains.
 
-use crate::cli::Backend;
-use crate::test_support::{EnvGuard, TempDir};
+use crate::test_support::TempDir;
 use crate::utils::BuildContext;
 use xshell::cmd;
 
@@ -39,16 +38,4 @@ fn native_toolchain_env_does_not_install_missing_ninja() {
     let _command = apply_toolchains(&sh, &ctx, cmd!(sh, "true"), None).unwrap();
 
     assert!(!ctx.ninja_toolchain_dir().exists());
-}
-
-#[test]
-fn system_vulkan_env_skips_managed_sdk_install() {
-    let temp = TempDir::new("env-system-vulkan");
-    let ctx = BuildContext::from_workspace_root_for_test(temp.path());
-    let sh = xshell::Shell::new().unwrap();
-    let _env = EnvGuard::new(&[("SIPP_USE_SYSTEM_VULKAN", Some("1"))]);
-
-    let _command = apply_toolchains(&sh, &ctx, cmd!(sh, "true"), Some(&Backend::Vulkan)).unwrap();
-
-    assert!(!ctx.vulkan_dir().exists());
 }

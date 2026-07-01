@@ -72,13 +72,15 @@ pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
 }
 
 fn apply_vulkan_cmake_overrides(context: &BuildContext, config: &mut Config) {
-    let Some(vulkan_sdk) = &context.env_vars.vulkan_sdk else {
-        return;
-    };
+    if let Some(vulkan_sdk) = &context.env_vars.vulkan_sdk {
+        config.define("Vulkan_ROOT", vulkan_sdk.as_os_str());
+        if let Some(loader) = vulkan_loader_library(vulkan_sdk) {
+            config.define("Vulkan_LIBRARY", loader.as_os_str());
+        }
+    }
 
-    config.define("Vulkan_ROOT", vulkan_sdk.as_os_str());
-    if let Some(loader) = vulkan_loader_library(vulkan_sdk) {
-        config.define("Vulkan_LIBRARY", loader.as_os_str());
+    if let Some(glslc) = &context.env_vars.glslc {
+        config.define("Vulkan_GLSLC_EXECUTABLE", glslc.as_os_str());
     }
 }
 
