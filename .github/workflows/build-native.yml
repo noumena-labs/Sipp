@@ -77,6 +77,8 @@ env:
   CUDA_PACKAGE_SUFFIX: "13-0"
   CUDA_WINDOWS_INSTALLER_URL: https://developer.download.nvidia.com/compute/cuda/13.0.3/local_installers/cuda_13.0.3_windows.exe
   NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  SHADERC_REF: "d5f08ae5c5a9a45165578445cbd0f9adf0223448"
+  SHADERC_VERSION: "v2026.2"
   SIPP_MAX_GLIBC: "2.28"
   SIPP_MAX_WHEEL_MB: "100"
 
@@ -91,7 +93,6 @@ jobs:
     env:
       SIPP_CUDA_ARCHITECTURES: ${{ inputs.cuda-architectures }}
       SIPP_PYTHON_WHEEL_COMPATIBILITY: ${{ matrix.abi }}
-      SIPP_USE_SYSTEM_VULKAN: ${{ matrix.system_vulkan }}
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ inputs.release-codegen-units }}
     strategy:
@@ -105,7 +106,6 @@ jobs:
             cuda_repo: rhel8
             backends: cpu,vulkan,cuda
             cuda: true
-            system_vulkan: "1"
           - id: windows-x64
             os: windows-2022
             abi: host
@@ -177,10 +177,11 @@ jobs:
         with:
           path: |
             .build/toolchain/uv
+            .build/toolchain/glslc
             .build/uv-cache
-          key: sipp-uv-toolchain-build-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
+          key: sipp-native-toolchains-build-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-${{ env.SHADERC_REF }}-${{ hashFiles('xtask/src/toolchains/*.rs') }}
           restore-keys: |
-            sipp-uv-toolchain-build-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-
+            sipp-native-toolchains-build-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-
 
       - name: Install Linux CUDA 13.0 and Vulkan development libraries
         if: ${{ runner.os == 'Linux' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
@@ -193,15 +194,12 @@ jobs:
           dnf install -y \
             "cuda-compiler-${CUDA_PACKAGE_SUFFIX}" \
             "cuda-libraries-devel-${CUDA_PACKAGE_SUFFIX}" \
+            git \
+            python3 \
             libstdc++-static \
             vulkan-loader-devel \
             vulkan-headers
-          dnf install -y glslc || dnf install -y shaderc
           dnf clean all
-          if ! command -v glslc >/dev/null 2>&1; then
-            echo "::error::Linux Vulkan builds require a system glslc that runs on manylinux_2_28."
-            exit 1
-          fi
           cxx="${CXX:-c++}"
           stdcpp_archive="$("$cxx" -print-file-name=libstdc++.a)"
           if [ ! -f "$stdcpp_archive" ]; then
@@ -219,7 +217,51 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "/usr/local/cuda-${CUDA_VERSION}/bin" >> "$GITHUB_PATH"
           "/usr/local/cuda-${CUDA_VERSION}/bin/nvcc" --version
-          glslc --version
+
+      - name: Build Linux glslc for manylinux
+        if: ${{ runner.os == 'Linux' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          glslc_bin="$PWD/.build/toolchain/glslc/${SHADERC_VERSION}/bin/glslc"
+          if [ ! -x "$glslc_bin" ]; then
+            command -v cmake
+            command -v python3
+            command -v git
+            cmake --version
+            python3 --version
+            git --version
+            generator_args=()
+            if command -v ninja >/dev/null 2>&1; then
+              ninja --version
+              generator_args=(-GNinja)
+            else
+              echo "::warning::ninja is not on PATH; using CMake's default generator for glslc."
+            fi
+            shaderc_src="$RUNNER_TEMP/shaderc-src"
+            shaderc_build="$RUNNER_TEMP/shaderc-build"
+            rm -rf "$shaderc_src" "$shaderc_build"
+            git init "$shaderc_src"
+            git -C "$shaderc_src" remote add origin https://github.com/google/shaderc.git
+            git -C "$shaderc_src" fetch --depth 1 origin "$SHADERC_REF"
+            git -C "$shaderc_src" checkout --detach FETCH_HEAD
+            echo "Shaderc commit: $(git -C "$shaderc_src" rev-parse HEAD)"
+            "$shaderc_src/utils/git-sync-deps"
+            cmake -S "$shaderc_src" -B "$shaderc_build" "${generator_args[@]}" \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DSHADERC_SKIP_TESTS=ON \
+              -DSHADERC_SKIP_EXAMPLES=ON \
+              -DSHADERC_SKIP_EXECUTABLES=OFF
+            cmake --build "$shaderc_build" --target glslc_exe --parallel 1
+            mkdir -p "$(dirname "$glslc_bin")"
+            cp "$shaderc_build/glslc/glslc" "$glslc_bin"
+            chmod +x "$glslc_bin"
+            strip "$glslc_bin" || true
+          else
+            echo "Using cached glslc at $glslc_bin"
+          fi
+          "$glslc_bin" --version
+          echo "SIPP_GLSLC=$glslc_bin" >> "$GITHUB_ENV"
 
       - name: Install Windows CUDA 13.0 compiler and development libraries
         if: ${{ runner.os == 'Windows' && matrix.cuda && (inputs.package == 'all' || inputs.package == 'node-npm' || inputs.package == 'python') }}
@@ -273,6 +315,9 @@ jobs:
           echo "Native backends: ${{ matrix.backends }}"
           if [ "${{ matrix.cuda }}" = "true" ]; then
             echo "CUDA architectures: $SIPP_CUDA_ARCHITECTURES"
+          fi
+          if [ -n "${SIPP_GLSLC:-}" ]; then
+            echo "glslc override: $SIPP_GLSLC"
           fi
 
       - name: Build Node native artifacts

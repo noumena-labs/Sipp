@@ -64,6 +64,7 @@ impl BuildContext {
         println!("cargo:rerun-if-env-changed=CUDA_PATH");
         println!("cargo:rerun-if-env-changed=CUDA_HOME");
         println!("cargo:rerun-if-env-changed=VULKAN_SDK");
+        println!("cargo:rerun-if-env-changed=SIPP_GLSLC");
         println!("cargo:rerun-if-env-changed=EMSDK");
         println!("cargo:rerun-if-env-changed=SIPP_SYS_CMAKE_OUT_DIR");
         println!("cargo:rerun-if-env-changed=SIPP_CUDA_ARCHITECTURES");
@@ -129,6 +130,7 @@ pub(crate) struct BuildEnv {
     pub(crate) cuda_path: Option<PathBuf>,
     pub(crate) cuda_architectures: Option<String>,
     pub(crate) vulkan_sdk: Option<PathBuf>,
+    pub(crate) glslc: Option<PathBuf>,
     pub(crate) cmake_out_dir: Option<PathBuf>,
     pub(crate) static_cxx_runtime_lib_dir: Option<PathBuf>,
 }
@@ -144,6 +146,7 @@ impl BuildEnv {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
             vulkan_sdk: env::var_os("VULKAN_SDK").map(PathBuf::from),
+            glslc: env_path("SIPP_GLSLC"),
             cmake_out_dir: env::var("SIPP_SYS_CMAKE_OUT_DIR").ok().map(sanitize_path),
             static_cxx_runtime_lib_dir: env_path("SIPP_STATIC_CXX_RUNTIME_LIB_DIR"),
         }
