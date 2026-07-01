@@ -667,12 +667,12 @@ jobs:
           mkdir -p "$package_dir"
           rm -f "$package_dir/sipp-sys-$VERSION.crate" "$package_dir/sipp-rs-$VERSION.crate"
 
-          cargo publish -p sipp-sys --dry-run
+          cargo publish -p sipp-sys --dry-run --allow-dirty
           cargo package -p sipp-sys --allow-dirty --no-verify
 
           status=$(curl -s -H "User-Agent: sipp-release" -o /tmp/sipp-sys.json -w '%{http_code}' "https://crates.io/api/v1/crates/sipp-sys")
           if [ "$status" = "200" ] && jq -e --arg v "$VERSION" '.versions[]? | select(.num == $v)' /tmp/sipp-sys.json > /dev/null; then
-            cargo publish -p sipp-rs --dry-run
+            cargo publish -p sipp-rs --dry-run --allow-dirty
             cargo package -p sipp-rs --allow-dirty --no-verify
           else
             echo "Skipping sipp-rs dry-run publish validation and packaging because sipp-sys $VERSION is not yet on crates.io."
@@ -909,10 +909,10 @@ jobs:
           if crate_version_exists sipp-sys "$VERSION"; then
             echo "sipp-sys $VERSION is already published; skipping."
           else
-            cargo publish -p sipp-sys
+            cargo publish -p sipp-sys --allow-dirty
           fi
           wait_for_crate_version sipp-sys "$VERSION"
-          cargo publish -p sipp-rs --dry-run
+          cargo publish -p sipp-rs --dry-run --allow-dirty
 
       - name: Publish npm packages
         shell: bash
@@ -995,7 +995,7 @@ jobs:
           if crate_version_exists sipp-rs "$VERSION"; then
             echo "sipp-rs $VERSION is already published; skipping."
           else
-            cargo publish -p sipp-rs
+            cargo publish -p sipp-rs --allow-dirty
           fi
           target_dir="$(cargo metadata --no-deps --format-version 1 | jq -r '.target_directory')"
           cargo package -p sipp-rs --allow-dirty --no-verify
