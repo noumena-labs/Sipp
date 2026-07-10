@@ -93,6 +93,10 @@ uses `SIPP_PYTHON_BACKEND`, and the CLI uses `--backend`.
 | `residency` | `max_gpu_models_per_device`, `allow_cpu_models_while_gpu_loaded`, `require_gpu_lease` | GPU model residency policy for native runtimes. |
 | `observability` | `runtime_metrics`, `backend_profiling` | Runtime timing, throughput, and backend diagnostics. |
 
+Encoder-capable models default `n_ubatch` to `n_batch`, or 2048 when neither is
+configured. Each encoder prompt must fit within `n_ubatch`; concurrent prompts
+are partitioned into separate encoder batches when their combined size exceeds it.
+
 Use runtime config for stable endpoint behavior. Use request options for values
 that should vary per prompt, user action, or UI control.
 

@@ -43,6 +43,8 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 | `residency` | `max_gpu_models_per_device`, `allow_cpu_models_while_gpu_loaded`, `require_gpu_lease` | GPU 模型驻留策略，多模型 GPU 资源分配 |
 | `observability` | `runtime_metrics`, `backend_profiling` | 运行时记录延迟、吞吐量和后端诊断数据 |
 
+支持编码器的模型默认 `n_ubatch` 等于 `n_batch`；两者均未配置时使用 2048。 每个编码器提示词都必须能放入一个 `n_ubatch`；并发提示词的总长度超过该值时，运行时会将它们分到不同的编码器批次中。
+
 运行时配置设置一次即持续生效，适用于稳定的端点行为。如果某个值因提示词、用户操作或 UI 控件不同而变化，应使用请求选项，而非在配置中写死。
 
 ## 浏览器子选项

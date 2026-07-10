@@ -15,6 +15,12 @@ use crate::runtime::scheduler::{
 use super::capabilities::RuntimeModelCapabilities;
 use super::InferenceRuntime;
 
+#[derive(Debug, PartialEq, Eq)]
+enum EncoderAdmissionBatch {
+    Ready { end: usize, token_count: i32 },
+    Oversized { requested: i32 },
+}
+
 impl InferenceRuntime {
     pub(crate) fn text_generation_slot_plan(&self) -> Result<SlotExecutionPlan> {
         text_generation_slot_plan(&self.capabilities)
@@ -24,18 +30,56 @@ impl InferenceRuntime {
         embedding_slot_plan(&self.capabilities)
     }
 
-    pub(super) fn fail_admitted_slot(&mut self, slot_index: usize, error: Error) {
+    fn fail_admitted_slot(&mut self, slot_index: usize, error: &Error) {
         if let Some(slot) = self.slot_scheduler.slots.get_mut(slot_index) {
             slot.fail(format!("admission prefill failed: {error}"));
         }
     }
 
-    pub(super) fn run_encoder_admission_batch(&mut self, slot_indices: &[usize]) -> Result<()> {
-        let max_tokens = encoder_batch_token_count(&self.slot_scheduler.slots, slot_indices)?;
+    pub(super) fn fail_admitted_slots(&mut self, slot_indices: &[usize], error: &Error) {
+        for &slot_index in slot_indices {
+            self.fail_admitted_slot(slot_index, error);
+        }
+    }
+
+    pub(super) fn run_encoder_admission_batches(&mut self, slot_indices: &[usize]) -> Result<()> {
+        let mut start = 0;
+        while start < slot_indices.len() {
+            match next_encoder_admission_batch(
+                &self.slot_scheduler.slots,
+                slot_indices,
+                start,
+                self.resolved_limits.n_ubatch,
+            )? {
+                EncoderAdmissionBatch::Ready { end, token_count } => {
+                    let batch_slots = &slot_indices[start..end];
+                    if let Err(error) = self.run_encoder_admission_batch(batch_slots, token_count) {
+                        self.fail_admitted_slots(batch_slots, &error);
+                    }
+                    start = end;
+                }
+                EncoderAdmissionBatch::Oversized { requested } => {
+                    let error = Error::BatchCapacity {
+                        capacity: self.resolved_limits.n_ubatch,
+                        requested,
+                    };
+                    self.fail_admitted_slot(slot_indices[start], &error);
+                    start += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn run_encoder_admission_batch(
+        &mut self,
+        slot_indices: &[usize],
+        token_count: i32,
+    ) -> Result<()> {
         let max_sequences = i32::try_from(slot_indices.len())
             .map_err(|_| Error::InvalidRequest("encoder batch exceeds i32::MAX sequences"))?;
         self.shared_batch_builder
-            .ensure_capacity(max_tokens, max_sequences)?;
+            .ensure_capacity(token_count, max_sequences)?;
         self.shared_batch_builder.reset();
 
         for &slot_index in slot_indices {
@@ -44,7 +88,7 @@ impl InferenceRuntime {
                 .slots
                 .get(slot_index)
                 .ok_or(Error::RuntimeNotReady)?;
-            add_encoder_prompt_to_batch(&mut self.shared_batch_builder, slot, max_tokens)?;
+            add_encoder_prompt_to_batch(&mut self.shared_batch_builder, slot, token_count)?;
         }
 
         let status = self
@@ -82,7 +126,7 @@ impl InferenceRuntime {
                     }
                 });
             if let Err(error) = result {
-                self.fail_admitted_slot(slot_index, error);
+                self.fail_admitted_slot(slot_index, &error);
             }
         }
         Ok(())
@@ -128,31 +172,55 @@ impl InferenceRuntime {
     }
 }
 
-fn encoder_batch_token_count(slots: &[SlotState], slot_indices: &[usize]) -> Result<i32> {
-    let mut total_tokens = 0_usize;
-    for &slot_index in slot_indices {
-        let slot = slots.get(slot_index).ok_or(Error::RuntimeNotReady)?;
-        let request = slot
-            .request()
-            .ok_or(Error::InvalidRequest("admitted slot has no request"))?;
-        if slot.seq_id < 0 {
-            return Err(Error::InvalidRequest(
-                "admitted slot has no sequence id for encoder pass",
-            ));
+fn next_encoder_admission_batch(
+    slots: &[SlotState],
+    slot_indices: &[usize],
+    start: usize,
+    max_tokens: i32,
+) -> Result<EncoderAdmissionBatch> {
+    let mut end = start;
+    let mut batch_tokens = 0;
+
+    for (position, &slot_index) in slot_indices.iter().enumerate().skip(start) {
+        let prompt_tokens = encoder_prompt_token_count(slots, slot_index)?;
+        if prompt_tokens > max_tokens {
+            if position == start {
+                return Ok(EncoderAdmissionBatch::Oversized {
+                    requested: prompt_tokens,
+                });
+            }
+            break;
         }
-        if request.prompt_tokens.is_empty() {
-            return Err(Error::InvalidRequest(
-                "encoder prompt ingest received an empty token slice",
-            ));
+        if prompt_tokens > max_tokens - batch_tokens {
+            break;
         }
-        total_tokens = total_tokens
-            .checked_add(request.prompt_tokens.len())
-            .ok_or(Error::InvalidRequest(
-                "encoder batch token count overflowed",
-            ))?;
+        batch_tokens += prompt_tokens;
+        end = position + 1;
     }
-    i32::try_from(total_tokens)
-        .map_err(|_| Error::InvalidRequest("encoder batch exceeds i32::MAX tokens"))
+
+    Ok(EncoderAdmissionBatch::Ready {
+        end,
+        token_count: batch_tokens,
+    })
+}
+
+fn encoder_prompt_token_count(slots: &[SlotState], slot_index: usize) -> Result<i32> {
+    let slot = slots.get(slot_index).ok_or(Error::RuntimeNotReady)?;
+    let request = slot
+        .request()
+        .ok_or(Error::InvalidRequest("admitted slot has no request"))?;
+    if slot.seq_id < 0 {
+        return Err(Error::InvalidRequest(
+            "admitted slot has no sequence id for encoder pass",
+        ));
+    }
+    if request.prompt_tokens.is_empty() {
+        return Err(Error::InvalidRequest(
+            "encoder prompt ingest received an empty token slice",
+        ));
+    }
+    i32::try_from(request.prompt_tokens.len())
+        .map_err(|_| Error::InvalidRequest("encoder prompt exceeds i32::MAX tokens"))
 }
 
 fn add_encoder_prompt_to_batch(

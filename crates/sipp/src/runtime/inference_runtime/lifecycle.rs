@@ -19,6 +19,8 @@ use super::capabilities::RuntimeModelCapabilities;
 use super::environment::{admit_runtime_residency, snapshot_prefix_cache_enabled};
 use super::{fingerprint_path, nonnegative_i32_to_usize, positive_i32_to_usize, InferenceRuntime};
 
+const DEFAULT_ENCODER_BATCH_SIZE: i32 = 2048;
+
 impl InferenceRuntime {
     pub fn load(
         model_path: impl AsRef<std::path::Path>,
@@ -185,6 +187,7 @@ fn apply_model_class_defaults(config: &mut NativeRuntimeConfig, class: ModelClas
             if config.context.embeddings.is_none() {
                 config.context.embeddings = Some(true);
             }
+            apply_encoder_batch_defaults(config);
         }
         ModelClass::EncoderDecoder => {
             if config.context.embeddings == Some(true) {
@@ -201,9 +204,19 @@ fn apply_model_class_defaults(config: &mut NativeRuntimeConfig, class: ModelClas
                         .to_string(),
                 });
             }
+            apply_encoder_batch_defaults(config);
         }
     }
     Ok(())
+}
+
+fn apply_encoder_batch_defaults(config: &mut NativeRuntimeConfig) {
+    if config.context.n_ubatch.is_some() {
+        return;
+    }
+    let n_batch = config.context.n_batch.unwrap_or(DEFAULT_ENCODER_BATCH_SIZE);
+    config.context.n_batch = Some(n_batch);
+    config.context.n_ubatch = Some(n_batch);
 }
 
 fn build_capabilities(

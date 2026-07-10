@@ -179,13 +179,8 @@ impl InferenceRuntime {
             }
         }
         if !encoder_slots.is_empty() {
-            if let Err(error) = self.run_encoder_admission_batch(&encoder_slots) {
-                let message = format!("admission prefill failed: {error}");
-                for &slot_index in &encoder_slots {
-                    if let Some(slot) = self.slot_scheduler.slots.get_mut(slot_index) {
-                        slot.fail(message.clone());
-                    }
-                }
+            if let Err(error) = self.run_encoder_admission_batches(&encoder_slots) {
+                self.fail_admitted_slots(&encoder_slots, &error);
             }
         }
         encoder_slots.clear();

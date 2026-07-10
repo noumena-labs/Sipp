@@ -15,6 +15,8 @@ fn encoder_only_enables_embedding_context_before_common_params() {
     apply_model_class_defaults(&mut config, ModelClass::EncoderOnly).expect("defaults");
 
     assert_eq!(config.context.embeddings, Some(true));
+    assert_eq!(config.context.n_batch, Some(DEFAULT_ENCODER_BATCH_SIZE));
+    assert_eq!(config.context.n_ubatch, Some(DEFAULT_ENCODER_BATCH_SIZE));
 }
 
 #[test]
@@ -27,7 +29,35 @@ fn decoder_only_and_encoder_decoder_defaults_preserve_supported_configs() {
     apply_model_class_defaults(&mut encoder_decoder_config, ModelClass::EncoderDecoder)
         .expect("encoder-decoder defaults");
     assert_eq!(encoder_decoder_config.context.embeddings, None);
+    assert_eq!(
+        encoder_decoder_config.context.n_batch,
+        Some(DEFAULT_ENCODER_BATCH_SIZE)
+    );
+    assert_eq!(
+        encoder_decoder_config.context.n_ubatch,
+        Some(DEFAULT_ENCODER_BATCH_SIZE)
+    );
     assert_eq!(encoder_decoder_config.context.n_parallel, Some(1));
+}
+
+#[test]
+fn encoder_batch_defaults_follow_n_batch_and_preserve_explicit_n_ubatch() {
+    let mut config = NativeRuntimeConfig::default();
+    config.context.n_batch = Some(1024);
+
+    apply_model_class_defaults(&mut config, ModelClass::EncoderOnly).expect("encoder defaults");
+
+    assert_eq!(config.context.n_ubatch, Some(1024));
+
+    let mut explicit_config = NativeRuntimeConfig::default();
+    explicit_config.context.n_batch = Some(1024);
+    explicit_config.context.n_ubatch = Some(256);
+
+    apply_model_class_defaults(&mut explicit_config, ModelClass::EncoderOnly)
+        .expect("explicit encoder defaults");
+
+    assert_eq!(explicit_config.context.n_batch, Some(1024));
+    assert_eq!(explicit_config.context.n_ubatch, Some(256));
 }
 
 #[test]
