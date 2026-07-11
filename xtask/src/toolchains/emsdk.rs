@@ -21,7 +21,7 @@ mod emsdk_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const EMSDK_VERSION: &str = "4.0.23";
+const EMSDK_VERSION: &str = "5.0.6";
 const RUST_EMSCRIPTEN_TARGET: &str = "wasm32-unknown-emscripten";
 
 /// Ensures the configured Emscripten SDK is cloned, installed, and active.
