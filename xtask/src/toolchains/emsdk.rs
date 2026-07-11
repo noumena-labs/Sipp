@@ -107,10 +107,17 @@ fn ensure_emdawnwebgpu_port(sh: &Shell, ctx: &BuildContext) -> Result<std::path:
         "Downloading emdawnwebgpu",
         cmd!(sh, "curl -f -L -o {archive_path} {url}"),
     )?;
-    output::run_command(
-        "Extracting emdawnwebgpu",
-        cmd!(sh, "tar -xf {archive_path} -C {install_dir}"),
-    )?;
+    if cfg!(windows) {
+        output::run_command(
+            "Extracting emdawnwebgpu",
+            cmd!(sh, "tar -xf {archive_path} -C {install_dir}"),
+        )?;
+    } else {
+        output::run_command(
+            "Extracting emdawnwebgpu",
+            cmd!(sh, "unzip -oq {archive_path} -d {install_dir}"),
+        )?;
+    }
     sh.remove_path(&archive_path)?;
 
     if !emdawnwebgpu_is_installed(&package_dir)? {
