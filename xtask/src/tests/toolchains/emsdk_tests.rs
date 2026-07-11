@@ -6,8 +6,9 @@
 use crate::test_support::TempDir;
 
 use super::{
-    emsdk_is_active, emsdk_is_installed, expected_emsdk_tool_id, patch_emsdk_windows,
-    rust_target_list_contains, EMSDK_VERSION,
+    emdawnwebgpu_is_installed, emdawnwebgpu_package_dir, emsdk_is_active, emsdk_is_installed,
+    expected_emsdk_tool_id, patch_emsdk_windows, rust_target_list_contains, EMDAWNWEBGPU_VERSION,
+    EMSDK_VERSION,
 };
 
 #[test]
@@ -54,6 +55,36 @@ fn installed_check_rejects_wrong_version_marker() {
     temp.write("upstream/.emsdk_version", "other\n");
 
     assert!(!emsdk_is_installed(temp.path()).unwrap());
+}
+
+#[test]
+fn emdawnwebgpu_install_check_requires_port_and_version_marker() {
+    let temp = TempDir::new("emdawnwebgpu-installed");
+    let ctx = crate::utils::BuildContext::from_workspace_root_for_test(temp.path());
+    let package_dir = emdawnwebgpu_package_dir(&ctx);
+
+    assert_eq!(
+        package_dir,
+        temp.join(format!(
+            ".build/toolchain/emdawnwebgpu/{EMDAWNWEBGPU_VERSION}/emdawnwebgpu_pkg"
+        ))
+    );
+    assert!(!emdawnwebgpu_is_installed(&package_dir).unwrap());
+
+    temp.write(
+        format!(
+            ".build/toolchain/emdawnwebgpu/{EMDAWNWEBGPU_VERSION}/emdawnwebgpu_pkg/emdawnwebgpu.port.py"
+        ),
+        "",
+    );
+    temp.write(
+        format!(
+            ".build/toolchain/emdawnwebgpu/{EMDAWNWEBGPU_VERSION}/emdawnwebgpu_pkg/VERSION.txt"
+        ),
+        format!("Dawn release {EMDAWNWEBGPU_VERSION} at revision abc."),
+    );
+
+    assert!(emdawnwebgpu_is_installed(&package_dir).unwrap());
 }
 
 #[test]

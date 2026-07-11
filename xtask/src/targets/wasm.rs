@@ -5,7 +5,7 @@ use crate::javascript;
 use crate::output;
 use crate::toolchains::bun::setup_bun;
 use crate::toolchains::cmake::setup_cmake;
-use crate::toolchains::emsdk::{run_with_emsdk, setup_emsdk};
+use crate::toolchains::emsdk::{run_with_emsdk, setup_emsdk, EmscriptenToolchain};
 use crate::toolchains::ninja::setup_ninja;
 use crate::toolchains::source::ensure_llama_cpp_submodule;
 use crate::utils::BuildContext;
@@ -28,7 +28,7 @@ pub fn build(
     output::path("WASM artifact directory", &ctx.npm_browser_wasm_dir());
 
     ensure_llama_cpp_submodule(sh, ctx)?;
-    let emsdk_dir = setup_emsdk(sh, ctx)?;
+    let emscripten = setup_emsdk(sh, ctx)?;
     let cmake_bin_dir = setup_cmake(sh, ctx)?;
     let ninja_dir = setup_ninja(sh, ctx)?;
 
@@ -48,7 +48,7 @@ pub fn build(
                 sh,
                 ctx,
                 root,
-                &emsdk_dir,
+                &emscripten,
                 &cmake_bin_dir,
                 ninja_dir.as_deref(),
                 false,
@@ -64,7 +64,7 @@ pub fn build(
                 sh,
                 ctx,
                 root,
-                &emsdk_dir,
+                &emscripten,
                 &cmake_bin_dir,
                 ninja_dir.as_deref(),
                 true,
@@ -144,7 +144,7 @@ fn build_target(
     sh: &Shell,
     ctx: &BuildContext,
     root: &Path,
-    emsdk_dir: &Path,
+    emscripten: &EmscriptenToolchain,
     cmake_bin_dir: &Path,
     ninja_dir: Option<&Path>,
     use_pthreads: bool,
@@ -190,7 +190,7 @@ fn build_target(
 
     run_with_emsdk(
         sh,
-        emsdk_dir,
+        &emscripten.emsdk_dir,
         Some(cmake_bin_dir),
         ninja_dir,
         &format!("Compiling Rust staticlib for {js_file}"),
@@ -201,6 +201,7 @@ fn build_target(
     let wasm_dir = root.join("bindings").join("wasm");
     let wasm_source_dir = ctx.cmake_file_path(&wasm_dir);
     let rust_staticlib_cmake = ctx.cmake_file_path(&rust_staticlib);
+    let emdawnwebgpu_cmake = ctx.cmake_file_path(&emscripten.emdawnwebgpu_dir);
     let build_dir = cmake_build_dir(ctx, use_pthreads, runtime_flavor);
     sh.create_dir(&build_dir)?;
     output::path("CMake build directory", &build_dir);
@@ -223,16 +224,17 @@ fn build_target(
         "-DCE_WASM_USE_JSPI=OFF"
     };
     let emcmake_cmd = format!(
-        "emcmake cmake \"{}\" -G Ninja -DCMAKE_BUILD_TYPE=Release {} {} {} -DCE_WASM_RUST_STATICLIB=\"{}\"",
+        "emcmake cmake \"{}\" -G Ninja -DCMAKE_BUILD_TYPE=Release {} {} {} -DCE_WASM_RUST_STATICLIB=\"{}\" -DEMDAWNWEBGPU_DIR=\"{}\"",
         wasm_source_dir,
         cmake_thread_flag,
         cmake_webgpu_flag,
         cmake_jspi_flag,
-        rust_staticlib_cmake
+        rust_staticlib_cmake,
+        emdawnwebgpu_cmake
     );
     run_with_emsdk(
         sh,
-        emsdk_dir,
+        &emscripten.emsdk_dir,
         Some(cmake_bin_dir),
         ninja_dir,
         &format!("Configuring CMake for {artifact_name}"),
@@ -242,7 +244,7 @@ fn build_target(
     let build_cmd = "cmake --build . --parallel";
     run_with_emsdk(
         sh,
-        emsdk_dir,
+        &emscripten.emsdk_dir,
         Some(cmake_bin_dir),
         ninja_dir,
         &format!("Building browser runtime for {artifact_name}"),

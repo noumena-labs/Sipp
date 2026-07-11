@@ -2,7 +2,7 @@
 
 use crate::output;
 use crate::utils::BuildContext;
-use anyhow::{Context, Result};
+use anyhow::{Result};
 use std::path::{Path, PathBuf};
 use xshell::{cmd, Shell};
 
