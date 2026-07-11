@@ -22,7 +22,7 @@ mod emsdk_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 const EMSDK_VERSION: &str = "5.0.6";
-const EMDAWNWEBGPU_VERSION: &str = "v20260624.223603";
+const EMDAWNWEBGPU_VERSION: &str = "v20260317.182325";
 const RUST_EMSCRIPTEN_TARGET: &str = "wasm32-unknown-emscripten";
 
 #[derive(Clone, Debug)]
