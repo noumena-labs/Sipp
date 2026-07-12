@@ -156,23 +156,104 @@ fn encoder_decoder_rewrite_preserves_source_input_token_count() {
 }
 
 #[test]
-fn encoder_batch_token_count_sums_admitted_prompt_tokens() {
-    let slots = vec![
-        admitted_encoder_slot(0, 7, 0, vec![11, 12, 13]),
-        admitted_encoder_slot(1, 8, 1, vec![21, 22]),
-    ];
+fn encoder_admission_batch_accepts_prompt_at_ubatch_limit() {
+    let slots = vec![admitted_encoder_slot(0, 7, 0, vec![11, 12, 13])];
 
-    let token_count =
-        super::encoder_batch_token_count(&slots, &[0, 1]).expect("encoder batch token count");
+    let batch =
+        super::next_encoder_admission_batch(&slots, &[0], 0, 3).expect("encoder admission batch");
 
-    assert_eq!(token_count, 5);
+    assert_eq!(
+        batch,
+        super::EncoderAdmissionBatch::Ready {
+            end: 1,
+            token_count: 3,
+        }
+    );
 }
 
 #[test]
-fn encoder_batch_token_count_rejects_empty_prompt() {
+fn encoder_admission_batch_rejects_prompt_above_ubatch_limit() {
+    let slots = vec![admitted_encoder_slot(0, 7, 0, vec![11, 12, 13, 14])];
+
+    let batch =
+        super::next_encoder_admission_batch(&slots, &[0], 0, 3).expect("encoder admission batch");
+
+    assert_eq!(
+        batch,
+        super::EncoderAdmissionBatch::Oversized { requested: 4 }
+    );
+}
+
+#[test]
+fn encoder_admission_batches_partition_concurrent_prompts_in_order() {
+    let slots = vec![
+        admitted_encoder_slot(0, 7, 0, vec![11, 12, 13]),
+        admitted_encoder_slot(1, 8, 1, vec![21, 22]),
+        admitted_encoder_slot(2, 9, 2, vec![31, 32, 33, 34]),
+    ];
+
+    let first = super::next_encoder_admission_batch(&slots, &[0, 1, 2], 0, 5)
+        .expect("first encoder admission batch");
+    let second = super::next_encoder_admission_batch(&slots, &[0, 1, 2], 2, 5)
+        .expect("second encoder admission batch");
+
+    assert_eq!(
+        first,
+        super::EncoderAdmissionBatch::Ready {
+            end: 2,
+            token_count: 5,
+        }
+    );
+    assert_eq!(
+        second,
+        super::EncoderAdmissionBatch::Ready {
+            end: 3,
+            token_count: 4,
+        }
+    );
+}
+
+#[test]
+fn encoder_admission_batches_isolate_oversized_concurrent_prompt() {
+    let slots = vec![
+        admitted_encoder_slot(0, 7, 0, vec![11, 12]),
+        admitted_encoder_slot(1, 8, 1, vec![21, 22, 23, 24, 25, 26]),
+        admitted_encoder_slot(2, 9, 2, vec![31, 32, 33]),
+    ];
+
+    let first = super::next_encoder_admission_batch(&slots, &[0, 1, 2], 0, 5)
+        .expect("first encoder admission batch");
+    let oversized = super::next_encoder_admission_batch(&slots, &[0, 1, 2], 1, 5)
+        .expect("oversized encoder prompt");
+    let last = super::next_encoder_admission_batch(&slots, &[0, 1, 2], 2, 5)
+        .expect("last encoder admission batch");
+
+    assert_eq!(
+        first,
+        super::EncoderAdmissionBatch::Ready {
+            end: 1,
+            token_count: 2,
+        }
+    );
+    assert_eq!(
+        oversized,
+        super::EncoderAdmissionBatch::Oversized { requested: 6 }
+    );
+    assert_eq!(
+        last,
+        super::EncoderAdmissionBatch::Ready {
+            end: 3,
+            token_count: 3,
+        }
+    );
+}
+
+#[test]
+fn encoder_admission_batch_rejects_empty_prompt() {
     let slots = vec![admitted_encoder_slot(0, 7, 0, Vec::new())];
 
-    let error = super::encoder_batch_token_count(&slots, &[0]).expect_err("empty encoder prompt");
+    let error =
+        super::next_encoder_admission_batch(&slots, &[0], 0, 3).expect_err("empty encoder prompt");
 
     assert!(matches!(
         error,
@@ -181,10 +262,11 @@ fn encoder_batch_token_count_rejects_empty_prompt() {
 }
 
 #[test]
-fn encoder_batch_token_count_rejects_missing_sequence_id() {
+fn encoder_admission_batch_rejects_missing_sequence_id() {
     let slots = vec![admitted_encoder_slot(0, 7, -1, vec![11])];
 
-    let error = super::encoder_batch_token_count(&slots, &[0]).expect_err("missing sequence id");
+    let error =
+        super::next_encoder_admission_batch(&slots, &[0], 0, 3).expect_err("missing sequence id");
 
     assert!(matches!(
         error,
