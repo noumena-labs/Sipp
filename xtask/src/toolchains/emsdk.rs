@@ -21,11 +21,18 @@ mod emsdk_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const EMSDK_VERSION: &str = "4.0.23";
+const EMSDK_VERSION: &str = "5.0.6";
+const EMDAWNWEBGPU_VERSION: &str = "v20260317.182325";
 const RUST_EMSCRIPTEN_TARGET: &str = "wasm32-unknown-emscripten";
 
+#[derive(Clone, Debug)]
+pub(crate) struct EmscriptenToolchain {
+    pub(crate) emsdk_dir: std::path::PathBuf,
+    pub(crate) emdawnwebgpu_dir: std::path::PathBuf,
+}
+
 /// Ensures the configured Emscripten SDK is cloned, installed, and active.
-pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<std::path::PathBuf> {
+pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<EmscriptenToolchain> {
     let toolchain_root = ctx.toolchain_dir();
     let emsdk_dir = toolchain_root.join("emsdk");
 
@@ -64,8 +71,88 @@ pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<std::path::P
     }
 
     ensure_rust_emscripten_target(sh)?;
+    let emdawnwebgpu_dir = ensure_emdawnwebgpu_port(sh, ctx)?;
 
-    Ok(emsdk_dir)
+    Ok(EmscriptenToolchain {
+        emsdk_dir,
+        emdawnwebgpu_dir,
+    })
+}
+
+fn ensure_emdawnwebgpu_port(sh: &Shell, ctx: &BuildContext) -> Result<std::path::PathBuf> {
+    let package_dir = emdawnwebgpu_package_dir(ctx);
+    if emdawnwebgpu_is_installed(&package_dir)? {
+        output::success(format!(
+            "Using emdawnwebgpu {EMDAWNWEBGPU_VERSION} at {}",
+            package_dir.display()
+        ));
+        return Ok(package_dir);
+    }
+
+    let install_dir = package_dir
+        .parent()
+        .context("failed to resolve emdawnwebgpu install directory")?;
+    let archive_name = format!("emdawnwebgpu_pkg-{EMDAWNWEBGPU_VERSION}.zip");
+    let archive_path = install_dir.join(&archive_name);
+    let url = format!(
+        "https://github.com/google/dawn/releases/download/{EMDAWNWEBGPU_VERSION}/{archive_name}"
+    );
+
+    output::phase("Emdawnwebgpu WebGPU port");
+    output::detail("Version", EMDAWNWEBGPU_VERSION);
+    output::path("Install directory", install_dir);
+    sh.create_dir(install_dir)?;
+    output::detail("Download", &url);
+    output::run_command(
+        "Downloading emdawnwebgpu",
+        cmd!(sh, "curl -f -L -o {archive_path} {url}"),
+    )?;
+    if cfg!(windows) {
+        output::run_command(
+            "Extracting emdawnwebgpu",
+            cmd!(sh, "tar -xf {archive_path} -C {install_dir}"),
+        )?;
+    } else {
+        output::run_command(
+            "Extracting emdawnwebgpu",
+            cmd!(sh, "unzip -oq {archive_path} -d {install_dir}"),
+        )?;
+    }
+    sh.remove_path(&archive_path)?;
+
+    if !emdawnwebgpu_is_installed(&package_dir)? {
+        bail!(
+            "emdawnwebgpu {EMDAWNWEBGPU_VERSION} was not installed at {}",
+            package_dir.display()
+        );
+    }
+
+    output::success(format!(
+        "Installed emdawnwebgpu {EMDAWNWEBGPU_VERSION} at {}",
+        package_dir.display()
+    ));
+    Ok(package_dir)
+}
+
+fn emdawnwebgpu_package_dir(ctx: &BuildContext) -> std::path::PathBuf {
+    ctx.toolchain_dir()
+        .join("emdawnwebgpu")
+        .join(EMDAWNWEBGPU_VERSION)
+        .join("emdawnwebgpu_pkg")
+}
+
+fn emdawnwebgpu_is_installed(package_dir: &Path) -> Result<bool> {
+    let port_file = package_dir.join("emdawnwebgpu.port.py");
+    if !port_file.exists() {
+        return Ok(false);
+    }
+
+    let version_file = package_dir.join("VERSION.txt");
+    let Ok(version) = std::fs::read_to_string(&version_file) else {
+        return Ok(false);
+    };
+
+    Ok(version.contains(&format!("Dawn release {EMDAWNWEBGPU_VERSION}")))
 }
 
 /// Runs a command after loading the Emscripten environment.

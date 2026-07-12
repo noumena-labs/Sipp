@@ -264,40 +264,18 @@ endif()
 # ======================================================================================
 # WebGPU Port Configuration
 # ======================================================================================
-if(NOT EMDAWNWEBGPU_DIR)
-    set(_ce_emdawnwebgpu_candidates
-        "${CMAKE_SOURCE_DIR}/../Libs/emdawnwebgpu_pkg"
-    )
-
-    if(DEFINED EMSCRIPTEN_ROOT_PATH AND EMSCRIPTEN_ROOT_PATH)
-        list(APPEND _ce_emdawnwebgpu_candidates
-            "${EMSCRIPTEN_ROOT_PATH}/cache/ports/emdawnwebgpu/emdawnwebgpu_pkg"
-        )
+if(CE_WASM_ENABLE_WEBGPU)
+    if(NOT EMDAWNWEBGPU_DIR)
+        message(FATAL_ERROR "CE_WASM_ENABLE_WEBGPU requires EMDAWNWEBGPU_DIR")
     endif()
-
-    if(DEFINED EMSDK AND EMSDK)
-        list(APPEND _ce_emdawnwebgpu_candidates
-            "${EMSDK}/upstream/emscripten/cache/ports/emdawnwebgpu/emdawnwebgpu_pkg"
-        )
-    endif()
-
-    foreach(_ce_emdawnwebgpu_candidate IN LISTS _ce_emdawnwebgpu_candidates)
-        if(EXISTS "${_ce_emdawnwebgpu_candidate}/emdawnwebgpu.port.py")
-            set(EMDAWNWEBGPU_DIR "${_ce_emdawnwebgpu_candidate}" CACHE PATH "Path to the emdawnwebgpu port package" FORCE)
-            break()
-        endif()
-    endforeach()
-endif()
-
-if(EMDAWNWEBGPU_DIR)
     set(CE_WEBGPU_PORT "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
 else()
-    set(CE_WEBGPU_PORT "--use-port=emdawnwebgpu")
+    set(CE_WEBGPU_PORT "disabled")
 endif()
 
-# The ggml-webgpu target injects the emdawnwebgpu port itself. Keep discovery here
-# for status output and downstream checks, but do not append the port globally or
-# Emscripten will reject the duplicated port registration.
+# The ggml-webgpu target injects the emdawnwebgpu port itself. Keep the resolved
+# flag here for status output, but do not append the port globally or Emscripten
+# will reject the duplicated port registration.
 
 # ======================================================================================
 # Status Output
