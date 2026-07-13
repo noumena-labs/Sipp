@@ -23,7 +23,7 @@ fn request(id: GenerateRequestId, context_key: &str) -> GenerateRequest {
 fn admission(seq_id: i32) -> KvCacheAdmission {
     KvCacheAdmission {
         seq_id,
-        generation: 1,
+        lease_epoch: 1,
         mirror: SequenceMirror::default(),
         candidate: CacheCandidate::None,
         requires_kv_clear: true,

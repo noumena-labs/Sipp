@@ -45,7 +45,7 @@ fn warm_reuse_moves_idle_tokens_into_admission_mirror() {
     manager.finalize_slot(
         "ctx",
         cold.seq_id,
-        cold.generation,
+        cold.lease_epoch,
         mirror(&[1, 2, 3, 4]),
         true,
         KvReuseMode::LiveSlotPrefix,
@@ -56,7 +56,7 @@ fn warm_reuse_moves_idle_tokens_into_admission_mirror() {
         .expect("warm admission");
     assert_eq!(warm.candidate, CacheCandidate::Live);
     assert_eq!(warm.seq_id, cold.seq_id);
-    assert_eq!(warm.generation, cold.generation);
+    assert!(warm.lease_epoch > cold.lease_epoch);
     assert!(!warm.requires_kv_clear);
     assert_eq!(warm.mirror.current_kv_tokens, vec![1, 2, 3, 4]);
 }
@@ -71,7 +71,7 @@ fn stale_resident_ref_never_reuses_reassigned_sequence() {
     manager.finalize_slot(
         "a",
         a.seq_id,
-        a.generation,
+        a.lease_epoch,
         mirror(&[1, 2, 3]),
         true,
         KvReuseMode::LiveSlotPrefix,
@@ -82,12 +82,12 @@ fn stale_resident_ref_never_reuses_reassigned_sequence() {
         .expect("b admission");
     assert_eq!(b.candidate, CacheCandidate::None);
     assert_eq!(b.seq_id, a.seq_id);
-    assert!(b.generation > a.generation);
+    assert!(b.lease_epoch > a.lease_epoch);
     assert!(b.requires_kv_clear);
     manager.finalize_slot(
         "b",
         b.seq_id,
-        b.generation,
+        b.lease_epoch,
         mirror(&[9, 8, 7]),
         true,
         KvReuseMode::LiveSlotPrefix,
@@ -98,7 +98,7 @@ fn stale_resident_ref_never_reuses_reassigned_sequence() {
         .expect("a return admission");
     assert_eq!(a_return.candidate, CacheCandidate::None);
     assert_eq!(a_return.seq_id, a.seq_id);
-    assert!(a_return.generation > b.generation);
+    assert!(a_return.lease_epoch > b.lease_epoch);
     assert!(a_return.requires_kv_clear);
     assert!(a_return.mirror.current_kv_tokens.is_empty());
 }
@@ -113,7 +113,7 @@ fn disabled_mode_success_evicts_live_residency() {
     manager.finalize_slot(
         "ctx",
         admission.seq_id,
-        admission.generation,
+        admission.lease_epoch,
         mirror(&[1, 2, 3]),
         true,
         KvReuseMode::Disabled,
@@ -123,7 +123,7 @@ fn disabled_mode_success_evicts_live_residency() {
         .admit("ctx", KvReuseMode::LiveSlotPrefix, false)
         .expect("next admission");
     assert_eq!(next.candidate, CacheCandidate::None);
-    assert!(next.generation > admission.generation);
+    assert!(next.lease_epoch > admission.lease_epoch);
     assert!(next.requires_kv_clear);
     assert!(next.mirror.current_kv_tokens.is_empty());
 }
@@ -140,19 +140,19 @@ fn can_admit_is_false_when_every_sequence_is_leased() {
 }
 
 #[test]
-fn forced_reset_releases_in_flight_state_and_bumps_generation() {
+fn forced_reset_releases_in_flight_state_and_bumps_lease_epoch() {
     let mut manager = KvCacheManager::new(1);
 
     let admission = manager
         .admit("ctx", KvReuseMode::LiveSlotPrefix, false)
         .expect("admission");
-    manager.release_slot_for_reset("ctx", admission.seq_id, admission.generation);
+    manager.release_slot_for_reset("ctx", admission.seq_id, admission.lease_epoch);
 
     let next = manager
         .admit("ctx", KvReuseMode::LiveSlotPrefix, false)
         .expect("next admission");
     assert_eq!(next.candidate, CacheCandidate::None);
-    assert!(next.generation > admission.generation);
+    assert!(next.lease_epoch > admission.lease_epoch);
     assert!(next.requires_kv_clear);
 }
 
@@ -163,18 +163,18 @@ fn stale_finalize_does_not_overwrite_new_lease() {
     let stale = manager
         .admit("stale", KvReuseMode::LiveSlotPrefix, false)
         .expect("stale admission");
-    manager.release_slot_for_reset("stale", stale.seq_id, stale.generation);
+    manager.release_slot_for_reset("stale", stale.seq_id, stale.lease_epoch);
 
     let current = manager
         .admit("current", KvReuseMode::LiveSlotPrefix, false)
         .expect("current admission");
-    assert!(current.generation > stale.generation);
+    assert!(current.lease_epoch > stale.lease_epoch);
     assert!(current.requires_kv_clear);
 
     manager.finalize_slot(
         "stale",
         stale.seq_id,
-        stale.generation,
+        stale.lease_epoch,
         mirror(&[1, 2, 3]),
         true,
         KvReuseMode::LiveSlotPrefix,
@@ -190,29 +190,29 @@ fn stale_finalize_does_not_overwrite_new_lease() {
 }
 
 #[test]
-fn stale_generation_callbacks_do_not_clear_new_same_context_lease() {
+fn stale_lease_epoch_callbacks_do_not_clear_new_same_context_lease() {
     let mut manager = KvCacheManager::new(1);
 
     let stale = manager
         .admit("ctx", KvReuseMode::LiveSlotPrefix, false)
         .expect("stale admission");
-    manager.release_slot_for_reset("ctx", stale.seq_id, stale.generation);
+    manager.release_slot_for_reset("ctx", stale.seq_id, stale.lease_epoch);
 
     let current = manager
         .admit("ctx", KvReuseMode::LiveSlotPrefix, false)
         .expect("current admission");
-    assert!(current.generation > stale.generation);
+    assert!(current.lease_epoch > stale.lease_epoch);
     assert!(current.requires_kv_clear);
 
     manager.finalize_slot(
         "ctx",
         stale.seq_id,
-        stale.generation,
+        stale.lease_epoch,
         mirror(&[1, 2, 3]),
         true,
         KvReuseMode::LiveSlotPrefix,
     );
-    manager.release_slot_for_reset("ctx", stale.seq_id, stale.generation);
+    manager.release_slot_for_reset("ctx", stale.seq_id, stale.lease_epoch);
 
     let index = usize::try_from(current.seq_id).expect("current seq index");
     assert!(matches!(manager.physical[index].state, SeqState::Leased));
@@ -232,7 +232,7 @@ fn bypass_cache_forces_cold_admission_even_with_live_resident() {
     manager.finalize_slot(
         "ctx",
         initial.seq_id,
-        initial.generation,
+        initial.lease_epoch,
         mirror(&[1, 2, 3]),
         true,
         KvReuseMode::LiveSlotPrefix,
@@ -242,7 +242,7 @@ fn bypass_cache_forces_cold_admission_even_with_live_resident() {
         .admit("ctx", KvReuseMode::LiveSlotPrefix, true)
         .expect("bypass admission");
     assert_eq!(bypass.candidate, CacheCandidate::None);
-    assert!(bypass.generation > initial.generation);
+    assert!(bypass.lease_epoch > initial.lease_epoch);
     assert!(bypass.requires_kv_clear);
     assert!(bypass.mirror.current_kv_tokens.is_empty());
 }
@@ -257,7 +257,7 @@ fn lru_scan_drops_stale_residents_and_evicts_only_valid_idle_sequence() {
     manager.finalize_slot(
         "stale",
         stale.seq_id,
-        stale.generation,
+        stale.lease_epoch,
         mirror(&[1, 2, 3]),
         true,
         KvReuseMode::LiveSlotPrefix,
@@ -268,13 +268,13 @@ fn lru_scan_drops_stale_residents_and_evicts_only_valid_idle_sequence() {
     manager.finalize_slot(
         "valid",
         valid.seq_id,
-        valid.generation,
+        valid.lease_epoch,
         mirror(&[4, 5, 6]),
         true,
         KvReuseMode::LiveSlotPrefix,
     );
 
-    manager.physical[usize::try_from(stale.seq_id).expect("stale seq index")].generation += 1;
+    manager.physical[usize::try_from(stale.seq_id).expect("stale seq index")].lease_epoch += 1;
     manager.idle_lru.clear();
     manager.idle_lru.push_back("stale".to_string());
     manager.idle_lru.push_back("valid".to_string());
@@ -283,7 +283,7 @@ fn lru_scan_drops_stale_residents_and_evicts_only_valid_idle_sequence() {
         SessionRecord {
             resident: Some(ResidentRef {
                 seq_id: stale.seq_id,
-                generation: stale.generation,
+                lease_epoch: stale.lease_epoch,
             }),
             in_flight: false,
         },
@@ -316,7 +316,7 @@ fn state_snapshot_success_does_not_keep_live_residency() {
     manager.finalize_slot(
         "ctx",
         admission.seq_id,
-        admission.generation,
+        admission.lease_epoch,
         mirror(&[1, 2, 3]),
         true,
         KvReuseMode::StateSnapshot,
@@ -326,7 +326,7 @@ fn state_snapshot_success_does_not_keep_live_residency() {
         .admit("ctx", KvReuseMode::LiveSlotPrefix, false)
         .expect("next admission");
     assert_eq!(next.candidate, CacheCandidate::None);
-    assert!(next.generation > admission.generation);
+    assert!(next.lease_epoch > admission.lease_epoch);
     assert!(next.requires_kv_clear);
     assert!(next.mirror.current_kv_tokens.is_empty());
 }
@@ -341,7 +341,7 @@ fn failed_slot_evicts_live_residency() {
     manager.finalize_slot(
         "ctx",
         admission.seq_id,
-        admission.generation,
+        admission.lease_epoch,
         mirror(&[1, 2, 3]),
         false,
         KvReuseMode::LiveSlotPrefix,
@@ -351,7 +351,7 @@ fn failed_slot_evicts_live_residency() {
         .admit("ctx", KvReuseMode::LiveSlotPrefix, false)
         .expect("next admission");
     assert_eq!(next.candidate, CacheCandidate::None);
-    assert!(next.generation > admission.generation);
+    assert!(next.lease_epoch > admission.lease_epoch);
     assert!(next.requires_kv_clear);
 }
 
@@ -367,13 +367,48 @@ fn queued_snapshot_is_dropped_when_sequence_is_released() {
         7,
         "ctx",
         admission.seq_id,
-        admission.generation,
+        admission.lease_epoch,
         &[1, 2],
         2,
     ));
     assert_eq!(manager.pending_prefix_snapshot_count(), 1);
 
-    manager.release_slot_for_reset("ctx", admission.seq_id, admission.generation);
+    manager.release_slot_for_reset("ctx", admission.seq_id, admission.lease_epoch);
 
+    assert_eq!(manager.pending_prefix_snapshot_count(), 0);
+}
+
+#[test]
+fn warm_reuse_invalidates_pending_snapshot_and_advances_lease_epoch() {
+    let mut manager = KvCacheManager::new(1);
+
+    let admission = manager
+        .admit("ctx", KvReuseMode::LiveSlotAndSnapshot, false)
+        .expect("admission");
+    assert!(manager.queue_prefix_snapshot(
+        7,
+        "ctx",
+        admission.seq_id,
+        admission.lease_epoch,
+        &[1, 2],
+        2,
+    ));
+    manager.finalize_slot(
+        "ctx",
+        admission.seq_id,
+        admission.lease_epoch,
+        mirror(&[1, 2, 3]),
+        true,
+        KvReuseMode::LiveSlotAndSnapshot,
+    );
+    assert_eq!(manager.pending_prefix_snapshot_count(), 1);
+
+    let warm = manager
+        .admit("ctx", KvReuseMode::LiveSlotAndSnapshot, false)
+        .expect("warm admission");
+
+    assert_eq!(warm.candidate, CacheCandidate::Live);
+    assert_eq!(warm.seq_id, admission.seq_id);
+    assert!(warm.lease_epoch > admission.lease_epoch);
     assert_eq!(manager.pending_prefix_snapshot_count(), 0);
 }

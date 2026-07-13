@@ -5,10 +5,10 @@
 use super::*;
 use crate::runtime::session::{CacheCandidate, KvCacheAdmission, SequenceMirror};
 
-fn admission(seq_id: i32, generation: u64, tokens: Vec<i32>) -> KvCacheAdmission {
+fn admission(seq_id: i32, lease_epoch: u64, tokens: Vec<i32>) -> KvCacheAdmission {
     KvCacheAdmission {
         seq_id,
-        generation,
+        lease_epoch,
         mirror: SequenceMirror {
             n_past: tokens.len() as i32,
             current_kv_tokens: tokens,
@@ -36,7 +36,7 @@ fn attach_request_copies_session_mirror_and_resets_slot_progress() {
     assert_eq!(slot.slot_id, 3);
     assert_eq!(slot.request_id, 42);
     assert_eq!(slot.seq_id, 7);
-    assert_eq!(slot.lease_generation, 11);
+    assert_eq!(slot.lease_epoch, 11);
     assert_eq!(slot.cache_candidate, CacheCandidate::Live);
     assert!(!slot.requires_kv_clear);
     assert_eq!(slot.phase, SlotPhase::Admitted);
@@ -60,7 +60,7 @@ fn reset_to_idle_clears_request_and_runtime_buffers() {
 
     assert_eq!(slot.phase, SlotPhase::Idle);
     assert_eq!(slot.seq_id, -1);
-    assert_eq!(slot.lease_generation, 0);
+    assert_eq!(slot.lease_epoch, 0);
     assert_eq!(slot.cache_candidate, CacheCandidate::None);
     assert!(!slot.requires_kv_clear);
     assert_eq!(slot.request_id, 0);

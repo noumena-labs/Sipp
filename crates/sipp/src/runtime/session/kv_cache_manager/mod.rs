@@ -6,6 +6,7 @@ use crate::runtime::metrics::CacheSource;
 use crate::runtime::numeric::saturating_usize_to_u64;
 use crate::runtime::{llama_seq_id, llama_token};
 
+use super::prefix_cache_policy::{mix_prefix_hash_token, PREFIX_HASH_SEED};
 use super::prefix_state_cache::PendingPrefixSnapshot;
 use super::{PrefixCachePolicy, PrefixStateCache};
 
@@ -31,7 +32,7 @@ pub struct CachePreparation {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct KvCacheAdmission {
     pub seq_id: llama_seq_id,
-    pub generation: u64,
+    pub lease_epoch: u64,
     pub mirror: SequenceMirror,
     pub candidate: CacheCandidate,
     pub requires_kv_clear: bool,
@@ -46,7 +47,7 @@ pub(crate) struct SnapshotRestore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ResidentRef {
     seq_id: llama_seq_id,
-    generation: u64,
+    lease_epoch: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -57,7 +58,7 @@ struct SessionRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PhysicalSequence {
-    generation: u64,
+    lease_epoch: u64,
     state: SeqState,
 }
 
@@ -97,7 +98,7 @@ impl KvCacheManager {
             idle_lru: VecDeque::with_capacity(max_sequences),
             physical: (0..max_sequences)
                 .map(|_| PhysicalSequence {
-                    generation: 0,
+                    lease_epoch: 0,
                     state: SeqState::Free,
                 })
                 .collect(),
@@ -152,19 +153,25 @@ impl KvCacheManager {
         &mut self,
         context_key: &str,
         seq_id: llama_seq_id,
-        generation: u64,
+        lease_epoch: u64,
         mirror: SequenceMirror,
         completed: bool,
         mode: KvReuseMode,
     ) {
-        if !self.sequence_generation_matches(seq_id, generation) {
+        if !self.sequence_lease_epoch_matches(seq_id, lease_epoch) {
             return;
         }
 
         if completed && live_reuse_enabled(mode) {
             if let Some(index) = seq_index(seq_id, self.physical.len()) {
                 self.physical[index].state = SeqState::Idle { mirror };
-                self.set_session_idle(context_key, ResidentRef { seq_id, generation });
+                self.set_session_idle(
+                    context_key,
+                    ResidentRef {
+                        seq_id,
+                        lease_epoch,
+                    },
+                );
             }
         } else {
             self.evict_sequence(seq_id);
@@ -176,9 +183,9 @@ impl KvCacheManager {
         &mut self,
         context_key: &str,
         seq_id: llama_seq_id,
-        generation: u64,
+        lease_epoch: u64,
     ) {
-        if !self.sequence_generation_matches(seq_id, generation) {
+        if !self.sequence_lease_epoch_matches(seq_id, lease_epoch) {
             return;
         }
         self.evict_sequence(seq_id);
@@ -188,7 +195,7 @@ impl KvCacheManager {
     pub fn evict_all_active_and_idle(&mut self) {
         for index in 0..self.physical.len() {
             self.physical[index].state = SeqState::Free;
-            self.physical[index].generation = self.physical[index].generation.saturating_add(1);
+            self.physical[index].lease_epoch = self.physical[index].lease_epoch.saturating_add(1);
         }
         self.sessions.clear();
         self.idle_lru.clear();
@@ -264,7 +271,7 @@ impl KvCacheManager {
         model_fingerprint: u64,
         snapshot_scope: &str,
         seq_id: llama_seq_id,
-        generation: u64,
+        lease_epoch: u64,
         tokens: &[llama_token],
         terminal_token_count: usize,
     ) -> bool {
@@ -279,7 +286,7 @@ impl KvCacheManager {
         self.prefix_state_cache
             .enqueue_pending_snapshot(PendingPrefixSnapshot {
                 seq_id,
-                generation,
+                lease_epoch,
                 model_fingerprint,
                 snapshot_scope: snapshot_scope.to_string(),
                 token_count,
@@ -295,19 +302,13 @@ impl KvCacheManager {
         native_runtime: &NativeRuntimeHandle,
         max_to_drain: usize,
     ) -> usize {
-        let generations_by_seq: Vec<u64> = self
-            .physical
-            .iter()
-            .map(|sequence| sequence.generation)
-            .collect();
+        let physical = &self.physical;
+        let sessions = &self.sessions;
         let prefix_cache_policy = &mut self.prefix_cache_policy;
         self.prefix_state_cache.drain_pending_snapshots(
             native_runtime,
             max_to_drain,
-            |seq_id, generation| {
-                seq_index(seq_id, generations_by_seq.len())
-                    .is_some_and(|index| generations_by_seq[index] == generation)
-            },
+            |snapshot| pending_snapshot_source_is_current(snapshot, physical, sessions),
             |token_count| prefix_cache_policy.record_store(token_count),
         )
     }
@@ -320,18 +321,22 @@ impl KvCacheManager {
     fn try_admit_warm(&mut self, context_key: &str) -> Option<KvCacheAdmission> {
         let resident = self.sessions.get(context_key)?.resident?;
         let index = self.valid_resident_index(resident)?;
+        self.prefix_state_cache
+            .drop_pending_snapshots_for_seq(resident.seq_id);
         let SeqState::Idle { mirror } =
             std::mem::replace(&mut self.physical[index].state, SeqState::Leased)
         else {
             return None;
         };
+        self.physical[index].lease_epoch = self.physical[index].lease_epoch.saturating_add(1);
+        let lease_epoch = self.physical[index].lease_epoch;
         self.remove_lru_key(context_key);
         let record = self.sessions.get_mut(context_key)?;
         record.resident = None;
         record.in_flight = true;
         Some(KvCacheAdmission {
             seq_id: resident.seq_id,
-            generation: resident.generation,
+            lease_epoch,
             mirror,
             candidate: CacheCandidate::Live,
             requires_kv_clear: false,
@@ -344,7 +349,7 @@ impl KvCacheManager {
         self.prefix_state_cache
             .drop_pending_snapshots_for_seq(seq_id);
         self.physical[index].state = SeqState::Free;
-        self.physical[index].generation = self.physical[index].generation.saturating_add(1);
+        self.physical[index].lease_epoch = self.physical[index].lease_epoch.saturating_add(1);
         self.physical[index].state = SeqState::Leased;
         self.remove_lru_key(context_key);
         match self.sessions.entry(context_key.to_string()) {
@@ -362,7 +367,7 @@ impl KvCacheManager {
         }
         Some(KvCacheAdmission {
             seq_id,
-            generation: self.physical[index].generation,
+            lease_epoch: self.physical[index].lease_epoch,
             mirror: SequenceMirror::default(),
             candidate: CacheCandidate::None,
             requires_kv_clear,
@@ -440,7 +445,7 @@ impl KvCacheManager {
         self.prefix_state_cache
             .drop_pending_snapshots_for_seq(seq_id);
         self.physical[index].state = SeqState::Free;
-        self.physical[index].generation = self.physical[index].generation.saturating_add(1);
+        self.physical[index].lease_epoch = self.physical[index].lease_epoch.saturating_add(1);
     }
 
     fn prune_stale_idle_sessions(&mut self) {
@@ -496,14 +501,14 @@ impl KvCacheManager {
     fn valid_resident_index(&self, resident: ResidentRef) -> Option<usize> {
         let index = seq_index(resident.seq_id, self.physical.len())?;
         let sequence = &self.physical[index];
-        (sequence.generation == resident.generation
+        (sequence.lease_epoch == resident.lease_epoch
             && matches!(sequence.state, SeqState::Idle { .. }))
         .then_some(index)
     }
 
-    fn sequence_generation_matches(&self, seq_id: llama_seq_id, generation: u64) -> bool {
+    fn sequence_lease_epoch_matches(&self, seq_id: llama_seq_id, lease_epoch: u64) -> bool {
         seq_index(seq_id, self.physical.len())
-            .is_some_and(|index| self.physical[index].generation == generation)
+            .is_some_and(|index| self.physical[index].lease_epoch == lease_epoch)
     }
 
     fn refresh_lru_key(&mut self, context_key: &str) {
@@ -544,7 +549,85 @@ fn max_representable_sequences() -> usize {
 }
 
 fn free_sequence_requires_clear(sequence: &PhysicalSequence) -> bool {
-    sequence.generation > 0
+    sequence.lease_epoch > 0
+}
+
+fn pending_snapshot_source_is_current(
+    snapshot: &PendingPrefixSnapshot,
+    physical: &[PhysicalSequence],
+    sessions: &HashMap<String, SessionRecord>,
+) -> bool {
+    if snapshot.seq_id < 0
+        || snapshot.token_count == 0
+        || snapshot.token_count > snapshot.prefix_tokens.len()
+    {
+        return false;
+    }
+
+    let Some(index) = seq_index(snapshot.seq_id, physical.len()) else {
+        return false;
+    };
+    let sequence = &physical[index];
+    if sequence.lease_epoch != snapshot.lease_epoch {
+        return false;
+    }
+    let SeqState::Idle { mirror } = &sequence.state else {
+        return false;
+    };
+
+    let Some(record) = sessions.get(&snapshot.snapshot_scope) else {
+        return false;
+    };
+    if record.in_flight
+        || record.resident
+            != Some(ResidentRef {
+                seq_id: snapshot.seq_id,
+                lease_epoch: snapshot.lease_epoch,
+            })
+    {
+        return false;
+    }
+
+    prefix_hash_matches(
+        &snapshot.prefix_tokens,
+        snapshot.token_count,
+        snapshot.prefix_hash,
+    ) && mirror_covers_prefix(mirror, &snapshot.prefix_tokens, snapshot.token_count)
+}
+
+fn prefix_hash_matches(
+    prefix_tokens: &[llama_token],
+    token_count: usize,
+    expected_hash: u64,
+) -> bool {
+    if token_count == 0 || token_count > prefix_tokens.len() {
+        return false;
+    }
+
+    prefix_tokens[..token_count]
+        .iter()
+        .fold(PREFIX_HASH_SEED, |hash, &token| {
+            mix_prefix_hash_token(hash, token)
+        })
+        == expected_hash
+}
+
+fn mirror_covers_prefix(
+    mirror: &SequenceMirror,
+    prefix_tokens: &[llama_token],
+    token_count: usize,
+) -> bool {
+    if token_count == 0
+        || token_count > prefix_tokens.len()
+        || token_count > mirror.current_kv_tokens.len()
+    {
+        return false;
+    }
+    let Ok(n_past) = usize::try_from(mirror.n_past) else {
+        return false;
+    };
+
+    n_past >= token_count && mirror.current_kv_tokens[..token_count] == prefix_tokens[..token_count]
 }
 
 #[cfg(test)]

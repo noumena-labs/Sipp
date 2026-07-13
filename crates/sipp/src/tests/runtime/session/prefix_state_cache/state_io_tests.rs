@@ -29,13 +29,13 @@ fn request<'a>(
 
 fn pending_snapshot(
     seq_id: i32,
-    generation: u64,
+    lease_epoch: u64,
     snapshot_scope: &str,
     tokens: Vec<i32>,
 ) -> PendingPrefixSnapshot {
     PendingPrefixSnapshot {
         seq_id,
-        generation,
+        lease_epoch,
         model_fingerprint: 7,
         snapshot_scope: snapshot_scope.to_string(),
         token_count: tokens.len(),
@@ -125,13 +125,13 @@ fn drop_pending_snapshots_for_seq_removes_only_matching_sequence() {
 }
 
 #[test]
-fn drain_pending_snapshots_drops_stale_generation_without_store() {
+fn drain_pending_snapshots_drops_stale_source_without_store() {
     let mut cache = PrefixStateCache::new(4, 1024);
     let runtime = NativeRuntimeHandle::empty_for_tests();
     cache.enqueue_pending_snapshot(pending_snapshot(0, 11, "ctx", vec![1, 2]));
 
     let drained =
-        cache.drain_pending_snapshots(&runtime, 2, |_seq_id, generation| generation == 12, |_| {});
+        cache.drain_pending_snapshots(&runtime, 2, |snapshot| snapshot.lease_epoch == 12, |_| {});
 
     assert_eq!(drained, 1);
     assert_eq!(cache.pending_snapshot_count(), 0);

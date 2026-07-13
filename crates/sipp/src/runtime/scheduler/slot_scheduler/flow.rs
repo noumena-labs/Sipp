@@ -153,7 +153,7 @@ impl SlotScheduler {
                 kv_cache.finalize_slot(
                     &request_val.context_key,
                     slot.seq_id,
-                    slot.lease_generation,
+                    slot.lease_epoch,
                     std::mem::take(&mut slot.mirror),
                     should_commit_live,
                     cache_mode,
@@ -230,7 +230,7 @@ fn release_slot_for_reset(kv_cache: &mut KvCacheManager, slot: &SlotState) {
     let Some(request) = slot.request() else {
         return;
     };
-    kv_cache.release_slot_for_reset(&request.context_key, slot.seq_id, slot.lease_generation);
+    kv_cache.release_slot_for_reset(&request.context_key, slot.seq_id, slot.lease_epoch);
 }
 
 fn completed_slot_status(
