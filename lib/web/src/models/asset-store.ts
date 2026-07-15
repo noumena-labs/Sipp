@@ -7,7 +7,6 @@ import {
   type QueryErrorCode,
   type RegistryManifest,
 } from './types.js';
-import { currentLocationHref, resolveUrl } from '../utils/url.js';
 
 const DEFAULT_BROWSER_DIRECT_LOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_BROWSER_SHARD_MAX_BYTES = 512 * 1024 * 1024;
@@ -56,12 +55,17 @@ export interface GgufSplitRuntime {
 }
 
 export interface RemoteAssetMetadata {
-  url: string;
-  canonicalUrl: string;
-  name: string;
-  bytes: number;
-  etag: string;
-  lastModified: string;
+  readonly url: string;
+  readonly canonicalUrl: string;
+  readonly name: string;
+  readonly bytes: number;
+  readonly etag?: string;
+  readonly lastModified?: string;
+}
+
+export interface RemoteStoreReceipt {
+  readonly records: readonly AssetRecord[];
+  readonly createdAssetIds: readonly string[];
 }
 
 export interface InstallAssetInput {
@@ -104,15 +108,6 @@ function normalizeAssetName(name: string): string {
   const trimmed = name.trim();
   const defaultValue = trimmed.length > 0 ? trimmed : 'model.gguf';
   return defaultValue.replace(/[\\/:*?"<>|]+/g, '-');
-}
-
-function fileNameFromUrl(url: string): string {
-  try {
-    const parsed = new URL(url, currentLocationHref());
-    return normalizeAssetName(decodeURIComponent(parsed.pathname.split('/').pop() || 'model.gguf'));
-  } catch {
-    return normalizeAssetName(url.split('/').pop()?.split('?')[0] ?? 'model.gguf');
-  }
 }
 
 function toFile(blob: Blob, name: string): File {
@@ -200,9 +195,9 @@ async function remoteSourceFingerprint(metadata: RemoteAssetMetadata): Promise<s
     'remote-asset-v1\n',
     metadata.canonicalUrl,
     '\n',
-    metadata.etag,
+    metadata.etag ?? '',
     '\n',
-    metadata.lastModified,
+    metadata.lastModified ?? '',
     '\n',
     String(metadata.bytes),
   ]);
@@ -294,88 +289,39 @@ export class AssetStore {
     }
   }
 
-  public requiresBrowserSplit(sourceBytes: number): boolean {
-    return sourceBytes > this.browserCachePolicy.directLoadMaxBytes;
-  }
-
-  public async resolveRemoteMetadata(rawUrl: string, signal?: AbortSignal): Promise<RemoteAssetMetadata> {
-    this.ensureAvailable();
-    const canonicalUrl = this.parseUrl(rawUrl).toString();
-    let response: Response;
-    try {
-      response = await fetch(canonicalUrl, { method: 'HEAD', signal });
-    } catch (error) {
-      throw new QueryError(
-        'REMOTE_METADATA_UNAVAILABLE',
-        `Unable to read model metadata for "${canonicalUrl}".`,
-        { cause: error }
-      );
-    }
-    if (!response.ok) {
-      throw new QueryError(
-        'REMOTE_METADATA_UNAVAILABLE',
-        `Unable to read model metadata for "${canonicalUrl}" (HTTP ${response.status}).`
-      );
-    }
-
-    const bytes = Number.parseInt(response.headers.get('Content-Length') ?? '', 10);
-    const etag = response.headers.get('ETag')?.trim() ?? '';
-    const lastModified = response.headers.get('Last-Modified')?.trim() ?? '';
-    if (!Number.isFinite(bytes) || bytes <= 0 || (etag.length === 0 && lastModified.length === 0)) {
-      throw new QueryError(
-        'REMOTE_METADATA_UNAVAILABLE',
-        `Remote model "${canonicalUrl}" must provide Content-Length and either ETag or Last-Modified.`
-      );
-    }
-
-    return {
-      url: rawUrl,
-      canonicalUrl,
-      name: fileNameFromUrl(canonicalUrl),
-      bytes,
-      etag,
-      lastModified,
-    };
-  }
-
   public async downloadRemote(
     metadata: RemoteAssetMetadata,
     kind: ModelAssetKind,
+    response: Response,
     signal?: AbortSignal,
     onProgress?: (progress: ModelLoadProgress) => void
-  ): Promise<AssetRecord> {
+  ): Promise<RemoteStoreReceipt> {
     this.ensureAvailable();
     const fingerprint = await remoteSourceFingerprint(metadata);
     const id = assetIdFromFingerprint(fingerprint);
     const storagePath = `${id}-${metadata.name}`;
     const existing = await this.storage.getFile(storagePath);
     if (existing != null && existing.size === metadata.bytes) {
-      return this.buildAssetRecord({
-        id,
-        kind,
-        name: metadata.name,
-        bytes: metadata.bytes,
-        storagePath,
-        sourceUrl: metadata.canonicalUrl,
-        sourceEtag: metadata.etag,
-        sourceLastModified: metadata.lastModified,
-        sourceBytes: metadata.bytes,
-      });
+      return {
+        records: [this.buildAssetRecord({
+          id,
+          kind,
+          name: metadata.name,
+          bytes: metadata.bytes,
+          storagePath,
+          sourceUrl: metadata.canonicalUrl,
+          sourceEtag: metadata.etag,
+          sourceLastModified: metadata.lastModified,
+          sourceBytes: metadata.bytes,
+        })],
+        createdAssetIds: [],
+      };
     }
-
-    let response: Response;
-    try {
-      response = await fetch(metadata.canonicalUrl, { signal });
-    } catch (error) {
-      throw new QueryError('REMOTE_LOAD_FAILED', `Failed to download "${metadata.canonicalUrl}".`, {
-        cause: error,
-      });
+    if (existing != null) {
+      await this.storage.deleteFile(storagePath);
     }
-    if (!response.ok || response.body == null) {
-      throw new QueryError(
-        'REMOTE_LOAD_FAILED',
-        `Failed to download "${metadata.canonicalUrl}" (HTTP ${response.status}).`
-      );
+    if (response.body == null) {
+      throw new QueryError('REMOTE_LOAD_FAILED', 'Remote download response has no body.');
     }
 
     let file: File;
@@ -409,7 +355,7 @@ export class AssetStore {
       );
     }
 
-    return this.buildAssetRecord({
+    const record = this.buildAssetRecord({
       id,
       kind,
       name: metadata.name,
@@ -420,27 +366,18 @@ export class AssetStore {
       sourceLastModified: metadata.lastModified,
       sourceBytes: metadata.bytes,
     });
+    return { records: [record], createdAssetIds: [record.id] };
   }
 
-  public async downloadRemoteSplitGguf(
+  public async downloadRemoteGguf(
     metadata: RemoteAssetMetadata,
     runtime: GgufSplitRuntime,
+    response: Response,
     signal?: AbortSignal,
     onProgress?: (progress: ModelLoadProgress) => void
-  ): Promise<AssetRecord[]> {
+  ): Promise<RemoteStoreReceipt> {
     this.ensureAvailable();
     const policy = this.browserCachePolicy;
-    if (metadata.bytes <= policy.directLoadMaxBytes) {
-      return [await this.downloadRemote(metadata, 'model', signal, onProgress)];
-    }
-
-    if (!(await FileSystemStorage.isSyncAccessSupported())) {
-      throw new QueryError(
-        'STORAGE_UNAVAILABLE',
-        'Browser-only large GGUF splitting requires OPFS sync access handles. Run model loading in a browser worker with createSyncAccessHandle() support.'
-      );
-    }
-
     let layout: 'single-file' | 'split-gguf';
     try {
       layout = await runtime.browserCacheLayout(
@@ -457,29 +394,16 @@ export class AssetStore {
       );
     }
     if (layout !== 'split-gguf') {
-      return [
-        await this.downloadRemote(
-          metadata,
-          'model',
-          signal,
-          onProgress
-        ),
-      ];
+      return await this.downloadRemote(metadata, 'model', response, signal, onProgress);
     }
-
-    let response: Response;
-    try {
-      response = await fetch(metadata.canonicalUrl, { signal });
-    } catch (error) {
-      throw new QueryError('REMOTE_LOAD_FAILED', `Failed to download "${metadata.canonicalUrl}".`, {
-        cause: error,
-      });
-    }
-    if (!response.ok || response.body == null) {
+    if (!(await FileSystemStorage.isSyncAccessSupported())) {
       throw new QueryError(
-        'REMOTE_LOAD_FAILED',
-        `Failed to download "${metadata.canonicalUrl}" (HTTP ${response.status}).`
+        'STORAGE_UNAVAILABLE',
+        'Browser-only large GGUF splitting requires OPFS sync access handles. Run model loading in a browser worker with createSyncAccessHandle() support.'
       );
+    }
+    if (response.body == null) {
+      throw new QueryError('REMOTE_LOAD_FAILED', 'Remote download response has no body.');
     }
 
     const sourceKey = (await remoteSourceFingerprint(metadata)).slice(0, 24);
@@ -517,7 +441,7 @@ export class AssetStore {
       throw error;
     }
 
-    return await this.splitStoredGguf({
+    const records = await this.splitStoredGguf({
       sourcePath: sourceTempPath,
       sourceName: metadata.name,
       sourceBytes: metadata.bytes,
@@ -537,27 +461,21 @@ export class AssetStore {
         sourcePartCount: count,
       }),
     });
+    return {
+      records,
+      createdAssetIds: records.map((record) => record.id),
+    };
   }
 
-  public async installLocalSplitGguf(
+  public async installLocalGguf(
     file: File,
     runtime: GgufSplitRuntime,
+    manifest: RegistryManifest,
     signal?: AbortSignal,
     onProgress?: (progress: ModelLoadProgress) => void
   ): Promise<AssetRecord[]> {
     this.ensureAvailable();
     const policy = this.browserCachePolicy;
-    if (file.size <= policy.directLoadMaxBytes) {
-      return [await this.installFile({ kind: 'model', file, signal, onProgress })];
-    }
-
-    if (!(await FileSystemStorage.isSyncAccessSupported())) {
-      throw new QueryError(
-        'STORAGE_UNAVAILABLE',
-        'Browser-only large local GGUF splitting requires OPFS sync access handles. Run model loading in a browser worker with createSyncAccessHandle() support.'
-      );
-    }
-
     const name = normalizeAssetName(file.name || 'model.gguf');
     let layout: 'single-file' | 'split-gguf';
     try {
@@ -577,6 +495,13 @@ export class AssetStore {
     if (layout !== 'split-gguf') {
       return [await this.installFile({ kind: 'model', file, signal, onProgress })];
     }
+    if (!(await FileSystemStorage.isSyncAccessSupported())) {
+      throw new QueryError(
+        'STORAGE_UNAVAILABLE',
+        'Browser-only large local GGUF splitting requires OPFS sync access handles. Run model loading in a browser worker with createSyncAccessHandle() support.'
+      );
+    }
+    await this.cleanupBrowserSplitArtifacts(manifest);
 
     const sourceKey = (await localFileFingerprint(file, name)).slice(0, 24);
     const sourceTempPath = `tmp-local-source-${Date.now().toString(36)}-${Math.random()
@@ -787,14 +712,6 @@ export class AssetStore {
       sourceFileName: input.sourceFileName,
       sourceFileLastModified: input.sourceFileLastModified,
     });
-  }
-
-  private parseUrl(rawUrl: string): URL {
-    try {
-      return resolveUrl(rawUrl, 'model URL');
-    } catch {
-      throw new QueryError('INVALID_MODEL_SOURCE', `Invalid model URL "${rawUrl}".`);
-    }
   }
 
   private async splitStoredGguf(input: SplitStoredGgufInput): Promise<AssetRecord[]> {

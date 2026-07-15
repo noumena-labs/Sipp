@@ -170,7 +170,7 @@ export default function App() {
       setStatus('Downloading and loading model?');
       await client.add('local', {
         kind: 'local',
-        source: args.modelUrl,
+        source: { kind: 'remote', modelUrls: [args.modelUrl] },
         options: {
           onProgress: (progress: ModelLoadProgress) => {
             if (progress.phase === 'download') {

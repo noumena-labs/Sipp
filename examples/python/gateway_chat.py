@@ -9,6 +9,7 @@ from sipp import (
     ContextRuntimeConfig,
     GatewayDescriptor,
     LocalModelDescriptor,
+    ModelSource,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
@@ -94,7 +95,7 @@ def main() -> None:
     client = SippClient()
     local_endpoint = client.add(
         "local",
-        LocalModelDescriptor(model, runtime_config(embeddings=False)),
+        LocalModelDescriptor(ModelSource.local([model]), ".sipp-models", runtime_config(embeddings=False)),
     )
     gateway_endpoint = client.add(
         "gateway",

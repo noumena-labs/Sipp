@@ -7,6 +7,7 @@ from sipp import (
     SippTextOptions,
     ContextRuntimeConfig,
     LocalModelDescriptor,
+    ModelSource,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
@@ -69,7 +70,7 @@ def main() -> None:
     client = SippClient()
     client.add(
         "default",
-        LocalModelDescriptor(model, runtime_config(embeddings=False)),
+        LocalModelDescriptor(ModelSource.local([model]), ".sipp-models", runtime_config(embeddings=False)),
     )
 
     # `chat` sends role-tagged messages and can stream partial token batches.

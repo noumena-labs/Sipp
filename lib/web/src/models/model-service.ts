@@ -14,13 +14,16 @@ import type {
 } from '../engine/inference-types.js';
 import { hasSamplingRuntimeOverrideFields } from '../engine/inference-types.js';
 import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
-import { AssetStore, type RemoteAssetMetadata } from './asset-store.js';
+import { AssetStore } from './asset-store.js';
+import { RemoteAcquisitionHost } from './remote-acquisition-host.js';
 import { ModelRegistryStore } from './model-registry-store.js';
 import type {
   RustLifecycleBridge,
   RustLifecycleLoadSource,
   RustLifecyclePrepareLoadValue,
+  RustRemoteCommandValue,
 } from '../wasm/wasm-bridge.js';
+import { queryErrorFromLifecycleError } from '../wasm/wasm-bridge.js';
 import {
   QueryError,
   type AssetRecord,
@@ -72,7 +75,6 @@ interface InstalledAsset {
 
 interface SourceInstallResult {
   assets: InstalledAsset[];
-  source: 'remote' | 'local';
   explicitProjectorAssetId: string | null;
 }
 
@@ -94,7 +96,6 @@ interface RuntimeRequestOptions {
   onRequestStarted?: (requestId: number) => void;
 }
 
-type BaseSource = string | File | readonly string[] | readonly File[];
 type NavigatorWithGpu = Navigator & {
   gpu?: {
     requestAdapter(): Promise<NavigatorGpuAdapter | null>;
@@ -115,18 +116,6 @@ interface ResolvedBrowserBackend {
 
 function isFile(value: unknown): value is File {
   return typeof File !== 'undefined' && value instanceof File;
-}
-
-function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}
-
-function isFileArray(value: unknown): value is readonly File[] {
-  return Array.isArray(value) && value.every((item) => isFile(item));
-}
-
-function isSourceObject(source: ModelSource): source is Extract<ModelSource, { model: BaseSource }> {
-  return typeof source === 'object' && source != null && !isFile(source) && !Array.isArray(source);
 }
 
 async function resolveBrowserBackend(
@@ -257,7 +246,6 @@ export class ModelService implements ModelLifecycleService {
   private transitioning = false;
   private readonly observability = new ObservabilityController();
   private readonly engineEventListeners = new Set<(event: EngineEvent) => void>();
-  private browserSplitCleanup: Promise<void> | null = null;
   private rustLifecyclePromise: Promise<RustLifecycleBridge> | null = null;
 
   constructor(
@@ -685,19 +673,51 @@ export class ModelService implements ModelLifecycleService {
     );
     let prepared: RustLifecyclePrepareLoadValue | null = null;
     let rust: RustLifecycleBridge | null = null;
+    let remoteHost: RemoteAcquisitionHost | null = source.kind === 'remote'
+      ? new RemoteAcquisitionHost(
+        this.assetStore,
+        this.runtime,
+        manifest,
+        async (assetId, file, signal) => {
+          const result = await this.assetClassifier.classify(assetId, file, signal);
+          return {
+            assetId: result.assetId,
+            name: result.name,
+            inspection: result.inspection,
+          };
+        },
+        loadOptions
+      )
+      : null;
+    let remoteAcquisitionId: string | null = null;
     try {
-      const rustSource = await this.buildRustLoadSource(source, manifest, loadOptions);
       const [resolvedRust, resolvedBackend] = await Promise.all([rustPromise, backendPromise]);
       rust = resolvedRust;
       const runtimeConfig = applyBrowserRuntimeDefaults(
         options.runtime,
         wasmThreading
       );
-      prepared = rust.prepareLoad(rustSource, {
+      const rustOptions = {
         backend: resolvedBackend.backend,
         runtime: runtimeConfig,
         observability: observabilityMode,
-      });
+      } as const;
+      if (source.kind === 'remote') {
+        const acquired = await this.acquireRemote(
+          rust,
+          remoteHost as RemoteAcquisitionHost,
+          source,
+          rustOptions,
+          (acquisitionId) => {
+            remoteAcquisitionId = acquisitionId;
+          }
+        );
+        prepared = acquired;
+        remoteAcquisitionId = null;
+      } else {
+        const rustSource = await this.buildRustLoadSource(source, manifest, loadOptions);
+        prepared = rust.prepareLoad(rustSource, rustOptions);
+      }
       await this.replaceManifest(prepared.manifest);
       this.ingestRustEvents(prepared.events);
 
@@ -777,33 +797,83 @@ export class ModelService implements ModelLifecycleService {
         this.observability.ingest({ type: 'error', snapshot });
         this.ingestRustEvents(rust.drainEvents());
       }
+      if (remoteAcquisitionId != null && rust != null && remoteHost != null) {
+        await this.cancelRemoteAcquisition(rust, remoteHost, remoteAcquisitionId);
+      }
       throw error;
     }
   }
 
+  private async acquireRemote(
+    rust: RustLifecycleBridge,
+    host: RemoteAcquisitionHost,
+    source: Extract<ModelSource, { kind: 'remote' }>,
+    options: Parameters<RustLifecycleBridge['prepareLoad']>[1],
+    setAcquisitionId: (acquisitionId: string | null) => void
+  ): Promise<RustLifecyclePrepareLoadValue> {
+    let response = rust.remoteAcquisition({
+      command: 'begin',
+      modelUrls: source.modelUrls,
+      ...(source.projectorUrl == null ? {} : { projectorUrl: source.projectorUrl }),
+      options,
+    });
+    while (response.kind === 'action') {
+      setAcquisitionId(response.action.acquisitionId);
+      const result = await host.execute(response.action);
+      response = rust.remoteAcquisition({
+        command: 'advance',
+        event: result.event,
+        ...(result.assets == null ? {} : { assets: result.assets }),
+        ...(result.classified == null ? {} : { classified: result.classified }),
+      });
+    }
+    setAcquisitionId(null);
+    if (response.kind === 'cancelled') {
+      throw new QueryError('REMOTE_LOAD_FAILED', 'Remote acquisition was cancelled.');
+    }
+    if (response.kind === 'failed') {
+      throw queryErrorFromLifecycleError(response.error, 'Remote acquisition failed.');
+    }
+    return response.prepared;
+  }
+
+  private async cancelRemoteAcquisition(
+    rust: RustLifecycleBridge,
+    host: RemoteAcquisitionHost,
+    acquisitionId: string
+  ): Promise<void> {
+    let response: RustRemoteCommandValue = rust.remoteAcquisition({
+      command: 'cancel',
+      acquisitionId,
+    });
+    while (response.kind === 'action') {
+      const result = await host.execute(response.action);
+      response = rust.remoteAcquisition({
+        command: 'advance',
+        event: result.event,
+      });
+    }
+  }
+
   private async buildRustLoadSource(
-    source: ModelSource,
+    source: Exclude<ModelSource, { kind: 'remote' }>,
     manifest: RegistryManifest,
     options: ModelLoadOptions
   ): Promise<RustLifecycleLoadSource> {
-    const existing = this.resolveInstalledModel(manifest, source);
-    const classifiedProjectors = await this.classifiedInstalledProjectors(manifest, options.signal);
-    if (existing != null && !isSourceObject(source)) {
+    if (source.kind === 'installed') {
       return {
         kind: 'installed',
-        id: existing.id,
-        classifiedProjectors,
+        id: source.modelId,
       };
     }
-
-    const installed = await this.installSource(source, manifest, options);
+    const installed = await this.installLocalSource(source, manifest, options);
     const classified = await this.classifyAssets(installed.assets, options.signal);
     const sourceProjectorAssetId = this.resolveSourceProjectorAssetId(
       classified,
       installed.explicitProjectorAssetId
     );
     return {
-      kind: 'assets',
+      kind: 'local',
       assets: installed.assets.map((asset) => asset.record),
       classified: classified.map((file) => ({
         assetId: file.assetId,
@@ -811,43 +881,7 @@ export class ModelService implements ModelLifecycleService {
         inspection: file.inspection,
       })),
       explicitProjectorAssetId: sourceProjectorAssetId,
-      classifiedProjectors,
     };
-  }
-
-  private async classifiedInstalledProjectors(
-    manifest: RegistryManifest,
-    signal?: AbortSignal
-  ): Promise<ClassifiedAsset[]> {
-    const projectors: ClassifiedAsset[] = [];
-    for (const asset of Object.values(manifest.assets)) {
-      if (asset.kind !== 'projector' || asset.refCount <= 0) {
-        continue;
-      }
-      if (asset.inspection != null) {
-        projectors.push({
-          assetId: asset.id,
-          name: asset.name,
-          inspection: asset.inspection,
-        });
-        continue;
-      }
-      try {
-        const file = await this.assetStore.getFile(asset);
-        const classified = await this.assetClassifier.classify(asset.id, file, signal);
-        projectors.push({
-          assetId: classified.assetId,
-          name: classified.name,
-          inspection: classified.inspection,
-        });
-      } catch (error) {
-        if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
-          continue;
-        }
-        throw error;
-      }
-    }
-    return projectors;
   }
 
   private async getRustLifecycle(
@@ -973,191 +1007,29 @@ export class ModelService implements ModelLifecycleService {
     };
   }
 
-  private async installSource(
-    source: ModelSource,
+  private async installLocalSource(
+    source: Extract<ModelSource, { kind: 'local' }>,
     manifest: RegistryManifest,
     options: ModelLoadOptions
   ): Promise<SourceInstallResult> {
-    if (isSourceObject(source)) {
-      const base = await this.installBaseSource(source.model, manifest, options, false);
-      const projector =
-        source.projector == null
-          ? null
-          : await this.installProjectorSource(source.projector, manifest, options);
-      return {
-        assets: [...base.assets, ...(projector?.assets ?? [])],
-        source: base.source,
-        explicitProjectorAssetId: projector?.assets[0]?.record.id ?? null,
-      };
+    if (source.modelFiles.length === 0 || !source.modelFiles.every(isFile)) {
+      throw new QueryError(
+        'INVALID_MODEL_SOURCE',
+        'Local model source requires at least one File.'
+      );
     }
-    const base = await this.installBaseSource(source, manifest, options, false);
+    const base = source.modelFiles.length === 1
+      ? await this.installLocalModelAssets(source.modelFiles[0], manifest, options)
+      : await Promise.all(
+        source.modelFiles.map((file) => this.installLocalAsset(file, 'shard', manifest, options))
+      );
+    const projector = source.projectorFile == null
+      ? null
+      : await this.installLocalAsset(source.projectorFile, 'projector', manifest, options);
     return {
-      ...base,
-      explicitProjectorAssetId: null,
+      assets: [...base, ...(projector == null ? [] : [projector])],
+      explicitProjectorAssetId: projector?.record.id ?? null,
     };
-  }
-
-  private async installBaseSource(
-    source: BaseSource,
-    manifest: RegistryManifest,
-    options: ModelLoadOptions,
-    includeProjector: boolean
-  ): Promise<SourceInstallResult> {
-    if (typeof source === 'string') {
-      const installed = manifest.models[source];
-      if (installed != null) {
-        return await this.assetsForEntry(installed, manifest, includeProjector);
-      }
-      return {
-        assets: await this.installRemoteModelAssets(source, manifest, options),
-        source: 'remote',
-        explicitProjectorAssetId: null,
-      };
-    }
-    if (isFile(source)) {
-      return {
-        assets: await this.installLocalModelAssets(source, manifest, options),
-        source: 'local',
-        explicitProjectorAssetId: null,
-      };
-    }
-    if (isStringArray(source)) {
-      if (source.length === 0) {
-        throw new QueryError('INVALID_MODEL_SOURCE', 'Model URL array must not be empty.');
-      }
-      return {
-        assets: await Promise.all(
-          source.map((url) => this.installRemoteAsset(url, 'shard', manifest, options))
-        ),
-        source: 'remote',
-        explicitProjectorAssetId: null,
-      };
-    }
-    if (isFileArray(source)) {
-      if (source.length === 0) {
-        throw new QueryError('INVALID_MODEL_SOURCE', 'Model file array must not be empty.');
-      }
-      return {
-        assets: await Promise.all(
-          source.map((file) => this.installLocalAsset(file, 'shard', manifest, options))
-        ),
-        source: 'local',
-        explicitProjectorAssetId: null,
-      };
-    }
-    throw new QueryError('INVALID_MODEL_SOURCE', 'Unsupported model source.');
-  }
-
-  private async cleanupBrowserSplitArtifacts(manifest: RegistryManifest): Promise<void> {
-    if (this.browserSplitCleanup == null) {
-      this.browserSplitCleanup = this.assetStore.cleanupBrowserSplitArtifacts(manifest).catch((error) => {
-        this.browserSplitCleanup = null;
-        throw error;
-      });
-    }
-    await this.browserSplitCleanup;
-  }
-
-  private async installProjectorSource(
-    source: string | File,
-    manifest: RegistryManifest,
-    options: ModelLoadOptions
-  ): Promise<SourceInstallResult> {
-    if (typeof source === 'string') {
-      return {
-        assets: [await this.installRemoteAsset(source, 'projector', manifest, options)],
-        source: 'remote',
-        explicitProjectorAssetId: null,
-      };
-    }
-    if (isFile(source)) {
-      return {
-        assets: [await this.installLocalAsset(source, 'projector', manifest, options)],
-        source: 'local',
-        explicitProjectorAssetId: null,
-      };
-    }
-    throw new QueryError('INVALID_MODEL_SOURCE', 'Projector source must be a URL or File.');
-  }
-
-  private async installRemoteAsset(
-    url: string,
-    kind: AssetRecord['kind'],
-    manifest: RegistryManifest,
-    options: ModelLoadOptions
-  ): Promise<InstalledAsset> {
-    options.onProgress?.({
-      phase: 'metadata',
-      loadedBytes: 0,
-      totalBytes: null,
-      percent: null,
-      assetName: url,
-    });
-    const metadata = await this.assetStore.resolveRemoteMetadata(url, options.signal);
-    const existing = this.findRemoteAsset(manifest, metadata, kind);
-    if (existing != null) {
-      return {
-        record: existing,
-        file: await this.assetStore.getFile(existing),
-      };
-    }
-    const record = await this.assetStore.downloadRemote(
-      metadata,
-      kind,
-      options.signal,
-      options.onProgress
-    );
-    return {
-      record,
-      file: await this.assetStore.getFile(record),
-    };
-  }
-
-  private async installRemoteModelAssets(
-    url: string,
-    manifest: RegistryManifest,
-    options: ModelLoadOptions
-  ): Promise<InstalledAsset[]> {
-    options.onProgress?.({
-      phase: 'metadata',
-      loadedBytes: 0,
-      totalBytes: null,
-      percent: null,
-      assetName: url,
-    });
-    const metadata = await this.assetStore.resolveRemoteMetadata(url, options.signal);
-    const existingSingle = this.findRemoteAsset(manifest, metadata, 'model');
-    if (existingSingle != null) {
-      return [
-        {
-          record: existingSingle,
-          file: await this.assetStore.getFile(existingSingle),
-        },
-      ];
-    }
-
-    const existingSplit = this.findRemoteSplitAssets(manifest, metadata);
-    if (existingSplit != null) {
-      const assets: InstalledAsset[] = [];
-      for (const record of existingSplit) {
-        assets.push({
-          record,
-          file: await this.assetStore.getFile(record),
-        });
-      }
-      return assets;
-    }
-
-    if (this.assetStore.requiresBrowserSplit(metadata.bytes)) {
-      await this.cleanupBrowserSplitArtifacts(manifest);
-    }
-    const records = await this.assetStore.downloadRemoteSplitGguf(
-      metadata,
-      this.runtime,
-      options.signal,
-      options.onProgress
-    );
-    return await this.installedAssetsFromRecords(records, manifest);
   }
 
   private async installLocalModelAssets(
@@ -1177,12 +1049,10 @@ export class ModelService implements ModelLifecycleService {
       return assets;
     }
 
-    if (this.assetStore.requiresBrowserSplit(file.size)) {
-      await this.cleanupBrowserSplitArtifacts(manifest);
-    }
-    const records = await this.assetStore.installLocalSplitGguf(
+    const records = await this.assetStore.installLocalGguf(
       file,
       this.runtime,
+      manifest,
       options.signal,
       options.onProgress
     );
@@ -1230,41 +1100,6 @@ export class ModelService implements ModelLifecycleService {
     };
   }
 
-  private findRemoteAsset(
-    manifest: RegistryManifest,
-    metadata: RemoteAssetMetadata,
-    kind: AssetRecord['kind']
-  ): AssetRecord | null {
-    return (
-      Object.values(manifest.assets).find(
-        (asset) =>
-          asset.kind === kind &&
-          asset.sourceUrl === metadata.canonicalUrl &&
-          asset.sourceEtag === metadata.etag &&
-          asset.sourceLastModified === metadata.lastModified &&
-          asset.bytes === metadata.bytes
-      ) ?? null
-    );
-  }
-
-  private findRemoteSplitAssets(
-    manifest: RegistryManifest,
-    metadata: RemoteAssetMetadata
-  ): AssetRecord[] | null {
-    return this.findCompleteSplitAssets(
-      Object.values(manifest.assets).filter(
-        (asset) =>
-          asset.kind === 'shard' &&
-          asset.sourceUrl === metadata.canonicalUrl &&
-          (asset.sourceEtag ?? '') === metadata.etag &&
-          (asset.sourceLastModified ?? '') === metadata.lastModified &&
-          asset.sourceBytes === metadata.bytes &&
-          Number.isInteger(asset.sourcePartIndex) &&
-          Number.isInteger(asset.sourcePartCount)
-      )
-    );
-  }
-
   private findLocalSplitAssets(
     manifest: RegistryManifest,
     file: File
@@ -1302,33 +1137,6 @@ export class ModelService implements ModelLifecycleService {
       }
     }
     return candidates;
-  }
-
-  private async assetsForEntry(
-    entry: ModelEntry,
-    manifest: RegistryManifest,
-    includeProjector: boolean
-  ): Promise<SourceInstallResult> {
-    const assetIds = [...entry.modelAssetIds, includeProjector ? entry.projectorAssetId : undefined].filter(
-      (assetId): assetId is string => typeof assetId === 'string'
-    );
-    const assets: InstalledAsset[] = [];
-    for (const assetId of assetIds) {
-      const record = manifest.assets[assetId];
-      if (record == null) {
-        await this.markBroken(entry.id);
-        throw new QueryError('MODEL_BROKEN', `Installed model "${entry.id}" references a missing asset.`);
-      }
-      assets.push({
-        record,
-        file: await this.getAssetFileForEntry(entry, record),
-      });
-    }
-    return {
-      assets,
-      source: assets.some((asset) => asset.record.sourceUrl != null) ? 'remote' : 'local',
-      explicitProjectorAssetId: null,
-    };
   }
 
   private async classifyAssets(
@@ -1464,13 +1272,6 @@ export class ModelService implements ModelLifecycleService {
         entry.updatedAt = new Date().toISOString();
       }
     });
-  }
-
-  private resolveInstalledModel(manifest: RegistryManifest, source: ModelSource): ModelEntry | null {
-    if (typeof source !== 'string') {
-      return null;
-    }
-    return manifest.models[source] ?? null;
   }
 
   private async withLifecycleLock<T>(operation: () => Promise<T>): Promise<T> {

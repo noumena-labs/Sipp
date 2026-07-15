@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::engine::NativeRuntimeConfig;
+use crate::lifecycle::ModelSource;
 
 use crate::client::GatewayEndpointConfig;
 #[cfg(feature = "providers")]
@@ -19,14 +20,6 @@ pub enum EndpointDescriptor {
 }
 
 impl EndpointDescriptor {
-    /// Create a local model descriptor.
-    pub fn local(model_path: impl Into<PathBuf>, config: NativeRuntimeConfig) -> Self {
-        Self::LocalModel(LocalModelDescriptor {
-            model_path: model_path.into(),
-            config,
-        })
-    }
-
     /// Create a gateway endpoint descriptor.
     pub fn gateway(config: GatewayEndpointConfig) -> Self {
         Self::Gateway(config)
@@ -42,8 +35,10 @@ impl EndpointDescriptor {
 /// Local GGUF model descriptor.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalModelDescriptor {
-    /// Path to the local model artifact.
-    pub model_path: PathBuf,
+    /// Authoritative model source.
+    pub source: ModelSource,
+    /// Explicit lifecycle registry and asset-store root.
+    pub storage_root: PathBuf,
     /// Native runtime configuration.
     pub config: NativeRuntimeConfig,
 }

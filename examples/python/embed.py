@@ -6,6 +6,7 @@ from sipp import (
     ContextRuntimeConfig,
     LocalEmbedOptions,
     LocalModelDescriptor,
+    ModelSource,
     ModelPlacementConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
@@ -58,7 +59,7 @@ def main() -> None:
     client = SippClient()
     client.add(
         "default",
-        LocalModelDescriptor(model, runtime_config(embeddings=True)),
+        LocalModelDescriptor(ModelSource.local([model]), ".sipp-models", runtime_config(embeddings=True)),
     )
 
     # Embeddings use the same local endpoint. The runtime is loaded with

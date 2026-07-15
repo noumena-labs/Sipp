@@ -9,9 +9,9 @@ pub use crate::shard::{GgufMetadataInspection, ModelDetection, ModelDetectionMet
 pub use assets::{AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind};
 pub use error::ModelError;
 pub use model::{
-    ClassifiedAsset, ModelAsset, ModelAssets, ModelEntry, ModelInfo, ModelModality, ModelPairing,
-    ModelPairingReason, ModelPairingState, ModelSource, ModelSourceKind, ModelStatus, PairingPlan,
-    RegistryManifest, REGISTRY_MANIFEST_VERSION,
+    ClassifiedAsset, ModelEntry, ModelInfo, ModelModality, ModelPairing, ModelPairingReason,
+    ModelPairingState, ModelSource, ModelSourceKind, ModelStatus, PairingPlan, RegistryManifest,
+    REGISTRY_MANIFEST_VERSION,
 };
 pub use runtime::{
     BackendPreference, BackendSelection, ModelLoadOptions, ModelServiceState, StatsMode,

@@ -28,7 +28,8 @@ import { SippClient } from '@sipphq/sipp-server';
 const client = new SippClient();
 const endpoint = await client.add('default', {
   kind: 'local',
-  modelPath: process.argv[2],
+  source: { kind: 'local', modelPaths: [process.argv[2]] },
+  storageRoot: '.sipp-models',
   config: {
     context: { n_ctx: 2048 },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },

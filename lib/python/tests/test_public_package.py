@@ -3,7 +3,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import pytest
 
 
 def _fake_native_module_source(observability: str) -> str:
@@ -21,6 +25,7 @@ class GatewayDescriptor: pass
 class LocalEmbedOptions: pass
 class LocalModelDescriptor: pass
 class LocalTextOptions: pass
+class ModelSource: pass
 class ModelPlacementConfig: pass
 class MultimodalRuntimeConfig: pass
 class NativeRuntimeConfig: pass
@@ -28,6 +33,7 @@ class ObservabilityRuntimeConfig: pass
 class ProviderDescriptor: pass
 class ProviderError(Exception): pass
 class EndpointError(Exception): pass
+class ModelLifecycleError(Exception): pass
 class ResidencyRuntimeConfig: pass
 class SamplingRuntimeConfig: pass
 class SchedulerPolicyConfig: pass
@@ -50,9 +56,53 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert sipp.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
     assert hasattr(sipp.SippClient, "add")
     assert hasattr(sipp, "GatewayDescriptor")
+    assert hasattr(sipp, "ModelSource")
+    assert issubclass(sipp.ModelLifecycleError, Exception)
     assert sipp.SamplingRuntimeOverride is sipp.SamplingRuntimeConfig
     assert not hasattr(sipp.SippClient, "add_" + "local")
     assert not hasattr(sipp.SippClient, "add_http_endpoint")
+
+
+def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(
+    tmp_path: Path,
+) -> None:
+    import sipp
+
+    class ServiceUnavailableHandler(BaseHTTPRequestHandler):
+        attempts = 0
+
+        def do_HEAD(self) -> None:
+            type(self).attempts += 1
+            self.send_response(503)
+            self.send_header("Retry-After", "0")
+            self.end_headers()
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ServiceUnavailableHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        client = sipp.SippClient()
+        descriptor = sipp.LocalModelDescriptor(
+            sipp.ModelSource.remote([f"http://{host}:{port}/model.gguf"]),
+            tmp_path / "models",
+        )
+
+        with pytest.raises(sipp.ModelLifecycleError) as caught:
+            client.add("remote-model", descriptor)
+
+        assert caught.value.code == "REMOTE_METADATA_UNAVAILABLE"
+        assert caught.value.status == 503
+        assert caught.value.retry_after_ms == 0
+        assert ServiceUnavailableHandler.attempts == 4
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_invalid_backend_environment_is_rejected() -> None:

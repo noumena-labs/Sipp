@@ -185,56 +185,38 @@ async function inspectBrowserEnvironment(): Promise<Record<string, unknown>> {
 }
 
 function sourceLabel(source: ModelSource): string {
-  if (typeof source === 'string') return source;
-  if (source instanceof File) return source.name;
-  if (Array.isArray(source)) {
-    const first = source[0];
-    return typeof first === 'string' ? first : first?.name ?? 'model shards';
+  switch (source.kind) {
+    case 'installed':
+      return source.modelId;
+    case 'local':
+      return source.modelFiles[0]?.name ?? 'model shards';
+    case 'remote':
+      return source.modelUrls[0] ?? 'model.gguf';
   }
-  if ('model' in source) {
-    return sourceLabel(source.model);
-  }
-  return 'model.gguf';
-}
-
-function isModelSourceObject(
-  source: ModelSource
-): source is Extract<ModelSource, { model: ModelSource }> {
-  return (
-    typeof source === 'object' &&
-    source != null &&
-    !(source instanceof File) &&
-    !Array.isArray(source) &&
-    'model' in source
-  );
 }
 
 function sourceKey(source: ModelSource): string {
-  if (typeof source === 'string') return `string:${source}`;
-  if (source instanceof File) {
-    return `file:${source.name}:${source.size}:${source.lastModified}`;
+  switch (source.kind) {
+    case 'installed':
+      return `installed:${source.modelId}`;
+    case 'local':
+      return `local:${source.modelFiles
+        .map((file) => `${file.name}:${file.size}:${file.lastModified}`)
+        .join('|')};projector=${source.projectorFile?.name ?? 'none'}`;
+    case 'remote':
+      return `remote:${source.modelUrls.join('|')};projector=${source.projectorUrl ?? 'none'}`;
   }
-  if (Array.isArray(source)) {
-    return `array:[${source.map((item) => sourceKey(item)).join('|')}]`;
-  }
-  if (!isModelSourceObject(source)) {
-    return 'unknown:model-source';
-  }
-  return `pair:model=${sourceKey(source.model)};projector=${source.projector == null ? 'none' : sourceKey(source.projector)
-    }`;
 }
 
 function withProjector(source: ModelSource, projector?: string | File): ModelSource {
   if (projector == null) return source;
-  if (
-    typeof source === 'object' &&
-    source != null &&
-    !(source instanceof File) &&
-    !Array.isArray(source)
-  ) {
-    return { ...source, projector };
+  if (source.kind === 'remote' && typeof projector === 'string') {
+    return { ...source, projectorUrl: projector };
   }
-  return { model: source, projector };
+  if (source.kind === 'local' && projector instanceof File) {
+    return { ...source, projectorFile: projector };
+  }
+  throw new Error('Model and projector must both be URLs or both be local files.');
 }
 
 async function fetchImageBytes(source: string): Promise<Uint8Array[]> {
@@ -698,12 +680,14 @@ export default function App() {
     if (modelType === 'registry') return selectedVariant.source;
     if (modelType === 'url') {
       const projector = projectorOverride();
-      return modelUrl.trim().length > 0 ? withProjector(modelUrl.trim(), projector) : null;
+      return modelUrl.trim().length > 0
+        ? withProjector({ kind: 'remote', modelUrls: [modelUrl.trim()] }, projector)
+        : null;
     }
     const files = Array.from(fileInputRef.current?.files ?? []);
     if (files.length === 0) return null;
     const projector = projectorOverride();
-    return withProjector(files.length === 1 ? files[0] : files, projector);
+    return withProjector({ kind: 'local', modelFiles: files }, projector);
   };
 
   const applyEmbeddingUseCase = (value: EmbeddingUseCase): void => {

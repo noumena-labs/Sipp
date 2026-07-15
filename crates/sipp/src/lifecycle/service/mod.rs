@@ -1,18 +1,19 @@
 //! High-level lifecycle service: ingest sources, resolve pairings, expose ready models.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::engine::{
     protocol::EngineStatus, ChatRequest, EmbedRequest, EngineEmbeddingRun, EngineEventReceiver,
     EngineTextRun, QueryRequest, SippEngine,
 };
+use crate::lifecycle::acquisition::RemoteAcquisitionIds;
 
 use super::backend_policy::BackendPolicy;
 use super::storage::{now_unix_ms, LocalStorageBackend, StorageBackend};
 use super::util::{invalid_pairing, invalid_source, media_marker_for_modality, model_not_found};
 use super::{
-    AssetSource, AssetStore, BackendSelection, ModelAsset, ModelAssets, ModelError, ModelInfo,
-    ModelLoadOptions, ModelRegistry, ModelServiceState, ModelSource, ModelStatus,
+    AssetSource, AssetStore, BackendSelection, ModelError, ModelInfo, ModelLoadOptions,
+    ModelRegistry, ModelServiceState, ModelSource, ModelStatus,
 };
 
 mod helpers;
@@ -40,6 +41,7 @@ pub struct ModelService<B: StorageBackend = LocalStorageBackend> {
     registry: ModelRegistry<B>,
     assets: AssetStore<B>,
     current: Option<LoadedEngine>,
+    acquisition_ids: RemoteAcquisitionIds,
 }
 
 impl ModelService<LocalStorageBackend> {
@@ -56,6 +58,7 @@ impl<B: StorageBackend> ModelService<B> {
             registry,
             assets,
             current: None,
+            acquisition_ids: RemoteAcquisitionIds::default(),
         })
     }
 
@@ -64,7 +67,7 @@ impl<B: StorageBackend> ModelService<B> {
         source: ModelSource,
         options: ModelLoadOptions,
     ) -> Result<LoadedModelInfo, ModelError> {
-        let resolved = self.resolve_source(source)?;
+        let resolved = self.resolve_source(source).await?;
         self.load_entry(&resolved.entry_id, options).await
     }
 
@@ -138,6 +141,13 @@ impl<B: StorageBackend> ModelService<B> {
 
     pub fn subscribe_events(&self) -> Result<EngineEventReceiver, ModelError> {
         Ok(self.engine()?.subscribe_events())
+    }
+
+    pub(crate) fn take_loaded_engine(&mut self) -> Result<SippEngine, ModelError> {
+        self.current
+            .take()
+            .map(|loaded| loaded.engine)
+            .ok_or_else(|| model_not_found(NO_MODEL_LOADED))
     }
 
     fn engine(&self) -> Result<&SippEngine, ModelError> {
@@ -258,29 +268,6 @@ impl<B: StorageBackend> Drop for ModelService<B> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedSource {
     entry_id: String,
-}
-
-pub fn model_source_from_path(path: impl AsRef<Path>) -> ModelSource {
-    ModelSource::Assets {
-        model: ModelAssets::Path {
-            path: path.as_ref().to_path_buf(),
-        },
-        projector: None,
-    }
-}
-
-pub fn vision_model_source_from_paths(
-    model: impl AsRef<Path>,
-    projector: impl AsRef<Path>,
-) -> ModelSource {
-    ModelSource::Assets {
-        model: ModelAssets::Path {
-            path: model.as_ref().to_path_buf(),
-        },
-        projector: Some(ModelAsset::Path {
-            path: projector.as_ref().to_path_buf(),
-        }),
-    }
 }
 
 #[cfg(test)]

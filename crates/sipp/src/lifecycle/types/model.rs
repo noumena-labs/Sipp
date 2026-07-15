@@ -19,31 +19,28 @@ mod model_tests;
 
 pub const REGISTRY_MANIFEST_VERSION: u32 = 3;
 
+/// Authoritative source used to resolve and install a model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelAsset {
-    Path { path: PathBuf },
-    Url { url: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelAssets {
-    Path { path: PathBuf },
-    Paths { paths: Vec<PathBuf> },
-    Url { url: String },
-    Urls { urls: Vec<String> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ModelSource {
+    /// Resolve a model already present in the selected model store.
     Installed {
-        id: String,
+        /// Installed model identifier.
+        model_id: String,
     },
-    Assets {
-        model: ModelAssets,
-        projector: Option<ModelAsset>,
+    /// Install model files supplied by the local host filesystem.
+    Local {
+        /// One model file or an ordered set of GGUF shards.
+        model_paths: Vec<PathBuf>,
+        /// Explicit multimodal projector file.
+        projector_path: Option<PathBuf>,
+    },
+    /// Acquire model files from HTTP or HTTPS URLs.
+    Remote {
+        /// One model URL or an ordered set of GGUF shard URLs.
+        model_urls: Vec<String>,
+        /// Explicit multimodal projector URL.
+        projector_url: Option<String>,
     },
 }
 

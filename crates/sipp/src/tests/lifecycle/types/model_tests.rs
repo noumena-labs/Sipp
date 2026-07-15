@@ -23,80 +23,43 @@ fn model_enum_as_str_values_match_wire_names() {
 #[test]
 fn model_source_variants_use_snake_case_tags() {
     let source: ModelSource = serde_json::from_value(json!({
-        "assets": {
-            "model": { "paths": { "paths": ["a.gguf", "b.gguf"] } },
-            "projector": { "path": { "path": "mmproj.gguf" } }
-        }
+        "kind": "local",
+        "model_paths": ["a.gguf", "b.gguf"],
+        "projector_path": "mmproj.gguf"
     }))
     .expect("model source");
 
     assert!(matches!(
         source,
-        ModelSource::Assets {
-            model: ModelAssets::Paths { .. },
-            projector: Some(ModelAsset::Path { .. })
+        ModelSource::Local {
+            model_paths,
+            projector_path: Some(projector_path)
         }
+        if model_paths == [PathBuf::from("a.gguf"), PathBuf::from("b.gguf")]
+            && projector_path == PathBuf::from("mmproj.gguf")
     ));
 
     let installed: ModelSource =
-        serde_json::from_value(json!({ "installed": { "id": "model-a" } }))
+        serde_json::from_value(json!({ "kind": "installed", "model_id": "model-a" }))
             .expect("installed source");
     assert_eq!(
         installed,
         ModelSource::Installed {
-            id: "model-a".to_string()
-        }
-    );
-}
-
-#[test]
-fn model_asset_variants_round_trip_with_snake_case_tags() {
-    let path_asset: ModelAsset =
-        serde_json::from_value(json!({ "path": { "path": "local.gguf" } })).expect("path asset");
-    assert_eq!(
-        path_asset,
-        ModelAsset::Path {
-            path: PathBuf::from("local.gguf")
+            model_id: "model-a".to_string()
         }
     );
 
-    let url_asset: ModelAsset =
-        serde_json::from_value(json!({ "url": { "url": "https://example.test/mmproj.gguf" } }))
-            .expect("url asset");
+    let remote = ModelSource::Remote {
+        model_urls: vec!["https://example.test/model.gguf".to_string()],
+        projector_url: None,
+    };
     assert_eq!(
-        url_asset,
-        ModelAsset::Url {
-            url: "https://example.test/mmproj.gguf".to_string()
-        }
-    );
-
-    let urls: ModelAssets = serde_json::from_value(json!({
-        "urls": { "urls": ["https://example.test/a.gguf", "https://example.test/b.gguf"] }
-    }))
-    .expect("urls");
-    assert_eq!(
-        urls,
-        ModelAssets::Urls {
-            urls: vec![
-                "https://example.test/a.gguf".to_string(),
-                "https://example.test/b.gguf".to_string()
-            ]
-        }
-    );
-
-    assert_eq!(
-        serde_json::to_value(ModelAssets::Path {
-            path: PathBuf::from("model.gguf")
+        serde_json::to_value(remote).expect("remote source"),
+        json!({
+            "kind": "remote",
+            "model_urls": ["https://example.test/model.gguf"],
+            "projector_url": null
         })
-        .expect("model path"),
-        json!({ "path": { "path": "model.gguf" } })
-    );
-    assert_eq!(
-        serde_json::to_value(ModelAssets::Url {
-            url: "https://example.test/model.gguf".to_string()
-        })
-        .expect("model url"),
-        json!({ "url": { "url": "https://example.test/model.gguf" } })
     );
 }
 

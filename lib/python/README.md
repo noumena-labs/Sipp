@@ -38,6 +38,7 @@ from sipp import (
     ContextRuntimeConfig,
     LocalModelDescriptor,
     LocalTextOptions,
+    ModelSource,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
     SchedulerRuntimeConfig,
@@ -48,7 +49,8 @@ client = SippClient()
 endpoint = client.add(
     "default",
     LocalModelDescriptor(
-        sys.argv[1],
+        ModelSource.local([sys.argv[1]]),
+        ".sipp-models",
         NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
             scheduler=SchedulerRuntimeConfig(

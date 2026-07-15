@@ -1,6 +1,7 @@
 //! Tests the `lifecycle::service` module in `sipp`.
 //!
-//! Covers lifecycle registry, storage, browser, service, and pairing behavior with temporary storage and pure fixtures instead of native runtime loading.
+//! Covers registry, storage, service, and pairing behavior with temporary
+//! storage and pure fixtures instead of native runtime loading.
 
 use super::helpers::model_id_from_plan;
 use super::*;
@@ -65,8 +66,11 @@ fn service_installs_and_lists_text_asset() {
     fs::write(&model, b"not a gguf").expect("model");
 
     let mut service = ModelService::local(root.path.join("store")).expect("service");
-    let source = model_source_from_path(&model);
-    let result = service.resolve_source(source).expect("resolved");
+    let source = ModelSource::Local {
+        model_paths: vec![model],
+        projector_path: None,
+    };
+    let result = block_on(service.resolve_source(source)).expect("resolved");
 
     let models = service.list();
     assert_eq!(models.len(), 1);
@@ -82,9 +86,11 @@ fn cached_local_asset_requires_matching_source_hash() {
     fs::write(&model, b"first bytes").expect("model");
 
     let mut service = ModelService::local(root.path.join("store")).expect("service");
-    let first = service
-        .resolve_source(model_source_from_path(&model))
-        .expect("first");
+    let first = block_on(service.resolve_source(ModelSource::Local {
+        model_paths: vec![model.clone()],
+        projector_path: None,
+    }))
+    .expect("first");
     let first_asset_id = service
         .registry
         .manifest
@@ -95,9 +101,11 @@ fn cached_local_asset_requires_matching_source_hash() {
         .clone();
 
     fs::write(&model, b"secondbytes").expect("same len replacement");
-    let second = service
-        .resolve_source(model_source_from_path(&model))
-        .expect("second");
+    let second = block_on(service.resolve_source(ModelSource::Local {
+        model_paths: vec![model],
+        projector_path: None,
+    }))
+    .expect("second");
     let second_asset_id = service
         .registry
         .manifest
@@ -148,7 +156,7 @@ fn service_rejects_unresolved_vision_model_on_load() {
 
     let error = block_on(service.load(
         ModelSource::Installed {
-            id: entry_id.clone(),
+            model_id: entry_id.clone(),
         },
         ModelLoadOptions::default(),
     ))

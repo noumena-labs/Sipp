@@ -1,7 +1,5 @@
 mod support;
 
-use std::path::PathBuf;
-
 use futures::executor::block_on;
 use futures::StreamExt;
 use sipp::backend::set_llama_log_quiet;
@@ -13,8 +11,8 @@ use sipp::engine::{
 use sipp::engine::{ChatMessage, ChatRole};
 use sipp::{
     EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
-    GatewayTimeoutPolicy, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions,
-    SippTextResponse, SippTextRun,
+    GatewayTimeoutPolicy, LocalModelDescriptor, LocalTextOptions, ModelSource, SippChatRequest,
+    SippClient, SippTextOptions, SippTextResponse, SippTextRun,
 };
 
 fn main() -> support::ExampleResult<()> {
@@ -29,7 +27,14 @@ fn main() -> support::ExampleResult<()> {
         let local_endpoint = client
             .add(
                 "local",
-                EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
+                EndpointDescriptor::LocalModel(LocalModelDescriptor {
+                    source: ModelSource::Local {
+                        model_paths: vec![args.model_path],
+                        projector_path: None,
+                    },
+                    storage_root: ".sipp-models".into(),
+                    config: runtime_config(false),
+                }),
             )
             .await?;
         let config = GatewayEndpointConfig {
@@ -104,7 +109,7 @@ async fn collect_streamed_text(
     Ok(response)
 }
 
-fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRuntimeConfig {
+fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
     NativeRuntimeConfig {
         placement: ModelPlacementConfig {
             gpu_layers: support::env_parse("SIPP_GPU_LAYERS")
@@ -132,10 +137,6 @@ fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRu
         },
         cache: CacheRuntimeConfig {
             mode: KvReuseMode::LiveSlotPrefix,
-            ..Default::default()
-        },
-        multimodal: sipp::engine::MultimodalRuntimeConfig {
-            projector_path: projector_path.map(|path| path.to_string_lossy().into_owned()),
             ..Default::default()
         },
         residency: ResidencyRuntimeConfig {

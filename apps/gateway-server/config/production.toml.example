@@ -33,5 +33,6 @@ targets = ["local"]
 name = "local"
 type = "local"
 model = "/models/model.gguf"
+storage_root = "/models/.sipp"
 backend = "auto"
 stats = "basic"

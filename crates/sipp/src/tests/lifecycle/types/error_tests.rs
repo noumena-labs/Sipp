@@ -13,8 +13,13 @@ fn model_error_display_messages_are_stable() {
             "invalid model source: empty",
         ),
         (
-            ModelError::RemoteUnavailable("https://example.test/model.gguf".to_string()),
-            "remote model loading is not available in this runtime: https://example.test/model.gguf",
+            ModelError::RemoteMetadataUnavailable {
+                url: "https://example.test/model.gguf".to_string(),
+                status: Some(503),
+                retry_after_ms: Some(1_000),
+                reason: "HTTP 503".to_string(),
+            },
+            "remote metadata is unavailable for https://example.test/model.gguf: HTTP 503",
         ),
         (
             ModelError::UnsupportedOperation {

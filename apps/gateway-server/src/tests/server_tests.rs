@@ -124,6 +124,7 @@ fn test_gateway_config() -> GatewayServerConfig {
             name: "local".to_string(),
             endpoint: EndpointConfig::Local {
                 model: "model.gguf".into(),
+                storage_root: ".sipp-models".into(),
                 backend: GatewayBackendPreference::Auto,
                 stats: StatsMode::Basic,
                 runtime: NativeRuntimeConfig::default(),
@@ -169,6 +170,7 @@ fn config_accepts_typed_custom_routes() {
         name = "local"
         type = "local"
         model = "model.gguf"
+        storage_root = ".sipp-models"
     "#;
 
     let config: GatewayServerConfig = toml::from_str(source).expect("config");
@@ -209,6 +211,7 @@ fn local_target_accepts_backend_and_stats_overrides() {
         name = "local"
         type = "local"
         model = "model.gguf"
+        storage_root = ".sipp-models"
         backend = "vulkan"
         stats = "profile"
     "#;
@@ -247,6 +250,7 @@ fn local_target_rejects_unsupported_backend_names() {
         name = "local"
         type = "local"
         model = "model.gguf"
+        storage_root = ".sipp-models"
         backend = "webgpu"
     "#;
 
@@ -376,6 +380,7 @@ fn config_rejects_missing_security_section() {
         name = "local"
         type = "local"
         model = "model.gguf"
+        storage_root = ".sipp-models"
     "#;
 
     let error = match toml::from_str::<GatewayServerConfig>(source) {
@@ -406,6 +411,7 @@ fn config_rejects_missing_admin_password_env() {
         name = "local"
         type = "local"
         model = "model.gguf"
+        storage_root = ".sipp-models"
     "#;
 
     let config: GatewayServerConfig = toml::from_str(source).expect("config");

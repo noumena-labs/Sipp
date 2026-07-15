@@ -53,7 +53,10 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_0',
         sizeBytes: 397_000_000,
-        source: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf'],
+        },
       },
     ],
   },
@@ -67,7 +70,10 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_K_M',
         sizeBytes: 1_050_000_000,
-        source: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf'],
+        },
       },
     ],
   },
@@ -81,7 +87,10 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q8_0',
         sizeBytes: 386_000_000,
-        source: 'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf'],
+        },
       },
     ],
   },
@@ -96,7 +105,10 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q5_K_M',
         sizeBytes: 46_300_000,
-        source: 'https://huggingface.co/noumenalabs/t5-small-gguf/resolve/main/t5-small-q5_k_m.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/noumenalabs/t5-small-gguf/resolve/main/t5-small-q5_k_m.gguf'],
+        },
       },
     ],
   },
@@ -112,7 +124,10 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_K_M',
         sizeBytes: 29_200_000,
-        source: 'https://huggingface.co/ChristianAzinn/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5.Q4_K_M.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/ChristianAzinn/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5.Q4_K_M.gguf'],
+        },
       },
     ],
   },
@@ -126,7 +141,10 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_K_M',
         sizeBytes: 84_100_000,
-        source: 'https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf'],
+        },
       },
     ],
   },
@@ -144,8 +162,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         sizeBytes: 1_400_000_000,
         projectorSizeBytes: 1_500_000_000,
         source: {
-          model: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/Qwen2-VL-2B-Instruct-Q4_K_M.gguf',
-          projector: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf',
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/Qwen2-VL-2B-Instruct-Q4_K_M.gguf'],
+          projectorUrl: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf',
         },
       },
     ],
@@ -162,8 +181,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         sizeBytes: 4_080_000_000,
         projectorSizeBytes: 624_000_000,
         source: {
-          model: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf',
-          projector: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf',
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf'],
+          projectorUrl: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf',
         },
       },
     ],
@@ -180,8 +200,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         sizeBytes: 286_000_000,
         projectorSizeBytes: 360_000_000,
         source: {
-          model: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf',
-          projector: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-f16.gguf',
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf'],
+          projectorUrl: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-f16.gguf',
         },
       },
     ],
@@ -198,8 +219,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         sizeBytes: 534_000_000,
         projectorSizeBytes: 360_000_000,
         source: {
-          model: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q8_0.gguf',
-          projector: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-f16.gguf',
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q8_0.gguf'],
+          projectorUrl: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-f16.gguf',
         },
       },
     ],
@@ -216,8 +238,9 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         sizeBytes: 4_680_000_000,
         projectorSizeBytes: 1_040_000_000,
         source: {
-          model: 'https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/MiniCPM-V-2_6-Q4_K_M.gguf',
-          projector: 'https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/mmproj-model-f16-2.gguf',
+          kind: 'remote',
+          modelUrls: ['https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/MiniCPM-V-2_6-Q4_K_M.gguf'],
+          projectorUrl: 'https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/mmproj-model-f16-2.gguf',
         },
       },
     ],
@@ -235,28 +258,15 @@ export function getDefaultVariant(model: ModelRegistryEntry): ModelVariant {
 }
 
 export function getVariantPrimaryUrl(variant: ModelVariant): string {
-  if (typeof variant.source === 'string') {
-    return variant.source;
+  const source = variant.source;
+  switch (source.kind) {
+    case 'installed':
+      return source.modelId;
+    case 'local':
+      return source.modelFiles[0]?.name || 'model.gguf';
+    case 'remote':
+      return source.modelUrls[0] ?? 'model.gguf';
   }
-  if (variant.source instanceof File) {
-    return variant.source.name || 'model.gguf';
-  }
-  if (Array.isArray(variant.source)) {
-    const first = variant.source[0];
-    return typeof first === 'string' ? first : first?.name || 'model.gguf';
-  }
-  if (!('model' in variant.source)) {
-    return 'model.gguf';
-  }
-  const model = variant.source.model;
-  if (typeof model === 'string') {
-    return model;
-  }
-  if (model instanceof File) {
-    return model.name || 'model.gguf';
-  }
-  const first = model[0];
-  return typeof first === 'string' ? first : first?.name || 'model.gguf';
 }
 
 export function isVisionModel(model: ModelRegistryEntry): boolean {

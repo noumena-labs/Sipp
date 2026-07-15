@@ -118,6 +118,13 @@ const metadata: RemoteAssetMetadata = {
   lastModified: 'Wed, 01 May 2024 00:00:00 GMT',
 };
 
+const emptyManifest = {
+  version: 3,
+  projectorIndexRevision: 0,
+  assets: {},
+  models: {},
+} as const;
+
 async function withSupportedStorage<T>(fn: () => Promise<T>): Promise<T> {
   const original = FileSystemStorage.isSupported;
   FileSystemStorage.isSupported = () => true;
@@ -142,52 +149,62 @@ async function withSyncAccessSupported<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function withFetchResponse<T>(body: string, fn: () => Promise<T>): Promise<T> {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(new Blob([body]).stream(), { status: 200 });
-  try {
-    return await fn();
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}
-
 test('AssetStore registers remote downloads without copying the OPFS temp file', async () => {
   await withSupportedStorage(async () => {
-    await withFetchResponse('model-bytes', async () => {
-      const storage = new MemoryStorage();
-      const store = createTestAssetStore(storage);
+    const storage = new MemoryStorage();
+    const store = createTestAssetStore(storage);
+    const response = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
 
-      const record = await store.downloadRemote(metadata, 'model');
-      const file = await store.getFile(record);
+    const receipt = await store.downloadRemote(metadata, 'model', response);
+    const record = receipt.records[0];
+    assert.ok(record);
+    const file = await store.getFile(record);
 
-      assert.equal(storage.writes.length, 1);
-      assert.match(storage.writes[0], /^asset-[0-9a-f]{64}-model\.gguf$/);
-      assert.equal(record.storagePath, storage.writes[0]);
-      assert.match(record.id, /^asset-[0-9a-f]{64}$/);
-      assert.equal(record.name, 'model.gguf');
-      assert.equal(record.bytes, 11);
-      assert.equal(record.sourceBytes, 11);
-      assert.equal(await file.text(), 'model-bytes');
-    });
+    assert.equal(storage.writes.length, 1);
+    assert.match(storage.writes[0], /^asset-[0-9a-f]{64}-model\.gguf$/);
+    assert.equal(record.storagePath, storage.writes[0]);
+    assert.match(record.id, /^asset-[0-9a-f]{64}$/);
+    assert.equal(record.name, 'model.gguf');
+    assert.equal(record.bytes, 11);
+    assert.equal(record.sourceBytes, 11);
+    assert.equal(await file.text(), 'model-bytes');
+  });
+});
+
+test('AssetStore replaces wrong-sized deterministic remote files', async () => {
+  await withSupportedStorage(async () => {
+    const storage = new MemoryStorage();
+    const store = createTestAssetStore(storage);
+    const initial = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
+    const first = await store.downloadRemote(metadata, 'model', initial);
+    const record = first.records[0];
+    assert.ok(record);
+    storage.files.set(record.storagePath, new File(['short'], record.storagePath));
+
+    const replacement = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
+    const second = await store.downloadRemote(metadata, 'model', replacement);
+
+    assert.deepEqual(storage.deleted, [record.storagePath]);
+    assert.equal(second.records[0]?.storagePath, record.storagePath);
+    assert.equal(second.records[0]?.bytes, 11);
+    assert.equal(await storage.files.get(record.storagePath)?.text(), 'model-bytes');
   });
 });
 
 test('AssetStore surfaces quota failures with a storage-specific error code', async () => {
   await withSupportedStorage(async () => {
-    await withFetchResponse('model-bytes', async () => {
-      const storage = new MemoryStorage();
-      storage.failWith = new DOMException('quota full', 'QuotaExceededError');
-      const store = createTestAssetStore(storage);
+    const storage = new MemoryStorage();
+    storage.failWith = new DOMException('quota full', 'QuotaExceededError');
+    const store = createTestAssetStore(storage);
+    const response = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
 
-      await assert.rejects(
-        () => store.downloadRemote(metadata, 'model'),
-        (error) =>
-          error instanceof QueryError &&
-          error.code === 'STORAGE_QUOTA_EXCEEDED' &&
-          error.message.includes('model.gguf')
-      );
-    });
+    await assert.rejects(
+      () => store.downloadRemote(metadata, 'model', response),
+      (error) =>
+        error instanceof QueryError &&
+        error.code === 'STORAGE_QUOTA_EXCEEDED' &&
+        error.message.includes('model.gguf')
+    );
   });
 });
 
@@ -216,7 +233,7 @@ test('AssetStore splits large local GGUF files through sync OPFS callbacks', asy
         },
       };
 
-      const records = await store.installLocalSplitGguf(source, runtime);
+      const records = await store.installLocalGguf(source, runtime, emptyManifest);
 
       assert.equal(records.length, 2);
       assert.deepEqual(

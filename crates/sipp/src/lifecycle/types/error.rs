@@ -41,8 +41,36 @@ pub enum ModelError {
     #[error("model not found: {0}")]
     ModelNotFound(String),
 
-    #[error("remote model loading is not available in this runtime: {0}")]
-    RemoteUnavailable(String),
+    #[error("failed to initialize remote model acquisition: {0}")]
+    RemoteClient(String),
+
+    #[error("remote metadata is unavailable for {url}: {reason}")]
+    RemoteMetadataUnavailable {
+        url: String,
+        status: Option<u16>,
+        retry_after_ms: Option<u64>,
+        reason: String,
+    },
+
+    #[error("remote model download failed for {url}: {reason}")]
+    RemoteDownloadFailed {
+        url: String,
+        status: Option<u16>,
+        retry_after_ms: Option<u64>,
+        reason: String,
+    },
+
+    #[error("remote model integrity failed for {url}: {reason}")]
+    RemoteIntegrityFailed { url: String, reason: String },
+
+    #[error("remote model cleanup failed for {url}: {reason}")]
+    RemoteCleanupFailed { url: String, reason: String },
+
+    #[error("remote acquisition was cancelled")]
+    AcquisitionCancelled,
+
+    #[error("stale remote acquisition result: expected {expected}, received {received}")]
+    StaleAcquisitionResult { expected: String, received: String },
 
     #[error("model runtime failed: {0}")]
     Runtime(String),
@@ -58,6 +86,47 @@ pub enum ModelError {
 
     #[error("model IO failed: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl ModelError {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidModelSource(_)
+            | Self::UnsupportedGgufVersion(_)
+            | Self::InvalidGgufMetadata(_)
+            | Self::GgufMetadataTooLarge { .. } => "INVALID_MODEL_SOURCE",
+            Self::InvalidModelPairing(_) => "INVALID_MODEL_PAIRING",
+            Self::StorageUnavailable(_) | Self::Io(_) => "STORAGE_UNAVAILABLE",
+            Self::StorageCorrupt(_) | Self::RegistryJson(_) => "STORAGE_CORRUPT",
+            Self::AssetMissing(_) => "MODEL_BROKEN",
+            Self::ModelNotFound(_) => "MODEL_NOT_FOUND",
+            Self::RemoteMetadataUnavailable { .. } => "REMOTE_METADATA_UNAVAILABLE",
+            Self::RemoteClient(_)
+            | Self::RemoteDownloadFailed { .. }
+            | Self::RemoteIntegrityFailed { .. }
+            | Self::RemoteCleanupFailed { .. } => "REMOTE_LOAD_FAILED",
+            Self::AcquisitionCancelled => "ACQUISITION_CANCELLED",
+            Self::StaleAcquisitionResult { .. } => "STALE_ACQUISITION_RESULT",
+            Self::Runtime(_) => "QUERY_FAILED",
+            Self::UnsupportedOperation { .. } => "UNSUPPORTED_OPERATION",
+        }
+    }
+
+    pub const fn status(&self) -> Option<u16> {
+        match self {
+            Self::RemoteMetadataUnavailable { status, .. }
+            | Self::RemoteDownloadFailed { status, .. } => *status,
+            _ => None,
+        }
+    }
+
+    pub const fn retry_after_ms(&self) -> Option<u64> {
+        match self {
+            Self::RemoteMetadataUnavailable { retry_after_ms, .. }
+            | Self::RemoteDownloadFailed { retry_after_ms, .. } => *retry_after_ms,
+            _ => None,
+        }
+    }
 }
 
 impl From<crate::error::Error> for ModelError {

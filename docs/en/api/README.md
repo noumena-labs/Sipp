@@ -47,11 +47,12 @@ the operation runs.
 A local endpoint loads a GGUF model into the current process. The application
 owns model selection, runtime lifecycle, and cleanup.
 
-| Field       | Type                           | Description                                                                                                                                 |
-| ----------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`      | `"local"`                      | Endpoint kind selector.                                                                                                                     |
-| `modelPath` | string / `PathBuf`             | Filesystem path or browser URL for the GGUF artifact.                                                                                       |
-| `config`    | `NativeRuntimeConfig` optional | Load-time runtime configuration, including context size, GPU placement, scheduler policy, cache mode, sampling defaults, and observability. |
+| Field         | Type                           | Description                                                                                                                                 |
+| ------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`        | `"local"`                      | Endpoint kind selector.                                                                                                                     |
+| `source`      | `ModelSource`                  | Explicit installed, local-file, or HTTP(S) source.                                                                                          |
+| `storageRoot` | string / `PathBuf`             | Registry and managed-asset root for native packages.                                                                                        |
+| `config`      | `NativeRuntimeConfig` optional | Load-time runtime configuration, including context size, GPU placement, scheduler policy, cache mode, sampling defaults, and observability. |
 
 Use a local endpoint when the current process should own model execution.
 
@@ -210,7 +211,7 @@ HTTP routes to `query`, `chat`, or `embed`.
 
 ```text
 Server client:
-  add("local-model", LocalDescriptor { modelPath, config })
+  add("local-model", LocalDescriptor { source, storageRoot, config })
   -> route handler decodes HTTP request
   -> route handler calls client.query/chat/embed
   -> route handler encodes HTTP response

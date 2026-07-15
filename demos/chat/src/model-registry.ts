@@ -44,8 +44,12 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     sizeLabel: '429 MB',
     capability: 'text',
     recommended: true,
-    source:
-      'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
+    source: {
+      kind: 'remote',
+      modelUrls: [
+        'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
+      ],
+    },
   },
   {
     id: 'smollm2-360m-instruct',
@@ -54,8 +58,12 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     detail: 'Q8_0',
     sizeLabel: '386 MB',
     capability: 'text',
-    source:
-      'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
+    source: {
+      kind: 'remote',
+      modelUrls: [
+        'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
+      ],
+    },
   },
   {
     id: 'lfm2.5-vl-450m',
@@ -65,9 +73,11 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     sizeLabel: '901 MB',
     capability: 'vision',
     source: {
-      model:
+      kind: 'remote',
+      modelUrls: [
         'https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/LFM2.5-VL-450M-F16.gguf',
-      projector:
+      ],
+      projectorUrl:
         'https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-LFM2.5-VL-450m-F16.gguf',
     },
   },
@@ -103,7 +113,7 @@ export function resolveModelSelection(
       id: `custom-file:${selection.file.name}`,
       name: selection.file.name || 'Local GGUF model',
       capability: 'text',
-      source: selection.file,
+      source: { kind: 'local', modelFiles: [selection.file] },
       custom: true,
     };
   }
@@ -113,7 +123,7 @@ export function resolveModelSelection(
     id: `custom-url:${url}`,
     name: fileNameFromUrl(url),
     capability: 'text',
-    source: url,
+    source: { kind: 'remote', modelUrls: [url] },
     custom: true,
   };
 }

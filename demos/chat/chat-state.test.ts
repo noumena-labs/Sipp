@@ -19,7 +19,8 @@ test('text model selection never includes a projector', () => {
   });
 
   assert.equal(resolved.capability, 'text');
-  assert.equal(typeof resolved.source, 'string');
+  assert.equal(resolved.source.kind, 'remote');
+  assert.equal(resolved.source.modelUrls.length, 1);
 });
 
 test('curated vision selection owns its hidden projector source', () => {
@@ -29,17 +30,13 @@ test('curated vision selection owns its hidden projector source', () => {
   });
 
   assert.equal(resolved.capability, 'vision');
-  assert.equal(typeof resolved.source, 'object');
-  assert.ok(resolved.source != null && 'model' in resolved.source);
-  assert.match(
-    String(resolved.source.projector),
-    /mmproj-LFM2\.5-VL-450m-F16\.gguf$/
-  );
+  assert.equal(resolved.source.kind, 'remote');
+  assert.match(resolved.source.projectorUrl ?? '', /mmproj-LFM2\.5-VL-450m-F16\.gguf$/);
 });
 
 test('custom URL selection remains model-only after curated vision selection', () => {
   const vision = getCuratedModel('lfm2.5-vl-450m');
-  assert.equal(typeof vision.source, 'object');
+  assert.equal(vision.source.kind, 'remote');
 
   const custom = resolveModelSelection({
     kind: 'custom-url',
@@ -47,7 +44,10 @@ test('custom URL selection remains model-only after curated vision selection', (
   });
 
   assert.equal(custom.capability, 'text');
-  assert.equal(custom.source, 'https://models.example.test/custom.gguf');
+  assert.deepEqual(custom.source, {
+    kind: 'remote',
+    modelUrls: ['https://models.example.test/custom.gguf'],
+  });
   assert.equal(custom.custom, true);
 });
 
@@ -55,7 +55,7 @@ test('custom file selection remains model-only', () => {
   const file = new File(['gguf'], 'local-model.gguf');
   const resolved = resolveModelSelection({ kind: 'custom-file', file });
 
-  assert.equal(resolved.source, file);
+  assert.deepEqual(resolved.source, { kind: 'local', modelFiles: [file] });
   assert.equal(resolved.capability, 'text');
 });
 

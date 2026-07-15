@@ -256,12 +256,32 @@ class EndpointRef:
     @property
     def kind(self) -> str: ...
 
+class ModelSource:
+    @staticmethod
+    def installed(model_id: str) -> ModelSource: ...
+    @staticmethod
+    def local(
+        model_paths: Sequence[PathLike],
+        projector_path: Optional[PathLike] = None,
+    ) -> ModelSource: ...
+    @staticmethod
+    def remote(
+        model_urls: Sequence[str],
+        projector_url: Optional[str] = None,
+    ) -> ModelSource: ...
+
 class LocalModelDescriptor:
     def __init__(
         self,
-        model_path: PathLike,
+        source: ModelSource,
+        storage_root: PathLike,
         config: Optional[NativeRuntimeConfig] = None,
     ) -> None: ...
+
+class ModelLifecycleError(Exception):
+    code: str
+    status: Optional[int]
+    retry_after_ms: Optional[int]
 
 class ProviderDescriptor:
     def __init__(

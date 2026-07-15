@@ -279,6 +279,8 @@ EndpointRef = _native.EndpointRef
 GatewayDescriptor = _native.GatewayDescriptor
 LocalEmbedOptions = _native.LocalEmbedOptions
 LocalModelDescriptor = _native.LocalModelDescriptor
+ModelSource = _native.ModelSource
+ModelLifecycleError = _native.ModelLifecycleError
 LocalTextOptions = _native.LocalTextOptions
 ModelPlacementConfig = _native.ModelPlacementConfig
 MultimodalRuntimeConfig = _native.MultimodalRuntimeConfig
@@ -311,6 +313,8 @@ __all__ = [
     "GatewayDescriptor",
     "LocalEmbedOptions",
     "LocalModelDescriptor",
+    "ModelSource",
+    "ModelLifecycleError",
     "LocalTextOptions",
     "ModelPlacementConfig",
     "MultimodalRuntimeConfig",

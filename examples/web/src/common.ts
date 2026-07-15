@@ -231,10 +231,10 @@ export function readModelSource(
 ): ModelSource | null {
   const file = fileInput.files?.[0];
   if (file != null) {
-    return file;
+    return { kind: 'local', modelFiles: [file] };
   }
   const model = modelInput.value.trim();
-  return model === '' ? null : model;
+  return model === '' ? null : { kind: 'remote', modelUrls: [model] };
 }
 
 export function readPrompt(input: HTMLTextAreaElement): string | null {

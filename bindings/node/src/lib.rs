@@ -733,12 +733,42 @@ impl From<&ProviderStaticHeader> for dto::ProviderStaticHeader {
     }
 }
 
-/// Local or direct provider endpoint descriptor accepted by add.
+/// Authoritative installed, local, or remote model source.
+#[napi(object)]
+pub struct ModelSource {
+    pub kind: String,
+    #[napi(js_name = "modelId")]
+    pub model_id: Option<String>,
+    #[napi(js_name = "modelPaths")]
+    pub model_paths: Option<Vec<String>>,
+    #[napi(js_name = "projectorPath")]
+    pub projector_path: Option<String>,
+    #[napi(js_name = "modelUrls")]
+    pub model_urls: Option<Vec<String>>,
+    #[napi(js_name = "projectorUrl")]
+    pub projector_url: Option<String>,
+}
+
+impl From<&ModelSource> for dto::ModelSource {
+    fn from(value: &ModelSource) -> Self {
+        Self {
+            kind: value.kind.clone(),
+            model_id: value.model_id.clone(),
+            model_paths: value.model_paths.clone(),
+            projector_path: value.projector_path.clone(),
+            model_urls: value.model_urls.clone(),
+            projector_url: value.projector_url.clone(),
+        }
+    }
+}
+
+/// Local, gateway, or direct provider endpoint descriptor accepted by add.
 #[napi(object)]
 pub struct EndpointDescriptor {
     pub kind: String,
-    #[napi(js_name = "modelPath")]
-    pub model_path: Option<String>,
+    pub source: Option<ModelSource>,
+    #[napi(js_name = "storageRoot")]
+    pub storage_root: Option<String>,
     pub config: Option<NativeRuntimeConfig>,
     #[napi(js_name = "baseUrl")]
     pub base_url: Option<String>,
@@ -773,7 +803,8 @@ impl From<&EndpointDescriptor> for dto::EndpointDescriptor {
     fn from(value: &EndpointDescriptor) -> Self {
         Self {
             kind: value.kind.clone(),
-            model_path: value.model_path.clone(),
+            source: value.source.as_ref().map(dto::ModelSource::from),
+            storage_root: value.storage_root.clone(),
             config: value.config.as_ref().map(dto::NativeRuntimeConfig::from),
             base_url: value.base_url.clone(),
             target: value.target.clone(),
@@ -1354,6 +1385,30 @@ fn endpoint_error_to_node(env: Env, error: sipp::EndpointError) -> Error {
     }
 }
 
+fn model_lifecycle_error_to_node(env: Env, error: sipp::lifecycle::ModelError) -> Error {
+    match model_lifecycle_error_to_node_result(env, error) {
+        Ok(error) => error,
+        Err(error) => error,
+    }
+}
+
+fn model_lifecycle_error_to_node_result(
+    env: Env,
+    error: sipp::lifecycle::ModelError,
+) -> Result<Error> {
+    let mut object = env.create_error(Error::new(Status::GenericFailure, error.to_string()))?;
+    object.set("name", "ModelLifecycleError")?;
+    object.set("code", error.code())?;
+    object.set("status", error.status())?;
+    object.set(
+        "retryAfterMs",
+        error
+            .retry_after_ms()
+            .map(|milliseconds| milliseconds as f64),
+    )?;
+    Ok(Error::from(object.to_unknown()))
+}
+
 fn endpoint_error_to_node_result(env: Env, error: sipp::EndpointError) -> Result<Error> {
     let mut object = env.create_error(Error::new(Status::GenericFailure, error.to_string()))?;
     object.set("name", "EndpointError")?;
@@ -1391,6 +1446,7 @@ fn provider_error_to_node_result(env: Env, error: CoreProviderEndpointError) -> 
 fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
+        CoreClientError::ModelLifecycle(error) => model_lifecycle_error_to_node(env, error),
         CoreClientError::Endpoint(error) => endpoint_error_to_node(env, error),
         CoreClientError::Provider(error) => provider_error_to_node(env, error),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),

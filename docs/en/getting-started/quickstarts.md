@@ -36,7 +36,10 @@ const queryPrompt = [
 
 const textEndpoint = await client.add('text', {
   kind: 'local',
-  source: '/models/chat.gguf',
+  source: {
+    kind: 'remote',
+    modelUrls: [new URL('/models/chat.gguf', window.location.href).href],
+  },
   options: { backend: 'webgpu', runtime: { context: { n_ctx: 2048 } } },
 });
 
@@ -56,7 +59,10 @@ const chat = await client.chat(messages, {
 
 const embedEndpoint = await client.add('embed', {
   kind: 'local',
-  source: '/models/embed.gguf',
+  source: {
+    kind: 'remote',
+    modelUrls: [new URL('/models/embed.gguf', window.location.href).href],
+  },
   options: {
     backend: 'webgpu',
     runtime: { context: { n_ctx: 2048, embeddings: true, pooling: 'mean' } },
@@ -101,7 +107,8 @@ const embedModel = process.argv[3] ?? 'embed.gguf';
 
 const textEndpoint = await client.add('text', {
   kind: 'local',
-  modelPath: textModel,
+  source: { kind: 'local', modelPaths: [textModel] },
+  storageRoot: '.sipp-models',
   config: { context: { n_ctx: 2048 } },
 });
 
@@ -123,7 +130,8 @@ const chat = await client.chat({
 
 const embedEndpoint = await client.add('embed', {
   kind: 'local',
-  modelPath: embedModel,
+  source: { kind: 'local', modelPaths: [embedModel] },
+  storageRoot: '.sipp-models',
   config: { context: { n_ctx: 2048, embeddings: true, pooling: 'mean' } },
 });
 
@@ -158,6 +166,7 @@ from sipp import (
     LocalEmbedOptions,
     LocalTextOptions,
     LocalModelDescriptor,
+    ModelSource,
     NativeRuntimeConfig,
 )
 
@@ -177,7 +186,13 @@ query_prompt = "\n".join(
 )
 text_options = SippTextOptions(max_tokens=64)
 
-text_endpoint = client.add("text", LocalModelDescriptor("chat.gguf"))
+text_endpoint = client.add(
+    "text",
+    LocalModelDescriptor(
+        ModelSource.local(["chat.gguf"]),
+        ".sipp-models",
+    ),
+)
 
 # query: raw prompt; replace markers with the target model's template.
 query = client.query(
@@ -198,7 +213,8 @@ chat = client.chat(
 embed_endpoint = client.add(
     "embed",
     LocalModelDescriptor(
-        "embed.gguf",
+        ModelSource.local(["embed.gguf"]),
+        ".sipp-models",
         NativeRuntimeConfig(
             context=ContextRuntimeConfig(
                 n_ctx=2048,
@@ -232,6 +248,7 @@ use sipp::engine::{
 use sipp::{
     SippChatRequest, SippClient, SippEmbedRequest, SippQueryRequest,
     SippTextOptions, EndpointDescriptor, LocalEmbedOptions, LocalTextOptions,
+    LocalModelDescriptor, ModelSource,
 };
 
 let mut client = SippClient::new();
@@ -253,7 +270,17 @@ let text_options = SippTextOptions {
 };
 
 let text_endpoint = client
-    .add("text", EndpointDescriptor::local("chat.gguf", Default::default()))
+    .add(
+        "text",
+        EndpointDescriptor::LocalModel(LocalModelDescriptor {
+            source: ModelSource::Local {
+                model_paths: vec!["chat.gguf".into()],
+                projector_path: None,
+            },
+            storage_root: ".sipp-models".into(),
+            config: Default::default(),
+        }),
+    )
     .await?;
 
 // query: raw prompt; replace markers with the target model's template.
@@ -285,7 +312,17 @@ let chat = client
     .await?;
 
 let embed_endpoint = client
-    .add("embed", EndpointDescriptor::local("embed.gguf", embed_config()))
+    .add(
+        "embed",
+        EndpointDescriptor::LocalModel(LocalModelDescriptor {
+            source: ModelSource::Local {
+                model_paths: vec!["embed.gguf".into()],
+                projector_path: None,
+            },
+            storage_root: ".sipp-models".into(),
+            config: embed_config(),
+        }),
+    )
     .await?;
 
 // embed: vector output; local endpoint must be embedding-capable.

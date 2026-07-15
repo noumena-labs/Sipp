@@ -601,7 +601,7 @@ export default function App() {
         setStatus('Downloading model');
         await nextClient.add('local', {
           kind: 'local',
-          source: url,
+          source: { kind: 'remote', modelUrls: [url] },
           options: {
             onProgress: (progress: ModelLoadProgress) => {
               if (progress.phase === 'download') {

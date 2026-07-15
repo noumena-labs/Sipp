@@ -47,6 +47,12 @@ pyo3::create_exception!(
 
 pyo3::create_exception!(_native, EndpointError, PyException, "Endpoint error.");
 pyo3::create_exception!(_native, ProviderError, PyException, "Provider API error.");
+pyo3::create_exception!(
+    _native,
+    ModelLifecycleError,
+    PyException,
+    "Model lifecycle error."
+);
 
 const PY_CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const PY_CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
@@ -829,6 +835,58 @@ impl PyGatewayDescriptor {
     }
 }
 
+/// Authoritative installed, local, or remote model source.
+#[pyclass(name = "ModelSource")]
+#[derive(Clone)]
+struct PyModelSource {
+    dto: dto::ModelSource,
+}
+
+#[pymethods]
+impl PyModelSource {
+    #[staticmethod]
+    fn installed(model_id: String) -> Self {
+        Self {
+            dto: dto::ModelSource {
+                kind: "installed".to_string(),
+                model_id: Some(model_id),
+                ..dto::ModelSource::default()
+            },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (model_paths, projector_path = None))]
+    fn local(model_paths: Vec<PathBuf>, projector_path: Option<PathBuf>) -> Self {
+        Self {
+            dto: dto::ModelSource {
+                kind: "local".to_string(),
+                model_paths: Some(
+                    model_paths
+                        .into_iter()
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .collect(),
+                ),
+                projector_path: projector_path.map(|path| path.to_string_lossy().into_owned()),
+                ..dto::ModelSource::default()
+            },
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (model_urls, projector_url = None))]
+    fn remote(model_urls: Vec<String>, projector_url: Option<String>) -> Self {
+        Self {
+            dto: dto::ModelSource {
+                kind: "remote".to_string(),
+                model_urls: Some(model_urls),
+                projector_url,
+                ..dto::ModelSource::default()
+            },
+        }
+    }
+}
+
 /// Local model descriptor accepted by SippClient.add.
 #[pyclass(name = "LocalModelDescriptor")]
 #[derive(Clone)]
@@ -839,15 +897,17 @@ struct PyLocalModelDescriptor {
 #[pymethods]
 impl PyLocalModelDescriptor {
     #[new]
-    #[pyo3(signature = (model_path, config = None))]
+    #[pyo3(signature = (source, storage_root, config = None))]
     fn new(
         py: Python<'_>,
-        model_path: PathBuf,
+        source: Py<PyModelSource>,
+        storage_root: PathBuf,
         config: Option<Py<PyNativeRuntimeConfig>>,
     ) -> PyResult<Self> {
         let dto = dto::EndpointDescriptor {
             kind: "local".to_string(),
-            model_path: Some(model_path.to_string_lossy().into_owned()),
+            source: Some(source.borrow(py).dto.clone()),
+            storage_root: Some(storage_root.to_string_lossy().into_owned()),
             config: config.map(|value| value.borrow(py).to_dto()),
             ..dto::EndpointDescriptor::default()
         };
@@ -1170,6 +1230,10 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         "ProviderError",
         module.py().get_type_bound::<ProviderError>(),
     )?;
+    module.add(
+        "ModelLifecycleError",
+        module.py().get_type_bound::<ModelLifecycleError>(),
+    )?;
     module.add_class::<PyModelPlacementConfig>()?;
     module.add_class::<PyContextRuntimeConfig>()?;
     module.add_class::<PySamplingRuntimeConfig>()?;
@@ -1190,6 +1254,7 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySippTokenIterator>()?;
     module.add_class::<PySippEmbeddingRun>()?;
     module.add_class::<PyGatewayDescriptor>()?;
+    module.add_class::<PyModelSource>()?;
     module.add_class::<PyLocalModelDescriptor>()?;
     module.add_class::<PyProviderDescriptor>()?;
     module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
@@ -1503,6 +1568,21 @@ fn to_py_provider_error_result(
 fn to_py_client_error(error: ClientError) -> PyErr {
     match error {
         ClientError::Local(error) => to_py_error(error),
+        ClientError::ModelLifecycle(error) => Python::with_gil(|py| {
+            let instance = py
+                .get_type_bound::<ModelLifecycleError>()
+                .call1((error.to_string(),))
+                .and_then(|instance| {
+                    instance.setattr("code", error.code())?;
+                    instance.setattr("status", error.status())?;
+                    instance.setattr("retry_after_ms", error.retry_after_ms())?;
+                    Ok(instance)
+                });
+            match instance {
+                Ok(instance) => PyErr::from_value_bound(instance),
+                Err(error) => error,
+            }
+        }),
         ClientError::Endpoint(error) => Python::with_gil(|py| {
             let instance = py
                 .get_type_bound::<EndpointError>()

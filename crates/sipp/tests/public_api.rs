@@ -1,12 +1,15 @@
 //! Integration tests for the `sipp` crate-level public API.
 //!
 //! Covers the root client re-exports, nested native config modules, and the
-//! `shard`, client, and `providers` public surfaces without loading local
-//! models or calling gateway endpoints.
+//! explicit model-source descriptors, and the `shard` and `providers` public
+//! surfaces without loading local models or calling gateway endpoints.
+
+use std::path::PathBuf;
 
 use sipp::{
     engine::ContextRuntimeConfig, lifecycle::BackendPreference,
-    runtime::request::GenerateResponseStatus, NativeRuntimeConfig, SippClient,
+    runtime::request::GenerateResponseStatus, EndpointDescriptor, LocalModelDescriptor,
+    ModelSource, NativeRuntimeConfig, SippClient,
 };
 
 #[test]
@@ -28,6 +31,22 @@ fn facade_reexports_client_and_native_runtime_config() {
 fn facade_reexports_lifecycle_and_runtime_modules() {
     assert_eq!(BackendPreference::Cpu.as_str(), "cpu");
     assert_eq!(GenerateResponseStatus::Completed.as_str(), "completed");
+}
+
+#[test]
+fn facade_exposes_only_explicit_model_source_variants() {
+    let source = ModelSource::Remote {
+        model_urls: vec!["https://models.example/model.gguf".to_string()],
+        projector_url: None,
+    };
+    let descriptor = EndpointDescriptor::LocalModel(LocalModelDescriptor {
+        source: source.clone(),
+        storage_root: PathBuf::from(".sipp-models"),
+        config: NativeRuntimeConfig::default(),
+    });
+
+    assert!(matches!(source, ModelSource::Remote { .. }));
+    assert!(matches!(descriptor, EndpointDescriptor::LocalModel(_)));
 }
 
 mod client_api {

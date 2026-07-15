@@ -31,14 +31,18 @@ futures.workspace = true
 futures-channel.workspace = true
 futures-core.workspace = true
 futures-util = { version = "0.3", optional = true }
+httpdate = "1"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+url = "2"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tokio = { workspace = true, features = [
+    "fs",
+    "io-util",
     "rt",
     "net",
     "time",

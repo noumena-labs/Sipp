@@ -47,6 +47,7 @@
 - [Maintainers](maintainers/README.md)
   - [Source Builds](maintainers/source-builds.md)
   - [Architecture](architecture.md)
+  - [Hybrid Intelligence Architecture](architecture-diagrams.md)
   - [Gateway Architecture](gateway.md)
   - [Testing](testing.md)
   - [Coverage](coverage.md)

@@ -26,7 +26,10 @@ export function LocalQuery(): JSX.Element {
     try {
       const endpoint = await client.add('default', {
         kind: 'local',
-        source: '/models/model.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: [new URL('/models/model.gguf', window.location.href).href],
+        },
         options: {
           backend: 'webgpu',
           runtime: {

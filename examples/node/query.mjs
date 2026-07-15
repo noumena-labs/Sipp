@@ -23,7 +23,8 @@ console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
 await client.add('default', {
   kind: 'local',
-  modelPath: model,
+  source: { kind: 'local', modelPaths: [model] },
+  storageRoot: '.sipp-models',
   config: runtimeConfig({ embeddings: false }),
 });
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
@@ -38,8 +39,7 @@ const result = await client.query({
 }).response;
 printText(result);
 
-function runtimeConfig({ embeddings, projectorPath = undefined }) {
-  const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };
+function runtimeConfig({ embeddings }) {
   return {
     placement: { gpu_layers: gpuLayers() },
     context: {
@@ -54,7 +54,6 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
     },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },
-    multimodal,
     residency: { max_gpu_models_per_device: 1 },
     observability: { runtime_metrics: true },
   };

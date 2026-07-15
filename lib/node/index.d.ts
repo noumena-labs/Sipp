@@ -269,11 +269,29 @@ export interface ProviderStaticHeader {
   value: string
 }
 
+/** Authoritative source used by the native model lifecycle. */
+export type ModelSource =
+  | {
+      readonly kind: 'installed'
+      readonly modelId: string
+    }
+  | {
+      readonly kind: 'local'
+      readonly modelPaths: readonly string[]
+      readonly projectorPath?: string
+    }
+  | {
+      readonly kind: 'remote'
+      readonly modelUrls: readonly string[]
+      readonly projectorUrl?: string
+    }
+
 /** Descriptor for a local model endpoint owned by this client process. */
 export type LocalEndpointDescriptor = {
-  kind: 'local'
-  modelPath: string
-  config?: NativeRuntimeConfig
+  readonly kind: 'local'
+  readonly source: ModelSource
+  readonly storageRoot: string
+  readonly config?: NativeRuntimeConfig
 }
 
 /** Descriptor for an explicitly selected external provider adapter. */
@@ -296,6 +314,13 @@ export type EndpointDescriptor =
   | LocalEndpointDescriptor
   | GatewayEndpointDescriptor
   | ProviderEndpointDescriptor
+
+/** Error raised when native model acquisition or lifecycle processing fails. */
+export interface ModelLifecycleError extends Error {
+  readonly code: string
+  readonly status?: number
+  readonly retryAfterMs?: number
+}
 
 /** Local runtime timing, cache, and throughput statistics. */
 export interface RequestStats {

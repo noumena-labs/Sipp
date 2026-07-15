@@ -54,7 +54,9 @@ impl From<crate::client::SippError> for GatewayError {
             | SippError::NoSupportedEndpoint { .. }
             | SippError::UnsupportedOperation { .. } => GatewayErrorKind::InvalidRequest,
             SippError::Internal(_) => GatewayErrorKind::Internal,
-            SippError::Local(_) | SippError::Endpoint(_) => GatewayErrorKind::Execution,
+            SippError::Local(_) | SippError::ModelLifecycle(_) | SippError::Endpoint(_) => {
+                GatewayErrorKind::Execution
+            }
             #[cfg(feature = "providers")]
             SippError::Provider(_) => GatewayErrorKind::Execution,
         };

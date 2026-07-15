@@ -26,7 +26,10 @@ import { SippClient } from '@sipphq/sipp';
 const client = new SippClient();
 await client.add('default', {
   kind: 'local',
-  source: '/models/model.gguf',
+  source: {
+    kind: 'remote',
+    modelUrls: ['/models/model.gguf'],
+  },
   options: {
     runtime: {
       context: { n_ctx: 2048 },

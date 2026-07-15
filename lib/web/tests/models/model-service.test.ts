@@ -23,7 +23,12 @@ import {
 } from '../../src/models/types.js';
 import type { EngineRuntime } from '../../src/runtime/engine-runtime.js';
 import type { RuntimeBackendOverride } from '../../src/engine/runtime-assets.js';
-import type { RustLifecycleBridge } from '../../src/wasm/wasm-bridge.js';
+import type {
+  RustLifecycleBridge,
+  RustRemoteAction,
+  RustRemoteCommand,
+  RustRemoteCommandValue,
+} from '../../src/wasm/wasm-bridge.js';
 import type {
   BackendObservability,
   ChatMessage,
@@ -40,6 +45,33 @@ import type { ChatBoundaryInfo } from '../../src/engine/chat-boundary-sanitizer.
 
 function file(name: string, contents = name): File {
   return new File([contents], name);
+}
+
+function localSource(name: string, contents = name) {
+  return {
+    kind: 'local' as const,
+    modelFiles: [file(name, contents)],
+  };
+}
+
+async function withGlobalFetch<T>(
+  fetchImpl: typeof globalThis.fetch,
+  callback: () => Promise<T>
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+  Object.defineProperty(globalThis, 'fetch', {
+    configurable: true,
+    value: fetchImpl,
+  });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor == null) {
+      Reflect.deleteProperty(globalThis, 'fetch');
+    } else {
+      Object.defineProperty(globalThis, 'fetch', descriptor);
+    }
+  }
 }
 
 async function withNavigatorGpu<T>(
@@ -123,67 +155,6 @@ class FakeAssetStore {
   public localSplitCount = 0;
   public cleanupCount = 0;
   public forceBrowserSplit = false;
-  public readonly remotes = new Map<
-    string,
-    {
-      etag: string;
-      lastModified: string;
-      file: File;
-    }
-  >();
-
-  public async resolveRemoteMetadata(rawUrl: string): Promise<{
-    url: string;
-    canonicalUrl: string;
-    name: string;
-    bytes: number;
-    etag: string;
-    lastModified: string;
-  }> {
-    const remote = this.remotes.get(rawUrl);
-    if (remote == null) {
-      throw new QueryError('REMOTE_METADATA_UNAVAILABLE', `No fake remote for ${rawUrl}.`);
-    }
-    return {
-      url: rawUrl,
-      canonicalUrl: rawUrl,
-      name: remote.file.name,
-      bytes: remote.file.size,
-      etag: remote.etag,
-      lastModified: remote.lastModified,
-    };
-  }
-
-  public async downloadRemote(
-    metadata: { canonicalUrl: string; etag: string; lastModified: string },
-    kind: AssetRecord['kind']
-  ): Promise<AssetRecord> {
-    const remote = this.remotes.get(metadata.canonicalUrl);
-    if (remote == null) {
-      throw new QueryError('REMOTE_LOAD_FAILED', `No fake remote for ${metadata.canonicalUrl}.`);
-    }
-    return this.installFile({
-      kind,
-      file: remote.file,
-      sourceUrl: metadata.canonicalUrl,
-      sourceEtag: metadata.etag,
-      sourceLastModified: metadata.lastModified,
-    });
-  }
-
-  public async downloadRemoteSplitGguf(metadata: {
-    canonicalUrl: string;
-    etag: string;
-    lastModified: string;
-    bytes: number;
-  }): Promise<AssetRecord[]> {
-    const record = await this.downloadRemote(metadata, 'model');
-    if (metadata.bytes <= FakeAssetStore.directLoadMaxBytes) {
-      return [record];
-    }
-    throw new Error('Large fake remote GGUF splitting is not implemented.');
-  }
-
   public async installFile(input: {
     kind: AssetRecord['kind'];
     file: File;
@@ -207,11 +178,18 @@ class FakeAssetStore {
     };
   }
 
-  public async installLocalSplitGguf(file: File): Promise<AssetRecord[]> {
-    if (file.size <= FakeAssetStore.directLoadMaxBytes) {
+  public async installLocalGguf(
+    file: File,
+    _runtime: unknown,
+    _manifest: RegistryManifest,
+    _signal?: AbortSignal,
+    _onProgress?: unknown
+  ): Promise<AssetRecord[]> {
+    if (!this.forceBrowserSplit && file.size <= FakeAssetStore.directLoadMaxBytes) {
       return [await this.installFile({ kind: 'model', file })];
     }
 
+    await this.cleanupBrowserSplitArtifacts();
     this.localSplitCount += 1;
     const sourceFileName = file.name.replace(/[\\/:*?"<>|]+/g, '-');
     return [0, 1].map((index) => {
@@ -276,10 +254,6 @@ class FakeAssetStore {
   public async delete(record: AssetRecord): Promise<void> {
     this.deleted.push(record.id);
     this.files.delete(record.id);
-  }
-
-  public requiresBrowserSplit(bytes: number): boolean {
-    return this.forceBrowserSplit || bytes > FakeAssetStore.directLoadMaxBytes;
   }
 
   public async cleanupBrowserSplitArtifacts(): Promise<void> {
@@ -768,8 +742,11 @@ class FakeRustLifecycleBridge {
   public prepareCount = 0;
   public commitCount = 0;
   public removeCount = 0;
+  public remoteAdvanceCount = 0;
+  public remoteCancelCount = 0;
   public lastSource: unknown = null;
   public lastOptions: unknown = null;
+  private remoteUrl: string | null = null;
   private manifest: RegistryManifest = {
     version: 3,
     projectorIndexRevision: 0,
@@ -784,9 +761,40 @@ class FakeRustLifecycleBridge {
     );
   }
 
+  public remoteAcquisition(command: RustRemoteCommand): RustRemoteCommandValue {
+    switch (command.command) {
+      case 'begin': {
+        const url = command.modelUrls[0];
+        assert.ok(url);
+        this.remoteUrl = url;
+        return { kind: 'action', action: this.remoteMetadataAction(1) };
+      }
+      case 'advance':
+        if (command.event.kind === 'wait_completed') {
+          return { kind: 'action', action: this.remoteMetadataAction(command.event.attempt + 1) };
+        }
+        assert.equal(command.event.kind, 'operation_failed');
+        this.remoteAdvanceCount += 1;
+        if (this.remoteAdvanceCount < 4) {
+          return { kind: 'action', action: this.remoteWaitAction(command.event.attempt) };
+        }
+        return {
+          kind: 'failed',
+          error: {
+            code: 'REMOTE_METADATA_UNAVAILABLE',
+            message: `remote metadata is unavailable for ${this.remoteUrl}: HTTP 503`,
+            status: 503,
+          },
+        };
+      case 'cancel':
+        this.remoteCancelCount += 1;
+        return { kind: 'cancelled', snapshot: this.snapshot('idle', null, 'off') };
+    }
+  }
+
   public prepareLoad(
     source: {
-      kind: 'assets';
+      kind: 'local';
       assets: AssetRecord[];
       classified: ClassifiedAsset[];
     },
@@ -936,6 +944,27 @@ class FakeRustLifecycleBridge {
     return [];
   }
 
+  private remoteMetadataAction(attempt: number): RustRemoteAction {
+    assert.ok(this.remoteUrl);
+    return {
+      kind: 'fetch_metadata',
+      acquisitionId: 'remote-1',
+      memberId: 0,
+      attempt,
+      url: this.remoteUrl,
+    };
+  }
+
+  private remoteWaitAction(attempt: number): RustRemoteAction {
+    return {
+      kind: 'wait',
+      acquisitionId: 'remote-1',
+      memberId: 0,
+      attempt,
+      delayMs: 0,
+    };
+  }
+
   private toModelInfo(entry: ModelEntry, loaded: boolean): ModelInfo {
     const assets = entry.modelAssetIds
       .map((assetId) => this.manifest.assets[assetId])
@@ -1014,7 +1043,7 @@ function createRustBackedService(runtime: FakeRuntime = new FakeRuntime()) {
 
 test('ModelService loads, lists, tracks current, and queries text models', async () => {
   const { service, runtime } = createService();
-  const info = await service.load(file('text-model.gguf'));
+  const info = await service.load(localSource('text-model.gguf'));
 
   assert.equal(info.status, 'ready');
   assert.equal(info.loaded, true);
@@ -1037,7 +1066,7 @@ test('ModelService loads, lists, tracks current, and queries text models', async
 
 test('ModelService maps common generation options into local prompt options', async () => {
   const { service, runtime } = createService();
-  await service.load(file('text-model.gguf'));
+  await service.load(localSource('text-model.gguf'));
 
   await service.runQuery('hello', {
     maxTokens: 12,
@@ -1063,7 +1092,7 @@ test('ModelService maps common generation options into local prompt options', as
 
 test('ModelService uses contextKey as the preferred local text context key', async () => {
   const { service, runtime } = createService();
-  await service.load(file('text-model.gguf'));
+  await service.load(localSource('text-model.gguf'));
 
   await service.runQuery('hello', {
     contextKey: 'ctx',
@@ -1074,7 +1103,7 @@ test('ModelService uses contextKey as the preferred local text context key', asy
 
 test('ModelService.embed returns embedding results without token emission', async () => {
   const { service, runtime } = createService();
-  await service.load(file('embedding-model.gguf'));
+  await service.load(localSource('embedding-model.gguf'));
 
   const result = await service.runEmbedding('hello', {
     normalize: false,
@@ -1100,7 +1129,7 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   ).createRustLifecycleBridge = async () => rust as unknown as RustLifecycleBridge;
   const { service, assets } = createService({ runtime });
 
-  const info = await service.load(file('rust-lifecycle.gguf'), {
+  const info = await service.load(localSource('rust-lifecycle.gguf'), {
     observability: 'runtime',
     runtime: { context: { n_ctx: 1024 } },
   });
@@ -1120,10 +1149,31 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   assert.deepEqual(assets.deleted, ['asset-model-rust-lifecycle.gguf-19']);
 });
 
+test('ModelService preserves terminal remote acquisition errors', async () => {
+  await withGlobalFetch(
+    async () => new Response(null, { status: 503 }),
+    async () => {
+      const { service, rust } = createRustBackedService();
+
+      await assert.rejects(
+        service.load({ kind: 'remote', modelUrls: ['https://example.test/model.gguf'] }),
+        (error) =>
+          error instanceof QueryError &&
+          error.code === 'REMOTE_METADATA_UNAVAILABLE' &&
+          error.status === 503 &&
+          error.message ===
+            'remote metadata is unavailable for https://example.test/model.gguf: HTTP 503'
+      );
+      assert.equal(rust.remoteAdvanceCount, 4);
+      assert.equal(rust.remoteCancelCount, 0);
+    }
+  );
+});
+
 test('ModelService skips browser split cleanup for direct local loads', async () => {
   const { service, assets } = createService();
 
-  await service.load(file('direct-load.gguf'));
+  await service.load(localSource('direct-load.gguf'));
 
   assert.equal(assets.cleanupCount, 0);
 });
@@ -1132,7 +1182,7 @@ test('ModelService cleans browser split artifacts before split-capable local loa
   const { service, assets } = createService();
   assets.forceBrowserSplit = true;
 
-  await service.load(file('split-capable.gguf'));
+  await service.load(localSource('split-capable.gguf'));
 
   assert.equal(assets.cleanupCount, 1);
 });
@@ -1143,7 +1193,7 @@ test('ModelService defaults browser pthread runtime thread counts before Rust pr
     runtime.wasmThreadingMode = 'pthread';
     const { service, rust } = createRustBackedService(runtime);
 
-    await service.load(file('pthread-defaults.gguf'), {
+    await service.load(localSource('pthread-defaults.gguf'), {
       runtime: { context: { n_ctx: 1024, n_threads: 2 } },
     });
 
@@ -1166,7 +1216,7 @@ test('ModelService auto-selects WebGPU when the browser has a shader-f16 adapter
   await withNavigatorGpu(async () => ({ features: { has: () => true } }), async () => {
     const { service, rust } = createRustBackedService();
 
-    await service.load(file('webgpu-auto.gguf'));
+    await service.load(localSource('webgpu-auto.gguf'));
 
     assert.equal(
       (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
@@ -1181,7 +1231,7 @@ test('ModelService honors the runtime CPU backend override before WebGPU auto-se
     runtime.defaultBackendOverride = 'cpu';
     const { service, rust } = createRustBackedService(runtime);
 
-    await service.load(file('cpu-runtime-override.gguf'));
+    await service.load(localSource('cpu-runtime-override.gguf'));
 
     assert.equal(
       (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
@@ -1196,7 +1246,7 @@ test('ModelService keeps an explicit WebGPU backend when the runtime has a CPU o
     runtime.defaultBackendOverride = 'cpu';
     const { service, rust } = createRustBackedService(runtime);
 
-    await service.load(file('explicit-webgpu.gguf'), { backend: 'webgpu' });
+    await service.load(localSource('explicit-webgpu.gguf'), { backend: 'webgpu' });
 
     assert.equal(
       (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
@@ -1209,7 +1259,7 @@ test('ModelService auto-selects CPU when the adapter lacks shader-f16', async ()
   await withNavigatorGpu(async () => ({ features: { has: () => false } }), async () => {
     const { service, rust } = createRustBackedService();
 
-    await service.load(file('webgpu-auto-no-f16.gguf'));
+    await service.load(localSource('webgpu-auto-no-f16.gguf'));
 
     assert.equal(
       (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
@@ -1220,7 +1270,7 @@ test('ModelService auto-selects CPU when the adapter lacks shader-f16', async ()
 
 test('ModelService.chat renders chat templates and sanitizes assistant boundaries', async () => {
   const { service, runtime } = createService();
-  await service.load(file('text-model.gguf'));
+  await service.load(localSource('text-model.gguf'));
   runtime.streamedTokens = ['Hello ', 'there</assistant>\n<user>ignored'];
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
 
@@ -1246,7 +1296,7 @@ test('ModelService.chat renders chat templates and sanitizes assistant boundarie
 
 test('ModelService.chat keeps token emission off when a token sink is not requested', async () => {
   const { service, runtime } = createService();
-  await service.load(file('text-model.gguf'));
+  await service.load(localSource('text-model.gguf'));
   runtime.nextOutputText = 'Hello there</assistant>\n<user>ignored';
 
   const answer = await service.runChat(
@@ -1264,7 +1314,7 @@ test('ModelService.chat keeps token emission off when a token sink is not reques
 
 test('ModelService passes token sinks to the runtime when token emission is requested', async () => {
   const { service, runtime } = createService();
-  await service.load(file('text-model.gguf'));
+  await service.load(localSource('text-model.gguf'));
 
   await service.runQuery('hello', {
     tokenBatchSink: () => {},
@@ -1277,7 +1327,7 @@ test('ModelService passes token sinks to the runtime when token emission is requ
 
 test('ModelService removes current models and deletes orphaned assets', async () => {
   const { service, runtime, assets } = createService();
-  const info = await service.load(file('remove-me.gguf'));
+  const info = await service.load(localSource('remove-me.gguf'));
 
   await service.remove(info.id);
   assert.equal(service.current(), null);
@@ -1294,14 +1344,14 @@ test('ModelService rejects queries during lifecycle transitions and serializes c
   });
   const { service } = createService({ runtime });
 
-  const firstLoad = service.load(file('slow.gguf'));
+  const firstLoad = service.load(localSource('slow.gguf'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   await assert.rejects(
     () => service.runQuery('too early', {}),
     (error) => error instanceof QueryError && error.code === 'MODEL_NOT_READY'
   );
 
-  const secondLoad = service.load(file('next.gguf'));
+  const secondLoad = service.load(localSource('next.gguf'));
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(runtime.stagedDescriptors.length, 1);
 
@@ -1315,7 +1365,7 @@ test('ModelService rejects queries during lifecycle transitions and serializes c
 test('ModelService surfaces OPFS unavailable as a storage error', async () => {
   const service = new ModelService(new FakeRuntime());
   await assert.rejects(
-    () => service.load(file('requires-opfs.gguf')),
+    () => service.load(localSource('requires-opfs.gguf')),
     (error) => error instanceof QueryError && error.code === 'STORAGE_UNAVAILABLE'
   );
 });

@@ -66,7 +66,8 @@ const run = client.chat({
 ```ts
 const endpoint = await client.add('t5-local', {
   kind: 'local',
-  modelPath: '/models/t5-small-f16.gguf',
+  source: { kind: 'local', modelPaths: ['/models/t5-small-f16.gguf'] },
+  storageRoot: '/models/.sipp',
 });
 
 const run = client.query({

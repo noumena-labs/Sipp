@@ -16,7 +16,7 @@ mod metadata;
 pub(crate) use content::hash_file;
 use content::inspect_local_path;
 pub(crate) use metadata::{modified_unix_ms, now_unix_ms};
-use metadata::{normalize_asset_name, unique_temp_suffix};
+use metadata::{normalize_asset_file_name, normalize_asset_name, unique_temp_suffix};
 
 const ASSETS_DIR: &str = "assets";
 const INCOMING_DIR: &str = ".incoming";
@@ -144,7 +144,6 @@ impl<B: StorageBackend> AssetStore<B> {
         path: impl AsRef<Path>,
         kind: Option<ModelAssetKind>,
     ) -> Result<AssetInstallResult, ModelError> {
-        self.backend.ensure_layout()?;
         let path = path.as_ref();
         let metadata = fs::metadata(path)?;
         if !metadata.is_file() {
@@ -154,55 +153,47 @@ impl<B: StorageBackend> AssetStore<B> {
             )));
         }
 
-        let name = normalize_asset_name(path);
         let source_path = canonicalize_existing_path(path)?;
         let source_modified_unix_ms = modified_unix_ms(&metadata);
-        let (hash, prefix) = inspect_local_path(path)?;
-        let id = format!("{ASSET_ID_PREFIX}{hash}");
-        let storage_path = self.backend.asset_storage_path(&id);
-        let final_path = self.backend.asset_path(&id);
-        let already_present = final_path.exists();
-
-        if already_present {
-            let existing_bytes = fs::metadata(&final_path)?.len();
-            if existing_bytes != metadata.len() {
-                return Err(asset_integrity_error(&id, "byte-size mismatch"));
-            }
-            let existing_hash = hash_file(&final_path)?;
-            if existing_hash != hash {
-                return Err(asset_integrity_error(&id, "content mismatch"));
-            }
-        } else {
-            let tmp_path = self.incoming_path();
-            stage_local_path(path, &tmp_path)?;
-            publish_staged_asset(&tmp_path, &final_path)?;
-        }
-
-        let detection = detect_model_from_gguf_bytes(&name, &prefix)?;
-        let inspection = detection.inspection;
-        let inferred_kind = kind.unwrap_or(match inspection.role {
-            AssetRole::Projector => ModelAssetKind::Projector,
-            AssetRole::Model | AssetRole::Unknown => ModelAssetKind::Model,
-        });
-
-        Ok(AssetInstallResult {
-            record: AssetRecord {
-                id,
-                kind: inferred_kind,
-                name,
-                hash,
-                bytes: metadata.len(),
-                storage_path,
-                source: AssetSource::Local {
-                    path: source_path,
-                    modified_unix_ms: source_modified_unix_ms,
-                },
-                ref_count: 0,
-                created_at_unix_ms: now_unix_ms(),
-                inspection: Some(inspection),
+        self.install_path(
+            path,
+            normalize_asset_name(path),
+            AssetSource::Local {
+                path: source_path,
+                modified_unix_ms: source_modified_unix_ms,
             },
-            already_present,
-        })
+            kind,
+            InstallPathMode::Copy,
+        )
+    }
+
+    pub(crate) fn install_remote_staged(
+        &self,
+        staged_path: &Path,
+        metadata: &super::acquisition::RemoteMetadata,
+        kind: ModelAssetKind,
+    ) -> Result<AssetInstallResult, ModelError> {
+        let bytes = fs::metadata(staged_path)?.len();
+        if bytes != metadata.bytes {
+            return Err(ModelError::RemoteIntegrityFailed {
+                url: metadata.url.clone(),
+                reason: format!(
+                    "downloaded byte length is {bytes}, expected {}",
+                    metadata.bytes
+                ),
+            });
+        }
+        self.install_path(
+            staged_path,
+            normalize_asset_file_name(&metadata.name),
+            AssetSource::Remote {
+                url: metadata.url.clone(),
+                etag: metadata.etag.clone(),
+                last_modified: metadata.last_modified.clone(),
+            },
+            Some(kind),
+            InstallPathMode::Move,
+        )
     }
 
     pub fn resolve_asset_path(&self, record: &AssetRecord) -> Result<PathBuf, ModelError> {
@@ -220,6 +211,14 @@ impl<B: StorageBackend> AssetStore<B> {
         Ok(path)
     }
 
+    pub(crate) fn validate_asset(&self, record: &AssetRecord) -> Result<(), ModelError> {
+        let path = self.resolve_asset_path(record)?;
+        if hash_file(&path)? != record.hash {
+            return Err(asset_integrity_error(&record.id, "content mismatch"));
+        }
+        Ok(())
+    }
+
     pub fn delete_asset(&self, record: &AssetRecord) -> Result<(), ModelError> {
         let path = self.backend.resolve_storage_path(&record.storage_path);
         match fs::remove_file(path) {
@@ -229,12 +228,84 @@ impl<B: StorageBackend> AssetStore<B> {
         }
     }
 
-    fn incoming_path(&self) -> PathBuf {
+    pub(crate) fn incoming_path(&self) -> PathBuf {
         self.backend
             .root()
             .join(INCOMING_DIR)
             .join(incoming_asset_file_name())
     }
+
+    fn install_path(
+        &self,
+        path: &Path,
+        name: String,
+        source: AssetSource,
+        kind: Option<ModelAssetKind>,
+        mode: InstallPathMode,
+    ) -> Result<AssetInstallResult, ModelError> {
+        self.backend.ensure_layout()?;
+        let metadata = fs::metadata(path)?;
+        let (hash, prefix) = inspect_local_path(path)?;
+        let id = format!("{ASSET_ID_PREFIX}{hash}");
+        let storage_path = self.backend.asset_storage_path(&id);
+        let final_path = self.backend.asset_path(&id);
+        let already_present = final_path.exists();
+
+        if already_present {
+            validate_existing_asset(&final_path, metadata.len(), &hash, &id)?;
+        } else {
+            match mode {
+                InstallPathMode::Copy => {
+                    let tmp_path = self.incoming_path();
+                    stage_local_path(path, &tmp_path)?;
+                    publish_staged_asset(&tmp_path, &final_path)?;
+                }
+                InstallPathMode::Move => publish_staged_asset(path, &final_path)?,
+            }
+        }
+
+        let inspection = detect_model_from_gguf_bytes(&name, &prefix)?.inspection;
+        let kind = kind.unwrap_or(match inspection.role {
+            AssetRole::Projector => ModelAssetKind::Projector,
+            AssetRole::Model | AssetRole::Unknown => ModelAssetKind::Model,
+        });
+        Ok(AssetInstallResult {
+            record: AssetRecord {
+                id,
+                kind,
+                name,
+                hash,
+                bytes: metadata.len(),
+                storage_path,
+                source,
+                ref_count: 0,
+                created_at_unix_ms: now_unix_ms(),
+                inspection: Some(inspection),
+            },
+            already_present,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InstallPathMode {
+    Copy,
+    Move,
+}
+
+fn validate_existing_asset(
+    path: &Path,
+    expected_bytes: u64,
+    expected_hash: &str,
+    asset_id: &str,
+) -> Result<(), ModelError> {
+    if fs::metadata(path)?.len() != expected_bytes {
+        return Err(asset_integrity_error(asset_id, "byte-size mismatch"));
+    }
+    if hash_file(path)? != expected_hash {
+        return Err(asset_integrity_error(asset_id, "content mismatch"));
+    }
+    Ok(())
 }
 
 fn stage_local_path(source_path: &Path, tmp_path: &Path) -> Result<(), ModelError> {

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::core::CapabilitySupport;
 use crate::engine::SippEngine;
+use crate::lifecycle::{ModelLoadOptions, ModelService};
 
 use crate::client::dispatch::InferenceEndpoint;
 #[cfg(not(target_family = "wasm"))]
@@ -65,13 +66,56 @@ impl SippClient {
     ) -> SippResult<EndpointRef> {
         match descriptor {
             EndpointDescriptor::LocalModel(descriptor) => {
-                let engine = SippEngine::load(descriptor.model_path, descriptor.config).await?;
+                let engine = self.acquire_local_engine(descriptor).await?;
                 self.register_local(id, engine).await
             }
             EndpointDescriptor::Gateway(config) => self.register_gateway(id, config),
             #[cfg(feature = "providers")]
             EndpointDescriptor::Provider(config) => self.register_provider(id, config),
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn acquire_local_engine(
+        &mut self,
+        descriptor: crate::client::LocalModelDescriptor,
+    ) -> SippResult<SippEngine> {
+        self.io_executor()?
+            .spawn(async move {
+                let mut service = ModelService::local(descriptor.storage_root)?;
+                service
+                    .load(
+                        descriptor.source,
+                        ModelLoadOptions {
+                            runtime: descriptor.config,
+                            ..ModelLoadOptions::default()
+                        },
+                    )
+                    .await?;
+                service.take_loaded_engine().map_err(SippError::from)
+            })
+            .await
+            .map_err(|error| {
+                SippError::Internal(format!("model acquisition task failed: {error}"))
+            })?
+    }
+
+    #[cfg(target_family = "wasm")]
+    async fn acquire_local_engine(
+        &mut self,
+        descriptor: crate::client::LocalModelDescriptor,
+    ) -> SippResult<SippEngine> {
+        let mut service = ModelService::local(descriptor.storage_root)?;
+        service
+            .load(
+                descriptor.source,
+                ModelLoadOptions {
+                    runtime: descriptor.config,
+                    ..ModelLoadOptions::default()
+                },
+            )
+            .await?;
+        service.take_loaded_engine().map_err(SippError::from)
     }
 
     async fn register_local(

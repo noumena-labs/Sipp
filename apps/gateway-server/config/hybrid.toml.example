@@ -33,6 +33,7 @@ targets = ["local-gpu", "openai-chat"]
 name = "local-gpu"
 type = "local"
 model = "/models/model.gguf"
+storage_root = "/models/.sipp"
 backend = "auto"
 stats = "basic"
 

@@ -33,5 +33,6 @@ targets = ["local"]
 name = "local"
 type = "local"
 model = ".build/models/qwen2.5-0.5b-instruct-q4_0.gguf"
+storage_root = ".build/model-store"
 backend = "auto"
 stats = "basic"

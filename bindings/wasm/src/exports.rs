@@ -232,6 +232,29 @@ pub unsafe extern "C" fn CE_ModelServicePrepareLoad(
     ))
 }
 
+/// Advances the browser remote-acquisition protocol through an owned JSON string.
+///
+/// # Safety
+///
+/// `command_json` must be null or point to a valid NUL-terminated string for
+/// the duration of this call. The returned string must be released with
+/// [`CE_FreeString`].
+#[no_mangle]
+pub unsafe extern "C" fn CE_ModelServiceRemoteAcquisitionCommand(
+    service: usize,
+    command_json: *const c_char,
+) -> *mut c_char {
+    let Some(command_json) = required_cstr(command_json) else {
+        return owned_json_error(
+            "INVALID_MODEL_SOURCE",
+            "remote acquisition command JSON is missing",
+        );
+    };
+    owned_string(
+        crate::lifecycle::model_service_remote_acquisition_command_json(service, &command_json),
+    )
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn CE_ModelServiceCommitLoad(
     service: usize,

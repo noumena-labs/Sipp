@@ -52,7 +52,10 @@ Browser local endpoints use `source` plus optional load options:
 ```ts
 const endpoint = await client.add('browser-local', {
   kind: 'local',
-  source: '/models/model.gguf',
+  source: {
+    kind: 'remote',
+    modelUrls: ['https://models.example.test/model.gguf'],
+  },
   options: {
     backend: 'webgpu',
     runtime: {
@@ -62,12 +65,13 @@ const endpoint = await client.add('browser-local', {
 });
 ```
 
-Node.js local endpoints use `modelPath` and `config`:
+Node.js local endpoints use an explicit source, storage root, and runtime config:
 
 ```ts
 const endpoint = await client.add('node-local', {
   kind: 'local',
-  modelPath: '/models/model.gguf',
+  source: { kind: 'local', modelPaths: ['/models/model.gguf'] },
+  storageRoot: '/models/.sipp',
   config: {
     context: { n_ctx: 2048, n_threads: 8, n_threads_batch: 8 },
   },

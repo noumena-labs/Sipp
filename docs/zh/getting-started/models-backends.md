@@ -4,12 +4,12 @@ Sipp 本地推理依赖 GGUF 模型文件。文本工作流需要文本 GGUF 模
 
 ## 指定模型路径
 
-在本地环境使用 Node.js、Python 或 Rust 包时，传入显式的 GGUF 模型路径；浏览器端代码则传入 GGUF 模型的 URL：
+所有包都使用显式的已安装、本地文件或远程模型源；原生包还必须指定资源存储目录：
 
-- 浏览器：`source: '/models/model.gguf'`
-- Node.js：`modelPath: '/path/to/model.gguf'`
-- Python：`LocalModelDescriptor('/path/to/model.gguf')`
-- Rust：`EndpointDescriptor::local(model_path, config)`
+- 浏览器：`source: { kind: 'remote', modelUrls: ['https://models.example/model.gguf'] }`
+- Node.js：`source: { kind: 'local', modelPaths: ['/path/model.gguf'] }, storageRoot: '.sipp-models'`
+- Python：`LocalModelDescriptor(ModelSource.local([model]), '.sipp-models', config)`
+- Rust：`LocalModelDescriptor { source: ModelSource::Local { .. }, storage_root, config }`
 
 源码示例和冒烟测试可直接加载 `.build/models` 目录下缓存的示例模型，详情见[源码构建](../maintainers/source-builds.md)。
 

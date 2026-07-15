@@ -46,7 +46,8 @@ or application-provided chat template.
 ```ts
 const endpoint = await client.add('local', {
   kind: 'local',
-  modelPath: '/models/model.gguf',
+  source: { kind: 'local', modelPaths: ['/models/model.gguf'] },
+  storageRoot: '/models/.sipp',
 });
 
 const prompt = [
@@ -97,7 +98,8 @@ first; Sipp then drives the decoder from the model's decoder-start token.
 ```ts
 const endpoint = await client.add('t5-local', {
   kind: 'local',
-  modelPath: '/models/t5-small-f16.gguf',
+  source: { kind: 'local', modelPaths: ['/models/t5-small-f16.gguf'] },
+  storageRoot: '/models/.sipp',
 });
 
 const run = client.query({

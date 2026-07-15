@@ -1,4 +1,7 @@
 //! Tests endpoint, request, and descriptor conversion to core types.
+//!
+//! Covers strict variant fields and typed request conversion with pure values
+//! and no native runtime execution.
 
 use super::*;
 use serde_json::json;
@@ -100,6 +103,48 @@ fn gateway_endpoint_descriptor_maps_through_add_shape() {
         }
         _ => panic!("expected gateway descriptor"),
     }
+}
+
+#[test]
+fn local_endpoint_descriptor_maps_explicit_remote_source_and_storage_root() {
+    let descriptor = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
+        kind: "local".to_string(),
+        source: Some(ModelSource {
+            kind: "remote".to_string(),
+            model_urls: Some(vec!["https://example.test/model.gguf".to_string()]),
+            projector_url: Some("https://example.test/mmproj.gguf".to_string()),
+            ..ModelSource::default()
+        }),
+        storage_root: Some(".sipp-models".to_string()),
+        ..EndpointDescriptor::default()
+    })
+    .expect("local descriptor");
+
+    let CoreEndpointDescriptor::LocalModel(local) = descriptor else {
+        panic!("expected local descriptor");
+    };
+    assert_eq!(local.storage_root, PathBuf::from(".sipp-models"));
+    assert!(matches!(
+        local.source,
+        CoreModelSource::Remote {
+            model_urls,
+            projector_url: Some(projector_url)
+        } if model_urls == ["https://example.test/model.gguf"]
+            && projector_url == "https://example.test/mmproj.gguf"
+    ));
+}
+
+#[test]
+fn model_source_rejects_fields_from_another_variant() {
+    let source = ModelSource {
+        kind: "installed".to_string(),
+        model_id: Some("model-a".to_string()),
+        model_urls: Some(vec!["https://example.test/model.gguf".to_string()]),
+        ..ModelSource::default()
+    };
+
+    let error = CoreModelSource::try_from(&source).expect_err("mixed source fields");
+    assert!(error.to_string().contains("modelUrls"));
 }
 
 #[test]

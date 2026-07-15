@@ -7,6 +7,7 @@ from sipp import (
     GatewayDescriptor,
     LocalEmbedOptions,
     LocalModelDescriptor,
+    ModelSource,
     ModelPlacementConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
@@ -62,7 +63,7 @@ def main() -> None:
     client = SippClient()
     local_endpoint = client.add(
         "local",
-        LocalModelDescriptor(model, runtime_config(embeddings=True)),
+        LocalModelDescriptor(ModelSource.local([model]), ".sipp-models", runtime_config(embeddings=True)),
     )
     gateway_endpoint = client.add(
         "gateway",

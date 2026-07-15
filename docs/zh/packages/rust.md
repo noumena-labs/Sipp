@@ -45,7 +45,7 @@ CPU 原生后端是基础能力，不需要 Cargo feature。其他后端特性�
 ```rust
 use sipp::{
     SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor,
-    LocalTextOptions,
+    LocalModelDescriptor, LocalTextOptions, ModelSource,
 };
 use sipp::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, KvReuseMode, NativeRuntimeConfig,
@@ -59,7 +59,14 @@ async fn run(
     let endpoint = client
         .add(
             "default",
-            EndpointDescriptor::local(model_path, runtime_config()),
+            EndpointDescriptor::LocalModel(LocalModelDescriptor {
+                source: ModelSource::Local {
+                    model_paths: vec![model_path],
+                    projector_path: None,
+                },
+                storage_root: ".sipp-models".into(),
+                config: runtime_config(),
+            }),
         )
         .await?;
 

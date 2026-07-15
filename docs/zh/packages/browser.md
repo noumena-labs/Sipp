@@ -28,7 +28,10 @@ import { SippClient, type ChatMessage } from '@sipphq/sipp';
 const client = new SippClient();
 const endpoint = await client.add('default', {
   kind: 'local',
-  source: '/models/model.gguf',
+  source: {
+    kind: 'remote',
+    modelUrls: [new URL('/models/model.gguf', window.location.href).href],
+  },
   options: {
     backend: 'webgpu',
     runtime: {

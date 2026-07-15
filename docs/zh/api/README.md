@@ -43,7 +43,8 @@ add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
 | 字段 | 类型 | 说明 |
 | ----------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `kind` | `"local"` | 端点类型。 |
-| `modelPath` | string / `PathBuf` | GGUF 文件的路径或浏览器 URL。 |
+| `source` | `ModelSource` | 显式指定已安装、本地文件或 HTTP(S) 模型源。 |
+| `storageRoot` | string / `PathBuf` | 原生包使用的注册表和托管资源目录。 |
 | `config` | `NativeRuntimeConfig`（可选） | 加载时的运行时配置，包括上下文大小、GPU 分配、调度策略、缓存模式、默认采样参数、可观测性等。 |
 
 当前进程需要自行管理模型执行时使用本地端点。
@@ -190,7 +191,7 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 
 ```text
 服务端：
-  add("local-model", LocalDescriptor { modelPath, config })
+  add("local-model", LocalDescriptor { source, storageRoot, config })
   -> 路由处理器解析 HTTP 请求
   -> 路由处理器调 client.query / chat / embed
   -> 路由处理器编码 HTTP 响应

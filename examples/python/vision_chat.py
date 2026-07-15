@@ -11,7 +11,7 @@ from sipp import (
     LocalModelDescriptor,
     LocalTextOptions,
     ModelPlacementConfig,
-    MultimodalRuntimeConfig,
+    ModelSource,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
     ResidencyRuntimeConfig,
@@ -34,7 +34,7 @@ from _support import (
 )
 
 
-def runtime_config(projector_path: str) -> NativeRuntimeConfig:
+def runtime_config() -> NativeRuntimeConfig:
     return NativeRuntimeConfig(
         placement=ModelPlacementConfig(gpu_layers=gpu_layers()),
         context=ContextRuntimeConfig(
@@ -51,7 +51,6 @@ def runtime_config(projector_path: str) -> NativeRuntimeConfig:
             prefill_chunk_size=0,
         ),
         cache=CacheRuntimeConfig(mode="live_slot_prefix"),
-        multimodal=MultimodalRuntimeConfig(projector_path=projector_path),
         residency=ResidencyRuntimeConfig(max_gpu_models_per_device=1),
         observability=ObservabilityRuntimeConfig(runtime_metrics=True),
     )
@@ -70,10 +69,17 @@ def main() -> None:
     set_llama_log_quiet(True)
 
     client = SippClient()
-    client.add("default", LocalModelDescriptor(model, runtime_config(projector)))
+    client.add(
+        "default",
+        LocalModelDescriptor(
+            ModelSource.local([model], projector),
+            ".sipp-models",
+            runtime_config(),
+        ),
+    )
 
-    # Multimodal chat uses the same chat API. The projector is in runtime
-    # config; image bytes are passed on the request.
+    # Multimodal chat uses the same chat API. The projector is part of the
+    # model source; image bytes are passed on the request.
     run = client.chat(
         [
             ChatMessage("user", prompt),

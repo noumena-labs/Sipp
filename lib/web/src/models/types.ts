@@ -52,13 +52,19 @@ export interface ModelLoadOptions {
 }
 
 export type ModelSource =
-  | string
-  | File
-  | readonly string[]
-  | readonly File[]
   | {
-    model: string | File | readonly string[] | readonly File[];
-    projector?: string | File;
+    readonly kind: 'installed';
+    readonly modelId: string;
+  }
+  | {
+    readonly kind: 'local';
+    readonly modelFiles: readonly File[];
+    readonly projectorFile?: File;
+  }
+  | {
+    readonly kind: 'remote';
+    readonly modelUrls: readonly string[];
+    readonly projectorUrl?: string;
   };
 
 export interface ModelInfo {
@@ -586,6 +592,8 @@ export type QueryErrorCode =
   | 'STORAGE_CORRUPT'
   | 'REMOTE_METADATA_UNAVAILABLE'
   | 'REMOTE_LOAD_FAILED'
+  | 'ACQUISITION_CANCELLED'
+  | 'STALE_ACQUISITION_RESULT'
   | 'STREAMING_UNAVAILABLE'
   | 'QUERY_FAILED';
 

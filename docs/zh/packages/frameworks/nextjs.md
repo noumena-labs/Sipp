@@ -145,7 +145,10 @@ export function LocalChat(): JSX.Element {
     try {
       const endpoint = await client.add('default', {
         kind: 'local',
-        source: '/models/model.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: [new URL('/models/model.gguf', window.location.href).href],
+        },
       });
       const response = await client.query(prompt, {
         endpoint,
@@ -189,7 +192,10 @@ export function HybridChat(): JSX.Element {
     try {
       const localEndpoint = await client.add('browser-local', {
         kind: 'local',
-        source: '/models/model.gguf',
+        source: {
+          kind: 'remote',
+          modelUrls: [new URL('/models/model.gguf', window.location.href).href],
+        },
       });
       const providerRouteEndpoint = await client.add('app-route', {
         kind: 'gateway',

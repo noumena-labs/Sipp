@@ -3,12 +3,12 @@ use std::path::PathBuf;
 
 use super::storage::now_unix_ms;
 
-pub(super) struct TempDir {
-    pub(super) path: PathBuf,
+pub(crate) struct TempDir {
+    pub(crate) path: PathBuf,
 }
 
 impl TempDir {
-    pub(super) fn new(scope: &str, name: &str) -> Self {
+    pub(crate) fn new(scope: &str, name: &str) -> Self {
         let path =
             std::env::temp_dir().join(format!("sipp-engine-{scope}-{name}-{}", now_unix_ms()));
         fs::create_dir_all(&path).expect("temp dir");

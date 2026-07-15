@@ -19,8 +19,8 @@ use futures_util::{stream, Stream, StreamExt};
 use sipp::engine::{NativeRuntimeConfig, PoolingType};
 use sipp::gateway_core::{GatewayStreamEvent, Operation};
 use sipp::{
-    EndpointDescriptor, EndpointRef, SippClient, SippRequestContext, SippTextResponseFuture,
-    SippTokenBatches,
+    EndpointDescriptor, EndpointRef, LocalModelDescriptor, ModelSource, SippClient,
+    SippRequestContext, SippTextResponseFuture, SippTokenBatches,
 };
 use sipp_gateway::{request_id, GatewayCodec, GatewayHttpError, ProtocolCodec};
 
@@ -42,10 +42,18 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let mut client = SippClient::new();
+    let source = ModelSource::Local {
+        model_paths: vec![cli.model],
+        projector_path: None,
+    };
     let text_endpoint = client
         .add(
             "local-text",
-            EndpointDescriptor::local(cli.model.clone(), NativeRuntimeConfig::default()),
+            EndpointDescriptor::LocalModel(LocalModelDescriptor {
+                source: source.clone(),
+                storage_root: ".sipp-models".into(),
+                config: NativeRuntimeConfig::default(),
+            }),
         )
         .await
         .context("failed to load local text model")?;
@@ -55,7 +63,11 @@ async fn main() -> anyhow::Result<()> {
     let embedding_endpoint = client
         .add(
             "local-embed",
-            EndpointDescriptor::local(cli.model, embedding_runtime),
+            EndpointDescriptor::LocalModel(LocalModelDescriptor {
+                source,
+                storage_root: ".sipp-models".into(),
+                config: embedding_runtime,
+            }),
         )
         .await
         .context("failed to load local embedding model")?;

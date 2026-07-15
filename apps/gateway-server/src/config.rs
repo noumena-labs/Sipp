@@ -13,8 +13,9 @@ use sipp::lifecycle::{
     BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
 };
 use sipp::{
-    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, OpenAiCompatibleProviderConfig,
-    OpenAiProviderConfig, ProviderAuthConfig, ProviderEndpointConfig, ProviderSecret, SippClient,
+    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, LocalModelDescriptor, ModelSource,
+    OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig,
+    ProviderEndpointConfig, ProviderSecret, SippClient,
 };
 use sipp_gateway::GatewayRoutes;
 
@@ -452,6 +453,7 @@ impl GatewayBackendPreference {
 pub enum EndpointConfig {
     Local {
         model: PathBuf,
+        storage_root: PathBuf,
         #[serde(default)]
         backend: GatewayBackendPreference,
         #[serde(default)]
@@ -484,9 +486,16 @@ pub enum EndpointConfig {
 impl EndpointConfig {
     fn validate(&self) -> anyhow::Result<()> {
         match self {
-            Self::Local { model, .. } => {
+            Self::Local {
+                model,
+                storage_root,
+                ..
+            } => {
                 if model.as_os_str().is_empty() {
                     bail!("local model path must not be empty");
+                }
+                if storage_root.as_os_str().is_empty() {
+                    bail!("local model storage root must not be empty");
                 }
             }
             Self::Openai {
@@ -531,13 +540,21 @@ impl EndpointConfig {
         match self {
             Self::Local {
                 model,
+                storage_root,
                 backend,
                 stats,
                 runtime,
             } => {
                 let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
                 Ok((
-                    EndpointDescriptor::local(model.clone(), plan.config),
+                    EndpointDescriptor::LocalModel(LocalModelDescriptor {
+                        source: ModelSource::Local {
+                            model_paths: vec![model.clone()],
+                            projector_path: None,
+                        },
+                        storage_root: storage_root.clone(),
+                        config: plan.config,
+                    }),
                     TargetSummary {
                         name: target_name.to_string(),
                         kind: TargetKind::Local,

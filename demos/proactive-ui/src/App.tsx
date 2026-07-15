@@ -292,7 +292,11 @@ export default function App() {
       setStatus('Downloading vision model and projector...');
       await nextClient.add('local', {
         kind: 'local',
-        source: { model: trimmedModel, projector: trimmedProjector },
+        source: {
+          kind: 'remote',
+          modelUrls: [trimmedModel],
+          projectorUrl: trimmedProjector,
+        },
         options: {
           observability: 'runtime',
           onProgress: (progress) => {
