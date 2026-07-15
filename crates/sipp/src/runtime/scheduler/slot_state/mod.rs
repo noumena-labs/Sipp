@@ -70,7 +70,7 @@ pub struct SlotState {
     pub plan: SlotExecutionPlan,
     pub request_id: GenerateRequestId,
     pub request: Option<GenerateRequest>,
-    pub lease_generation: u64,
+    pub lease_epoch: u64,
     pub cache_candidate: CacheCandidate,
     pub requires_kv_clear: bool,
     pub mirror: SequenceMirror,
@@ -109,7 +109,7 @@ impl SlotState {
         self.seq_id = -1;
         self.request_id = 0;
         self.request = None;
-        self.lease_generation = 0;
+        self.lease_epoch = 0;
         self.cache_candidate = CacheCandidate::None;
         self.requires_kv_clear = false;
         self.backend_sampler_attached = false;
@@ -127,7 +127,7 @@ impl SlotState {
         self.request_id = request.id;
         self.request = Some(request);
         self.seq_id = admission.seq_id;
-        self.lease_generation = admission.generation;
+        self.lease_epoch = admission.lease_epoch;
         self.cache_candidate = admission.candidate;
         self.requires_kv_clear = admission.requires_kv_clear;
         self.mirror = admission.mirror;
@@ -209,7 +209,7 @@ impl Default for SlotState {
             plan: SlotExecutionPlan::default(),
             request_id: 0,
             request: None,
-            lease_generation: 0,
+            lease_epoch: 0,
             cache_candidate: CacheCandidate::None,
             requires_kv_clear: false,
             mirror: SequenceMirror::default(),

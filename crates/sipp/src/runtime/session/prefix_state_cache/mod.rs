@@ -40,7 +40,7 @@ pub(super) struct PrefixStateStoreRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::runtime::session) struct PendingPrefixSnapshot {
     pub seq_id: llama_seq_id,
-    pub generation: u64,
+    pub lease_epoch: u64,
     pub model_fingerprint: u64,
     pub snapshot_scope: String,
     pub token_count: usize,

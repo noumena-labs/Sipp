@@ -66,7 +66,7 @@ impl PrefixStateCache {
         &mut self,
         runtime: &NativeRuntimeHandle,
         max_to_drain: usize,
-        mut sequence_is_current: impl FnMut(llama_seq_id, u64) -> bool,
+        mut snapshot_source_is_current: impl FnMut(&PendingPrefixSnapshot) -> bool,
         mut record_stored_snapshot: impl FnMut(usize),
     ) -> usize {
         if self.pending_snapshots.is_empty() {
@@ -85,7 +85,7 @@ impl PrefixStateCache {
             };
             drained += 1;
 
-            if !sequence_is_current(snapshot.seq_id, snapshot.generation) {
+            if !snapshot_source_is_current(&snapshot) {
                 continue;
             }
             let Ok(state_bytes) = runtime.state_seq(snapshot.seq_id) else {
@@ -193,7 +193,7 @@ fn same_pending_snapshot_identity(
     right: &PendingPrefixSnapshot,
 ) -> bool {
     left.seq_id == right.seq_id
-        && left.generation == right.generation
+        && left.lease_epoch == right.lease_epoch
         && left.model_fingerprint == right.model_fingerprint
         && left.snapshot_scope == right.snapshot_scope
         && left.token_count == right.token_count

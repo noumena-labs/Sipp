@@ -49,7 +49,7 @@ impl InferenceRuntime {
                     self.model_fingerprint,
                     &request.context_key,
                     slot.seq_id,
-                    slot.lease_generation,
+                    slot.lease_epoch,
                     snapshot_tokens,
                     terminal_token_count,
                 );
