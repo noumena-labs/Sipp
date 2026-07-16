@@ -253,7 +253,15 @@ impl<B: StorageBackend> AssetStore<B> {
 
         if already_present {
             validate_existing_asset(&final_path, metadata.len(), &hash, &id)?;
-        } else {
+        }
+
+        let inspection = detect_model_from_gguf_bytes(&name, &prefix)?.inspection;
+        let kind = kind.unwrap_or(match inspection.role {
+            AssetRole::Projector => ModelAssetKind::Projector,
+            AssetRole::Model | AssetRole::Unknown => ModelAssetKind::Model,
+        });
+
+        if !already_present {
             match mode {
                 InstallPathMode::Copy => {
                     let tmp_path = self.incoming_path();
@@ -264,11 +272,6 @@ impl<B: StorageBackend> AssetStore<B> {
             }
         }
 
-        let inspection = detect_model_from_gguf_bytes(&name, &prefix)?.inspection;
-        let kind = kind.unwrap_or(match inspection.role {
-            AssetRole::Projector => ModelAssetKind::Projector,
-            AssetRole::Model | AssetRole::Unknown => ModelAssetKind::Model,
-        });
         Ok(AssetInstallResult {
             record: AssetRecord {
                 id,
