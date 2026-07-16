@@ -1,6 +1,6 @@
 //! Native HTTP and filesystem executor for shared acquisition actions.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use reqwest::header::HeaderMap;
 use tokio::io::AsyncWriteExt;
@@ -13,19 +13,59 @@ use super::{
     RemoteMetadataHeaders,
 };
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "../../tests/lifecycle/native_acquisition_tests.rs"]
+mod native_acquisition_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
+
 const X_LINKED_ETAG: &str = "x-linked-etag";
 const X_LINKED_SIZE: &str = "x-linked-size";
+const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOTE_READ_TIMEOUT: Duration = Duration::from_secs(60);
+const REMOTE_METADATA_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) struct NativeRemoteExecutor<B: StorageBackend> {
     client: reqwest::Client,
+    timeouts: NativeHttpTimeouts,
     assets: AssetStore<B>,
     journal: AcquisitionJournal<B>,
+}
+
+#[derive(Clone, Copy)]
+struct NativeHttpTimeouts {
+    connect: Duration,
+    read: Duration,
+    metadata_request: Duration,
+}
+
+impl Default for NativeHttpTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: REMOTE_CONNECT_TIMEOUT,
+            read: REMOTE_READ_TIMEOUT,
+            metadata_request: REMOTE_METADATA_REQUEST_TIMEOUT,
+        }
+    }
 }
 
 impl<B: StorageBackend> NativeRemoteExecutor<B> {
     pub(crate) fn new(
         assets: AssetStore<B>,
         journal: AcquisitionJournal<B>,
+    ) -> Result<Self, ModelError> {
+        Self::with_timeouts(assets, journal, NativeHttpTimeouts::default())
+    }
+
+    fn with_timeouts(
+        assets: AssetStore<B>,
+        journal: AcquisitionJournal<B>,
+        timeouts: NativeHttpTimeouts,
     ) -> Result<Self, ModelError> {
         let redirect = reqwest::redirect::Policy::custom(|attempt| {
             let downgrade = attempt.previous().last().is_some_and(|previous| {
@@ -37,12 +77,17 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
                 attempt.follow()
             }
         });
+        // Model downloads can be multi-GB: bound connection setup and idle
+        // gaps globally, and apply total deadlines only to metadata HEADs.
         let client = reqwest::Client::builder()
+            .connect_timeout(timeouts.connect)
+            .read_timeout(timeouts.read)
             .redirect(redirect)
             .build()
             .map_err(|error| ModelError::RemoteClient(error.to_string()))?;
         Ok(Self {
             client,
+            timeouts,
             assets,
             journal,
         })
@@ -129,7 +174,13 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
         attempt: u8,
         url: String,
     ) -> RemoteAcquisitionEvent {
-        let response = match self.client.head(&url).send().await {
+        let response = match self
+            .client
+            .head(&url)
+            .timeout(self.timeouts.metadata_request)
+            .send()
+            .await
+        {
             Ok(response) => response,
             Err(_) => {
                 return operation_failed(
