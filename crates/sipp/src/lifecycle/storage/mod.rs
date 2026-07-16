@@ -11,15 +11,18 @@ use super::{
 use crate::defaults::BYTES_PER_MIB;
 
 mod content;
+mod journal;
 mod metadata;
 
 pub(crate) use content::hash_file;
 use content::inspect_local_path;
+pub(crate) use journal::AcquisitionJournal;
 pub(crate) use metadata::{modified_unix_ms, now_unix_ms};
 use metadata::{normalize_asset_file_name, normalize_asset_name, unique_temp_suffix};
 
 const ASSETS_DIR: &str = "assets";
 const INCOMING_DIR: &str = ".incoming";
+const JOURNALS_DIR: &str = "journals";
 const REGISTRY_FILE_NAME: &str = "registry.json";
 const ASSET_ID_PREFIX: &str = "asset-";
 pub(super) const COPY_BUFFER_BYTES: usize = BYTES_PER_MIB;
@@ -51,6 +54,19 @@ pub trait StorageBackend: Clone + Send + Sync + 'static {
         self.root().join(self.asset_storage_path(asset_id))
     }
 
+    fn incoming_storage_path(&self) -> PathBuf {
+        PathBuf::from(INCOMING_DIR).join(incoming_asset_file_name())
+    }
+
+    fn incoming_journal_dir(&self) -> PathBuf {
+        self.root().join(INCOMING_DIR).join(JOURNALS_DIR)
+    }
+
+    fn incoming_journal_path(&self, acquisition_id: &str) -> PathBuf {
+        self.incoming_journal_dir()
+            .join(format!("{acquisition_id}.json"))
+    }
+
     fn resolve_storage_path(&self, storage_path: &Path) -> PathBuf {
         if storage_path.is_absolute() {
             storage_path.to_path_buf()
@@ -62,6 +78,7 @@ pub trait StorageBackend: Clone + Send + Sync + 'static {
     fn ensure_layout(&self) -> Result<(), ModelError> {
         fs::create_dir_all(self.root().join(ASSETS_DIR))?;
         fs::create_dir_all(self.root().join(INCOMING_DIR))?;
+        fs::create_dir_all(self.incoming_journal_dir())?;
         Ok(())
     }
 
@@ -164,6 +181,7 @@ impl<B: StorageBackend> AssetStore<B> {
             },
             kind,
             InstallPathMode::Copy,
+            None,
         )
     }
 
@@ -172,6 +190,7 @@ impl<B: StorageBackend> AssetStore<B> {
         staged_path: &Path,
         metadata: &super::acquisition::RemoteMetadata,
         kind: ModelAssetKind,
+        journal: Option<&AcquisitionJournal<B>>,
     ) -> Result<AssetInstallResult, ModelError> {
         let bytes = fs::metadata(staged_path)?.len();
         if bytes != metadata.bytes {
@@ -193,6 +212,7 @@ impl<B: StorageBackend> AssetStore<B> {
             },
             Some(kind),
             InstallPathMode::Move,
+            journal,
         )
     }
 
@@ -230,9 +250,29 @@ impl<B: StorageBackend> AssetStore<B> {
 
     pub(crate) fn incoming_path(&self) -> PathBuf {
         self.backend
-            .root()
-            .join(INCOMING_DIR)
-            .join(incoming_asset_file_name())
+            .resolve_storage_path(&self.backend.incoming_storage_path())
+    }
+
+    pub(crate) fn incoming_storage_path(&self) -> PathBuf {
+        self.backend.incoming_storage_path()
+    }
+
+    pub(crate) fn resolve_storage_path(&self, storage_path: &Path) -> PathBuf {
+        self.backend.resolve_storage_path(storage_path)
+    }
+
+    pub(crate) fn acquisition_journal(
+        &self,
+        acquisition_id: impl Into<String>,
+    ) -> AcquisitionJournal<B> {
+        AcquisitionJournal::new(self.backend.clone(), acquisition_id.into())
+    }
+
+    pub(crate) fn recover_acquisition_journals(
+        &self,
+        manifest: &super::RegistryManifest,
+    ) -> Result<(), ModelError> {
+        journal::recover_acquisition_journals(&self.backend, manifest)
     }
 
     fn install_path(
@@ -242,6 +282,7 @@ impl<B: StorageBackend> AssetStore<B> {
         source: AssetSource,
         kind: Option<ModelAssetKind>,
         mode: InstallPathMode,
+        journal: Option<&AcquisitionJournal<B>>,
     ) -> Result<AssetInstallResult, ModelError> {
         self.backend.ensure_layout()?;
         let metadata = fs::metadata(path)?;
@@ -262,6 +303,9 @@ impl<B: StorageBackend> AssetStore<B> {
         });
 
         if !already_present {
+            if let Some(journal) = journal {
+                journal.record_path(&storage_path)?;
+            }
             match mode {
                 InstallPathMode::Copy => {
                     let tmp_path = self.incoming_path();

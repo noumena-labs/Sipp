@@ -75,6 +75,31 @@ export class FileSystemStorage {
     return this.root;
   }
 
+  private async getDirectory(
+    path: readonly string[],
+    options: { create?: boolean } = {}
+  ): Promise<FileSystemDirectoryHandle> {
+    let directory = await this.ensureRoot();
+    for (const segment of path) {
+      directory = await directory.getDirectoryHandle(segment, {
+        create: options.create === true,
+      });
+    }
+    return directory;
+  }
+
+  private async getFileHandleAt(
+    path: readonly string[],
+    options: { create?: boolean } = {}
+  ): Promise<FileSystemFileHandle> {
+    if (path.length === 0) {
+      throw new Error('OPFS file path must not be empty.');
+    }
+    const directory = await this.getDirectory(path.slice(0, -1), options);
+    const fileName = path[path.length - 1];
+    return await directory.getFileHandle(fileName, { create: options.create === true });
+  }
+
   private isNotFoundError(error: unknown): boolean {
     return typeof DOMException === 'function' && error instanceof DOMException && error.name === 'NotFoundError';
   }
@@ -169,6 +194,30 @@ export class FileSystemStorage {
     return names;
   }
 
+  public async listFileNamesAt(path: readonly string[]): Promise<string[]> {
+    try {
+      const directory = await this.getDirectory(path);
+      const names: string[] = [];
+      const entries = (directory as unknown as {
+        entries: () => AsyncIterable<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>;
+      }).entries;
+      if (typeof entries !== 'function') {
+        return names;
+      }
+      for await (const [name, handle] of entries.call(directory)) {
+        if (handle.kind === 'file') {
+          names.push(name);
+        }
+      }
+      return names;
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
+      }
+      return [];
+    }
+  }
+
   public async createSyncAccessHandle(
     fileName: string,
     options: { create?: boolean } = {}
@@ -194,9 +243,35 @@ export class FileSystemStorage {
     return await file.text();
   }
 
+  public async readTextAt(path: readonly string[]): Promise<string | null> {
+    try {
+      const handle = await this.getFileHandleAt(path);
+      return await (await handle.getFile()).text();
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
+      }
+      return null;
+    }
+  }
+
   public async writeText(fileName: string, contents: string): Promise<void> {
     const root = await this.ensureRoot();
     const handle = await root.getFileHandle(fileName, { create: true });
+    const writable = await handle.createWritable();
+    try {
+      await writable.write(contents);
+      await writable.close();
+    } catch (error) {
+      try {
+        await writable.abort();
+      } catch {}
+      throw error;
+    }
+  }
+
+  public async writeTextAt(path: readonly string[], contents: string): Promise<void> {
+    const handle = await this.getFileHandleAt(path, { create: true });
     const writable = await handle.createWritable();
     try {
       await writable.write(contents);
@@ -321,6 +396,20 @@ export class FileSystemStorage {
     try {
       const root = await this.ensureRoot();
       await root.removeEntry(fileName);
+    } catch (error) {
+      if (!this.isNotFoundError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  public async deleteFileAt(path: readonly string[]): Promise<void> {
+    try {
+      if (path.length === 0) {
+        throw new Error('OPFS file path must not be empty.');
+      }
+      const directory = await this.getDirectory(path.slice(0, -1));
+      await directory.removeEntry(path[path.length - 1]);
     } catch (error) {
       if (!this.isNotFoundError(error)) {
         throw error;

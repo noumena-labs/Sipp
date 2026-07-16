@@ -117,6 +117,7 @@ impl<B: StorageBackend> ModelService<B> {
             return Err(invalid_source(MODEL_URLS_REQUIRED));
         }
         let acquisition_id = self.acquisition_ids.issue()?;
+        let journal = self.assets.acquisition_journal(acquisition_id.clone());
         let model_role = if model_urls.len() == 1 {
             RemoteAssetRole::Model
         } else {
@@ -132,7 +133,7 @@ impl<B: StorageBackend> ModelService<B> {
         let requests = remote_requests(&self.registry.manifest.assets, sources)?;
 
         let mut acquisition = RemoteAcquisition::new(acquisition_id, requests)?;
-        let executor = NativeRemoteExecutor::new(self.assets.clone())?;
+        let executor = NativeRemoteExecutor::new(self.assets.clone(), journal.clone())?;
         let mut downloaded = BTreeMap::new();
         let mut progress = acquisition.progress();
         loop {
@@ -141,11 +142,23 @@ impl<B: StorageBackend> ModelService<B> {
                     let event = executor
                         .execute(action, &self.registry.manifest, &mut downloaded)
                         .await;
-                    progress = acquisition.advance(event)?;
+                    progress = match acquisition.advance(event) {
+                        Ok(progress) => progress,
+                        Err(error) => {
+                            journal.cleanup_uncommitted(&self.registry.manifest)?;
+                            return Err(error);
+                        }
+                    };
                 }
                 RemoteAcquisitionProgress::Ready(resolved) => {
                     let records =
-                        resolved_records(&resolved, &downloaded, &self.registry.manifest)?;
+                        match resolved_records(&resolved, &downloaded, &self.registry.manifest) {
+                            Ok(records) => records,
+                            Err(error) => {
+                                journal.cleanup_uncommitted(&self.registry.manifest)?;
+                                return Err(error);
+                            }
+                        };
                     let installed: Vec<_> = records
                         .into_iter()
                         .map(|record| InstalledAsset {
@@ -160,10 +173,23 @@ impl<B: StorageBackend> ModelService<B> {
                         .find(|member| member.role == RemoteAssetRole::Projector)
                         .and_then(|member| member.asset_ids.first())
                         .map(String::as_str);
-                    return self.commit_installed(installed, projector_id);
+                    return match self.commit_installed(installed, projector_id) {
+                        Ok(resolved) => {
+                            journal.clear()?;
+                            Ok(resolved)
+                        }
+                        Err(error) => {
+                            journal.cleanup_uncommitted(&self.registry.manifest)?;
+                            Err(error)
+                        }
+                    };
                 }
-                RemoteAcquisitionProgress::Failed(error) => return Err(error),
+                RemoteAcquisitionProgress::Failed(error) => {
+                    journal.cleanup_uncommitted(&self.registry.manifest)?;
+                    return Err(error);
+                }
                 RemoteAcquisitionProgress::Cancelled => {
+                    journal.cleanup_uncommitted(&self.registry.manifest)?;
                     return Err(ModelError::AcquisitionCancelled);
                 }
             }

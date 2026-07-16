@@ -54,6 +54,7 @@ impl<B: StorageBackend> ModelService<B> {
     pub fn open(backend: B) -> Result<Self, ModelError> {
         let registry = ModelRegistry::open(backend.clone())?;
         let assets = AssetStore::new(backend);
+        assets.recover_acquisition_journals(&registry.manifest)?;
         Ok(Self {
             registry,
             assets,

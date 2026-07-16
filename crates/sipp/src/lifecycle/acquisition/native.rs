@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use reqwest::header::HeaderMap;
 use tokio::io::AsyncWriteExt;
 
-use crate::lifecycle::storage::StorageBackend;
+use crate::lifecycle::storage::{AcquisitionJournal, StorageBackend};
 use crate::lifecycle::{AssetRecord, AssetStore, ModelError, RegistryManifest};
 
 use super::{
@@ -19,10 +19,14 @@ const X_LINKED_SIZE: &str = "x-linked-size";
 pub(crate) struct NativeRemoteExecutor<B: StorageBackend> {
     client: reqwest::Client,
     assets: AssetStore<B>,
+    journal: AcquisitionJournal<B>,
 }
 
 impl<B: StorageBackend> NativeRemoteExecutor<B> {
-    pub(crate) fn new(assets: AssetStore<B>) -> Result<Self, ModelError> {
+    pub(crate) fn new(
+        assets: AssetStore<B>,
+        journal: AcquisitionJournal<B>,
+    ) -> Result<Self, ModelError> {
         let redirect = reqwest::redirect::Policy::custom(|attempt| {
             let downgrade = attempt.previous().last().is_some_and(|previous| {
                 previous.scheme() == "https" && attempt.url().scheme() == "http"
@@ -37,7 +41,11 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
             .redirect(redirect)
             .build()
             .map_err(|error| ModelError::RemoteClient(error.to_string()))?;
-        Ok(Self { client, assets })
+        Ok(Self {
+            client,
+            assets,
+            journal,
+        })
     }
 
     pub(crate) async fn execute(
@@ -216,7 +224,16 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
             ));
         }
 
-        let staged_path = self.assets.incoming_path();
+        let staged_storage_path = self.assets.incoming_storage_path();
+        if let Err(error) = self.journal.record_path(&staged_storage_path) {
+            return NativeDownloadResult::Failed(operation_failed(
+                acquisition_id,
+                member_id,
+                attempt,
+                model_error_failure(RemoteFailurePhase::Download, error),
+            ));
+        }
+        let staged_path = self.assets.resolve_storage_path(&staged_storage_path);
         let mut staged = match tokio::fs::File::create(&staged_path).await {
             Ok(staged) => staged,
             Err(error) => {
@@ -276,8 +293,9 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
         let assets = self.assets.clone();
         let install_metadata = metadata.clone();
         let install_path = staged_path.clone();
+        let journal = self.journal.clone();
         let install = tokio::task::spawn_blocking(move || {
-            assets.install_remote_staged(&install_path, &install_metadata, kind)
+            assets.install_remote_staged(&install_path, &install_metadata, kind, Some(&journal))
         })
         .await;
         let installed = match install {

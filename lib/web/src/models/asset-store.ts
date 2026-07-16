@@ -1,4 +1,5 @@
 import { FileSystemStorage, type OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
+import { BrowserAcquisitionJournal } from './acquisition-journal.js';
 import {
   QueryError,
   type AssetRecord,
@@ -92,6 +93,7 @@ interface SplitStoredGgufInput {
   onProgress?: (progress: ModelLoadProgress) => void;
   failureCode: QueryErrorCode;
   failureMessage: string;
+  journal?: BrowserAcquisitionJournal;
   shardMetadata: (index: number, count: number) => {
     sourceUrl?: string;
     sourceEtag?: string;
@@ -294,7 +296,8 @@ export class AssetStore {
     kind: ModelAssetKind,
     response: Response,
     signal?: AbortSignal,
-    onProgress?: (progress: ModelLoadProgress) => void
+    onProgress?: (progress: ModelLoadProgress) => void,
+    journal?: BrowserAcquisitionJournal
   ): Promise<RemoteStoreReceipt> {
     this.ensureAvailable();
     const fingerprint = await remoteSourceFingerprint(metadata);
@@ -324,6 +327,7 @@ export class AssetStore {
       throw new QueryError('REMOTE_LOAD_FAILED', 'Remote download response has no body.');
     }
 
+    await journal?.recordStoragePath(storagePath);
     let file: File;
     const emitDownloadProgress = createProgressEmitter(
       onProgress,
@@ -374,7 +378,8 @@ export class AssetStore {
     runtime: GgufSplitRuntime,
     response: Response,
     signal?: AbortSignal,
-    onProgress?: (progress: ModelLoadProgress) => void
+    onProgress?: (progress: ModelLoadProgress) => void,
+    journal?: BrowserAcquisitionJournal
   ): Promise<RemoteStoreReceipt> {
     this.ensureAvailable();
     const policy = this.browserCachePolicy;
@@ -394,7 +399,7 @@ export class AssetStore {
       );
     }
     if (layout !== 'split-gguf') {
-      return await this.downloadRemote(metadata, 'model', response, signal, onProgress);
+      return await this.downloadRemote(metadata, 'model', response, signal, onProgress, journal);
     }
     if (!(await FileSystemStorage.isSyncAccessSupported())) {
       throw new QueryError(
@@ -420,6 +425,7 @@ export class AssetStore {
 
     try {
       emitDownloadProgress(0, true);
+      await journal?.recordStoragePath(sourceTempPath);
       const sourceFile = await this.storage.streamToDisk(
         sourceTempPath,
         response.body,
@@ -452,6 +458,7 @@ export class AssetStore {
       onProgress,
       failureCode: 'REMOTE_LOAD_FAILED',
       failureMessage: `Failed to split "${metadata.canonicalUrl}".`,
+      journal,
       shardMetadata: (index, count) => ({
         sourceUrl: metadata.canonicalUrl,
         sourceEtag: metadata.etag,
@@ -649,6 +656,10 @@ export class AssetStore {
     }
   }
 
+  public openAcquisitionJournal(acquisitionId: string): BrowserAcquisitionJournal {
+    return new BrowserAcquisitionJournal(this.storage, acquisitionId);
+  }
+
   public async registerStoredFile(input: {
     kind: ModelAssetKind;
     name: string;
@@ -755,6 +766,10 @@ export class AssetStore {
       for (let index = 0; index < shardCount; index += 1) {
         const path = splitShardPath(input.outputPrefix, index, shardCount);
         shardPaths.push(path);
+      }
+      await input.journal?.recordStoragePaths(shardPaths);
+
+      for (const path of shardPaths) {
         const handle = await this.storage.createSyncAccessHandle(path, { create: true });
         handle.truncate(0);
         shardHandles.set(path, handle);

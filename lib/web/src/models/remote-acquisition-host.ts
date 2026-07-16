@@ -1,5 +1,6 @@
 import type { GgufSplitRuntime, RemoteAssetMetadata } from './asset-store.js';
 import { AssetStore } from './asset-store.js';
+import type { BrowserAcquisitionJournal } from './acquisition-journal.js';
 import {
   QueryError,
   type AssetRecord,
@@ -28,6 +29,7 @@ type ClassifyAsset = (
 /** Executes Rust-selected HTTP and OPFS operations without owning acquisition policy. */
 export class RemoteAcquisitionHost {
   private readonly downloaded = new Map<string, AssetRecord>();
+  private journal: BrowserAcquisitionJournal | null = null;
 
   public constructor(
     private readonly assetStore: AssetStore,
@@ -157,6 +159,7 @@ export class RemoteAcquisitionHost {
     };
     let createdAssetIds: readonly string[] = [];
     try {
+      const journal = this.openJournal(action.acquisitionId);
       const receipt =
         action.role === 'model'
           ? await this.assetStore.downloadRemoteGguf(
@@ -164,14 +167,16 @@ export class RemoteAcquisitionHost {
               this.runtime,
               response,
               this.options.signal,
-              this.options.onProgress
+              this.options.onProgress,
+              journal
             )
           : await this.assetStore.downloadRemote(
               metadata,
               action.role,
               response,
               this.options.signal,
-              this.options.onProgress
+              this.options.onProgress,
+              journal
             );
       createdAssetIds = receipt.createdAssetIds;
       const classified: ClassifiedAsset[] = [];
@@ -237,6 +242,23 @@ export class RemoteAcquisitionHost {
       await this.assetStore.delete(record);
       this.downloaded.delete(assetId);
     }
+  }
+
+  public async commitJournal(): Promise<void> {
+    await this.journal?.clear();
+    this.journal = null;
+  }
+
+  public async cleanupUncommittedJournal(manifest: RegistryManifest): Promise<void> {
+    await this.journal?.cleanupUncommitted(manifest);
+    this.journal = null;
+  }
+
+  private openJournal(acquisitionId: string): BrowserAcquisitionJournal {
+    if (this.journal == null) {
+      this.journal = this.assetStore.openAcquisitionJournal(acquisitionId);
+    }
+    return this.journal;
   }
 }
 

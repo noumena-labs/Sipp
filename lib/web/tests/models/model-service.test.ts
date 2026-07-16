@@ -300,6 +300,20 @@ class FakeAssetStore {
   public async cleanupBrowserSplitArtifacts(): Promise<void> {
     this.cleanupCount += 1;
   }
+
+  public openAcquisitionJournal(): {
+    recordStoragePath(storagePath: string): Promise<void>;
+    recordStoragePaths(storagePaths: readonly string[]): Promise<void>;
+    cleanupUncommitted(manifest: RegistryManifest): Promise<void>;
+    clear(): Promise<void>;
+  } {
+    return {
+      recordStoragePath: async () => {},
+      recordStoragePaths: async () => {},
+      cleanupUncommitted: async () => {},
+      clear: async () => {},
+    };
+  }
 }
 
 class FakeAssetClassifier {

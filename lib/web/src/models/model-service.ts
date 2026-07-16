@@ -673,6 +673,7 @@ export class ModelService implements ModelLifecycleService {
     );
     let prepared: RustLifecyclePrepareLoadValue | null = null;
     let rust: RustLifecycleBridge | null = null;
+    let remoteManifestCommitted = false;
     let remoteHost: RemoteAcquisitionHost | null = source.kind === 'remote'
       ? new RemoteAcquisitionHost(
         this.assetStore,
@@ -719,6 +720,10 @@ export class ModelService implements ModelLifecycleService {
         prepared = rust.prepareLoad(rustSource, rustOptions);
       }
       await this.replaceManifest(prepared.manifest);
+      if (remoteHost != null) {
+        remoteManifestCommitted = true;
+        await remoteHost.commitJournal();
+      }
       this.ingestRustEvents(prepared.events);
 
       if (prepared.model.status === 'needs_projector') {
@@ -799,6 +804,9 @@ export class ModelService implements ModelLifecycleService {
       }
       if (remoteAcquisitionId != null && rust != null && remoteHost != null) {
         await this.cancelRemoteAcquisition(rust, remoteHost, remoteAcquisitionId);
+      }
+      if (remoteHost != null && !remoteManifestCommitted) {
+        await remoteHost.cleanupUncommittedJournal(manifest);
       }
       throw error;
     }

@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AssetStore, type GgufSplitRuntime, type RemoteAssetMetadata } from '../../src/models/asset-store.js';
+import {
+  BrowserAcquisitionJournal,
+  recoverBrowserAcquisitionJournals,
+} from '../../src/models/acquisition-journal.js';
 import { QueryError } from '../../src/models/types.js';
 import { FileSystemStorage, type OpfsSyncAccessHandle } from '../../src/engine/file-system-storage.js';
 
@@ -47,6 +51,8 @@ class MemorySyncAccessHandle implements OpfsSyncAccessHandle {
 
 class MemoryStorage {
   public readonly files = new Map<string, File>();
+  public readonly texts = new Map<string, string>();
+  public readonly operations: string[] = [];
   public readonly writes: string[] = [];
   public readonly deleted: string[] = [];
   public failWith: unknown = null;
@@ -59,6 +65,7 @@ class MemoryStorage {
     if (this.failWith != null) {
       throw this.failWith;
     }
+    this.operations.push(`stream:${fileName}`);
     this.writes.push(fileName);
     const reader = stream.getReader();
     const chunks: Uint8Array[] = [];
@@ -91,6 +98,24 @@ class MemoryStorage {
     return [...this.files.keys()];
   }
 
+  public async listFileNamesAt(path: readonly string[]): Promise<string[]> {
+    const prefix = `${path.join('/')}/`;
+    return [...this.texts.keys()]
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => key.slice(prefix.length))
+      .filter((key) => !key.includes('/'));
+  }
+
+  public async readTextAt(path: readonly string[]): Promise<string | null> {
+    return this.texts.get(path.join('/')) ?? null;
+  }
+
+  public async writeTextAt(path: readonly string[], contents: string): Promise<void> {
+    const key = path.join('/');
+    this.operations.push(`journal:${key}`);
+    this.texts.set(key, contents);
+  }
+
   public async createSyncAccessHandle(
     fileName: string,
     options: { create?: boolean } = {}
@@ -106,6 +131,10 @@ class MemoryStorage {
   public async deleteFile(fileName: string): Promise<void> {
     this.deleted.push(fileName);
     this.files.delete(fileName);
+  }
+
+  public async deleteFileAt(path: readonly string[]): Promise<void> {
+    this.texts.delete(path.join('/'));
   }
 }
 
@@ -169,6 +198,62 @@ test('AssetStore registers remote downloads without copying the OPFS temp file',
     assert.equal(record.sourceBytes, 11);
     assert.equal(await file.text(), 'model-bytes');
   });
+});
+
+test('AssetStore records remote download journal before creating the asset file', async () => {
+  await withSupportedStorage(async () => {
+    const storage = new MemoryStorage();
+    const store = createTestAssetStore(storage);
+    const journal = new BrowserAcquisitionJournal(
+      storage as unknown as FileSystemStorage,
+      'lease-1'
+    );
+    const response = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
+
+    await store.downloadRemote(metadata, 'model', response, undefined, undefined, journal);
+
+    assert.equal(storage.operations.length, 2);
+    assert.equal(storage.operations[0], 'journal:.incoming/journals/lease-1.json');
+    assert.match(storage.operations[1], /^stream:asset-[0-9a-f]{64}-model\.gguf$/);
+  });
+});
+
+test('Browser acquisition journal recovery preserves registered assets', async () => {
+  const storage = new MemoryStorage();
+  storage.files.set('asset-orphan', new File(['orphan'], 'asset-orphan'));
+  storage.files.set('asset-keep', new File(['keep'], 'asset-keep'));
+  storage.texts.set(
+    '.incoming/journals/lease-2.json',
+    JSON.stringify({
+      version: 1,
+      acquisitionId: 'lease-2',
+      entries: [
+        { storagePath: 'asset-orphan' },
+        { storagePath: 'asset-keep' },
+      ],
+    })
+  );
+
+  await recoverBrowserAcquisitionJournals(storage as unknown as FileSystemStorage, {
+    version: 3,
+    projectorIndexRevision: 0,
+    models: {},
+    assets: {
+      keep: {
+        id: 'keep',
+        kind: 'model',
+        name: 'model.gguf',
+        bytes: 4,
+        storagePath: 'asset-keep',
+        refCount: 1,
+        createdAt: new Date(0).toISOString(),
+      },
+    },
+  });
+
+  assert.equal(storage.files.has('asset-orphan'), false);
+  assert.equal(storage.files.has('asset-keep'), true);
+  assert.equal(storage.texts.has('.incoming/journals/lease-2.json'), false);
 });
 
 test('AssetStore replaces wrong-sized deterministic remote files', async () => {
