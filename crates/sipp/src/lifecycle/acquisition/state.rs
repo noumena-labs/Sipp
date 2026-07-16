@@ -132,12 +132,23 @@ impl RemoteAcquisition {
             (
                 ActiveOperation::Metadata,
                 RemoteAcquisitionEvent::OperationFailed { failure, .. },
-            )
-            | (
-                ActiveOperation::Download(_),
-                RemoteAcquisitionEvent::OperationFailed { failure, .. },
             ) => {
                 self.accept_failure(failure);
+            }
+            (
+                ActiveOperation::Download(_),
+                RemoteAcquisitionEvent::OperationFailed {
+                    failure,
+                    created_asset_ids,
+                    ..
+                },
+            ) => {
+                if created_asset_ids.is_empty() {
+                    self.accept_failure(failure);
+                } else {
+                    self.remember_created_assets(created_asset_ids);
+                    self.fail(failure);
+                }
             }
             (
                 ActiveOperation::Waiting { next, .. },
@@ -288,23 +299,35 @@ impl RemoteAcquisition {
     }
 
     fn complete_member(&mut self, asset_ids: Vec<String>, created_asset_ids: Vec<String>) {
-        let request = self.request().clone();
-        if !created_asset_ids.is_empty() {
-            self.created.push_back(CreatedAssets {
-                member_id: request.member_id,
-                url: request.url.clone(),
-                asset_ids: created_asset_ids.clone(),
-            });
-        }
+        let (member_id, role) = {
+            let request = self.request();
+            (request.member_id, request.role)
+        };
+        self.remember_created_assets(created_asset_ids.clone());
         self.resolved.push(RemoteResolvedMember {
-            member_id: request.member_id,
-            role: request.role,
+            member_id,
+            role,
             asset_ids,
             created_asset_ids,
         });
         self.request_index += 1;
         self.attempt = 1;
         self.operation = ActiveOperation::Metadata;
+    }
+
+    fn remember_created_assets(&mut self, asset_ids: Vec<String>) {
+        if asset_ids.is_empty() {
+            return;
+        }
+        let (member_id, url) = {
+            let request = self.request();
+            (request.member_id, request.url.clone())
+        };
+        self.created.push_back(CreatedAssets {
+            member_id,
+            url,
+            asset_ids,
+        });
     }
 
     fn begin_terminal(&mut self, terminal: Terminal) {

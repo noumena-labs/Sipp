@@ -53,6 +53,7 @@ fn failure(
             retry_after: None,
             reason: format!("HTTP {status}"),
         },
+        created_asset_ids: Vec::new(),
     }
 }
 
@@ -284,5 +285,59 @@ fn failure_cleans_assets_created_by_earlier_members_before_returning() {
             status: Some(400),
             ..
         })
+    ));
+}
+
+#[test]
+fn download_failure_cleans_assets_created_by_the_failed_operation() {
+    let mut acquisition =
+        RemoteAcquisition::new("lease-7".to_string(), vec![request(0, Vec::new())])
+            .expect("acquisition");
+    acquisition
+        .advance(RemoteAcquisitionEvent::MetadataSucceeded {
+            acquisition_id: "lease-7".to_string(),
+            member_id: 0,
+            attempt: 1,
+            headers: headers("download"),
+        })
+        .expect("metadata");
+
+    let progress = acquisition
+        .advance(RemoteAcquisitionEvent::OperationFailed {
+            acquisition_id: "lease-7".to_string(),
+            member_id: 0,
+            attempt: 1,
+            failure: RemoteFailure {
+                phase: RemoteFailurePhase::Download,
+                kind: RemoteFailureKind::Storage,
+                status: None,
+                retry_after: None,
+                reason: "classification failed".to_string(),
+            },
+            created_asset_ids: vec!["asset-new".to_string()],
+        })
+        .expect("download failure cleanup");
+    assert!(matches!(
+        progress,
+        RemoteAcquisitionProgress::Action(RemoteAction::Cleanup {
+            member_id: 0,
+            ref asset_ids,
+            ..
+        }) if asset_ids == &["asset-new".to_string()]
+    ));
+
+    let progress = acquisition
+        .advance(RemoteAcquisitionEvent::CleanupSucceeded {
+            acquisition_id: "lease-7".to_string(),
+            member_id: 0,
+            attempt: 1,
+        })
+        .expect("cleanup");
+    assert!(matches!(
+        progress,
+        RemoteAcquisitionProgress::Failed(ModelError::RemoteDownloadFailed {
+            reason,
+            ..
+        }) if reason == "classification failed"
     ));
 }

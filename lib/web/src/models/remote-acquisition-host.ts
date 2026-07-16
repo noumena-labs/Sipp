@@ -155,6 +155,7 @@ export class RemoteAcquisitionHost {
         ? {}
         : { lastModified: action.metadata.lastModified }),
     };
+    let createdAssetIds: readonly string[] = [];
     try {
       const receipt =
         action.role === 'model'
@@ -172,9 +173,12 @@ export class RemoteAcquisitionHost {
               this.options.signal,
               this.options.onProgress
             );
+      createdAssetIds = receipt.createdAssetIds;
       const classified: ClassifiedAsset[] = [];
       for (const record of receipt.records) {
         this.downloaded.set(record.id, record);
+      }
+      for (const record of receipt.records) {
         const file = await this.assetStore.getFile(record);
         classified.push(await this.classify(record.id, file, this.options.signal));
       }
@@ -190,9 +194,10 @@ export class RemoteAcquisitionHost {
       };
     } catch (error) {
       if (this.options.signal?.aborted === true) {
+        await this.rollbackCreatedAssets(createdAssetIds);
         throw error;
       }
-      return failed(action, hostFailure('download', error));
+      return failed(action, hostFailure('download', error), createdAssetIds);
     }
   }
 
@@ -219,6 +224,20 @@ export class RemoteAcquisitionHost {
       event: operationEvent(action, 'cleanup_succeeded'),
     };
   }
+
+  private async rollbackCreatedAssets(assetIds: readonly string[]): Promise<void> {
+    for (const assetId of assetIds) {
+      const record = this.downloaded.get(assetId);
+      if (record == null) {
+        throw new QueryError(
+          'STORAGE_CORRUPT',
+          'rollback asset is absent from the acquisition'
+        );
+      }
+      await this.assetStore.delete(record);
+      this.downloaded.delete(assetId);
+    }
+  }
 }
 
 function operationIdentity(action: RustRemoteAction): {
@@ -243,12 +262,17 @@ function operationEvent(
   >;
 }
 
-function failed(action: RustRemoteAction, failure: RustRemoteFailure): RemoteHostResult {
+function failed(
+  action: RustRemoteAction,
+  failure: RustRemoteFailure,
+  createdAssetIds: readonly string[] = []
+): RemoteHostResult {
   return {
     event: {
       ...operationIdentity(action),
       kind: 'operation_failed',
       failure,
+      createdAssetIds,
     },
   };
 }

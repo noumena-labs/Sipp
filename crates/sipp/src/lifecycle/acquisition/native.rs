@@ -436,6 +436,7 @@ fn operation_failed(
         member_id,
         attempt,
         failure,
+        created_asset_ids: Vec::new(),
     }
 }
 

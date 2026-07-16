@@ -231,6 +231,8 @@ pub(crate) enum RemoteAcquisitionEvent {
         member_id: u32,
         attempt: u8,
         failure: RemoteFailure,
+        #[serde(default)]
+        created_asset_ids: Vec<String>,
     },
     WaitCompleted {
         acquisition_id: String,

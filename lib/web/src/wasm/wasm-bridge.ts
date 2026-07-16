@@ -224,6 +224,7 @@ export type RustRemoteEvent =
     readonly memberId: number;
     readonly attempt: number;
     readonly failure: RustRemoteFailure;
+    readonly createdAssetIds: readonly string[];
   }
   | {
     readonly kind: 'wait_completed';

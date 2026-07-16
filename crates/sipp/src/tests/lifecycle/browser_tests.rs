@@ -338,7 +338,8 @@ fn browser_remote_commands_use_shared_503_retry_policy_without_cache_fallback() 
                     "kind": "http",
                     "status": 503,
                     "reason": "HTTP 503"
-                }
+                },
+                "createdAssetIds": []
             }),
             assets: Vec::new(),
             classified: Vec::new(),

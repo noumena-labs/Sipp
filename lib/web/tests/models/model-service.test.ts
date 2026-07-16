@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ModelService } from '../../src/models/model-service.js';
-import { AssetStore } from '../../src/models/asset-store.js';
+import {
+  AssetStore,
+  type RemoteAssetMetadata,
+  type RemoteStoreReceipt,
+} from '../../src/models/asset-store.js';
 import { ModelRegistryStore } from '../../src/models/model-registry-store.js';
 import {
   type ClassifiedAsset,
@@ -216,6 +220,43 @@ class FakeAssetStore {
     });
   }
 
+  public async downloadRemote(
+    metadata: RemoteAssetMetadata,
+    kind: AssetRecord['kind'],
+    response: Response
+  ): Promise<RemoteStoreReceipt> {
+    const payload = await response.arrayBuffer();
+    const id = `asset-${kind}-${metadata.name}-${metadata.bytes}`;
+    const stored = new File([payload], metadata.name);
+    this.files.set(id, stored);
+    return {
+      records: [
+        {
+          id,
+          kind,
+          name: metadata.name,
+          bytes: metadata.bytes,
+          storagePath: id,
+          sourceUrl: metadata.canonicalUrl,
+          sourceEtag: metadata.etag,
+          sourceLastModified: metadata.lastModified,
+          sourceBytes: metadata.bytes,
+          refCount: 0,
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+      createdAssetIds: [id],
+    };
+  }
+
+  public async downloadRemoteGguf(
+    metadata: RemoteAssetMetadata,
+    _runtime: unknown,
+    response: Response
+  ): Promise<RemoteStoreReceipt> {
+    return await this.downloadRemote(metadata, 'model', response);
+  }
+
   public async getFile(record: AssetRecord): Promise<File> {
     const stored = this.files.get(record.id);
     if (stored == null) {
@@ -288,6 +329,23 @@ class IncompatibleProjectorClassifier extends FakeAssetClassifier {
       classified.inspection.providedVisionProjectorType = 'other-merger';
     }
     return classified;
+  }
+}
+
+class FailingAssetClassifier extends FakeAssetClassifier {
+  public override async classify(): Promise<ClassifiedAssetFile> {
+    throw new QueryError('INVALID_MODEL_SOURCE', 'classification failed');
+  }
+}
+
+class AbortingAssetClassifier extends FakeAssetClassifier {
+  public constructor(private readonly controller: AbortController) {
+    super();
+  }
+
+  public override async classify(): Promise<ClassifiedAssetFile> {
+    this.controller.abort();
+    throw new DOMException('classification aborted', 'AbortError');
   }
 }
 
@@ -744,9 +802,12 @@ class FakeRustLifecycleBridge {
   public removeCount = 0;
   public remoteAdvanceCount = 0;
   public remoteCancelCount = 0;
+  public remoteCleanupCount = 0;
+  public remoteDownloadMode = false;
   public lastSource: unknown = null;
   public lastOptions: unknown = null;
   private remoteUrl: string | null = null;
+  private remoteFailure: { code: string; message: string } | null = null;
   private manifest: RegistryManifest = {
     version: 3,
     projectorIndexRevision: 0,
@@ -770,10 +831,62 @@ class FakeRustLifecycleBridge {
         return { kind: 'action', action: this.remoteMetadataAction(1) };
       }
       case 'advance':
+        if (this.remoteDownloadMode && command.event.kind === 'metadata_succeeded') {
+          assert.ok(this.remoteUrl);
+          return {
+            kind: 'action',
+            action: {
+              kind: 'download',
+              acquisitionId: command.event.acquisitionId,
+              memberId: command.event.memberId,
+              attempt: command.event.attempt,
+              role: 'model',
+              metadata: {
+                url: this.remoteUrl,
+                name: 'model.gguf',
+                bytes: command.event.headers.contentLength ?? 0,
+                etag: command.event.headers.etag,
+                lastModified: command.event.headers.lastModified,
+              },
+            },
+          };
+        }
+        if (this.remoteDownloadMode && command.event.kind === 'cleanup_succeeded') {
+          this.remoteCleanupCount += 1;
+          return {
+            kind: 'failed',
+            error: this.remoteFailure ?? {
+              code: 'REMOTE_LOAD_FAILED',
+              message: 'Remote acquisition failed.',
+            },
+          };
+        }
         if (command.event.kind === 'wait_completed') {
-          return { kind: 'action', action: this.remoteMetadataAction(command.event.attempt + 1) };
+          return {
+            kind: 'action',
+            action: this.remoteMetadataAction(command.event.attempt + 1),
+          };
         }
         assert.equal(command.event.kind, 'operation_failed');
+        if (this.remoteDownloadMode) {
+          assert.ok(this.remoteUrl);
+          this.remoteFailure = {
+            code: 'REMOTE_LOAD_FAILED',
+            message:
+              `remote model download failed for ${this.remoteUrl}: ` +
+              command.event.failure.reason,
+          };
+          return {
+            kind: 'action',
+            action: {
+              kind: 'cleanup',
+              acquisitionId: command.event.acquisitionId,
+              memberId: command.event.memberId,
+              attempt: command.event.attempt,
+              assetIds: command.event.createdAssetIds,
+            },
+          };
+        }
         this.remoteAdvanceCount += 1;
         if (this.remoteAdvanceCount < 4) {
           return { kind: 'action', action: this.remoteWaitAction(command.event.attempt) };
@@ -1028,7 +1141,20 @@ function createService(overrides: {
   };
 }
 
-function createRustBackedService(runtime: FakeRuntime = new FakeRuntime()) {
+function createRustBackedService(
+  runtime: FakeRuntime = new FakeRuntime(),
+  overrides: {
+    registry?: MemoryRegistryStore;
+    assets?: FakeAssetStore;
+    classifier?: {
+      classify(
+        assetId: string,
+        file: File,
+        signal?: AbortSignal
+      ): Promise<ClassifiedAssetFile>;
+    };
+  } = {}
+) {
   const rust = new FakeRustLifecycleBridge();
   (
     runtime as FakeRuntime & {
@@ -1036,7 +1162,7 @@ function createRustBackedService(runtime: FakeRuntime = new FakeRuntime()) {
     }
   ).createRustLifecycleBridge = async () => rust as unknown as RustLifecycleBridge;
   return {
-    ...createService({ runtime }),
+    ...createService({ ...overrides, runtime }),
     rust,
   };
 }
@@ -1166,6 +1292,82 @@ test('ModelService preserves terminal remote acquisition errors', async () => {
       );
       assert.equal(rust.remoteAdvanceCount, 4);
       assert.equal(rust.remoteCancelCount, 0);
+    }
+  );
+});
+
+test('ModelService cleans browser remote downloads when classification fails', async () => {
+  const remoteBytes = 'remote model bytes';
+  await withGlobalFetch(
+    async (_input, init) => {
+      if (init?.method === 'HEAD') {
+        return new Response(null, {
+          status: 200,
+          headers: {
+            'Content-Length': String(remoteBytes.length),
+            ETag: '"remote"',
+          },
+        });
+      }
+      return new Response(remoteBytes, { status: 200 });
+    },
+    async () => {
+      const { service, rust, assets } = createRustBackedService(
+        new FakeRuntime(),
+        { classifier: new FailingAssetClassifier() }
+      );
+      rust.remoteDownloadMode = true;
+
+      await assert.rejects(
+        service.load({ kind: 'remote', modelUrls: ['https://example.test/model.gguf'] }),
+        (error) =>
+          error instanceof QueryError &&
+          error.code === 'REMOTE_LOAD_FAILED' &&
+          error.message ===
+            'remote model download failed for https://example.test/model.gguf: classification failed'
+      );
+
+      assert.equal(rust.remoteCleanupCount, 1);
+      assert.deepEqual(assets.deleted, ['asset-model-model.gguf-18']);
+      assert.equal(assets.files.size, 0);
+    }
+  );
+});
+
+test('ModelService cleans browser remote downloads when classification is aborted', async () => {
+  const remoteBytes = 'remote model bytes';
+  await withGlobalFetch(
+    async (_input, init) => {
+      if (init?.method === 'HEAD') {
+        return new Response(null, {
+          status: 200,
+          headers: {
+            'Content-Length': String(remoteBytes.length),
+            ETag: '"remote"',
+          },
+        });
+      }
+      return new Response(remoteBytes, { status: 200 });
+    },
+    async () => {
+      const controller = new AbortController();
+      const { service, rust, assets } = createRustBackedService(
+        new FakeRuntime(),
+        { classifier: new AbortingAssetClassifier(controller) }
+      );
+      rust.remoteDownloadMode = true;
+
+      await assert.rejects(
+        service.load(
+          { kind: 'remote', modelUrls: ['https://example.test/model.gguf'] },
+          { signal: controller.signal }
+        ),
+        (error) => error instanceof DOMException && error.name === 'AbortError'
+      );
+
+      assert.equal(rust.remoteCancelCount, 1);
+      assert.deepEqual(assets.deleted, ['asset-model-model.gguf-18']);
+      assert.equal(assets.files.size, 0);
     }
   );
 });
