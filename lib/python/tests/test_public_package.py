@@ -179,6 +179,46 @@ def test_package_loader_supports_explicit_fake_native_module(tmp_path: Path) -> 
     assert "ok" in result.stdout
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows DLL search path only")
+def test_package_loader_registers_cuda_13_dll_directory(tmp_path: Path) -> None:
+    cuda_root = tmp_path / "cuda"
+    cuda_bin_x64 = cuda_root / "bin" / "x64"
+    cuda_bin_x64.mkdir(parents=True)
+    fake_native = tmp_path / "fake_native.py"
+    fake_native.write_text(
+        _fake_native_module_source('{"compiled":{"cuda":true}}'),
+        encoding="utf-8",
+    )
+    package_root = Path(__file__).resolve().parents[1] / "python"
+    env = os.environ.copy()
+    env["CUDA_PATH"] = str(cuda_root)
+    env["PYTHONPATH"] = str(package_root)
+    env["SIPP_PYTHON_NATIVE_LIBRARY_PATH"] = str(fake_native)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os\n"
+                "paths = []\n"
+                "def add_dll_directory(path):\n"
+                "    paths.append(os.fspath(path))\n"
+                "    return object()\n"
+                "os.add_dll_directory = add_dll_directory\n"
+                "import sipp\n"
+                f"assert {str(cuda_bin_x64)!r} in paths\n"
+            ),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
 def test_package_loader_supports_installed_backend_package(tmp_path: Path) -> None:
     backend_package = tmp_path / "sipp_backend_vulkan"
     backend_package.mkdir()

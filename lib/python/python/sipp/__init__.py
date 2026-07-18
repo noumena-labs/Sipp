@@ -37,6 +37,7 @@ def _add_windows_dll_directories() -> None:
         value = os.environ.get(env_name)
         if value:
             candidates.append(Path(value) / "bin")
+            candidates.append(Path(value) / "bin" / "x64")
 
     seen = set()
     for path in candidates:
