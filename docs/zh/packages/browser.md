@@ -1,6 +1,6 @@
 # 浏览器包
 
-浏览器包发布名称为 `@sipphq/sipp`。提供 `SippClient` 客户端，支持浏览器本地 GGUF 推理、网关调用、提供商描述符、Token 流式传输、基于 OPFS 的模型缓存以及浏览器运行时生命周期管理。
+浏览器包发布名称为 `@sipphq/sipp`。提供 `SippClient` 客户端，支持浏览器本地 GGUF 推理、网关调用、提供商描述符、Token 流式传输、基于 OPFS 的模型存储以及浏览器运行时生命周期管理。
 
 各平台共享的 `add`、`query`、`chat`、`embed` 见[API 概述](../api/)。
 
@@ -16,29 +16,28 @@ npm install @sipphq/sipp
 
 - 浏览器本地执行文本和视觉模型推理。
 - 浏览器运行时中调度 WebGPU 或 CPU 任务。
-- 利用 OPFS 实现本地模型缓存。
+- 在 OPFS 中持久安装模型。
 - 通过网关发起 query、chat、embedding 调用。
 - 为演示应用构建角色和导演助手。
 
 ## 本地推理
 
 ```ts
-import { SippClient, type ChatMessage } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
-const endpoint = await client.add('default', {
-  kind: 'local',
-  source: {
-    kind: 'remote',
-    modelUrls: [new URL('/models/model.gguf', window.location.href).href],
-  },
-  options: {
+const model = await client.models.installUrls([
+  new URL('/models/model.gguf', window.location.href).href,
+]);
+const endpoint = await client.add(
+  'default',
+  EndpointDescriptor.local(model.id, {
     backend: 'webgpu',
     runtime: {
       context: { n_ctx: 2048 },
     },
-  },
-});
+  })
+);
 
 const messages: readonly ChatMessage[] = [
   { role: 'system', content: 'Answer concisely.' },
@@ -68,15 +67,16 @@ await client.close();
 当需要由独立服务器统一管理模型路径、提供商凭证、访问策略和监控指标时，使用网关端点。
 
 ```ts
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
+import { EndpointDescriptor } from '@sipphq/sipp';
+
+const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target: 'local',
   baseUrl: 'https://gateway.example.com',
   authentication: {
     kind: 'bearer',
     valueProvider: getShortLivedGatewayToken,
   },
-});
+}));
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain gateway inference.' },
@@ -92,7 +92,7 @@ const run = client.chat(messages, {
 
 ## 浏览器运行时选项
 
-浏览器运行时通过 Emscripten 将 Sipp 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器暴露所需适配器时，引擎使用 WebGPU 运行 GGUF 文本和视觉模型；选择 CPU 后端时则使用 CPU 执行。首次下载模型或导入文件后，基于 OPFS 的模型缓存可加速后续加载。
+浏览器运行时通过 Emscripten 将 Sipp 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器暴露所需适配器时，引擎使用 WebGPU 运行 GGUF 文本和视觉模型；选择 CPU 后端时则使用 CPU 执行。首次获取 URL 或导入 `File` 后，已安装模型会保留在 OPFS 中，并可通过模型 ID 再次加载。
 
 该包在运行时自动解析其打包的 JavaScript 和 WASM 资源，通常无需手动覆盖资源 URL。只有应用需要精细控制浏览器的执行、存储或本地运行时行为时，才需要配置 `executionMode`、`wasmThreading`、`browserCache` 以及本地端点的 `options.runtime`。
 

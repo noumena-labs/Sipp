@@ -2,8 +2,8 @@
 
 `lib/python` is the Python package source for the public `sipppy`
 distribution. It installs the import package `sipp`, loads the best available
-native backend, and exposes descriptor classes for local GGUF models, gateway
-endpoints, and provider endpoints.
+native backend, and exposes the client model store plus descriptors for local
+GGUF models, gateway endpoints, and provider endpoints.
 
 Text and embedding calls return run handles. Call `.result()` for the final
 response and `.tokens()` for streamed text batches.
@@ -45,10 +45,11 @@ from sipp import (
 
 
 client = SippClient()
+model = client.models.install_files([sys.argv[1]])
 endpoint = client.add(
     "default",
-    EndpointDescriptor.files(
-        [sys.argv[1]],
+    EndpointDescriptor.local(
+        model.id,
         config=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
             scheduler=SchedulerRuntimeConfig(

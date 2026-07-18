@@ -27,6 +27,7 @@ use sipp::engine::{
 };
 use sipp::{
     EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
+    LocalDescriptor as CoreLocalDescriptor, ManagedModel as CoreManagedModel,
     ProviderEndpointError as CoreProviderEndpointError, SippChatRequest as ClientChatRequest,
     SippClient as CoreSippClient, SippEmbedRequest as ClientEmbedRequest,
     SippEmbeddingResponse as ClientEmbeddingResponse,
@@ -785,19 +786,38 @@ impl PyLocalEmbedOptions {
     }
 }
 
-/// Gateway endpoint descriptor accepted by SippClient.add.
-#[pyclass(name = "GatewayDescriptor")]
+/// Endpoint descriptor accepted by SippClient.add.
+#[pyclass(name = "EndpointDescriptor")]
 #[derive(Clone)]
-struct PyGatewayDescriptor {
-    dto: dto::EndpointDescriptor,
+struct PyEndpointDescriptor {
+    core: CoreEndpointDescriptor,
 }
 
 #[pymethods]
-impl PyGatewayDescriptor {
-    #[new]
+impl PyEndpointDescriptor {
+    /// Create a local endpoint for a managed model.
+    #[staticmethod]
+    #[pyo3(signature = (model_id, *, config = None))]
+    fn local(
+        py: Python<'_>,
+        model_id: String,
+        config: Option<Py<PyNativeRuntimeConfig>>,
+    ) -> PyResult<Self> {
+        let mut descriptor = CoreLocalDescriptor::new(model_id);
+        if let Some(config) = config {
+            descriptor.config = NativeRuntimeConfig::try_from(&config.borrow(py).to_dto())
+                .map_err(convert_error)?;
+        }
+        Ok(Self {
+            core: descriptor.into(),
+        })
+    }
+
+    /// Create a client-owned HTTP gateway endpoint.
+    #[staticmethod]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (target, base_url, *, authentication_kind = "none", authentication_value = None, authentication_header = None, static_headers = None, timeout_ms = None, query_route = None, chat_route = None, embed_route = None, protocol_options = None))]
-    fn new(
+    fn gateway(
         py: Python<'_>,
         target: String,
         base_url: String,
@@ -830,105 +850,15 @@ impl PyGatewayDescriptor {
                 .transpose()?,
             ..dto::EndpointDescriptor::default()
         };
-        CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
-        Ok(Self { dto })
+        let core = CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { core })
     }
-}
 
-/// Authoritative installed, local, or remote model source.
-#[pyclass(name = "ModelSource")]
-#[derive(Clone)]
-struct PyModelSource {
-    dto: dto::ModelSource,
-}
-
-#[pymethods]
-impl PyModelSource {
+    /// Create a direct provider endpoint using caller-owned credentials.
     #[staticmethod]
-    fn installed(model_id: String) -> Self {
-        Self {
-            dto: dto::ModelSource {
-                kind: "installed".to_string(),
-                model_id: Some(model_id),
-                ..dto::ModelSource::default()
-            },
-        }
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (model_paths, projector_path = None))]
-    fn local(model_paths: Vec<PathBuf>, projector_path: Option<PathBuf>) -> Self {
-        Self {
-            dto: dto::ModelSource {
-                kind: "local".to_string(),
-                model_paths: Some(
-                    model_paths
-                        .into_iter()
-                        .map(|path| path.to_string_lossy().into_owned())
-                        .collect(),
-                ),
-                projector_path: projector_path.map(|path| path.to_string_lossy().into_owned()),
-                ..dto::ModelSource::default()
-            },
-        }
-    }
-
-    #[staticmethod]
-    #[pyo3(signature = (model_urls, projector_url = None))]
-    fn remote(model_urls: Vec<String>, projector_url: Option<String>) -> Self {
-        Self {
-            dto: dto::ModelSource {
-                kind: "remote".to_string(),
-                model_urls: Some(model_urls),
-                projector_url,
-                ..dto::ModelSource::default()
-            },
-        }
-    }
-}
-
-/// Local model descriptor accepted by SippClient.add.
-#[pyclass(name = "LocalModelDescriptor")]
-#[derive(Clone)]
-struct PyLocalModelDescriptor {
-    dto: dto::EndpointDescriptor,
-}
-
-#[pymethods]
-impl PyLocalModelDescriptor {
-    #[new]
-    #[pyo3(signature = (source, storage_root, config = None))]
-    fn new(
-        py: Python<'_>,
-        source: Py<PyModelSource>,
-        storage_root: PathBuf,
-        config: Option<Py<PyNativeRuntimeConfig>>,
-    ) -> PyResult<Self> {
-        let dto = dto::EndpointDescriptor {
-            kind: "local".to_string(),
-            source: Some(source.borrow(py).dto.clone()),
-            storage_root: Some(storage_root.to_string_lossy().into_owned()),
-            config: config.map(|value| value.borrow(py).to_dto()),
-            ..dto::EndpointDescriptor::default()
-        };
-        CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
-        Ok(Self { dto })
-    }
-}
-
-/// Direct provider descriptor accepted by SippClient.add.
-#[pyclass(name = "ProviderDescriptor")]
-#[derive(Clone)]
-struct PyProviderDescriptor {
-    dto: dto::EndpointDescriptor,
-}
-
-#[pymethods]
-impl PyProviderDescriptor {
-    #[new]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (provider, model, *, api_key = None, base_url = None, timeout_ms = None, version = None, auth_header_name = None, auth_header_value = None, static_headers = None))]
-    fn new(
+    fn provider(
         provider: String,
         model: String,
         api_key: Option<String>,
@@ -952,8 +882,134 @@ impl PyProviderDescriptor {
             static_headers: static_headers.map(py_static_headers),
             ..dto::EndpointDescriptor::default()
         };
-        CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
-        Ok(Self { dto })
+        let core = CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
+        Ok(Self { core })
+    }
+}
+
+/// Model managed by a client model store.
+#[pyclass(name = "ManagedModel", frozen)]
+struct PyManagedModel {
+    #[pyo3(get)]
+    id: String,
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    bytes: u64,
+    #[pyo3(get)]
+    modality: String,
+    #[pyo3(get)]
+    status: String,
+}
+
+impl From<CoreManagedModel> for PyManagedModel {
+    fn from(model: CoreManagedModel) -> Self {
+        Self {
+            id: model.id,
+            name: model.name,
+            bytes: model.bytes,
+            modality: model.modality.as_str().to_string(),
+            status: model.status.as_str().to_string(),
+        }
+    }
+}
+
+/// Persistent models owned by a Sipp client.
+#[pyclass(name = "ModelStore")]
+struct PyModelStore {
+    client: Arc<Mutex<CoreSippClient>>,
+}
+
+#[pymethods]
+impl PyModelStore {
+    /// Install model files from the host filesystem.
+    #[pyo3(signature = (model_paths, *, projector_path = None))]
+    fn install_files(
+        &self,
+        py: Python<'_>,
+        model_paths: Vec<PathBuf>,
+        projector_path: Option<PathBuf>,
+    ) -> PyResult<PyManagedModel> {
+        let client = self.client.clone();
+        let model = py
+            .allow_threads(move || {
+                let client = client
+                    .lock()
+                    .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
+                match projector_path {
+                    Some(projector_path) => block_on(
+                        client
+                            .models()
+                            .install_files_with_projector(model_paths, projector_path),
+                    ),
+                    None => block_on(client.models().install_files(model_paths)),
+                }
+                .map_err(ClientError::from)
+            })
+            .map_err(to_py_client_error)?;
+        Ok(model.into())
+    }
+
+    /// Download and install model files from HTTP(S) URLs.
+    #[pyo3(signature = (model_urls, *, projector_url = None))]
+    fn install_urls(
+        &self,
+        py: Python<'_>,
+        model_urls: Vec<String>,
+        projector_url: Option<String>,
+    ) -> PyResult<PyManagedModel> {
+        let client = self.client.clone();
+        let model = py
+            .allow_threads(move || {
+                let client = client
+                    .lock()
+                    .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| {
+                        ClientError::Internal(format!(
+                            "failed to start model download runtime: {error}"
+                        ))
+                    })?;
+                match projector_url {
+                    Some(projector_url) => runtime.block_on(
+                        client
+                            .models()
+                            .install_urls_with_projector(model_urls, projector_url),
+                    ),
+                    None => runtime.block_on(client.models().install_urls(model_urls)),
+                }
+                .map_err(ClientError::from)
+            })
+            .map_err(to_py_client_error)?;
+        Ok(model.into())
+    }
+
+    /// List installed models.
+    fn list(&self, py: Python<'_>) -> PyResult<Vec<PyManagedModel>> {
+        let client = self.client.clone();
+        py.allow_threads(move || {
+            let client = client
+                .lock()
+                .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?;
+            Ok(block_on(client.models().list())
+                .into_iter()
+                .map(PyManagedModel::from)
+                .collect())
+        })
+    }
+
+    /// Remove an installed model that is not used by an endpoint.
+    fn remove(&self, py: Python<'_>, model_id: String) -> PyResult<()> {
+        let client = self.client.clone();
+        py.allow_threads(move || {
+            let client = client
+                .lock()
+                .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
+            block_on(client.models().remove(&model_id)).map_err(ClientError::from)
+        })
+        .map_err(to_py_client_error)
     }
 }
 
@@ -966,15 +1022,33 @@ struct PySippClient {
 #[pymethods]
 impl PySippClient {
     #[new]
-    fn new() -> PyResult<Self> {
+    #[pyo3(signature = (*, storage_root = None))]
+    fn new(storage_root: Option<PathBuf>) -> PyResult<Self> {
+        let client = match storage_root {
+            Some(storage_root) => CoreSippClient::with_storage_root(storage_root),
+            None => CoreSippClient::new(),
+        }
+        .map_err(to_py_client_error)?;
         Ok(Self {
-            inner: Arc::new(Mutex::new(CoreSippClient::new())),
+            inner: Arc::new(Mutex::new(client)),
         })
     }
 
+    #[getter]
+    fn models(&self) -> PyModelStore {
+        PyModelStore {
+            client: self.inner.clone(),
+        }
+    }
+
     /// Register or replace an endpoint and return its current reference.
-    fn add(&self, py: Python<'_>, id: String, descriptor: PyObject) -> PyResult<PyEndpointRef> {
-        let descriptor = py_endpoint_descriptor_to_core(py, descriptor)?;
+    fn add(
+        &self,
+        py: Python<'_>,
+        id: String,
+        descriptor: Py<PyEndpointDescriptor>,
+    ) -> PyResult<PyEndpointRef> {
+        let descriptor = descriptor.borrow(py).core.clone();
         let inner = self.inner.clone();
         let endpoint = py
             .allow_threads(move || {
@@ -987,6 +1061,18 @@ impl PySippClient {
         Ok(PyEndpointRef {
             dto: endpoint_ref_to_dto(endpoint),
         })
+    }
+
+    /// Remove a registered endpoint.
+    fn remove(&self, py: Python<'_>, id: String) -> PyResult<()> {
+        let inner = self.inner.clone();
+        py.allow_threads(move || {
+            let mut client = inner
+                .lock()
+                .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
+            block_on(client.remove(&id))
+        })
+        .map_err(to_py_client_error)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1249,38 +1335,18 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySippTextOptions>()?;
     module.add_class::<PyLocalTextOptions>()?;
     module.add_class::<PyLocalEmbedOptions>()?;
+    module.add_class::<PyManagedModel>()?;
+    module.add_class::<PyModelStore>()?;
     module.add_class::<PySippClient>()?;
     module.add_class::<PySippTextRun>()?;
     module.add_class::<PySippTokenIterator>()?;
     module.add_class::<PySippEmbeddingRun>()?;
-    module.add_class::<PyGatewayDescriptor>()?;
-    module.add_class::<PyModelSource>()?;
-    module.add_class::<PyLocalModelDescriptor>()?;
-    module.add_class::<PyProviderDescriptor>()?;
+    module.add_class::<PyEndpointDescriptor>()?;
     module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
     module.add("DEFAULT_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
     module.add_function(wrap_pyfunction!(backend_observability_json, module)?)?;
     module.add_function(wrap_pyfunction!(set_llama_log_quiet, module)?)?;
     Ok(())
-}
-
-fn py_endpoint_descriptor_to_core(
-    py: Python<'_>,
-    descriptor: PyObject,
-) -> PyResult<CoreEndpointDescriptor> {
-    let descriptor = descriptor.bind(py);
-    if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyLocalModelDescriptor>>() {
-        return CoreEndpointDescriptor::try_from(&descriptor.dto).map_err(convert_error);
-    }
-    if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyProviderDescriptor>>() {
-        return CoreEndpointDescriptor::try_from(&descriptor.dto).map_err(convert_error);
-    }
-    if let Ok(descriptor) = descriptor.extract::<PyRef<'_, PyGatewayDescriptor>>() {
-        return CoreEndpointDescriptor::try_from(&descriptor.dto).map_err(convert_error);
-    }
-    Err(PyTypeError::new_err(
-        "descriptor must be LocalModelDescriptor, ProviderDescriptor, or GatewayDescriptor",
-    ))
 }
 
 fn py_static_headers(

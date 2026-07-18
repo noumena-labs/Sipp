@@ -1,4 +1,5 @@
 import {
+  EndpointDescriptor,
   type SippClient,
   type ModelLoadOptions,
   type TokenBatch,
@@ -16,7 +17,7 @@ import type {
   ScenarioDefinition,
   ScenarioResult,
 } from './types';
-import { localEndpointDescriptor, type ModelLocation } from './model-registry';
+import { installModel, type ModelLocation } from './model-registry';
 import { measureAsync, round } from './utils';
 
 type BenchmarkRuntimeOptions = NonNullable<ModelLoadOptions['runtime']>;
@@ -450,15 +451,16 @@ export async function runScenarioBenchmark(
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
     setStatus(`${scenario.label}: loading model...`);
-    const measured = await measureAsync(() =>
-      targetClient.add(
+    const measured = await measureAsync(async () => {
+      const model = await installModel(targetClient, modelLocation);
+      return await targetClient.add(
         'playground-local',
-        localEndpointDescriptor(modelLocation, {
+        EndpointDescriptor.local(model.id, {
           runtime,
           observability: 'profile',
         })
-      )
-    );
+      );
+    });
     loadRuntimeMs = measured.ms;
   }
 
@@ -583,15 +585,16 @@ export async function runMixedLoadBenchmark(
 ): Promise<import('./types').MixedLoadResult> {
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
-    const measured = await measureAsync(() =>
-      targetClient.add(
+    const measured = await measureAsync(async () => {
+      const model = await installModel(targetClient, modelLocation);
+      return await targetClient.add(
         'playground-local',
-        localEndpointDescriptor(modelLocation, {
+        EndpointDescriptor.local(model.id, {
           runtime,
           observability: 'profile',
         })
-      )
-    );
+      );
+    });
     loadRuntimeMs = measured.ms;
   }
 

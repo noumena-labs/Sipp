@@ -63,13 +63,16 @@ def text_options() -> SippTextOptions:
 
 
 def main() -> None:
-    model, prompt = read_local_args("chat", "Explain the SippClient API in one sentence.")
+    model_path, prompt = read_local_args(
+        "chat", "Explain the SippClient API in one sentence."
+    )
     set_llama_log_quiet(True)
 
     client = SippClient()
+    model = client.models.install_files([model_path])
     client.add(
         "default",
-        EndpointDescriptor.files([model], config=runtime_config(embeddings=False)),
+        EndpointDescriptor.local(model.id, config=runtime_config(embeddings=False)),
     )
 
     # `chat` sends role-tagged messages and can stream partial token batches.

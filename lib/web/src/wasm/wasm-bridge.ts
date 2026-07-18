@@ -128,21 +128,15 @@ interface RustLifecycleCreateValue {
   snapshot: ObservabilitySnapshot;
 }
 
-interface RustLifecycleLoadSourceInstalled {
-  kind: 'installed';
-  id: string;
+export interface RustLifecycleLoadSource {
+  modelId: string;
 }
 
-interface RustLifecycleLoadSourceLocal {
-  kind: 'local';
+export interface RustLifecycleInstallSource {
   assets: AssetRecord[];
   classified: ClassifiedAsset[];
   explicitProjectorAssetId?: string | null;
 }
-
-export type RustLifecycleLoadSource =
-  | RustLifecycleLoadSourceInstalled
-  | RustLifecycleLoadSourceLocal;
 
 export interface RustRemoteMetadata {
   readonly url: string;
@@ -259,7 +253,6 @@ export type RustRemoteCommand =
     readonly command: 'begin';
     readonly modelUrls: readonly string[];
     readonly projectorUrl?: string;
-    readonly options: RustLifecycleLoadOptions;
   }
   | {
     readonly command: 'advance';
@@ -274,7 +267,7 @@ export type RustRemoteCommand =
 
 export type RustRemoteCommandValue =
   | { readonly kind: 'action'; readonly action: RustRemoteAction }
-  | { readonly kind: 'prepared'; readonly prepared: RustLifecyclePrepareLoadValue }
+  | { readonly kind: 'installed'; readonly installed: RustLifecycleInstallValue }
   | { readonly kind: 'cancelled'; readonly snapshot: ObservabilitySnapshot }
   | { readonly kind: 'failed'; readonly error: RustLifecycleError };
 
@@ -300,6 +293,13 @@ export interface RustLifecyclePrepareLoadValue {
   loadRequired: boolean;
   assets: RustLifecyclePlannedAsset[];
   projector?: RustLifecyclePlannedAsset | null;
+  manifest: RegistryManifest;
+  snapshot: ObservabilitySnapshot;
+  events: ObservabilityEvent[];
+}
+
+export interface RustLifecycleInstallValue {
+  model: ModelInfo;
   manifest: RegistryManifest;
   snapshot: ObservabilitySnapshot;
   events: ObservabilityEvent[];
@@ -378,6 +378,13 @@ export class RustLifecycleBridge {
     return unwrapLifecycleResponse(
       this.bridge.modelServicePrepareLoad(this.handle, source, options),
       'prepare model load'
+    );
+  }
+
+  public install(source: RustLifecycleInstallSource): RustLifecycleInstallValue {
+    return unwrapLifecycleResponse(
+      this.bridge.modelServiceInstall(this.handle, source),
+      'install model'
     );
   }
 
@@ -860,6 +867,17 @@ export class WasmBridge {
       'CE_ModelServicePrepareLoad',
       ['number', 'string', 'string'],
       [handle, JSON.stringify(source), JSON.stringify(options)]
+    );
+  }
+
+  public modelServiceInstall(
+    handle: RustLifecycleHandle,
+    source: RustLifecycleInstallSource
+  ): RustLifecycleResponse<RustLifecycleInstallValue> {
+    return this.callLifecycleJson<RustLifecycleInstallValue>(
+      'CE_ModelServiceInstall',
+      ['number', 'string'],
+      [handle, JSON.stringify(source)]
     );
   }
 

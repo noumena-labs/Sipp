@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mock } from 'bun:test';
 
 import {
   formatRequestStats,
@@ -8,45 +7,13 @@ import {
   type ConversationMessage,
 } from './src/chat-state.ts';
 
-const EndpointDescriptor = {
-  files(
-    modelFiles: readonly File[],
-    {
-      projectorFile,
-      ...options
-    }: Record<string, unknown> & { readonly projectorFile?: File } = {}
-  ) {
-    return {
-      kind: 'local',
-      location: { kind: 'files', modelFiles, projectorFile },
-      options,
-    };
-  },
-  urls(
-    modelUrls: readonly string[],
-    {
-      projectorUrl,
-      ...options
-    }: Record<string, unknown> & { readonly projectorUrl?: string } = {}
-  ) {
-    return {
-      kind: 'local',
-      location: { kind: 'urls', modelUrls, projectorUrl },
-      options,
-    };
-  },
-};
-
-mock.module('@noumena-labs/sipp', () => ({ EndpointDescriptor }));
-
 const {
   getCuratedModel,
-  localEndpointDescriptor,
   projectorRequirementMessage,
   resolveModelSelection,
 } = await import('./src/model-registry.ts');
 
-test('text model selection preserves its curated endpoint descriptor', () => {
+test('text model selection preserves its curated install location', () => {
   const resolved = resolveModelSelection({
     kind: 'curated',
     modelId: 'qwen2.5-0.5b-instruct',
@@ -56,7 +23,7 @@ test('text model selection preserves its curated endpoint descriptor', () => {
   assert.equal(resolved.location, getCuratedModel('qwen2.5-0.5b-instruct').location);
 });
 
-test('vision model selection preserves its curated endpoint descriptor', () => {
+test('vision model selection preserves its curated install location', () => {
   const resolved = resolveModelSelection({
     kind: 'curated',
     modelId: 'lfm2.5-vl-450m',
@@ -76,10 +43,10 @@ test('custom URL selection remains model-only after curated vision selection', (
   });
 
   assert.equal(custom.capability, 'text');
-  assert.deepEqual(
-    localEndpointDescriptor(custom.location, {}),
-    EndpointDescriptor.urls(['https://models.example.test/custom.gguf'])
-  );
+  assert.deepEqual(custom.location, {
+    kind: 'urls',
+    modelUrls: ['https://models.example.test/custom.gguf'],
+  });
   assert.equal(custom.custom, true);
 });
 
@@ -87,10 +54,7 @@ test('custom file selection remains model-only', () => {
   const file = new File(['gguf'], 'local-model.gguf');
   const resolved = resolveModelSelection({ kind: 'custom-file', file });
 
-  assert.deepEqual(
-    localEndpointDescriptor(resolved.location, {}),
-    EndpointDescriptor.files([file])
-  );
+  assert.deepEqual(resolved.location, { kind: 'files', modelFiles: [file] });
   assert.equal(resolved.capability, 'text');
 });
 

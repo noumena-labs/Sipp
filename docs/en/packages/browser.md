@@ -2,7 +2,7 @@
 
 The browser package target is `@sipphq/sipp`. It exposes `SippClient` for
 browser-local GGUF inference, gateway calls, provider descriptors where
-supported, token streaming, OPFS-backed model caching, and browser runtime
+supported, token streaming, an OPFS-backed model store, and browser runtime
 lifecycle management.
 
 See the [Library API Overview](../api/) for the shared `add`, `query`,
@@ -21,29 +21,28 @@ Use this package in browser code. For server routes or Node services, use
 
 - Browser-local text and vision inference.
 - WebGPU or CPU execution through the browser runtime.
-- OPFS-backed model caching.
+- Persistent model installation in OPFS.
 - Gateway-backed query, chat, and embedding calls.
 - Character and director helpers used by demos.
 
 ## Local GGUF Chat
 
 ```ts
-import { SippClient, type ChatMessage } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
-const endpoint = await client.add('default', {
-  kind: 'local',
-  source: {
-    kind: 'remote',
-    modelUrls: [new URL('/models/model.gguf', window.location.href).href],
-  },
-  options: {
+const model = await client.models.installUrls([
+  new URL('/models/model.gguf', window.location.href).href,
+]);
+const endpoint = await client.add(
+  'default',
+  EndpointDescriptor.local(model.id, {
     backend: 'webgpu',
     runtime: {
       context: { n_ctx: 2048 },
     },
-  },
-});
+  })
+);
 
 const messages: readonly ChatMessage[] = [
   { role: 'system', content: 'Answer concisely.' },
@@ -76,15 +75,16 @@ Use gateway endpoints when a separate server owns model paths, provider
 credentials, target policy, and metrics.
 
 ```ts
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
+import { EndpointDescriptor } from '@sipphq/sipp';
+
+const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target: 'local',
   baseUrl: 'https://gateway.example.com',
   authentication: {
     kind: 'bearer',
     valueProvider: getShortLivedGatewayToken,
   },
-});
+}));
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain gateway inference.' },
@@ -105,8 +105,8 @@ gateway tokens in browser bundles.
 The browser runtime links Sipp's Rust WASM ABI with llama.cpp and ggml
 through Emscripten. It runs GGUF text and vision models with WebGPU when the
 browser exposes the required adapter, or with CPU execution when CPU is the
-selected backend. OPFS-backed model caching keeps repeated browser loads local
-after the first model fetch or file import.
+selected backend. After the first URL fetch or `File` import, installed models
+remain in OPFS and can be loaded again by model ID.
 
 The package resolves its packaged JavaScript and WASM assets at runtime. Most
 apps should not override asset URLs. Use `executionMode`, `wasmThreading`,

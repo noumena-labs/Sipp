@@ -23,20 +23,22 @@ npm install @sipphq/sipp-server
 ## 本地推理 (Query)
 
 ```ts
-import { SippClient } from '@sipphq/sipp-server';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
-const endpoint = await client.add('default', {
-  kind: 'local',
-  source: { kind: 'local', modelPaths: [process.argv[2]] },
-  storageRoot: '.sipp-models',
-  config: {
-    context: { n_ctx: 2048 },
-    scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
-    cache: { mode: 'live_slot_prefix' },
-    observability: { runtime_metrics: true },
-  },
-});
+const modelPath = process.argv[2] ?? 'model.gguf';
+const model = await client.models.installFiles([modelPath]);
+const endpoint = await client.add(
+  'default',
+  EndpointDescriptor.local(model.id, {
+    config: {
+      context: { n_ctx: 2048 },
+      scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
+      cache: { mode: 'live_slot_prefix' },
+      observability: { runtime_metrics: true },
+    },
+  })
+);
 const queryPrompt = [
   '<|system|>',
   'Answer concisely.',
@@ -72,6 +74,8 @@ arm64 包。
 ## 网关推理
 
 ```ts
+import { EndpointDescriptor } from '@sipphq/sipp-server';
+
 function requiredEnv(name: string): string {
   const value = process.env[name];
   if (value == null || value === '') {
@@ -80,15 +84,14 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
+const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target: requiredEnv('SIPP_GATEWAY_TARGET'),
   baseUrl: requiredEnv('SIPP_GATEWAY_URL'),
   authentication: {
     kind: 'bearer',
     value: requiredEnv('SIPP_GATEWAY_TOKEN'),
   },
-});
+}));
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain gateway inference.' },
@@ -108,6 +111,8 @@ console.log((await run.response).text);
 仅在受信任的服务端代码中使用提供商端点。将提供商的 API 密钥存储在服务器环境变量中；以下示例中的 `OPENAI_API_KEY="<mock-openai-key>"` 仅为演示。
 
 ```ts
+import { EndpointDescriptor } from '@sipphq/sipp-server';
+
 function requiredEnv(name: string): string {
   const value = process.env[name];
   if (value == null || value === '') {
@@ -116,12 +121,11 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const endpoint = await client.add('provider', {
-  kind: 'provider',
+const endpoint = await client.add('provider', EndpointDescriptor.provider({
   provider: 'openai',
   model: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
   apiKey: requiredEnv('OPENAI_API_KEY'),
-});
+}));
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain provider inference.' },
@@ -138,10 +142,11 @@ console.log((await run.response).text);
 
 ## 网关 Profile 助手
 
-Node 路由需要向浏览器的 `kind: 'gateway'` 客户端提供类似原生网关端点的接口时，可使用网关 profile 助手。这些函数负责解码 `model`、`prompt`、`messages`、`input` 字段及 snake_case 风格生成选项，然后构造 JSON 或 SSE 响应。路由可基于解码后的请求，自由选择向提供商、本地端点或独立网关发起执行。
+Node 路由需要向浏览器网关客户端提供类似原生网关端点的接口时，可使用网关 profile 助手。这些函数负责解码 `model`、`prompt`、`messages`、`input` 字段及 snake_case 风格生成选项，然后构造 JSON 或 SSE 响应。路由可基于解码后的请求，自由选择向提供商、本地端点或独立网关发起执行。
 
 ```ts
 import {
+  EndpointDescriptor,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -161,12 +166,11 @@ export async function handleQuery(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('provider', {
-      kind: 'provider',
+    const endpoint = await client.add('provider', EndpointDescriptor.provider({
       provider: 'openai',
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),
-    });
+    }));
     const run = client.query({ ...decoded.request, endpoint });
     return decoded.stream
       ? gatewayTextStreamResponse(run)

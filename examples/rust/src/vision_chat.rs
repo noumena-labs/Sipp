@@ -17,9 +17,12 @@ fn main() -> support::ExampleResult<()> {
         let image = fs::read(args.image_path)?;
         set_llama_log_quiet(true);
 
-        let mut client = SippClient::new();
-        let mut descriptor =
-            LocalDescriptor::files_with_projector([args.model_path], args.projector_path);
+        let mut client = SippClient::new()?;
+        let model = client
+            .models()
+            .install_files_with_projector([args.model_path], args.projector_path)
+            .await?;
+        let mut descriptor = LocalDescriptor::new(model.id);
         descriptor.config = runtime_config(false);
         client.add("default", descriptor).await?;
 

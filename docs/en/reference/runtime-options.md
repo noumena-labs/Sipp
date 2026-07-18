@@ -9,8 +9,9 @@ which boundary receives each field.
 
 | Layer | Browser package | Node.js package | Purpose |
 | --- | --- | --- | --- |
-| Client options | `new SippClient(options)` | Environment and process setup | Browser assets, workers, browser cache, and backend selection. |
-| Local endpoint load options | `client.add(..., { kind: 'local', options })` | `client.add(..., { kind: 'local', config })` | Model source, backend preference, progress, and native runtime config. |
+| Client options | `new SippClient(options)` | `new SippClient(options)` | Model storage plus browser assets, workers, cache policy, and native backend setup. |
+| Model installation | `client.models.installFiles/installUrls` | `client.models.installFiles/installUrls` | Files or URLs, optional projector, progress, and cancellation. |
+| Local endpoint load options | `EndpointDescriptor.local(model.id, options)` | `EndpointDescriptor.local(model.id, { config })` | Backend preference and native runtime config. |
 | Text request options | `client.query(prompt, options)` | `client.query({ options })` | Output length, sampling shortcuts, streaming, cancellation, and stop strings. |
 | Local request options | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | Local-only prompt state, grammars, images, and embedding normalization. |
 | Gateway extensions | `endpointOptions` | `endpointOptions` | Extra fields consumed by gateway endpoint implementations. |
@@ -26,6 +27,7 @@ and browser storage. They do not select a model by themselves.
 
 | Option | Use |
 | --- | --- |
+| `storageRoot` | Select the OPFS directory for the client model store. |
 | `executionMode` | `auto` uses a worker when available. `worker` forces worker transport. `main-thread` is useful for debugging or constrained hosts. |
 | `wasmThreading` | `pthread` loads the bundled pthread runtime. `single-thread` is only valid with explicit custom `moduleUrl` and `wasmUrl` assets. |
 | `moduleUrl`, `wasmUrl` | Override the selected runtime asset URLs. Provide both together. |
@@ -47,35 +49,37 @@ const client = new SippClient({
 
 ## Local Endpoint Options
 
-Browser local endpoints use `source` plus optional load options:
+Browser local endpoint factories accept optional load options:
 
 ```ts
-const endpoint = await client.add('browser-local', {
-  kind: 'local',
-  source: {
-    kind: 'remote',
-    modelUrls: ['https://models.example.test/model.gguf'],
-  },
-  options: {
+const model = await client.models.installUrls([
+  'https://models.example.test/model.gguf',
+]);
+const endpoint = await client.add(
+  'browser-local',
+  EndpointDescriptor.local(model.id, {
     backend: 'webgpu',
     runtime: {
       context: { n_ctx: 2048 },
     },
-  },
-});
+  })
+);
 ```
 
-Node.js local endpoints use an explicit source, storage root, and runtime config:
+Node.js clients own storage configuration; local endpoint factories accept
+runtime configuration:
 
 ```ts
-const endpoint = await client.add('node-local', {
-  kind: 'local',
-  source: { kind: 'local', modelPaths: ['/models/model.gguf'] },
-  storageRoot: '/models/.sipp',
-  config: {
-    context: { n_ctx: 2048, n_threads: 8, n_threads_batch: 8 },
-  },
-});
+const client = new SippClient({ storageRoot: '/models/.sipp' });
+const model = await client.models.installFiles(['/models/model.gguf']);
+const endpoint = await client.add(
+  'node-local',
+  EndpointDescriptor.local(model.id, {
+    config: {
+      context: { n_ctx: 2048, n_threads: 8, n_threads_batch: 8 },
+    },
+  })
+);
 ```
 
 Browser `backend` accepts `auto`, `cpu`, or `webgpu`. Native package backend

@@ -53,15 +53,16 @@ def runtime_config(*, embeddings: bool) -> NativeRuntimeConfig:
 
 
 def main() -> None:
-    model, target, input_text = read_gateway_args(
+    model_path, target, input_text = read_gateway_args(
         "gateway_embed", "SippClient gateway embedding example input."
     )
     set_llama_log_quiet(True)
 
     client = SippClient()
+    model = client.models.install_files([model_path])
     local_endpoint = client.add(
         "local",
-        EndpointDescriptor.files([model], config=runtime_config(embeddings=True)),
+        EndpointDescriptor.local(model.id, config=runtime_config(embeddings=True)),
     )
     gateway_endpoint = client.add(
         "gateway",

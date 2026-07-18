@@ -19,7 +19,8 @@ import { RemoteAcquisitionHost } from './remote-acquisition-host.js';
 import { ModelRegistryStore } from './model-registry-store.js';
 import type {
   RustLifecycleBridge,
-  RustLifecycleLoadSource,
+  RustLifecycleInstallSource,
+  RustLifecycleInstallValue,
   RustLifecyclePrepareLoadValue,
   RustRemoteCommandValue,
 } from '../wasm/wasm-bridge.js';
@@ -42,9 +43,10 @@ import {
   type ModelEntry,
   type ModelDetectionResult,
   type ModelInfo,
+  type ModelInstallOptions,
+  type ModelInstallSource,
   type ModelLifecycleService,
   type ModelLoadOptions,
-  type ModelSource,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
   type QueryObservation,
@@ -307,12 +309,24 @@ export class ModelService implements ModelLifecycleService {
     };
   }
 
-  public async load(source: ModelSource, options: ModelLoadOptions = {}): Promise<ModelInfo> {
+  public async install(
+    source: ModelInstallSource,
+    options: ModelInstallOptions = {}
+  ): Promise<ModelInfo> {
+    return this.withLifecycleLock(async () => {
+      if (options.signal?.aborted) {
+        throw new DOMException('Model install aborted.', 'AbortError');
+      }
+      return await this.installWithRustLifecycle(source, options);
+    });
+  }
+
+  public async load(modelId: string, options: ModelLoadOptions = {}): Promise<ModelInfo> {
     return this.withLifecycleLock(async () => {
       if (options.signal?.aborted) {
         throw new DOMException('Model load aborted.', 'AbortError');
       }
-      return await this.loadWithRustLifecycle(source, options);
+      return await this.loadWithRustLifecycle(modelId, options);
     });
   }
 
@@ -320,13 +334,7 @@ export class ModelService implements ModelLifecycleService {
     await this.withLifecycleLock(async () => {
       const manifest = await this.registry.read();
       const rust = await this.getRustLifecycle(manifest);
-      const wasCurrent = this.currentLoaded?.id === id;
       const removed = rust.remove(id);
-      if (wasCurrent) {
-        this.runtime.close();
-        this.currentLoaded = null;
-        this.currentSnapshot = null;
-      }
       await this.replaceManifest(removed.manifest);
       for (const asset of removed.orphanedAssets) {
         await this.assetStore.delete(asset);
@@ -647,8 +655,76 @@ export class ModelService implements ModelLifecycleService {
     this.observability.markClosed();
   }
 
+  private async installWithRustLifecycle(
+    source: ModelInstallSource,
+    options: ModelInstallOptions
+  ): Promise<ModelInfo> {
+    const installOptions: ModelInstallOptions = {
+      ...options,
+      onProgress: (progress) => {
+        options.onProgress?.(progress);
+        this.emitEngineEvent({
+          type: 'load-progress',
+          loadedBytes: progress.loadedBytes,
+          totalBytes: progress.totalBytes,
+          assetName: progress.assetName,
+        });
+      },
+    };
+    const manifest = await this.registry.read();
+    const rustPromise = this.getRustLifecycle(manifest);
+    const remoteHost = source.kind === 'remote'
+      ? new RemoteAcquisitionHost(
+        this.assetStore,
+        this.runtime,
+        manifest,
+        async (assetId, file, signal) => {
+          const result = await this.assetClassifier.classify(assetId, file, signal);
+          return {
+            assetId: result.assetId,
+            name: result.name,
+            inspection: result.inspection,
+          };
+        },
+        installOptions
+      )
+      : null;
+    let rust: RustLifecycleBridge | null = null;
+    let remoteAcquisitionId: string | null = null;
+    let remoteManifestCommitted = false;
+    try {
+      rust = await rustPromise;
+      const installed = source.kind === 'remote'
+        ? await this.acquireRemote(
+          rust,
+          remoteHost as RemoteAcquisitionHost,
+          source,
+          (acquisitionId) => {
+            remoteAcquisitionId = acquisitionId;
+          }
+        )
+        : rust.install(await this.buildRustInstallSource(source, manifest, installOptions));
+      remoteAcquisitionId = null;
+      await this.replaceManifest(installed.manifest);
+      if (remoteHost != null) {
+        remoteManifestCommitted = true;
+        await remoteHost.commitJournal();
+      }
+      this.ingestRustEvents(installed.events);
+      return installed.model;
+    } catch (error) {
+      if (remoteAcquisitionId != null && rust != null && remoteHost != null) {
+        await this.cancelRemoteAcquisition(rust, remoteHost, remoteAcquisitionId);
+      }
+      if (remoteHost != null && !remoteManifestCommitted) {
+        await remoteHost.cleanupUncommittedJournal(manifest);
+      }
+      throw error;
+    }
+  }
+
   private async loadWithRustLifecycle(
-    source: ModelSource,
+    modelId: string,
     options: ModelLoadOptions
   ): Promise<ModelInfo> {
     const loadOptions: ModelLoadOptions = {
@@ -673,24 +749,6 @@ export class ModelService implements ModelLifecycleService {
     );
     let prepared: RustLifecyclePrepareLoadValue | null = null;
     let rust: RustLifecycleBridge | null = null;
-    let remoteManifestCommitted = false;
-    let remoteHost: RemoteAcquisitionHost | null = source.kind === 'remote'
-      ? new RemoteAcquisitionHost(
-        this.assetStore,
-        this.runtime,
-        manifest,
-        async (assetId, file, signal) => {
-          const result = await this.assetClassifier.classify(assetId, file, signal);
-          return {
-            assetId: result.assetId,
-            name: result.name,
-            inspection: result.inspection,
-          };
-        },
-        loadOptions
-      )
-      : null;
-    let remoteAcquisitionId: string | null = null;
     try {
       const [resolvedRust, resolvedBackend] = await Promise.all([rustPromise, backendPromise]);
       rust = resolvedRust;
@@ -703,33 +761,15 @@ export class ModelService implements ModelLifecycleService {
         runtime: runtimeConfig,
         observability: observabilityMode,
       } as const;
-      if (source.kind === 'remote') {
-        const acquired = await this.acquireRemote(
-          rust,
-          remoteHost as RemoteAcquisitionHost,
-          source,
-          rustOptions,
-          (acquisitionId) => {
-            remoteAcquisitionId = acquisitionId;
-          }
-        );
-        prepared = acquired;
-        remoteAcquisitionId = null;
-      } else {
-        const rustSource = await this.buildRustLoadSource(source, manifest, loadOptions);
-        prepared = rust.prepareLoad(rustSource, rustOptions);
-      }
+      prepared = rust.prepareLoad({ modelId }, rustOptions);
       await this.replaceManifest(prepared.manifest);
-      if (remoteHost != null) {
-        remoteManifestCommitted = true;
-        await remoteHost.commitJournal();
-      }
       this.ingestRustEvents(prepared.events);
 
-      if (prepared.model.status === 'needs_projector') {
-        this.currentLoaded = null;
-        this.currentSnapshot = null;
-        return prepared.model;
+      if (prepared.model.status !== 'ready') {
+        throw new QueryError(
+          'MODEL_NOT_READY',
+          `Model "${prepared.model.id}" is not ready to load.`
+        );
       }
 
       const entry = prepared.manifest.models[prepared.model.id];
@@ -802,12 +842,6 @@ export class ModelService implements ModelLifecycleService {
         this.observability.ingest({ type: 'error', snapshot });
         this.ingestRustEvents(rust.drainEvents());
       }
-      if (remoteAcquisitionId != null && rust != null && remoteHost != null) {
-        await this.cancelRemoteAcquisition(rust, remoteHost, remoteAcquisitionId);
-      }
-      if (remoteHost != null && !remoteManifestCommitted) {
-        await remoteHost.cleanupUncommittedJournal(manifest);
-      }
       throw error;
     }
   }
@@ -815,15 +849,13 @@ export class ModelService implements ModelLifecycleService {
   private async acquireRemote(
     rust: RustLifecycleBridge,
     host: RemoteAcquisitionHost,
-    source: Extract<ModelSource, { kind: 'remote' }>,
-    options: Parameters<RustLifecycleBridge['prepareLoad']>[1],
+    source: Extract<ModelInstallSource, { kind: 'remote' }>,
     setAcquisitionId: (acquisitionId: string | null) => void
-  ): Promise<RustLifecyclePrepareLoadValue> {
+  ): Promise<RustLifecycleInstallValue> {
     let response = rust.remoteAcquisition({
       command: 'begin',
       modelUrls: source.modelUrls,
       ...(source.projectorUrl == null ? {} : { projectorUrl: source.projectorUrl }),
-      options,
     });
     while (response.kind === 'action') {
       setAcquisitionId(response.action.acquisitionId);
@@ -842,7 +874,7 @@ export class ModelService implements ModelLifecycleService {
     if (response.kind === 'failed') {
       throw queryErrorFromLifecycleError(response.error, 'Remote acquisition failed.');
     }
-    return response.prepared;
+    return response.installed;
   }
 
   private async cancelRemoteAcquisition(
@@ -863,17 +895,11 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  private async buildRustLoadSource(
-    source: Exclude<ModelSource, { kind: 'remote' }>,
+  private async buildRustInstallSource(
+    source: Extract<ModelInstallSource, { kind: 'local' }>,
     manifest: RegistryManifest,
-    options: ModelLoadOptions
-  ): Promise<RustLifecycleLoadSource> {
-    if (source.kind === 'installed') {
-      return {
-        kind: 'installed',
-        id: source.modelId,
-      };
-    }
+    options: ModelInstallOptions
+  ): Promise<RustLifecycleInstallSource> {
     const installed = await this.installLocalSource(source, manifest, options);
     const classified = await this.classifyAssets(installed.assets, options.signal);
     const sourceProjectorAssetId = this.resolveSourceProjectorAssetId(
@@ -881,7 +907,6 @@ export class ModelService implements ModelLifecycleService {
       installed.explicitProjectorAssetId
     );
     return {
-      kind: 'local',
       assets: installed.assets.map((asset) => asset.record),
       classified: classified.map((file) => ({
         assetId: file.assetId,
@@ -1016,9 +1041,9 @@ export class ModelService implements ModelLifecycleService {
   }
 
   private async installLocalSource(
-    source: Extract<ModelSource, { kind: 'local' }>,
+    source: Extract<ModelInstallSource, { kind: 'local' }>,
     manifest: RegistryManifest,
-    options: ModelLoadOptions
+    options: ModelInstallOptions
   ): Promise<SourceInstallResult> {
     if (source.modelFiles.length === 0 || !source.modelFiles.every(isFile)) {
       throw new QueryError(
@@ -1043,7 +1068,7 @@ export class ModelService implements ModelLifecycleService {
   private async installLocalModelAssets(
     file: File,
     manifest: RegistryManifest,
-    options: ModelLoadOptions
+    options: ModelInstallOptions
   ): Promise<InstalledAsset[]> {
     const existingSplit = this.findLocalSplitAssets(manifest, file);
     if (existingSplit != null) {
@@ -1090,7 +1115,7 @@ export class ModelService implements ModelLifecycleService {
     file: File,
     kind: AssetRecord['kind'],
     manifest: RegistryManifest,
-    options: ModelLoadOptions
+    options: ModelInstallOptions
   ): Promise<InstalledAsset> {
     const record = await this.assetStore.installFile({
       kind,

@@ -5,7 +5,7 @@ import {
   QueryError,
   type AssetRecord,
   type ClassifiedAsset,
-  type ModelLoadOptions,
+  type ModelInstallOptions,
   type RegistryManifest,
 } from './types.js';
 import type {
@@ -36,7 +36,7 @@ export class RemoteAcquisitionHost {
     private readonly runtime: GgufSplitRuntime,
     private readonly manifest: RegistryManifest,
     private readonly classify: ClassifyAsset,
-    private readonly options: ModelLoadOptions
+    private readonly options: ModelInstallOptions
   ) {}
 
   public async execute(action: RustRemoteAction): Promise<RemoteHostResult> {

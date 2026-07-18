@@ -85,15 +85,16 @@ def collect_streamed_text(label: str, run: SippTextRun) -> dict[str, object]:
 
 
 def main() -> None:
-    model, target, prompt = read_gateway_args(
+    model_path, target, prompt = read_gateway_args(
         "gateway_chat", "Explain gateway-backed inference in one sentence."
     )
     set_llama_log_quiet(True)
 
     client = SippClient()
+    model = client.models.install_files([model_path])
     local_endpoint = client.add(
         "local",
-        EndpointDescriptor.files([model], config=runtime_config(embeddings=False)),
+        EndpointDescriptor.local(model.id, config=runtime_config(embeddings=False)),
     )
     gateway_endpoint = client.add(
         "gateway",

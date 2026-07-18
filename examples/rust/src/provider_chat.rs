@@ -25,7 +25,7 @@ fn main() -> support::ExampleResult<()> {
         // Direct providers belong in trusted Rust processes. Browser code
         // should call a gateway or application route instead of holding
         // provider credentials.
-        let mut client = SippClient::new();
+        let mut client = SippClient::new()?;
         let endpoint = client.add("provider", provider_descriptor()?).await?;
         let response = client
             .chat(SippChatRequest {

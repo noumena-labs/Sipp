@@ -232,6 +232,27 @@ pub unsafe extern "C" fn CE_ModelServicePrepareLoad(
     ))
 }
 
+/// Installs a browser model from serialized managed assets.
+///
+/// # Safety
+///
+/// `source_json` must be null or point to a valid NUL-terminated string for
+/// the duration of this call. The returned string must be freed with
+/// [`CE_FreeString`].
+#[no_mangle]
+pub unsafe extern "C" fn CE_ModelServiceInstall(
+    service: usize,
+    source_json: *const c_char,
+) -> *mut c_char {
+    let Some(source_json) = required_cstr(source_json) else {
+        return owned_json_error("INVALID_MODEL_SOURCE", "install source JSON is missing");
+    };
+    owned_string(crate::lifecycle::model_service_install_json(
+        service,
+        &source_json,
+    ))
+}
+
 /// Advances the browser remote-acquisition protocol through an owned JSON string.
 ///
 /// # Safety

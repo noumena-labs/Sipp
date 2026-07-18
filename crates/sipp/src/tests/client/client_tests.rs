@@ -11,14 +11,14 @@ use futures::executor::block_on;
 
 use crate::client::{
     EndpointRef, GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewayTimeoutPolicy,
-    LocalDescriptor, SippClient, SippError,
+    SippClient, SippError,
 };
 use crate::lifecycle::test_support::TempDir;
 use crate::lifecycle::ModelError;
 
 #[test]
 fn registers_gateway_endpoint_through_add() {
-    let mut client = SippClient::new();
+    let mut client = SippClient::new().expect("client");
     let endpoint = block_on(client.add("gateway", gateway_descriptor())).expect("gateway endpoint");
 
     assert_eq!(
@@ -32,7 +32,7 @@ fn registers_gateway_endpoint_through_add() {
 
 #[test]
 fn replacing_an_id_keeps_single_registered_endpoint() {
-    let mut client = SippClient::new();
+    let mut client = SippClient::new().expect("client");
     let first = block_on(client.add("service", gateway_descriptor())).expect("first endpoint");
     let second =
         block_on(client.add("service", gateway_descriptor())).expect("replacement endpoint");
@@ -54,7 +54,7 @@ fn replacing_an_id_keeps_single_registered_endpoint() {
 
 #[test]
 fn gateway_endpoints_are_never_selected_implicitly() {
-    let mut client = SippClient::new();
+    let mut client = SippClient::new().expect("client");
     block_on(client.add("gateway", gateway_descriptor())).expect("gateway endpoint");
 
     assert!(matches!(
@@ -63,8 +63,8 @@ fn gateway_endpoints_are_never_selected_implicitly() {
     ));
 }
 
-#[test]
-fn remote_add_uses_the_client_owned_io_runtime() {
+#[tokio::test]
+async fn remote_install_uses_the_client_model_store() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     let address = listener.local_addr().expect("test server address");
     let server = thread::spawn(move || {
@@ -80,20 +80,21 @@ fn remote_add_uses_the_client_owned_io_runtime() {
         }
     });
     let root = TempDir::new("client", "remote-owned-runtime");
-    let mut client = SippClient::new();
-    let mut descriptor = LocalDescriptor::urls([format!("http://{address}/model.gguf")]);
-    descriptor.storage_root = root.path.clone();
-    let error =
-        block_on(client.add("remote", descriptor)).expect_err("503 metadata response must fail");
+    let client = SippClient::with_storage_root(root.path.clone()).expect("client");
+    let error = client
+        .models()
+        .install_urls([format!("http://{address}/model.gguf")])
+        .await
+        .expect_err("503 metadata response must fail");
     server.join().expect("test server");
 
     assert!(matches!(
         error,
-        SippError::ModelLifecycle(ModelError::RemoteMetadataUnavailable {
+        ModelError::RemoteMetadataUnavailable {
             status: Some(503),
             retry_after_ms: Some(0),
             ..
-        })
+        }
     ));
 }
 

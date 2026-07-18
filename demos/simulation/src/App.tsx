@@ -3,7 +3,8 @@
 // App.tsx
 //
 // - Top-level simulation app. Wires:
-//     - a single shared SippClient, loaded from the configured .gguf URL
+//     - a single shared SippClient with a model installed from the configured
+//       GGUF URL
 //     - a DirectorRuntime from `director.json`
 //     - four CharacterRuntime-backed chooser adapters
 //     - an app-local SimulationRuntime that owns the world loop
@@ -604,16 +605,18 @@ export default function App() {
         nextClient = new SippClient();
 
         setStatus('Downloading model');
+        const onProgress = (progress: ModelLoadProgress) => {
+          if (progress.phase === 'download') {
+            setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
+          } else if (progress.phase === 'load') {
+            setStatus('Loading into memory');
+          }
+        };
+        const model = await nextClient.models.installUrls([url], { onProgress });
         await nextClient.add(
           'local',
-          EndpointDescriptor.urls([url], {
-            onProgress: (progress: ModelLoadProgress) => {
-              if (progress.phase === 'download') {
-                setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
-              } else if (progress.phase === 'load') {
-                setStatus('Loading into memory');
-              }
-            },
+          EndpointDescriptor.local(model.id, {
+            onProgress,
             observability: 'runtime',
             runtime: SIMULATION_RUNTIME,
           })

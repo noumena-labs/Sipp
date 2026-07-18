@@ -8,13 +8,14 @@ Next.js App Router 默认将页面和布局视为服务端组件。只有模块�
 
 通过路由处理器可有效防止提供商凭证泄露到客户端。引入 `@sipphq/sipp-server` 的路由文件，请确保声明 `export const runtime = 'nodejs';`。
 
-要把某个路由作为浏览器的 `kind: 'gateway'` 端点使用，该路由必须兼容网关的 Profile 格式。可利用 `@sipphq/sipp-server` 提供的网关 Profile 助手解析请求体，返回标准 JSON 或 SSE 响应。路由内部可继续向直接提供商端点发起请求。
+要把某个路由作为浏览器网关端点使用，该路由必须兼容网关的 Profile 格式。可利用 `@sipphq/sipp-server` 提供的网关 Profile 助手解析请求体，返回标准 JSON 或 SSE 响应。路由内部可继续向直接提供商端点发起请求。
 
 代码示例中的 `OPENAI_API_KEY="<mock-openai-key>"` 仅为演示。实际部署时，请务必从服务器环境变量或密钥管理服务中读取密钥。
 
 ```ts
 // app/api/sipp/query/route.ts
 import {
+  EndpointDescriptor,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -36,12 +37,11 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('provider', {
-      kind: 'provider',
+    const endpoint = await client.add('provider', EndpointDescriptor.provider({
       provider: 'openai',
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),
-    });
+    }));
     const run = client.query({
       ...decoded.request,
       endpoint,
@@ -59,7 +59,7 @@ export async function POST(request: Request): Promise<Response> {
 }
 ```
 
-浏览器客户端通过 `client.add({ kind: 'gateway' })` 调用该路由时，不要让路由返回非标准的自定义 JSON 结构（如 `{ text }`）。对浏览器而言，该路由必须表现得像一个正规的 HTTP 网关端点，即使它由 Next.js 应用自行实现。服务端可灵活决定将请求转发给提供商、本地端点或独立网关。
+浏览器客户端通过 `EndpointDescriptor.gateway(...)` 注册并调用该路由时，不要让路由返回非标准的自定义 JSON 结构（如 `{ text }`）。对浏览器而言，该路由必须表现得像一个正规的 HTTP 网关端点，即使它由 Next.js 应用自行实现。服务端可灵活决定将请求转发给提供商、本地端点或独立网关。
 
 服务吞吐量较高时，将端点配置逻辑抽离到纯服务端共享模块，在请求生命周期内复用客户端实例。绝不要在客户端组件中引入此模块。
 
@@ -69,7 +69,7 @@ export async function POST(request: Request): Promise<Response> {
 
 ```ts
 // app/api/sipp/stream/route.ts
-import { SippClient } from '@sipphq/sipp-server';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -90,12 +90,11 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const client = new SippClient();
-  const endpoint = await client.add('provider', {
-    kind: 'provider',
+  const endpoint = await client.add('provider', EndpointDescriptor.provider({
     provider: 'openai',
     model: requiredEnv('OPENAI_MODEL'),
     apiKey: requiredEnv('OPENAI_API_KEY'),
-  });
+  }));
   const run = client.query({
     endpoint,
     prompt,
@@ -135,7 +134,7 @@ export async function POST(request: Request): Promise<Response> {
 'use client';
 
 import { useState } from 'react';
-import { SippClient } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 export function LocalChat(): JSX.Element {
   const [text, setText] = useState('');
@@ -143,13 +142,13 @@ export function LocalChat(): JSX.Element {
   async function run(prompt: string): Promise<void> {
     const client = new SippClient();
     try {
-      const endpoint = await client.add('default', {
-        kind: 'local',
-        source: {
-          kind: 'remote',
-          modelUrls: [new URL('/models/model.gguf', window.location.href).href],
-        },
-      });
+      const model = await client.models.installUrls([
+        new URL('/models/model.gguf', window.location.href).href,
+      ]);
+      const endpoint = await client.add(
+        'default',
+        EndpointDescriptor.local(model.id)
+      );
       const response = await client.query(prompt, {
         endpoint,
         maxTokens: 64,
@@ -179,7 +178,7 @@ export function LocalChat(): JSX.Element {
 'use client';
 
 import { useState } from 'react';
-import { SippClient, type EndpointRef } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient, type EndpointRef } from '@sipphq/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
@@ -190,22 +189,24 @@ export function HybridChat(): JSX.Element {
   async function run(prompt: string): Promise<void> {
     const client = new SippClient();
     try {
-      const localEndpoint = await client.add('browser-local', {
-        kind: 'local',
-        source: {
-          kind: 'remote',
-          modelUrls: [new URL('/models/model.gguf', window.location.href).href],
-        },
-      });
-      const providerRouteEndpoint = await client.add('app-route', {
-        kind: 'gateway',
-        target: 'gpt-5-mini',
-        baseUrl: window.location.origin,
-        routes: { query: '/api/sipp/query' },
-        authentication: { kind: 'none' },
-      });
+      const model = await client.models.installUrls([
+        new URL('/models/model.gguf', window.location.href).href,
+      ]);
+      const localEndpoint = await client.add(
+        'browser-local',
+        EndpointDescriptor.local(model.id)
+      );
+      const providerRouteEndpoint = await client.add(
+        'app-route',
+        EndpointDescriptor.gateway({
+          target: 'gpt-5-mini',
+          baseUrl: window.location.origin,
+          routes: { query: '/api/sipp/query' },
+          authentication: { kind: 'none' },
+        })
+      );
       const endpoint: EndpointRef =
-          mode === 'local' ? localEndpoint : providerRouteEndpoint;
+        mode === 'local' ? localEndpoint : providerRouteEndpoint;
       const response = await client.query(prompt, {
         endpoint,
         maxTokens: 64,
@@ -240,8 +241,9 @@ export function HybridChat(): JSX.Element {
 需要跨多个应用统一管理目标策略、共享凭证、托管本地模型、实施限流或采集监控指标时，部署独立的 Sipp 网关。浏览器直接调用独立网关时，切勿将长效 Token 硬编码到客户端包中。最佳做法是通过 Next 路由向客户端颁发短期 Token，在客户端端点配置的 `valueProvider` 中获取并使用：
 
 ```ts
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
+import { EndpointDescriptor } from '@sipphq/sipp';
+
+const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target: 'local',
   baseUrl: 'https://gateway.example.com',
   authentication: {
@@ -251,7 +253,7 @@ const endpoint = await client.add('gateway', {
       return await response.text();
     },
   },
-});
+}));
 ```
 
 ## 参考链接

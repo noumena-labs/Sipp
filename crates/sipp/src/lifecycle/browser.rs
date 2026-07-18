@@ -264,18 +264,19 @@ pub struct BrowserLoadOptions {
     pub observability: BrowserObservabilityMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserLoadSource {
+    pub model_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum BrowserLoadSource {
-    Installed {
-        id: String,
-    },
-    Local {
-        assets: Vec<BrowserAssetRecord>,
-        classified: Vec<ClassifiedAsset>,
-        #[serde(default)]
-        explicit_projector_asset_id: Option<String>,
-    },
+#[serde(rename_all = "camelCase")]
+pub struct BrowserInstallSource {
+    pub assets: Vec<BrowserAssetRecord>,
+    pub classified: Vec<ClassifiedAsset>,
+    #[serde(default)]
+    pub explicit_projector_asset_id: Option<String>,
 }
 
 /// Browser host command for Rust-owned remote acquisition.
@@ -289,7 +290,6 @@ pub enum BrowserRemoteCommand {
     Begin {
         model_urls: Vec<String>,
         projector_url: Option<String>,
-        options: BrowserLoadOptions,
     },
     Advance {
         event: Value,
@@ -314,8 +314,8 @@ pub enum BrowserRemoteCommandResponse {
     Action {
         action: Value,
     },
-    Prepared {
-        prepared: BrowserPrepareLoadResponse,
+    Installed {
+        installed: BrowserInstallResponse,
     },
     Cancelled {
         snapshot: BrowserObservabilitySnapshot,
@@ -347,6 +347,16 @@ pub struct BrowserPrepareLoadResponse {
     pub assets: Vec<BrowserPlannedAsset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projector: Option<BrowserPlannedAsset>,
+    pub manifest: BrowserRegistryManifest,
+    pub snapshot: BrowserObservabilitySnapshot,
+    #[serde(default)]
+    pub events: Vec<BrowserObservabilityEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserInstallResponse {
+    pub model: BrowserModelInfo,
     pub manifest: BrowserRegistryManifest,
     pub snapshot: BrowserObservabilitySnapshot,
     #[serde(default)]
@@ -429,7 +439,6 @@ struct PendingLoad {
 #[derive(Debug)]
 struct PendingRemoteAcquisition {
     acquisition: RemoteAcquisition,
-    options: BrowserLoadOptions,
     assets: BTreeMap<String, BrowserAssetRecord>,
     classified: BTreeMap<String, ClassifiedAsset>,
 }
@@ -503,61 +512,14 @@ impl BrowserLifecycleService {
     ) -> Result<BrowserPrepareLoadResponse, ModelError> {
         self.pending_remote = None;
         validate_manifest(&self.manifest)?;
-        let entry = match source {
-            BrowserLoadSource::Installed { id } => {
-                let entry = self
-                    .manifest
-                    .models
-                    .get(&id)
-                    .cloned()
-                    .ok_or_else(|| model_not_found(&id))?;
-                let base_plan = self.derive_base_plan_for_entry(&entry)?;
-                self.resolve_entry_for_loading(entry, &base_plan)?
-            }
-            BrowserLoadSource::Local {
-                assets,
-                classified,
-                explicit_projector_asset_id,
-            } => {
-                self.upsert_assets(assets, &classified)?;
-                let source_projector = resolve_source_projector_asset_id(
-                    &classified,
-                    explicit_projector_asset_id.as_deref(),
-                );
-                let base_classified: Vec<_> = classified
-                    .iter()
-                    .filter(|asset| Some(asset.asset_id.as_str()) != source_projector.as_deref())
-                    .cloned()
-                    .collect();
-                let base_plan = PairingResolver::resolve(&base_classified)?;
-                let mut entry = self.upsert_base_model_entry(&base_plan)?;
-
-                if let Some(projector_id) = source_projector {
-                    let previous = entry.clone();
-                    match PairingResolver::resolve_explicit(&classified, &projector_id) {
-                        Ok(plan) => {
-                            let projector = plan
-                                .projector_asset_id
-                                .clone()
-                                .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_MISSING_ID))?;
-                            entry = self.set_resolved_projector(
-                                &entry.id,
-                                &projector,
-                                &plan.compatible_vision_projector_types,
-                            )?;
-                        }
-                        Err(error) => {
-                            self.restore_entry(previous)?;
-                            return Err(error);
-                        }
-                    }
-                } else {
-                    entry = self.resolve_entry_for_loading(entry, &base_plan)?;
-                }
-                validate_manifest(&self.manifest)?;
-                entry
-            }
-        };
+        let entry = self
+            .manifest
+            .models
+            .get(&source.model_id)
+            .cloned()
+            .ok_or_else(|| model_not_found(&source.model_id))?;
+        let base_plan = self.derive_base_plan_for_entry(&entry)?;
+        let entry = self.resolve_entry_for_loading(entry, &base_plan)?;
 
         let backend_plan = browser_backend_plan(&options)?;
         let runtime_config = serde_json::to_value(&backend_plan.config)?;
@@ -605,6 +567,60 @@ impl BrowserLifecycleService {
         })
     }
 
+    pub fn install(
+        &mut self,
+        source: BrowserInstallSource,
+    ) -> Result<BrowserInstallResponse, ModelError> {
+        let previous = self.manifest.clone();
+        let result = self.install_inner(source);
+        if result.is_err() {
+            self.manifest = previous;
+        }
+        result
+    }
+
+    fn install_inner(
+        &mut self,
+        source: BrowserInstallSource,
+    ) -> Result<BrowserInstallResponse, ModelError> {
+        validate_manifest(&self.manifest)?;
+        self.upsert_assets(source.assets, &source.classified)?;
+        let source_projector = resolve_source_projector_asset_id(
+            &source.classified,
+            source.explicit_projector_asset_id.as_deref(),
+        );
+        let base_classified: Vec<_> = source
+            .classified
+            .iter()
+            .filter(|asset| Some(asset.asset_id.as_str()) != source_projector.as_deref())
+            .cloned()
+            .collect();
+        let base_plan = PairingResolver::resolve(&base_classified)?;
+        let mut entry = self.upsert_base_model_entry(&base_plan)?;
+        if let Some(projector_id) = source_projector {
+            let plan = PairingResolver::resolve_explicit(&source.classified, &projector_id)?;
+            let projector = plan
+                .projector_asset_id
+                .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_MISSING_ID))?;
+            entry = self.set_resolved_projector(
+                &entry.id,
+                &projector,
+                &plan.compatible_vision_projector_types,
+            )?;
+        } else {
+            entry = self.resolve_entry_for_loading(entry, &base_plan)?;
+        }
+        validate_manifest(&self.manifest)?;
+        let model = self.model_info_from_entry(&entry);
+        let response = self.response_context();
+        Ok(BrowserInstallResponse {
+            model,
+            manifest: response.manifest,
+            snapshot: response.snapshot,
+            events: response.events,
+        })
+    }
+
     pub fn remote_command(
         &mut self,
         command: BrowserRemoteCommand,
@@ -613,8 +629,7 @@ impl BrowserLifecycleService {
             BrowserRemoteCommand::Begin {
                 model_urls,
                 projector_url,
-                options,
-            } => self.begin_remote(model_urls, projector_url, options),
+            } => self.begin_remote(model_urls, projector_url),
             BrowserRemoteCommand::Advance {
                 event,
                 assets,
@@ -628,7 +643,6 @@ impl BrowserLifecycleService {
         &mut self,
         model_urls: Vec<String>,
         projector_url: Option<String>,
-        options: BrowserLoadOptions,
     ) -> Result<BrowserRemoteCommandResponse, ModelError> {
         if model_urls.is_empty() {
             return Err(invalid_source("remote model URLs must not be empty"));
@@ -653,7 +667,6 @@ impl BrowserLifecycleService {
         let acquisition = RemoteAcquisition::new(acquisition_id, requests)?;
         self.pending_remote = Some(PendingRemoteAcquisition {
             acquisition,
-            options,
             assets: BTreeMap::new(),
             classified: BTreeMap::new(),
         });
@@ -784,18 +797,13 @@ impl BrowserLifecycleService {
             .find(|member| member.role == RemoteAssetRole::Projector)
             .and_then(|member| member.asset_ids.first())
             .cloned();
-        let previous = self.manifest.clone();
-        match self.prepare_load(
-            BrowserLoadSource::Local {
-                assets,
-                classified,
-                explicit_projector_asset_id,
-            },
-            pending.options.clone(),
-        ) {
-            Ok(prepared) => Ok(BrowserRemoteCommandResponse::Prepared { prepared }),
+        match self.install(BrowserInstallSource {
+            assets,
+            classified,
+            explicit_projector_asset_id,
+        }) {
+            Ok(installed) => Ok(BrowserRemoteCommandResponse::Installed { installed }),
             Err(error) => {
-                self.manifest = previous;
                 let progress = pending.acquisition.fail_finalization(error);
                 self.pending_remote = Some(pending);
                 self.resolve_remote_progress(progress)
@@ -885,6 +893,13 @@ impl BrowserLifecycleService {
     }
 
     pub fn remove(&mut self, model_id: &str) -> Result<BrowserRemoveResponse, ModelError> {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|current| current.id == model_id)
+        {
+            return Err(ModelError::ModelInUse(model_id.to_string()));
+        }
         let removed = self
             .manifest
             .models
@@ -892,13 +907,6 @@ impl BrowserLifecycleService {
             .ok_or_else(|| model_not_found(model_id))?;
         self.decrement_existing_refs(&removed);
         let orphaned_assets = self.remove_orphaned_assets();
-        if self
-            .current
-            .as_ref()
-            .is_some_and(|current| current.id == model_id)
-        {
-            self.current = None;
-        }
         if contains_projector_asset(&orphaned_assets) {
             self.bump_projector_index_revision()?;
         }
@@ -1264,20 +1272,6 @@ impl BrowserLifecycleService {
         self.manifest.models.insert(id.to_string(), entry.clone());
         validate_manifest(&self.manifest)?;
         Ok(entry)
-    }
-
-    fn restore_entry(&mut self, snapshot: BrowserModelEntry) -> Result<(), ModelError> {
-        let existing = self
-            .manifest
-            .models
-            .get(&snapshot.id)
-            .cloned()
-            .ok_or_else(|| model_not_found(&snapshot.id))?;
-        let previous_refs = entry_asset_ids(&existing);
-        let next_refs = entry_asset_ids(&snapshot);
-        self.rebalance_refs(&previous_refs, &next_refs)?;
-        self.manifest.models.insert(snapshot.id.clone(), snapshot);
-        validate_manifest(&self.manifest)
     }
 
     fn planned_assets_for_entry(

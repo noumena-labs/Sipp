@@ -5,7 +5,6 @@
 
 use super::*;
 use serde_json::json;
-use sipp::DEFAULT_STORAGE_ROOT;
 
 #[test]
 fn endpoint_ref_maps_closed_builtin_kinds() {
@@ -107,16 +106,10 @@ fn gateway_descriptor_maps_through_add_shape() {
 }
 
 #[test]
-fn local_descriptor_maps_explicit_remote_source_and_storage_root() {
+fn local_descriptor_maps_managed_model_id() {
     let descriptor = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
         kind: "local".to_string(),
-        source: Some(ModelSource {
-            kind: "remote".to_string(),
-            model_urls: Some(vec!["https://example.test/model.gguf".to_string()]),
-            projector_url: Some("https://example.test/mmproj.gguf".to_string()),
-            ..ModelSource::default()
-        }),
-        storage_root: Some(".sipp-models".to_string()),
+        model_id: Some("model-a".to_string()),
         ..EndpointDescriptor::default()
     })
     .expect("local descriptor");
@@ -124,26 +117,20 @@ fn local_descriptor_maps_explicit_remote_source_and_storage_root() {
     let CoreEndpointDescriptor::Local(local) = descriptor else {
         panic!("expected local descriptor");
     };
-    assert_eq!(local.storage_root, PathBuf::from(".sipp-models"));
+    assert_eq!(local.model_id, "model-a");
 }
 
 #[test]
-fn local_descriptor_defaults_storage_root() {
-    let descriptor = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
+fn local_descriptor_requires_model_id() {
+    let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
         kind: "local".to_string(),
-        source: Some(ModelSource {
-            kind: "remote".to_string(),
-            model_urls: Some(vec!["https://example.test/model.gguf".to_string()]),
-            ..ModelSource::default()
-        }),
         ..EndpointDescriptor::default()
     })
-    .expect("local descriptor");
+    .expect_err("missing model id");
 
-    let CoreEndpointDescriptor::Local(local) = descriptor else {
-        panic!("expected local descriptor");
-    };
-    assert_eq!(local.storage_root, PathBuf::from(DEFAULT_STORAGE_ROOT));
+    assert!(error
+        .to_string()
+        .contains("local descriptor modelId is required"));
 }
 
 #[test]
@@ -162,19 +149,17 @@ fn provider_descriptor_rejects_unsupported_provider_name() {
 }
 
 #[test]
-fn local_endpoint_rejects_unknown_source_kind() {
+fn local_endpoint_rejects_provider_model() {
     let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
         kind: "local".to_string(),
-        source: Some(ModelSource {
-            kind: "installed".to_string(),
-            ..ModelSource::default()
-        }),
+        model_id: Some("model-a".to_string()),
+        model: Some("provider-model".to_string()),
         ..EndpointDescriptor::default()
     })
-    .expect_err("unknown source kind");
+    .expect_err("provider model on local endpoint");
     assert!(error
         .to_string()
-        .contains("model source kind must be local or remote"));
+        .contains("model is not valid for local endpoint descriptors"));
 }
 
 #[test]

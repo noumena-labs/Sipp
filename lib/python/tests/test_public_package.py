@@ -14,7 +14,11 @@ def _fake_native_module_source(observability: str) -> str:
     return f'''
 class CacheRuntimeConfig: pass
 class ChatMessage: pass
-class SippClient: pass
+class ManagedModel: pass
+class ModelStore: pass
+class SippClient:
+    add = object()
+    models = object()
 class SippEmbeddingRun: pass
 class SippTextOptions: pass
 class SippTextRun: pass
@@ -22,8 +26,7 @@ class SippTokenIterator: pass
 class ContextRuntimeConfig: pass
 class EndpointRef: pass
 class EndpointDescriptor:
-    files = object()
-    urls = object()
+    local = object()
     gateway = object()
     provider = object()
 class LocalEmbedOptions: pass
@@ -56,9 +59,10 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert callable(sipp.set_llama_log_quiet)
     assert sipp.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
     assert hasattr(sipp.SippClient, "add")
+    assert hasattr(sipp.SippClient, "remove")
+    assert hasattr(sipp.SippClient, "models")
     assert hasattr(sipp, "EndpointDescriptor")
-    assert hasattr(sipp.EndpointDescriptor, "files")
-    assert hasattr(sipp.EndpointDescriptor, "urls")
+    assert hasattr(sipp.EndpointDescriptor, "local")
     assert hasattr(sipp.EndpointDescriptor, "gateway")
     assert hasattr(sipp.EndpointDescriptor, "provider")
     assert not hasattr(sipp.EndpointDescriptor, "installed")
@@ -66,6 +70,10 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert not hasattr(sipp, "GatewayEndpointDescriptor")
     assert not hasattr(sipp, "ProviderEndpointDescriptor")
     assert not hasattr(sipp, "ModelSource")
+    assert hasattr(sipp.ModelStore, "install_files")
+    assert hasattr(sipp.ModelStore, "install_urls")
+    assert hasattr(sipp.ModelStore, "list")
+    assert hasattr(sipp.ModelStore, "remove")
     assert issubclass(sipp.ModelLifecycleError, Exception)
     assert sipp.SamplingRuntimeOverride is sipp.SamplingRuntimeConfig
 
@@ -107,12 +115,8 @@ def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(
         monkeypatch.chdir(tmp_path)
         host, port = server.server_address
         client = sipp.SippClient()
-        descriptor = sipp.EndpointDescriptor.urls(
-            [f"http://{host}:{port}/model.gguf"]
-        )
-
         with pytest.raises(sipp.ModelLifecycleError) as caught:
-            client.add("remote-model", descriptor)
+            client.models.install_urls([f"http://{host}:{port}/model.gguf"])
 
         assert caught.value.code == "REMOTE_METADATA_UNAVAILABLE"
         assert caught.value.status == 503

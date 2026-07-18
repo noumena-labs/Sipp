@@ -6,7 +6,7 @@ use crate::lifecycle::util::{
 };
 use crate::lifecycle::{ModelEntry, ModelError};
 
-use super::ModelService;
+use super::ModelStoreState;
 
 #[derive(Debug)]
 pub(super) struct LoadAssetPaths {
@@ -14,7 +14,7 @@ pub(super) struct LoadAssetPaths {
     pub(super) projector_path: Option<PathBuf>,
 }
 
-impl<B: StorageBackend> ModelService<B> {
+impl<B: StorageBackend> ModelStoreState<B> {
     pub(super) fn resolve_load_asset_paths(
         &self,
         entry: &ModelEntry,

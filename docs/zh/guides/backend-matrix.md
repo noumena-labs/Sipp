@@ -25,7 +25,7 @@ ggml 运算级别的兼容矩阵参考上游的 [llama.cpp GGML 运算表](https
 
 | 环境 | 支持的后端 | 选择方式 |
 | --- | --- | --- |
-| 浏览器 | `auto`, `cpu`, `webgpu` | `client.add(..., { kind: 'local', options: { backend: 'webgpu' } })` |
+| 浏览器 | `auto`, `cpu`, `webgpu` | `EndpointDescriptor.local(model.id, { backend: 'webgpu' })` |
 | Node.js | `cpu`, `vulkan`, `cuda`, `metal` | `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` |
 | Python | `cpu`, `vulkan`, `cuda`, `metal` | `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` |
 | CLI | `auto`, `cpu`, `cuda`, `metal`, `vulkan` | `sipp ... --backend <backend>` |
@@ -91,17 +91,16 @@ backend = "cpu"
 
 ```ts
 // 浏览器可以通过选项分别指定 WebGPU 和 CPU 终端
-await client.add('local-webgpu', {
-  kind: 'local',
-  model: './models/model.gguf',
-  options: { backend: 'webgpu' },
-});
+const model = await client.models.installUrls(['./models/model.gguf']);
+await client.add(
+  'local-webgpu',
+  EndpointDescriptor.local(model.id, { backend: 'webgpu' })
+);
 
-await client.add('local-cpu', {
-  kind: 'local',
-  model: './models/model.gguf',
-  options: { backend: 'cpu' },
-});
+await client.add(
+  'local-cpu',
+  EndpointDescriptor.local(model.id, { backend: 'cpu' })
+);
 ```
 
 Node.js 和 Python 示例：

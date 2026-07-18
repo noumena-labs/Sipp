@@ -173,16 +173,18 @@ export default function App() {
       const client = new SippClient();
 
       setStatus('Downloading and loading model?');
+      const onProgress = (progress: ModelLoadProgress) => {
+        if (progress.phase === 'download') {
+          setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);
+        } else if (progress.phase === 'load') {
+          setStatus('Loading into memory...');
+        }
+      };
+      const model = await client.models.installUrls([args.modelUrl], { onProgress });
       await client.add(
         'local',
-        EndpointDescriptor.urls([args.modelUrl], {
-          onProgress: (progress: ModelLoadProgress) => {
-            if (progress.phase === 'download') {
-              setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);
-            } else if (progress.phase === 'load') {
-              setStatus('Loading into memory...');
-            }
-          },
+        EndpointDescriptor.local(model.id, {
+          onProgress,
           runtime: AVATAR_RUNTIME,
         })
       );

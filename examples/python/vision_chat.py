@@ -64,21 +64,23 @@ def text_options() -> SippTextOptions:
 
 
 def main() -> None:
-    model, projector, image, prompt = read_vision_args("Describe this image in one sentence.")
+    model_path, projector_path, image, prompt = read_vision_args(
+        "Describe this image in one sentence."
+    )
     set_llama_log_quiet(True)
 
     client = SippClient()
+    model = client.models.install_files([model_path], projector_path=projector_path)
     client.add(
         "default",
-        EndpointDescriptor.files(
-            [model],
-            projector_path=projector,
+        EndpointDescriptor.local(
+            model.id,
             config=runtime_config(),
         ),
     )
 
-    # Multimodal chat uses the same chat API. The projector is part of the
-    # model source; image bytes are passed on the request.
+    # Multimodal chat uses the same chat API. The projector is installed with
+    # the model; image bytes are passed on the request.
     run = client.chat(
         [
             ChatMessage("user", prompt),

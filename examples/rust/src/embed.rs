@@ -14,8 +14,9 @@ fn main() -> support::ExampleResult<()> {
         let args = support::local_args("SippClient embedding example input.", "embed")?;
         set_llama_log_quiet(true);
 
-        let mut client = SippClient::new();
-        let mut descriptor = LocalDescriptor::files([args.model_path]);
+        let mut client = SippClient::new()?;
+        let model = client.models().install_files([args.model_path]).await?;
+        let mut descriptor = LocalDescriptor::new(model.id);
         descriptor.config = runtime_config(true);
         client.add("default", descriptor).await?;
 

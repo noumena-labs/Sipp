@@ -41,8 +41,9 @@ struct Cli {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let mut client = SippClient::new();
-    let descriptor = LocalDescriptor::files([cli.model]);
+    let mut client = SippClient::new()?;
+    let model = client.models().install_files([cli.model]).await?;
+    let descriptor = LocalDescriptor::new(model.id);
     let text_endpoint = client
         .add("local-text", descriptor.clone())
         .await

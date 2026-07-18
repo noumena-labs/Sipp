@@ -1,9 +1,11 @@
 import {
+  EndpointDescriptor,
   SippClient,
   QueryError,
   type BrowserTextRun,
   type ChatInput,
   type NativeRuntimeConfig,
+  type ModelInstallOptions,
   type WebGpuAdapterInfo,
 } from '@noumena-labs/sipp';
 
@@ -16,7 +18,7 @@ import {
 } from './chat-state.js';
 import {
   CURATED_MODELS,
-  localEndpointDescriptor,
+  installModel,
   projectorRequirementMessage,
   resolveModelSelection,
   type ModelSelection,
@@ -57,7 +59,7 @@ interface PendingImage {
 }
 
 type PickerMode = 'curated' | 'custom';
-type CustomSourceMode = 'url' | 'file';
+type CustomLocationMode = 'url' | 'file';
 
 let client: SippClient | null = null;
 let loadedModel: LoadedModel | null = null;
@@ -67,7 +69,7 @@ let messages: ConversationMessage[] = [];
 let pendingImage: PendingImage | null = null;
 let selectedModelId = DEFAULT_MODEL_ID;
 let pickerMode: PickerMode = 'curated';
-let customSourceMode: CustomSourceMode = 'url';
+let customLocationMode: CustomLocationMode = 'url';
 let customFile: File | null = null;
 let settings: GenerationSettings = { ...DEFAULT_GENERATION_SETTINGS };
 let contextKey = createContextKey();
@@ -159,9 +161,9 @@ function initialize(): void {
       renderPickerMode();
     });
   });
-  document.querySelectorAll<HTMLButtonElement>('[data-custom-source]').forEach((button) => {
+  document.querySelectorAll<HTMLButtonElement>('[data-custom-location]').forEach((button) => {
     button.addEventListener('click', () => {
-      customSourceMode = button.dataset.customSource as CustomSourceMode;
+      customLocationMode = button.dataset.customLocation as CustomLocationMode;
       renderPickerMode();
     });
   });
@@ -252,16 +254,16 @@ function renderPickerMode(): void {
     button.classList.toggle('selected', selected);
     button.setAttribute('aria-pressed', String(selected));
   });
-  document.querySelectorAll<HTMLButtonElement>('[data-custom-source]').forEach((button) => {
-    const selected = button.dataset.customSource === customSourceMode;
+  document.querySelectorAll<HTMLButtonElement>('[data-custom-location]').forEach((button) => {
+    const selected = button.dataset.customLocation === customLocationMode;
     button.classList.toggle('selected', selected);
     button.setAttribute('aria-pressed', String(selected));
   });
 
   curatedPanel.hidden = pickerMode !== 'curated';
   customPanel.hidden = pickerMode !== 'custom';
-  customUrlPanel.hidden = customSourceMode !== 'url';
-  customFilePanel.hidden = customSourceMode !== 'file';
+  customUrlPanel.hidden = customLocationMode !== 'url';
+  customFilePanel.hidden = customLocationMode !== 'file';
 }
 
 function openModelDialog(): void {
@@ -299,29 +301,29 @@ async function loadSelectedModel(): Promise<void> {
 
   const nextClient = new SippClient({ wasmThreading: 'pthread' });
   try {
+    const onProgress: NonNullable<ModelInstallOptions['onProgress']> = (progress) => {
+      const phase = formatLoadPhase(progress.phase);
+      const percent = progress.percent;
+      loadStatus.textContent = percent == null
+        ? `${phase} ${resolved.name}...`
+        : `${phase} ${resolved.name}... ${Math.round(percent)}%`;
+      if (percent == null) {
+        loadProgress.removeAttribute('value');
+      } else {
+        loadProgress.value = percent;
+      }
+    };
+    const model = await installModel(nextClient, resolved.location, { onProgress });
     await nextClient.add(
       'chat-model',
-      localEndpointDescriptor(resolved.location, {
+      EndpointDescriptor.local(model.id, {
         backend: 'webgpu',
         observability: 'runtime',
         runtime: DEFAULT_RUNTIME,
-        onProgress: (progress) => {
-          const phase = formatLoadPhase(progress.phase);
-          const percent = progress.percent;
-          loadStatus.textContent = percent == null
-            ? `${phase} ${resolved.name}...`
-            : `${phase} ${resolved.name}... ${Math.round(percent)}%`;
-          if (percent == null) {
-            loadProgress.removeAttribute('value');
-          } else {
-            loadProgress.value = percent;
-          }
-        },
+        onProgress,
       })
     );
-    const info =
-      nextClient.currentLocal() ??
-      nextClient.observability.current().model;
+    const info = nextClient.observability.current().model;
     if (info == null) {
       throw new Error(`"${resolved.name}" did not create a local endpoint.`);
     }
@@ -368,7 +370,7 @@ function currentModelSelection(): ModelSelection {
   if (pickerMode === 'curated') {
     return { kind: 'curated', modelId: selectedModelId };
   }
-  if (customSourceMode === 'file') {
+  if (customLocationMode === 'file') {
     if (customFile == null) {
       throw new Error('Choose a local GGUF model file.');
     }

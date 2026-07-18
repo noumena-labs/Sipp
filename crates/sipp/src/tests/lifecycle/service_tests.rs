@@ -63,20 +63,33 @@ fn service_installs_and_lists_text_asset() {
     let model = root.path.join("model.gguf");
     fs::write(&model, b"not a gguf").expect("model");
 
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
-    let source = ModelSource::Local {
-        model_paths: vec![model],
-        projector_path: None,
-    };
-    let result = block_on(service.resolve_source(source)).expect("resolved");
-
-    let model = service
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    let installed = block_on(store.install_files([model])).expect("installed");
+    let state = block_on(store.state.lock());
+    let model = state
         .registry
         .manifest
         .models
-        .get(&result.entry_id)
+        .get(&installed.id)
         .expect("installed model");
     assert_eq!(model.status, ModelStatus::Ready);
+}
+
+#[test]
+fn store_rejects_removing_a_model_in_use() {
+    let root = TempDir::new("service", "remove-in-use");
+    let model_path = root.path.join("model.gguf");
+    fs::write(&model_path, b"not a gguf").expect("model");
+
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    let model = block_on(store.install_files([model_path])).expect("installed");
+    block_on(store.replace_usage(None, Some(&model.id)));
+
+    let error = block_on(store.remove(&model.id)).expect_err("model is in use");
+    assert!(matches!(error, ModelError::ModelInUse(id) if id == model.id));
+
+    block_on(store.replace_usage(Some(&model.id), None));
+    block_on(store.remove(&model.id)).expect("removed");
 }
 
 #[test]
@@ -85,32 +98,24 @@ fn cached_local_asset_requires_matching_source_hash() {
     let model = root.path.join("model.gguf");
     fs::write(&model, b"first bytes").expect("model");
 
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
-    let first = block_on(service.resolve_source(ModelSource::Local {
-        model_paths: vec![model.clone()],
-        projector_path: None,
-    }))
-    .expect("first");
-    let first_asset_id = service
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    let first = block_on(store.install_files([model.clone()])).expect("first");
+    let first_asset_id = block_on(store.state.lock())
         .registry
         .manifest
         .models
-        .get(&first.entry_id)
+        .get(&first.id)
         .expect("first model")
         .model_asset_ids[0]
         .clone();
 
     fs::write(&model, b"secondbytes").expect("same len replacement");
-    let second = block_on(service.resolve_source(ModelSource::Local {
-        model_paths: vec![model],
-        projector_path: None,
-    }))
-    .expect("second");
-    let second_asset_id = service
+    let second = block_on(store.install_files([model])).expect("second");
+    let second_asset_id = block_on(store.state.lock())
         .registry
         .manifest
         .models
-        .get(&second.entry_id)
+        .get(&second.id)
         .expect("second model")
         .model_asset_ids[0]
         .clone();
@@ -121,9 +126,9 @@ fn cached_local_asset_requires_matching_source_hash() {
 #[test]
 fn service_rejects_unresolved_vision_model_on_load() {
     let root = TempDir::new("service", "needs-projector");
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
     let plan = vision_plan();
-    let mut record = AssetRecord {
+    let record = AssetRecord {
         id: "asset-a".to_string(),
         kind: ModelAssetKind::Model,
         name: "vision.gguf".to_string(),
@@ -145,22 +150,18 @@ fn service_rejects_unresolved_vision_model_on_load() {
             provided_vision_projector_type: None,
         }),
     };
-    service
-        .registry
-        .upsert_asset(record.clone())
-        .expect("asset");
     let entry_id = model_id_from_plan(&plan);
-    let entry = model_entry_from_assets(&entry_id, "vision", &plan);
-    service.registry.insert_model(entry).expect("model");
-    record.ref_count = 1;
+    {
+        let mut state = block_on(store.state.lock());
+        state.registry.upsert_asset(record).expect("asset");
+        let entry = model_entry_from_assets(&entry_id, "vision", &plan);
+        state.registry.insert_model(entry).expect("model");
+    }
 
-    let error = block_on(service.load(
-        ModelSource::Installed {
-            model_id: entry_id.clone(),
-        },
-        ModelLoadOptions::default(),
-    ))
-    .expect_err("not ready");
+    let error = match block_on(store.load_engine(&entry_id, ModelLoadOptions::default())) {
+        Ok(_) => panic!("unresolved vision model loaded"),
+        Err(error) => error,
+    };
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));
 }

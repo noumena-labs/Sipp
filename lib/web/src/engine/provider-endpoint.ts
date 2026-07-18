@@ -106,8 +106,8 @@ export class ProviderEndpointRegistry {
     return { kind: 'provider', id: provider.id };
   }
 
-  public remove(id: string): void {
-    this.#providers.delete(id);
+  public remove(id: string): boolean {
+    return this.#providers.delete(id);
   }
 
   public get(endpoint: EndpointRef | undefined): ProviderEndpoint | null {

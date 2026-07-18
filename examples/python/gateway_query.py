@@ -63,15 +63,16 @@ def text_options() -> SippTextOptions:
 
 
 def main() -> None:
-    model, target, prompt = read_gateway_args(
+    model_path, target, prompt = read_gateway_args(
         "gateway_query", "Write one sentence about gateway inference."
     )
     set_llama_log_quiet(True)
 
     client = SippClient()
+    model = client.models.install_files([model_path])
     local_endpoint = client.add(
         "local",
-        EndpointDescriptor.files([model], config=runtime_config(embeddings=False)),
+        EndpointDescriptor.local(model.id, config=runtime_config(embeddings=False)),
     )
     gateway_endpoint = client.add(
         "gateway",

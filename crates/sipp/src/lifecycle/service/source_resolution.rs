@@ -13,11 +13,11 @@ use crate::lifecycle::storage::{hash_file, modified_unix_ms, now_unix_ms, Storag
 use crate::lifecycle::util::classified_asset;
 use crate::lifecycle::{
     AssetRecord, AssetSource, ModelAssetKind, ModelError, ModelPairing, ModelPairingReason,
-    ModelPairingState, ModelSource, ModelStatus, PairingResolver,
+    ModelPairingState, ModelStatus, PairingResolver,
 };
 
 use super::helpers::{model_id_from_plan, same_path};
-use super::{invalid_source, model_not_found, ModelService, ResolvedSource};
+use super::{invalid_source, ModelStoreState};
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -40,36 +40,12 @@ struct InstalledAsset {
     created: bool,
 }
 
-impl<B: StorageBackend> ModelService<B> {
-    pub(super) async fn resolve_source(
-        &mut self,
-        source: ModelSource,
-    ) -> Result<ResolvedSource, ModelError> {
-        match source {
-            ModelSource::Installed { model_id } => self.resolve_installed(model_id),
-            ModelSource::Local {
-                model_paths,
-                projector_path,
-            } => self.resolve_local(model_paths, projector_path),
-            ModelSource::Remote {
-                model_urls,
-                projector_url,
-            } => self.resolve_remote(model_urls, projector_url).await,
-        }
-    }
-
-    fn resolve_installed(&self, model_id: String) -> Result<ResolvedSource, ModelError> {
-        if !self.registry.manifest.models.contains_key(&model_id) {
-            return Err(model_not_found(&model_id));
-        }
-        Ok(ResolvedSource { entry_id: model_id })
-    }
-
-    fn resolve_local(
+impl<B: StorageBackend> ModelStoreState<B> {
+    pub(super) fn install_files(
         &mut self,
         model_paths: Vec<PathBuf>,
         projector_path: Option<PathBuf>,
-    ) -> Result<ResolvedSource, ModelError> {
+    ) -> Result<String, ModelError> {
         if model_paths.is_empty() {
             return Err(invalid_source(MODEL_PATHS_REQUIRED));
         }
@@ -108,11 +84,11 @@ impl<B: StorageBackend> ModelService<B> {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    async fn resolve_remote(
+    pub(super) async fn install_urls(
         &mut self,
         model_urls: Vec<String>,
         projector_url: Option<String>,
-    ) -> Result<ResolvedSource, ModelError> {
+    ) -> Result<String, ModelError> {
         if model_urls.is_empty() {
             return Err(invalid_source(MODEL_URLS_REQUIRED));
         }
@@ -174,9 +150,9 @@ impl<B: StorageBackend> ModelService<B> {
                         .and_then(|member| member.asset_ids.first())
                         .map(String::as_str);
                     return match self.commit_installed(installed, projector_id) {
-                        Ok(resolved) => {
+                        Ok(model_id) => {
                             journal.clear()?;
-                            Ok(resolved)
+                            Ok(model_id)
                         }
                         Err(error) => {
                             journal.cleanup_uncommitted(&self.registry.manifest)?;
@@ -197,11 +173,11 @@ impl<B: StorageBackend> ModelService<B> {
     }
 
     #[cfg(target_family = "wasm")]
-    async fn resolve_remote(
+    pub(super) async fn install_urls(
         &mut self,
         _model_urls: Vec<String>,
         _projector_url: Option<String>,
-    ) -> Result<ResolvedSource, ModelError> {
+    ) -> Result<String, ModelError> {
         Err(ModelError::UnsupportedOperation {
             operation: "native model service remote acquisition",
             reason: "browser acquisition is driven through BrowserLifecycleService".to_string(),
@@ -259,7 +235,7 @@ impl<B: StorageBackend> ModelService<B> {
         &mut self,
         installed: Vec<InstalledAsset>,
         explicit_projector_id: Option<&str>,
-    ) -> Result<ResolvedSource, ModelError> {
+    ) -> Result<String, ModelError> {
         let previous = self.registry.manifest.clone();
         let result = self.register_installed_assets(
             &installed
@@ -281,7 +257,7 @@ impl<B: StorageBackend> ModelService<B> {
         &mut self,
         installed: &[AssetRecord],
         explicit_projector_id: Option<&str>,
-    ) -> Result<ResolvedSource, ModelError> {
+    ) -> Result<String, ModelError> {
         let classified: Vec<_> = installed
             .iter()
             .map(|record| {
@@ -319,7 +295,7 @@ impl<B: StorageBackend> ModelService<B> {
         });
         self.registry.insert_model(entry)?;
         self.registry.save()?;
-        Ok(ResolvedSource { entry_id })
+        Ok(entry_id)
     }
 }
 

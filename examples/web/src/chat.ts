@@ -1,4 +1,5 @@
 import {
+  EndpointDescriptor,
   SippClient,
   type BrowserTextRun,
   type ChatMessage,
@@ -10,7 +11,7 @@ import {
   EXAMPLE_LOCAL_ENDPOINT,
   formatTextResult,
   readMaxTokens,
-  readEndpointDescriptor,
+  installModel,
   readPrompt,
   renderLocalPage,
   reportError,
@@ -23,23 +24,19 @@ let modelLoaded = false;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const descriptor = readEndpointDescriptor(
-    elements.modelInput,
-    elements.modelFileInput,
-    { runtime: runtimeConfig() }
-  );
-  if (descriptor == null) {
-    write(elements.output, 'Enter a GGUF model URL, path, or file.');
-    return;
-  }
-
   try {
     write(elements.output, 'Loading model...');
-    await client.add(EXAMPLE_LOCAL_ENDPOINT.id, descriptor);
-    const info = client.currentLocal();
-    if (info == null) throw new Error('Local model did not become active.');
+    const model = await installModel(client, elements.modelUrlInput, elements.modelFileInput);
+    if (model == null) {
+      write(elements.output, 'Enter a GGUF model URL, path, or file.');
+      return;
+    }
+    await client.add(
+      EXAMPLE_LOCAL_ENDPOINT.id,
+      EndpointDescriptor.local(model.id, { runtime: runtimeConfig() })
+    );
     modelLoaded = true;
-    write(elements.output, `Loaded ${info.name}.`);
+    write(elements.output, `Loaded ${model.name}.`);
   } catch (error) {
     reportError(elements.output, error);
   }

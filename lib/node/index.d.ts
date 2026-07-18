@@ -2,15 +2,54 @@
 /* eslint-disable */
 /** Client facade for registered inference endpoints. */
 export declare class SippClient {
-  constructor()
+  constructor(options?: SippClientOptions)
+  readonly models: ModelStore
   /** Register or replace a local, gateway, or direct provider endpoint. */
   add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef>
+  /** Remove a registered endpoint. */
+  remove(id: string): Promise<void>
   /** Start raw-prompt text generation and return the run handle. */
   query(request: SippQueryRequest): SippTextRun
   /** Start chat generation from ordered role/content messages. */
   chat(request: SippChatRequest): SippTextRun
   /** Start a single-input embedding request. */
   embed(request: SippEmbedRequest): SippEmbeddingRun
+}
+
+/** Client storage configuration. */
+export interface SippClientOptions {
+  readonly storageRoot?: string
+}
+
+/** Model managed by a client model store. */
+export interface ManagedModel {
+  readonly id: string
+  readonly name: string
+  readonly bytes: number
+  readonly modality: string
+  readonly status: string
+}
+
+/** Options for installing model files. */
+export interface FileInstallOptions {
+  readonly projectorPath?: string
+}
+
+/** Options for installing model URLs. */
+export interface UrlInstallOptions {
+  readonly projectorUrl?: string
+}
+
+/** Persistent models owned by a Sipp client. */
+export declare class ModelStore {
+  /** Install model files from the host filesystem. */
+  installFiles(modelPaths: readonly string[], options?: FileInstallOptions): Promise<ManagedModel>
+  /** Download and install model files from HTTP(S) URLs. */
+  installUrls(modelUrls: readonly string[], options?: UrlInstallOptions): Promise<ManagedModel>
+  /** List installed models. */
+  list(): Promise<ManagedModel[]>
+  /** Remove an installed model that is not used by an endpoint. */
+  remove(modelId: string): Promise<void>
 }
 
 /** Text generation handle with a final response and optional token stream. */
@@ -275,17 +314,8 @@ export type EndpointDescriptor = {
   readonly [endpointDescriptorBrand]: true
 }
 
-/** Options shared by local file endpoint descriptors. */
-export interface FileEndpointOptions {
-  readonly projectorPath?: string
-  readonly storageRoot?: string
-  readonly config?: NativeRuntimeConfig
-}
-
-/** Options shared by remote URL endpoint descriptors. */
-export interface UrlEndpointOptions {
-  readonly projectorUrl?: string
-  readonly storageRoot?: string
+/** Options for a local model endpoint. */
+export interface LocalEndpointOptions {
   readonly config?: NativeRuntimeConfig
 }
 
@@ -305,14 +335,7 @@ export interface ProviderEndpointOptions {
 
 /** Construct endpoint descriptors from explicit endpoint configuration. */
 export declare const EndpointDescriptor: {
-  files(
-    modelPaths: readonly string[],
-    options?: FileEndpointOptions
-  ): EndpointDescriptor
-  urls(
-    modelUrls: readonly string[],
-    options?: UrlEndpointOptions
-  ): EndpointDescriptor
+  local(modelId: string, options?: LocalEndpointOptions): EndpointDescriptor
   gateway(options: GatewayEndpointOptions): EndpointDescriptor
   provider(options: ProviderEndpointOptions): EndpointDescriptor
 }

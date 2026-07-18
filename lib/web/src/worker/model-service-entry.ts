@@ -162,9 +162,16 @@ function tokenEmissionOptionsFor(
 
 async function handleRequest(message: WorkerOperationRequest): Promise<unknown> {
   switch (message.kind) {
+    case 'models-install':
+      return await withAbortController(message.callId, (signal) =>
+        ensureService(message.config).install(message.source, {
+          signal,
+          onProgress: postLoadProgress(message.callId),
+        })
+      );
     case 'models-load': {
       const result = await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).load(message.source, {
+        ensureService(message.config).load(message.modelId, {
           ...message.options,
           signal,
           onProgress: postLoadProgress(message.callId),

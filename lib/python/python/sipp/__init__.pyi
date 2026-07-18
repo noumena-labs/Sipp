@@ -232,19 +232,9 @@ class ProviderError(Exception):
 
 class EndpointDescriptor:
     @staticmethod
-    def files(
-        model_paths: Sequence[PathLike],
+    def local(
+        model_id: str,
         *,
-        projector_path: Optional[PathLike] = None,
-        storage_root: Optional[PathLike] = None,
-        config: Optional[NativeRuntimeConfig] = None,
-    ) -> EndpointDescriptor: ...
-    @staticmethod
-    def urls(
-        model_urls: Sequence[str],
-        *,
-        projector_url: Optional[str] = None,
-        storage_root: Optional[PathLike] = None,
         config: Optional[NativeRuntimeConfig] = None,
     ) -> EndpointDescriptor: ...
     @staticmethod
@@ -290,6 +280,29 @@ class ModelLifecycleError(Exception):
     status: Optional[int]
     retry_after_ms: Optional[int]
 
+class ManagedModel:
+    id: str
+    name: str
+    bytes: int
+    modality: str
+    status: str
+
+class ModelStore:
+    def install_files(
+        self,
+        model_paths: Sequence[PathLike],
+        *,
+        projector_path: Optional[PathLike] = None,
+    ) -> ManagedModel: ...
+    def install_urls(
+        self,
+        model_urls: Sequence[str],
+        *,
+        projector_url: Optional[str] = None,
+    ) -> ManagedModel: ...
+    def list(self) -> list[ManagedModel]: ...
+    def remove(self, model_id: str) -> None: ...
+
 class SippTextOptions:
     def __init__(
         self,
@@ -329,12 +342,15 @@ class SippEmbeddingRun:
     def result(self) -> SippEmbeddingResponse: ...
 
 class SippClient:
-    def __init__(self) -> None: ...
+    def __init__(self, *, storage_root: Optional[PathLike] = None) -> None: ...
+    @property
+    def models(self) -> ModelStore: ...
     def add(
         self,
         id: str,
         descriptor: EndpointDescriptor,
     ) -> EndpointRef: ...
+    def remove(self, id: str) -> None: ...
     def query(
         self,
         prompt: str,

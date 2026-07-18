@@ -1,6 +1,7 @@
 import {
-  EndpointDescriptor,
-  type ModelLoadOptions,
+  type ManagedModel,
+  type ModelInstallOptions,
+  type SippClient,
 } from '@noumena-labs/sipp';
 
 export type ModelCapability = 'text' | 'vision';
@@ -143,17 +144,18 @@ export function resolveModelSelection(
   };
 }
 
-export function localEndpointDescriptor(
+export async function installModel(
+  client: SippClient,
   location: ModelLocation,
-  options: ModelLoadOptions
-): EndpointDescriptor {
+  options: ModelInstallOptions = {}
+): Promise<ManagedModel> {
   if (location.kind === 'files') {
-    return EndpointDescriptor.files(location.modelFiles, {
+    return await client.models.installFiles(location.modelFiles, {
       ...options,
       projectorFile: location.projectorFile,
     });
   }
-  return EndpointDescriptor.urls(location.modelUrls, {
+  return await client.models.installUrls(location.modelUrls, {
     ...options,
     projectorUrl: location.projectorUrl,
   });

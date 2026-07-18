@@ -1,13 +1,9 @@
-use std::path::PathBuf;
-
-use crate::engine::NativeRuntimeConfig;
-use crate::lifecycle::ModelSource;
-
 use crate::client::GatewayDescriptor;
 #[cfg(feature = "providers")]
 use crate::client::ProviderDescriptor;
+use crate::engine::NativeRuntimeConfig;
 
-/// Default native registry and managed-asset root for local endpoints.
+/// Default native registry and managed-asset root for a client.
 pub const DEFAULT_STORAGE_ROOT: &str = ".sipp-models";
 
 /// Descriptor used by `SippClient::add` to register an endpoint.
@@ -44,66 +40,17 @@ impl From<ProviderDescriptor> for EndpointDescriptor {
 /// Descriptor for a local GGUF model endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalDescriptor {
-    pub(crate) source: ModelSource,
-    /// Lifecycle registry and asset-store root.
-    pub storage_root: PathBuf,
+    /// Installed model id returned by the client model store.
+    pub model_id: String,
     /// Native runtime configuration.
     pub config: NativeRuntimeConfig,
 }
 
 impl LocalDescriptor {
-    /// Create a local endpoint from host filesystem model files.
-    pub fn files<P, I>(model_paths: I) -> Self
-    where
-        P: Into<PathBuf>,
-        I: IntoIterator<Item = P>,
-    {
-        Self::from_source(ModelSource::Local {
-            model_paths: model_paths.into_iter().map(Into::into).collect(),
-            projector_path: None,
-        })
-    }
-
-    /// Create a multimodal local endpoint from host filesystem files.
-    pub fn files_with_projector<P, I>(model_paths: I, projector_path: impl Into<PathBuf>) -> Self
-    where
-        P: Into<PathBuf>,
-        I: IntoIterator<Item = P>,
-    {
-        Self::from_source(ModelSource::Local {
-            model_paths: model_paths.into_iter().map(Into::into).collect(),
-            projector_path: Some(projector_path.into()),
-        })
-    }
-
-    /// Create a local endpoint that acquires model files from HTTP(S) URLs.
-    pub fn urls<U, I>(model_urls: I) -> Self
-    where
-        U: Into<String>,
-        I: IntoIterator<Item = U>,
-    {
-        Self::from_source(ModelSource::Remote {
-            model_urls: model_urls.into_iter().map(Into::into).collect(),
-            projector_url: None,
-        })
-    }
-
-    /// Create a multimodal local endpoint from HTTP(S) model URLs.
-    pub fn urls_with_projector<U, I>(model_urls: I, projector_url: impl Into<String>) -> Self
-    where
-        U: Into<String>,
-        I: IntoIterator<Item = U>,
-    {
-        Self::from_source(ModelSource::Remote {
-            model_urls: model_urls.into_iter().map(Into::into).collect(),
-            projector_url: Some(projector_url.into()),
-        })
-    }
-
-    fn from_source(source: ModelSource) -> Self {
+    /// Create a local endpoint for a model in the client model store.
+    pub fn new(model_id: impl Into<String>) -> Self {
         Self {
-            source,
-            storage_root: DEFAULT_STORAGE_ROOT.into(),
+            model_id: model_id.into(),
             config: NativeRuntimeConfig::default(),
         }
     }

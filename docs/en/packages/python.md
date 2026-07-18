@@ -57,7 +57,7 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    LocalModelDescriptor,
+    EndpointDescriptor,
     LocalTextOptions,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
@@ -66,11 +66,12 @@ from sipp import (
 
 
 client = SippClient()
+model = client.models.install_files([sys.argv[1]])
 endpoint = client.add(
     "default",
-    LocalModelDescriptor(
-        sys.argv[1],
-        NativeRuntimeConfig(
+    EndpointDescriptor.local(
+        model.id,
+        config=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
             scheduler=SchedulerRuntimeConfig(
                 continuous_batching=True,
@@ -114,13 +115,13 @@ only by an x64 Python process; native arm64 Python should use arm64 wheels.
 ```python
 import os
 
-from sipp import ChatMessage, SippClient, SippTextOptions, GatewayDescriptor
+from sipp import ChatMessage, SippClient, SippTextOptions, EndpointDescriptor
 
 
 client = SippClient()
 endpoint = client.add(
     "gateway",
-    GatewayDescriptor(
+    EndpointDescriptor.gateway(
         os.environ["SIPP_GATEWAY_TARGET"],
         os.environ["SIPP_GATEWAY_URL"],
         authentication_kind="bearer",

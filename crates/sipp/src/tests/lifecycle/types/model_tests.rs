@@ -3,8 +3,6 @@
 //! Covers model lifecycle value contracts, serde wire names, and default
 //! manifest boundaries with pure value fixtures.
 
-use std::path::PathBuf;
-
 use serde_json::json;
 
 use super::*;
@@ -18,49 +16,6 @@ fn model_enum_as_str_values_match_wire_names() {
     assert_eq!(ModelStatus::Broken.as_str(), "broken");
     assert_eq!(ModelSourceKind::Local.as_str(), "local");
     assert_eq!(ModelSourceKind::Remote.as_str(), "remote");
-}
-
-#[test]
-fn model_source_variants_use_snake_case_tags() {
-    let source: ModelSource = serde_json::from_value(json!({
-        "kind": "local",
-        "model_paths": ["a.gguf", "b.gguf"],
-        "projector_path": "mmproj.gguf"
-    }))
-    .expect("model source");
-
-    assert!(matches!(
-        source,
-        ModelSource::Local {
-            model_paths,
-            projector_path: Some(projector_path)
-        }
-        if model_paths == [PathBuf::from("a.gguf"), PathBuf::from("b.gguf")]
-            && projector_path == PathBuf::from("mmproj.gguf")
-    ));
-
-    let installed: ModelSource =
-        serde_json::from_value(json!({ "kind": "installed", "model_id": "model-a" }))
-            .expect("installed source");
-    assert_eq!(
-        installed,
-        ModelSource::Installed {
-            model_id: "model-a".to_string()
-        }
-    );
-
-    let remote = ModelSource::Remote {
-        model_urls: vec!["https://example.test/model.gguf".to_string()],
-        projector_url: None,
-    };
-    assert_eq!(
-        serde_json::to_value(remote).expect("remote source"),
-        json!({
-            "kind": "remote",
-            "model_urls": ["https://example.test/model.gguf"],
-            "projector_url": null
-        })
-    );
 }
 
 #[test]

@@ -23,6 +23,9 @@ use sipp_gateway::GatewayRoutes;
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GatewayServerConfig {
+    /// Filesystem root for managed local models.
+    #[serde(default = "default_storage_root")]
+    pub storage_root: PathBuf,
     /// Public inference listener.
     #[serde(default = "default_public_bind")]
     pub public_bind: SocketAddr,
@@ -58,6 +61,10 @@ fn default_public_bind() -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], 8080))
 }
 
+fn default_storage_root() -> PathBuf {
+    PathBuf::from(sipp::DEFAULT_STORAGE_ROOT)
+}
+
 fn default_management_bind() -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], 9090))
 }
@@ -83,6 +90,9 @@ impl GatewayServerConfig {
 
     /// Validate configuration without loading secrets or endpoints.
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.storage_root.as_os_str().is_empty() {
+            bail!("model storage root must not be empty");
+        }
         if self.public_bind == self.management_bind {
             bail!("public_bind and management_bind must be different");
         }
@@ -131,11 +141,14 @@ impl GatewayServerConfig {
 
     /// Load endpoints and return the application-owned client runtime.
     pub async fn build_runtime(&self) -> anyhow::Result<GatewayServerRuntime> {
-        let mut client = SippClient::new();
+        let mut client = SippClient::with_storage_root(&self.storage_root)?;
         let mut targets = BTreeMap::new();
         let mut summaries = Vec::new();
         for target in &self.targets {
-            let (descriptor, summary) = target.endpoint.descriptor_and_summary(&target.name)?;
+            let (descriptor, summary) = target
+                .endpoint
+                .descriptor_and_summary(&target.name, &client)
+                .await?;
             let endpoint = client
                 .add(target.name.clone(), descriptor)
                 .await
@@ -453,7 +466,6 @@ impl GatewayBackendPreference {
 pub enum EndpointConfig {
     Local {
         model: PathBuf,
-        storage_root: PathBuf,
         #[serde(default)]
         backend: GatewayBackendPreference,
         #[serde(default)]
@@ -486,16 +498,9 @@ pub enum EndpointConfig {
 impl EndpointConfig {
     fn validate(&self) -> anyhow::Result<()> {
         match self {
-            Self::Local {
-                model,
-                storage_root,
-                ..
-            } => {
+            Self::Local { model, .. } => {
                 if model.as_os_str().is_empty() {
                     bail!("local model path must not be empty");
-                }
-                if storage_root.as_os_str().is_empty() {
-                    bail!("local model storage root must not be empty");
                 }
             }
             Self::Openai {
@@ -533,21 +538,25 @@ impl EndpointConfig {
         Ok(())
     }
 
-    fn descriptor_and_summary(
+    async fn descriptor_and_summary(
         &self,
         target_name: &str,
+        client: &SippClient,
     ) -> anyhow::Result<(EndpointDescriptor, TargetSummary)> {
         match self {
             Self::Local {
                 model,
-                storage_root,
                 backend,
                 stats,
                 runtime,
             } => {
                 let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
-                let mut descriptor = LocalDescriptor::files([model.clone()]);
-                descriptor.storage_root = storage_root.clone();
+                let installed = client
+                    .models()
+                    .install_files([model.clone()])
+                    .await
+                    .with_context(|| format!("failed to install {}", model.display()))?;
+                let mut descriptor = LocalDescriptor::new(installed.id);
                 descriptor.config = plan.config;
                 Ok((
                     EndpointDescriptor::Local(descriptor),

@@ -16,13 +16,14 @@ npm install @sipphq/sipp
 
 ## Browser Local Query
 
-Use `@sipphq/sipp` only in browser code. A local endpoint `source` can be a model
-URL served by the app, a user-provided `File`, an installed model id, or shard
-sources.
+Use `@sipphq/sipp` only in browser code. Install one or more model URLs or
+user-provided `File` objects through `client.models`; multiple inputs represent
+model shards. Installation returns a model ID, and an existing installed ID can
+also be passed directly to `EndpointDescriptor.local(...)`.
 
 ```ts
 import { useState } from 'react';
-import { SippClient } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 export function LocalQuery(): JSX.Element {
   const [text, setText] = useState('');
@@ -30,19 +31,18 @@ export function LocalQuery(): JSX.Element {
   async function run(): Promise<void> {
     const client = new SippClient();
     try {
-      const endpoint = await client.add('default', {
-        kind: 'local',
-        source: {
-          kind: 'remote',
-          modelUrls: [new URL('/models/model.gguf', window.location.href).href],
-        },
-        options: {
+      const model = await client.models.installUrls([
+        new URL('/models/model.gguf', window.location.href).href,
+      ]);
+      const endpoint = await client.add(
+        'default',
+        EndpointDescriptor.local(model.id, {
           backend: 'webgpu',
           runtime: {
             context: { n_ctx: 2048 },
           },
-        },
-      });
+        })
+      );
       const response = await client.query('Explain Sipp.', {
         endpoint,
         maxTokens: 64,

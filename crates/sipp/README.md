@@ -43,8 +43,9 @@ use sipp::engine::{
 async fn run(
     model_path: std::path::PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = SippClient::new();
-    let mut descriptor = LocalDescriptor::files([model_path]);
+    let mut client = SippClient::new()?;
+    let model = client.models().install_files([model_path]).await?;
+    let mut descriptor = LocalDescriptor::new(model.id);
     descriptor.config = runtime_config();
     let endpoint = client.add("default", descriptor).await?;
 

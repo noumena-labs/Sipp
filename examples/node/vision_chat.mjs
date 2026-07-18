@@ -14,7 +14,12 @@ import {
   readVisionArgs,
 } from './_support.mjs';
 
-const { model, projector, image, input } = readVisionArgs('Describe this image in one sentence.');
+const {
+  model: modelPath,
+  projector: projectorPath,
+  image,
+  input,
+} = readVisionArgs('Describe this image in one sentence.');
 const {
   EndpointDescriptor,
   SippClient,
@@ -25,10 +30,12 @@ const {
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
+const model = await client.models.installFiles([modelPath], {
+  projectorPath,
+});
 await client.add(
   'default',
-  EndpointDescriptor.files([model], {
-    projectorPath: projector,
+  EndpointDescriptor.local(model.id, {
     config: runtimeConfig({ embeddings: false }),
   })
 );

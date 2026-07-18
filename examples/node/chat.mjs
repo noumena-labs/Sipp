@@ -18,14 +18,18 @@ const {
   backendObservabilityJson,
   setLlamaLogQuiet,
 } = native;
-const { model, input } = readLocalArgs('chat', 'Explain the SippClient API in one sentence.');
+const { model: modelPath, input } = readLocalArgs(
+  'chat',
+  'Explain the SippClient API in one sentence.',
+);
 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
+const model = await client.models.installFiles([modelPath]);
 await client.add(
   'default',
-  EndpointDescriptor.files([model], {
+  EndpointDescriptor.local(model.id, {
     config: runtimeConfig({ embeddings: false }),
   })
 );

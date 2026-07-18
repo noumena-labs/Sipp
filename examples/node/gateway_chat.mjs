@@ -14,15 +14,16 @@ import {
 } from './_support.mjs';
 
 const { EndpointDescriptor, SippClient, setLlamaLogQuiet } = native;
-const { model, target, input } = readGatewayArgs(
+const { model: modelPath, target, input } = readGatewayArgs(
   'gateway_chat',
   'Explain gateway-backed inference in one sentence.',
 );
 setLlamaLogQuiet(true);
 const client = new SippClient();
+const model = await client.models.installFiles([modelPath]);
 const localEndpoint = await client.add(
   'local',
-  EndpointDescriptor.files([model], {
+  EndpointDescriptor.local(model.id, {
     config: runtimeConfig({ embeddings: false }),
   })
 );

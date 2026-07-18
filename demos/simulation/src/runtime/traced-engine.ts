@@ -25,8 +25,8 @@ export function createTracedBrainClient(
 }
 
 class TracedBrainClient implements CharacterRuntimeClient, DirectorRuntimeClient {
-  public currentLocal(): ReturnType<SippClient['currentLocal']> {
-    return this.client.currentLocal();
+  public get observability(): SippClient['observability'] {
+    return this.client.observability;
   }
 
   public constructor(

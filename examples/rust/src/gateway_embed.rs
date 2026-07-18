@@ -20,8 +20,9 @@ fn main() -> support::ExampleResult<()> {
         )?;
         set_llama_log_quiet(true);
 
-        let mut client = SippClient::new();
-        let mut local_descriptor = LocalDescriptor::files([args.model_path]);
+        let mut client = SippClient::new()?;
+        let model = client.models().install_files([args.model_path]).await?;
+        let mut local_descriptor = LocalDescriptor::new(model.id);
         local_descriptor.config = runtime_config(true);
         let local_endpoint = client.add("local", local_descriptor).await?;
         let descriptor = GatewayDescriptor {

@@ -44,6 +44,9 @@ pub mod gateway_core;
 /// Native model lifecycle helpers and backend selection types.
 pub mod lifecycle;
 
+/// Managed model storage types.
+pub use self::lifecycle::{ManagedModel, ModelStore};
+
 #[cfg(feature = "providers")]
 /// Direct provider adapters behind the `providers` feature.
 pub mod providers;

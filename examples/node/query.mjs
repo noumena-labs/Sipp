@@ -18,17 +18,21 @@ const {
   backendObservabilityJson,
   setLlamaLogQuiet,
 } = native;
-const { model, input } = readLocalArgs('query', 'Write one sentence about local inference.');
+const { model: modelPath, input } = readLocalArgs(
+  'query',
+  'Write one sentence about local inference.',
+);
 
 // Keep backend logs quiet so the example output focuses on the response.
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 
-// The app owns a client and loads one local GGUF endpoint.
+// Install the GGUF once, then register an endpoint with its model id.
 const client = new SippClient();
+const model = await client.models.installFiles([modelPath]);
 await client.add(
   'default',
-  EndpointDescriptor.files([model], {
+  EndpointDescriptor.local(model.id, {
     config: runtimeConfig({ embeddings: false }),
   })
 );

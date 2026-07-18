@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -18,31 +17,6 @@ mod model_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 pub const REGISTRY_MANIFEST_VERSION: u32 = 3;
-
-/// Authoritative source used to resolve and install a model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum ModelSource {
-    /// Resolve a model already present in the selected model store.
-    Installed {
-        /// Installed model identifier.
-        model_id: String,
-    },
-    /// Install model files supplied by the local host filesystem.
-    Local {
-        /// One model file or an ordered set of GGUF shards.
-        model_paths: Vec<PathBuf>,
-        /// Explicit multimodal projector file.
-        projector_path: Option<PathBuf>,
-    },
-    /// Acquire model files from HTTP or HTTPS URLs.
-    Remote {
-        /// One model URL or an ordered set of GGUF shard URLs.
-        model_urls: Vec<String>,
-        /// Explicit multimodal projector URL.
-        projector_url: Option<String>,
-    },
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +84,22 @@ pub struct ModelInfo {
     pub media_marker: Option<String>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
+}
+
+/// Model managed by a client model store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedModel {
+    /// Stable id used to create local endpoint descriptors.
+    pub id: String,
+    /// Display name read from model metadata or the source filename.
+    pub name: String,
+    /// Total bytes occupied by the model and optional projector.
+    pub bytes: u64,
+    /// Inference modality detected from model metadata.
+    pub modality: ModelModality,
+    /// Current installation and pairing state.
+    pub status: ModelStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

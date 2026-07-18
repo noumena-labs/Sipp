@@ -5,23 +5,26 @@ endpoint-oriented client model.
 
 At a high level:
 
-1. Register an endpoint with `add`.
-2. Keep the returned `EndpointRef`.
-3. Pass that reference to `query`, `chat`, or `embed`.
+1. Install local models through `client.models` when needed.
+2. Register an endpoint with `add`.
+3. Keep the returned `EndpointRef`.
+4. Pass that reference to `query`, `chat`, or `embed`.
 
 This keeps application code the same whether inference runs locally, through a
 gateway, through a provider, or across a hybrid setup.
 
 ## Core Client Methods
 
-`SippClient` exposes four primary methods:
+`SippClient` exposes endpoint operations and a model store:
 
-| Method  | Purpose                                                                      |
-| ------- | ---------------------------------------------------------------------------- |
-| `add`   | Register a local, gateway, or provider endpoint and return an `EndpointRef`. |
-| `query` | Generate text from a raw prompt string. No chat template is applied.         |
-| `chat`  | Generate text from ordered `{ role, content }` messages.                     |
-| `embed` | Generate an embedding vector from text input.                                |
+| Member   | Purpose                                                                      |
+| -------- | ---------------------------------------------------------------------------- |
+| `models` | Install, list, and remove models owned by this client.                       |
+| `add`    | Register a local, gateway, or provider endpoint and return an `EndpointRef`. |
+| `remove` | Remove a registered endpoint.                                                |
+| `query`  | Generate text from a raw prompt string. No chat template is applied.         |
+| `chat`   | Generate text from ordered `{ role, content }` messages.                     |
+| `embed`  | Generate an embedding vector from text input.                                |
 
 ## `add()` — Register an Endpoint
 
@@ -44,15 +47,17 @@ the operation runs.
 
 ### Local Endpoint
 
-A local endpoint loads a GGUF model into the current process. The application
-owns model selection, runtime lifecycle, and cleanup.
+A local endpoint loads an installed GGUF model into the current process. The
+application selects the model; the client owns storage and runtime lifecycle.
 
-| Field         | Type                           | Description                                                                                                                                 |
-| ------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`        | `"local"`                      | Endpoint kind selector.                                                                                                                     |
-| `source`      | `ModelSource`                  | Explicit installed, local-file, or HTTP(S) source.                                                                                          |
-| `storageRoot` | string / `PathBuf`             | Registry and managed-asset root for native packages.                                                                                        |
-| `config`      | `NativeRuntimeConfig` optional | Load-time runtime configuration, including context size, GPU placement, scheduler policy, cache mode, sampling defaults, and observability. |
+Install a file or URL through `client.models`, then construct a local descriptor
+with `EndpointDescriptor.local(modelId, options)`. The descriptor selects an
+installed model; it does not own acquisition or storage.
+
+Native packages accept `config: NativeRuntimeConfig`. Browser descriptors
+accept browser backend and observability options plus
+`runtime: NativeRuntimeConfig`. See [Runtime Options](../reference/runtime-options.md)
+for the complete package-specific shapes.
 
 Use a local endpoint when the current process should own model execution.
 
@@ -211,7 +216,8 @@ HTTP routes to `query`, `chat`, or `embed`.
 
 ```text
 Server client:
-  add("local-model", LocalDescriptor { source, storageRoot, config })
+  model = models.installFiles(files)
+  add("local-model", EndpointDescriptor.local(model.id, options))
   -> route handler decodes HTTP request
   -> route handler calls client.query/chat/embed
   -> route handler encodes HTTP response
@@ -227,7 +233,7 @@ calls `query`, `chat`, or `embed` the same way it would call a local endpoint.
 
 ```text
 Client client:
-  add("remote", GatewayDescriptor { target, baseUrl, authentication })
+  add("remote", EndpointDescriptor.gateway(options))
   -> client.query/chat/embed({ endpoint: ref, ... })
   -> request is sent to the gateway over HTTP
 ```
@@ -238,8 +244,9 @@ A single client can register multiple endpoint kinds. The application chooses
 where an operation runs by passing a different endpoint reference.
 
 ```text
-localRef = client.add("local", LocalDescriptor { ... })
-gatewayRef = client.add("gateway", GatewayDescriptor { ... })
+model = client.models.installFiles(files)
+localRef = client.add("local", EndpointDescriptor.local(model.id, options))
+gatewayRef = client.add("gateway", EndpointDescriptor.gateway(options))
 
 client.query({ endpoint: localRef, prompt, ... })
 client.query({ endpoint: gatewayRef, prompt, ... })
@@ -354,6 +361,6 @@ flowchart LR
 
 * [Using the Core Library](../packages) — per-language install steps and examples.
 * [Inference Operations](../guides/inference-operations.md) — operation contracts, template behavior, and gateway target mapping.
-* [Local Inference](../guides/local-inference.md) — model sources, runtime options, threads, and browser execution.
+* [Local Inference](../guides/local-inference.md) — managed models, runtime options, threads, and browser execution.
 * [Gateway and Hybrid Inference](../guides/gateway-hybrid.md) — deployment shapes, endpoint model, and authentication patterns.
 * [Runtime Options](../reference/runtime-options.md) — complete option layer map and field reference.

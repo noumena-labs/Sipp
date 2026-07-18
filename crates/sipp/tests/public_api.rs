@@ -4,17 +4,15 @@
 //! explicit local model descriptors, and the `shard` and `providers` public
 //! surfaces without loading local models or calling gateway endpoints.
 
-use std::path::{Path, PathBuf};
-
 use sipp::{
     engine::ContextRuntimeConfig, lifecycle::BackendPreference,
     runtime::request::GenerateResponseStatus, EndpointDescriptor, LocalDescriptor,
-    NativeRuntimeConfig, SippClient, DEFAULT_STORAGE_ROOT,
+    NativeRuntimeConfig, SippClient,
 };
 
 #[test]
 fn facade_reexports_client_and_native_runtime_config() {
-    let client = SippClient::new();
+    let client = SippClient::new().expect("client");
     let config = NativeRuntimeConfig {
         context: ContextRuntimeConfig {
             n_ctx: Some(128),
@@ -34,36 +32,17 @@ fn facade_reexports_lifecycle_and_runtime_modules() {
 }
 
 #[test]
-fn local_descriptor_exposes_explicit_source_constructors() {
-    let descriptors = [
-        LocalDescriptor::files(["model.gguf"]),
-        LocalDescriptor::files_with_projector(["model.gguf"], "projector.gguf"),
-        LocalDescriptor::urls(["https://models.example/model.gguf"]),
-        LocalDescriptor::urls_with_projector(
-            ["https://models.example/model.gguf"],
-            "https://models.example/projector.gguf",
-        ),
-    ];
-
-    assert!(descriptors
-        .into_iter()
-        .all(|descriptor| descriptor.storage_root.as_path() == Path::new(DEFAULT_STORAGE_ROOT)));
-}
-
-#[test]
-fn local_descriptor_defaults_and_overrides_storage_root() {
-    let descriptor: EndpointDescriptor =
-        LocalDescriptor::urls(["https://models.example/model.gguf"]).into();
+fn local_descriptor_accepts_a_managed_model_id_and_runtime_config() {
+    let descriptor: EndpointDescriptor = LocalDescriptor::new("model-a").into();
 
     let EndpointDescriptor::Local(local) = descriptor else {
         panic!("expected local descriptor");
     };
-    assert_eq!(local.storage_root, PathBuf::from(DEFAULT_STORAGE_ROOT));
+    assert_eq!(local.model_id, "model-a");
     assert_eq!(local.config, NativeRuntimeConfig::default());
 
-    let mut override_descriptor = LocalDescriptor::files(["model.gguf"]);
-    override_descriptor.storage_root = ".custom-models".into();
-    override_descriptor.config = NativeRuntimeConfig {
+    let mut configured = LocalDescriptor::new("model-b");
+    configured.config = NativeRuntimeConfig {
         context: ContextRuntimeConfig {
             n_ctx: Some(256),
             ..Default::default()
@@ -71,11 +50,8 @@ fn local_descriptor_defaults_and_overrides_storage_root() {
         ..Default::default()
     };
 
-    assert_eq!(
-        override_descriptor.storage_root,
-        PathBuf::from(".custom-models")
-    );
-    assert_eq!(override_descriptor.config.context.n_ctx, Some(256));
+    assert_eq!(configured.model_id, "model-b");
+    assert_eq!(configured.config.context.n_ctx, Some(256));
 }
 
 mod client_api {

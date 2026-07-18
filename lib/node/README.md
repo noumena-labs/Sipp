@@ -27,11 +27,11 @@ Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 ```ts
 import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
-const client = new SippClient();
+const client = new SippClient({ storageRoot: '.sipp-models' });
+const model = await client.models.installFiles([process.argv[2]]);
 await client.add(
   'default',
-  EndpointDescriptor.files([process.argv[2]], {
-    storageRoot: '.sipp-models',
+  EndpointDescriptor.local(model.id, {
     config: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },

@@ -16,14 +16,18 @@ const {
   backendObservabilityJson,
   setLlamaLogQuiet,
 } = native;
-const { model, input } = readLocalArgs('embed', 'SippClient embedding example input.');
+const { model: modelPath, input } = readLocalArgs(
+  'embed',
+  'SippClient embedding example input.',
+);
 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
+const model = await client.models.installFiles([modelPath]);
 await client.add(
   'default',
-  EndpointDescriptor.files([model], {
+  EndpointDescriptor.local(model.id, {
     config: runtimeConfig({ embeddings: true }),
   })
 );

@@ -35,7 +35,7 @@ first-party Sipp backend names at this time.
 
 | Surface | Supported backend selectors | How to select |
 | --- | --- | --- |
-| Browser local | `auto`, `cpu`, `webgpu` | `client.add(..., { kind: 'local', options: { backend: 'webgpu' } })` |
+| Browser local | `auto`, `cpu`, `webgpu` | `EndpointDescriptor.local(model.id, { backend: 'webgpu' })` |
 | Node.js local | `cpu`, `vulkan`, `cuda`, `metal` | `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` |
 | Python local | `cpu`, `vulkan`, `cuda`, `metal` | `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` |
 | CLI | `auto`, `cpu`, `cuda`, `metal`, `vulkan` | `sipp ... --backend <backend>` |
@@ -114,17 +114,16 @@ Browser examples:
 
 ```ts
 // Browser local supports CPU and WebGPU backend selection per local endpoint.
-await client.add('local-webgpu', {
-  kind: 'local',
-  model: './models/model.gguf',
-  options: { backend: 'webgpu' },
-});
+const model = await client.models.installUrls(['./models/model.gguf']);
+await client.add(
+  'local-webgpu',
+  EndpointDescriptor.local(model.id, { backend: 'webgpu' })
+);
 
-await client.add('local-cpu', {
-  kind: 'local',
-  model: './models/model.gguf',
-  options: { backend: 'cpu' },
-});
+await client.add(
+  'local-cpu',
+  EndpointDescriptor.local(model.id, { backend: 'cpu' })
+);
 ```
 
 Node.js and Python examples:

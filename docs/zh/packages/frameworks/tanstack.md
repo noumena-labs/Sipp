@@ -3,7 +3,7 @@
 基于 TanStack 的应用通常按以下几种模式使用 Sipp：
 
 - 利用 TanStack Start 服务端函数处理纯服务端推理、管理提供商凭证、配置本地模型路径、下发网关 Token，提供类型安全的 RPC 调用。
-- 借助 TanStack Start 服务器路由，让浏览器端通过 `kind: 'gateway'` 将该路由作为网关端点调用。
+- 借助 TanStack Start 服务器路由，让浏览器端将该路由作为网关端点调用。
 - 搭配 TanStack Query，缓存查询结果，客户端按需通过查询键重新获取完整生成内容。
 
 处理 Token 流式传输时，应显式维护组件状态或使用自定义 Hook 接收并追加内容。TanStack Query 更适合处理基于 Promise 的最终完整结果，而非逐步拼接零散 Token。
@@ -17,7 +17,7 @@
 ```ts
 // src/server/sipp.ts
 import { createServerFn } from '@tanstack/react-start';
-import { SippClient } from '@sipphq/sipp-server';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -31,12 +31,11 @@ export const querySipp = createServerFn({ method: 'POST' })
   .inputValidator((data: { prompt: string }) => data)
   .handler(async ({ data }) => {
     const client = new SippClient();
-    const endpoint = await client.add('provider', {
-      kind: 'provider',
+    const endpoint = await client.add('provider', EndpointDescriptor.provider({
       provider: 'openai',
       model: requiredEnv('OPENAI_MODEL'),
       apiKey: requiredEnv('OPENAI_API_KEY'),
-    });
+    }));
     const run = client.query({
       endpoint,
       prompt: data.prompt,
@@ -49,7 +48,7 @@ export const querySipp = createServerFn({ method: 'POST' })
 
 必须像对待任何对外公开的 API 端点那样严格校验服务端函数的输入参数。服务端函数本质上是可以通过网络调用的端点，务必在其实现或前置中间件中加入身份认证和权限隔离逻辑。
 
-服务端函数非常适合为应用提供强类型 RPC 接口，返回自定义结构（如 `{ text }`）。但不适用于作为浏览器端 `client.add({ kind: 'gateway' })` 调用的代理路由，因为该方法要求端点严格兼容官方网关的 HTTP Profile 格式。
+服务端函数非常适合为应用提供强类型 RPC 接口，返回自定义结构（如 `{ text }`）。但不适用于作为浏览器网关端点调用的代理路由，因为该方法要求端点严格兼容官方网关的 HTTP Profile 格式。
 
 ## TanStack Start 路由
 
@@ -59,6 +58,7 @@ export const querySipp = createServerFn({ method: 'POST' })
 // src/routes/api/sipp/query.ts
 import { createFileRoute } from '@tanstack/react-router';
 import {
+  EndpointDescriptor,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -81,12 +81,11 @@ export const Route = createFileRoute('/api/sipp/query')({
         try {
           const decoded = decodeGatewayQueryBody(await request.json());
           const client = new SippClient();
-          const endpoint = await client.add('provider', {
-            kind: 'provider',
+          const endpoint = await client.add('provider', EndpointDescriptor.provider({
             provider: 'openai',
             model: decoded.target,
             apiKey: requiredEnv('OPENAI_API_KEY'),
-          });
+          }));
           const run = client.query({
             ...decoded.request,
             endpoint,
@@ -178,7 +177,7 @@ export function StreamingAnswer(): JSX.Element {
 
 ```ts
 import { useState } from 'react';
-import { SippClient } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 export function LocalAnswer(): JSX.Element {
   const [text, setText] = useState('');
@@ -186,13 +185,13 @@ export function LocalAnswer(): JSX.Element {
   async function run(prompt: string): Promise<void> {
     const client = new SippClient();
     try {
-      const endpoint = await client.add('browser-local', {
-        kind: 'local',
-        source: {
-          kind: 'remote',
-          modelUrls: [new URL('/models/model.gguf', window.location.href).href],
-        },
-      });
+      const model = await client.models.installUrls([
+        new URL('/models/model.gguf', window.location.href).href,
+      ]);
+      const endpoint = await client.add(
+        'browser-local',
+        EndpointDescriptor.local(model.id)
+      );
       const response = await client.query(prompt, {
         endpoint,
         maxTokens: 64,
@@ -219,7 +218,7 @@ export function LocalAnswer(): JSX.Element {
 
 ```ts
 import { useState } from 'react';
-import { SippClient, type EndpointRef } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient, type EndpointRef } from '@sipphq/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
@@ -230,20 +229,22 @@ export function HybridAnswer(): JSX.Element {
   async function run(prompt: string): Promise<void> {
     const client = new SippClient();
     try {
-      const localEndpoint = await client.add('browser-local', {
-        kind: 'local',
-        source: {
-          kind: 'remote',
-          modelUrls: [new URL('/models/model.gguf', window.location.href).href],
-        },
-      });
-      const providerRouteEndpoint = await client.add('app-route', {
-        kind: 'gateway',
-        target: 'gpt-5-mini',
-        baseUrl: window.location.origin,
-        routes: { query: '/api/sipp/query' },
-        authentication: { kind: 'none' },
-      });
+      const model = await client.models.installUrls([
+        new URL('/models/model.gguf', window.location.href).href,
+      ]);
+      const localEndpoint = await client.add(
+        'browser-local',
+        EndpointDescriptor.local(model.id)
+      );
+      const providerRouteEndpoint = await client.add(
+        'app-route',
+        EndpointDescriptor.gateway({
+          target: 'gpt-5-mini',
+          baseUrl: window.location.origin,
+          routes: { query: '/api/sipp/query' },
+          authentication: { kind: 'none' },
+        })
+      );
       const endpoint: EndpointRef =
         mode === 'local' ? localEndpoint : providerRouteEndpoint;
       const response = await client.query(prompt, {

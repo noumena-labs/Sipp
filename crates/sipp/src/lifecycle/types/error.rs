@@ -41,6 +41,9 @@ pub enum ModelError {
     #[error("model not found: {0}")]
     ModelNotFound(String),
 
+    #[error("model is in use: {0}")]
+    ModelInUse(String),
+
     #[error("failed to initialize remote model acquisition: {0}")]
     RemoteClient(String),
 
@@ -100,6 +103,7 @@ impl ModelError {
             Self::StorageCorrupt(_) | Self::RegistryJson(_) => "STORAGE_CORRUPT",
             Self::AssetMissing(_) => "MODEL_BROKEN",
             Self::ModelNotFound(_) => "MODEL_NOT_FOUND",
+            Self::ModelInUse(_) => "MODEL_IN_USE",
             Self::RemoteMetadataUnavailable { .. } => "REMOTE_METADATA_UNAVAILABLE",
             Self::RemoteClient(_)
             | Self::RemoteDownloadFailed { .. }

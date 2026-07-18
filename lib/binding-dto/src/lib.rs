@@ -2,7 +2,6 @@
 //! types, shared by the Node and Python bindings and unit-tested here without
 //! any host runtime.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -880,8 +879,7 @@ pub struct ProviderStaticHeader {
 #[serde(rename_all = "camelCase")]
 pub struct EndpointDescriptor {
     pub kind: String,
-    pub source: Option<ModelSource>,
-    pub storage_root: Option<String>,
+    pub model_id: Option<String>,
     pub config: Option<NativeRuntimeConfig>,
     #[serde(alias = "baseUrl")]
     pub base_url: Option<String>,
@@ -910,80 +908,6 @@ pub struct EndpointDescriptor {
     pub embed_route: Option<String>,
     #[serde(alias = "protocolOptions")]
     pub protocol_options: Option<serde_json::Value>,
-}
-
-/// Authoritative local or remote model source.
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelSource {
-    pub kind: String,
-    pub model_paths: Option<Vec<String>>,
-    pub projector_path: Option<String>,
-    pub model_urls: Option<Vec<String>>,
-    pub projector_url: Option<String>,
-}
-
-impl ModelSource {
-    fn to_local_descriptor(&self) -> Result<CoreLocalDescriptor> {
-        match self.kind.as_str() {
-            "local" => {
-                reject_model_source_fields(
-                    self,
-                    &[
-                        ("modelUrls", self.model_urls.is_some()),
-                        ("projectorUrl", self.projector_url.is_some()),
-                    ],
-                )?;
-                let model_paths = required_descriptor_strings(
-                    self.model_paths.as_ref(),
-                    "model source modelPaths",
-                )?
-                .into_iter()
-                .map(PathBuf::from)
-                .collect::<Vec<_>>();
-                match &self.projector_path {
-                    Some(projector_path) => Ok(CoreLocalDescriptor::files_with_projector(
-                        model_paths,
-                        PathBuf::from(projector_path),
-                    )),
-                    None => Ok(CoreLocalDescriptor::files(model_paths)),
-                }
-            }
-            "remote" => {
-                reject_model_source_fields(
-                    self,
-                    &[
-                        ("modelPaths", self.model_paths.is_some()),
-                        ("projectorPath", self.projector_path.is_some()),
-                    ],
-                )?;
-                let model_urls = required_descriptor_strings(
-                    self.model_urls.as_ref(),
-                    "model source modelUrls",
-                )?;
-                match &self.projector_url {
-                    Some(projector_url) => Ok(CoreLocalDescriptor::urls_with_projector(
-                        model_urls,
-                        projector_url,
-                    )),
-                    None => Ok(CoreLocalDescriptor::urls(model_urls)),
-                }
-            }
-            _ => Err(invalid_arg("model source kind must be local or remote")),
-        }
-    }
-}
-
-fn reject_model_source_fields(source: &ModelSource, fields: &[(&'static str, bool)]) -> Result<()> {
-    for (field, present) in fields {
-        if *present {
-            return Err(invalid_arg(format!(
-                "{field} is not valid for {} model sources",
-                source.kind
-            )));
-        }
-    }
-    Ok(())
 }
 
 impl TryFrom<&EndpointDescriptor> for CoreEndpointDescriptor {
@@ -1024,20 +948,16 @@ impl EndpointDescriptor {
             ],
             "local",
         )?;
-        let source = self
-            .source
-            .as_ref()
-            .ok_or_else(|| invalid_arg("local descriptor source is required"))?;
         let config = self
             .config
             .as_ref()
             .map(CoreNativeRuntimeConfig::try_from)
             .transpose()?
             .unwrap_or_default();
-        let mut descriptor = source.to_local_descriptor()?;
-        if let Some(storage_root) = &self.storage_root {
-            descriptor.storage_root = PathBuf::from(storage_root);
-        }
+        let mut descriptor = CoreLocalDescriptor::new(required_descriptor_string(
+            self.model_id.as_ref(),
+            "local descriptor modelId",
+        )?);
         descriptor.config = config;
         Ok(CoreEndpointDescriptor::Local(descriptor))
     }
@@ -1045,8 +965,7 @@ impl EndpointDescriptor {
     fn gateway_to_core(&self) -> Result<CoreEndpointDescriptor> {
         reject_endpoint_descriptor_fields(
             &[
-                ("source", self.source.is_some()),
-                ("storageRoot", self.storage_root.is_some()),
+                ("modelId", self.model_id.is_some()),
                 ("config", self.config.is_some()),
                 ("provider", self.provider.is_some()),
                 ("model", self.model.is_some()),
@@ -1090,8 +1009,7 @@ impl EndpointDescriptor {
     fn provider_to_core(&self) -> Result<CoreEndpointDescriptor> {
         reject_endpoint_descriptor_fields(
             &[
-                ("source", self.source.is_some()),
-                ("storageRoot", self.storage_root.is_some()),
+                ("modelId", self.model_id.is_some()),
                 ("config", self.config.is_some()),
                 ("target", self.target.is_some()),
                 ("authentication", self.authentication.is_some()),
@@ -1327,19 +1245,6 @@ fn required_descriptor_string(value: Option<&String>, name: &'static str) -> Res
     value
         .cloned()
         .ok_or_else(|| invalid_arg(format!("{name} is required")))
-}
-
-fn required_descriptor_strings(
-    value: Option<&Vec<String>>,
-    name: &'static str,
-) -> Result<Vec<String>> {
-    let values = value
-        .cloned()
-        .ok_or_else(|| invalid_arg(format!("{name} is required")))?;
-    if values.is_empty() {
-        return Err(invalid_arg(format!("{name} must not be empty")));
-    }
-    Ok(values)
 }
 
 fn endpoint_timeout(timeout_ms: Option<u64>) -> Result<Option<Duration>> {

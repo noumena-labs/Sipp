@@ -1,8 +1,8 @@
 # Local Inference
 
 Local inference runs a GGUF model inside the current browser, Node.js, Python,
-Rust, or CLI process. The application owns model selection, runtime lifecycle,
-resource cleanup, and the request options that should be exposed to users.
+Rust, or CLI process. The application chooses the model and request options;
+`SippClient` owns the model store, endpoint registry, and runtime resources.
 
 Register a local endpoint with `SippClient.add`, keep the returned endpoint
 reference, and pass that reference to `query`, `chat`, or `embed`.
@@ -10,30 +10,34 @@ reference, and pass that reference to `query`, `chat`, or `embed`.
 ## Endpoint Flow
 
 1. Choose a GGUF model that supports the requested capability.
-2. Register the model with a local descriptor.
-3. Set load-time runtime options on the endpoint descriptor.
-4. Pass request-time generation options to `query`, `chat`, or `embed`.
-5. Stream tokens or await the final response.
-6. Close the client when the page, worker, service, or script no longer needs
+2. Install its files or URLs through `client.models`.
+3. Create a local endpoint descriptor from the returned model ID.
+4. Set load-time runtime options on the endpoint descriptor.
+5. Pass request-time options to `query`, `chat`, or `embed`.
+6. Stream tokens or await the final response.
+7. Close the client when the page, worker, service, or script no longer needs
    the runtime.
 
-Local endpoints do not route implicitly. A client can register multiple
-endpoints, but every request that should use a specific destination should pass
-the endpoint reference returned by `add`.
+Pass the endpoint reference returned by `add` whenever routing must be
+explicit. Omit it only when the client can select one compatible local
+endpoint unambiguously.
 
-## Model Sources
+## Model Installation
 
-Browser local endpoints can load:
+All packages install models before creating local endpoints:
 
-- A model URL served by the application.
-- A user-selected `File`.
-- Multiple shard URLs or files.
-- An installed model id returned by browser model-management APIs.
-- A model plus projector pair for vision-capable models.
+- Browser `installFiles` and `installUrls` persist models in OPFS.
+- Node.js, Python, and Rust install filesystem paths or HTTP(S) URLs under the
+  client's storage root.
+- Both forms accept multiple shards and an optional projector for vision
+  models.
 
-Node.js, Python, Rust, and CLI local endpoints use filesystem paths. Source
-examples and smoke workflows can use cached sample models under `.build/models`
-when running from a checkout.
+Installation returns a stable model ID. `EndpointDescriptor.local(model.id)`
+or `LocalDescriptor::new(model.id)` loads that installed model; it does not
+download or copy files.
+
+Source examples and smoke workflows can use cached sample models under
+`.build/models` when running from a checkout.
 
 ## Runtime And Request Options
 
@@ -41,8 +45,10 @@ Keep option layers separate:
 
 - Browser client options such as `executionMode`, `wasmThreading`, runtime
   asset URLs, and `browserCache` belong on `new SippClient(...)`.
-- Local endpoint load options choose the model source, browser backend
-  preference, progress callbacks, and `NativeRuntimeConfig`.
+- Install method arguments choose files or URLs; install options provide an
+  optional projector, progress callback, and cancellation where supported.
+- Local endpoint options select the installed model ID, browser backend
+  preference, and `NativeRuntimeConfig`.
 - Runtime config groups such as `context`, `sampling`, `scheduler`, `cache`,
   `placement`, `multimodal`, `residency`, and `observability` describe stable
   local endpoint behavior.

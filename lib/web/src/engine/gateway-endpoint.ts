@@ -113,8 +113,8 @@ export class GatewayEndpointRegistry {
     return { kind: 'gateway', id: endpoint.id };
   }
 
-  public remove(id: string): void {
-    this.#endpoints.delete(id);
+  public remove(id: string): boolean {
+    return this.#endpoints.delete(id);
   }
 
   public get(endpoint: EndpointRef | undefined): GatewayEndpoint | null {

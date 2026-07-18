@@ -2,6 +2,7 @@ public_bind = "0.0.0.0:8080"
 management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 2
+storage_root = "/models/.sipp"
 allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"
 
@@ -33,6 +34,5 @@ targets = ["local"]
 name = "local"
 type = "local"
 model = "/models/qwen2.5-0.5b-instruct-q4_0.gguf"
-storage_root = "/models/.sipp"
 backend = "auto"
 stats = "basic"

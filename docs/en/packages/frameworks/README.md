@@ -25,7 +25,7 @@ or services that run in a Node.js runtime.
 | --- | --- | --- |
 | Browser component | `@sipphq/sipp` | Use for browser-local GGUF inference or direct gateway calls. |
 | Node server route | `@sipphq/sipp-server` | Use for direct provider endpoints, local server inference, or gateway clients. |
-| Gateway profile route | `@sipphq/sipp-server` | Use when a browser `kind: 'gateway'` endpoint calls a framework route. |
+| Gateway profile route | `@sipphq/sipp-server` | Use when a browser gateway endpoint calls a framework route. |
 | Gateway client | Either | Browser code can call a separate gateway with short-lived tokens, or server code can use server-held secrets. |
 
 ## Provider-First Server Routes
@@ -35,12 +35,11 @@ endpoints when the framework server owns the credential. Register a provider in
 server-only code:
 
 ```ts
-const endpoint = await client.add('provider', {
-  kind: 'provider',
+const endpoint = await client.add('provider', EndpointDescriptor.provider({
   provider: 'openai',
   model: requiredEnv('OPENAI_MODEL'),
   apiKey: requiredEnv('OPENAI_API_KEY'),
-});
+}));
 ```
 
 Use `OPENAI_API_KEY="<mock-openai-key>"` only as a placeholder in docs and
@@ -60,6 +59,6 @@ proxy through a server route.
 Use `decodeGatewayQueryBody()`, `decodeGatewayChatBody()`,
 `decodeGatewayEmbedBody()`, and the matching response helpers from
 `@sipphq/sipp-server` when a framework route should be registered as a browser
-`kind: 'gateway'` endpoint. Those helpers keep route examples focused on auth,
+gateway endpoint. Those helpers keep route examples focused on auth,
 target policy, provider selection, and client lifecycle instead of gateway
 profile JSON shaping.

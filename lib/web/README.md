@@ -1,8 +1,9 @@
 # Sipp Browser Package
 
 `lib/web` is the browser package source for the public `@sipphq/sipp` package. It
-supports browser-local GGUF inference, gateway calls, streaming text, OPFS model
-caching, and browser runtime lifecycle management through `SippClient`.
+supports browser-local GGUF inference, gateway calls, streaming text, and an
+OPFS-backed model store, with browser runtime lifecycle management through
+`SippClient`.
 
 Source builds use the workspace manifest in this directory. Public docs use the
 `@sipphq/sipp` package target.
@@ -24,9 +25,10 @@ if the launcher is not active.
 import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 const client = new SippClient();
+const model = await client.models.installUrls(['/models/model.gguf']);
 await client.add(
   'default',
-  EndpointDescriptor.urls(['/models/model.gguf'], {
+  EndpointDescriptor.local(model.id, {
     runtime: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
@@ -55,8 +57,9 @@ await client.close();
 
 The browser runtime links the Rust WASM ABI with llama.cpp and ggml through
 Emscripten. It runs GGUF text and vision models with WebGPU on compatible
-browsers, falls back to CPU execution for compatible local workflows, and uses
-OPFS-backed caching for repeated model loads.
+browsers, falls back to CPU execution for compatible local workflows, and
+keeps models in OPFS after the first URL fetch or `File` import so later loads
+can reuse the installed model ID.
 
 <!--
 Future benchmark graph placeholder:

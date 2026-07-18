@@ -55,16 +55,18 @@ function gateway(overrides: Partial<GatewayEndpointOptions> = {}): EndpointDescr
 }
 
 test('SippClient exposes typed inference and endpoint registration', async () => {
-  assert.deepEqual(Object.keys(EndpointDescriptor), ['files', 'urls', 'gateway', 'provider']);
+  assert.deepEqual(Object.keys(EndpointDescriptor), ['local', 'gateway', 'provider']);
   const client = new SippClient({ executionMode: 'main-thread' });
 
   assert.equal(typeof client.add, 'function');
+  assert.equal(typeof client.remove, 'function');
   assert.equal(typeof client.query, 'function');
   assert.equal(typeof client.chat, 'function');
   assert.equal(typeof client.embed, 'function');
-  assert.equal(typeof client.currentLocal, 'function');
-  assert.equal(typeof client.listLocal, 'function');
-  assert.equal(typeof client.removeLocal, 'function');
+  assert.equal(typeof client.models.installFiles, 'function');
+  assert.equal(typeof client.models.installUrls, 'function');
+  assert.equal(typeof client.models.list, 'function');
+  assert.equal(typeof client.models.remove, 'function');
 
   await client.close();
 });
@@ -329,10 +331,7 @@ test('gateway configuration rejects invalid and unknown fields', async () => {
 });
 
 test('endpoints require the descriptor factory', async () => {
-  const descriptor = EndpointDescriptor.urls(
-    ['https://models.example.test/model.gguf'],
-    { observability: 'runtime' }
-  );
+  const descriptor = EndpointDescriptor.local('model-a', { observability: 'runtime' });
   assert.deepEqual(Object.keys(descriptor), []);
 
   const client = new SippClient({ executionMode: 'main-thread' });
@@ -341,10 +340,7 @@ test('endpoints require the descriptor factory', async () => {
       'raw-local',
       {
         kind: 'local',
-        source: {
-          kind: 'remote',
-          modelUrls: ['https://models.example.test/model.gguf'],
-        },
+        modelId: 'model-a',
       } as unknown as EndpointDescriptor
     ),
     (error) =>

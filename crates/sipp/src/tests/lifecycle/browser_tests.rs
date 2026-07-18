@@ -89,12 +89,17 @@ fn prepares_and_commits_text_load() {
     let mut service =
         BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
 
+    let installed = service
+        .install(BrowserInstallSource {
+            assets: vec![model.clone()],
+            classified: vec![classified(&model)],
+            explicit_projector_asset_id: None,
+        })
+        .expect("install");
     let prepared = service
         .prepare_load(
-            BrowserLoadSource::Local {
-                assets: vec![model.clone()],
-                classified: vec![classified(&model)],
-                explicit_projector_asset_id: None,
+            BrowserLoadSource {
+                model_id: installed.model.id,
             },
             load_options(
                 json!({ "context": { "n_ctx": 1024 } }),
@@ -250,26 +255,20 @@ fn explicit_projector_failure_restores_previous_entry() {
         BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
 
     let first = service
-        .prepare_load(
-            BrowserLoadSource::Local {
-                assets: vec![base.clone(), first_projector.clone()],
-                classified: vec![classified(&base), classified(&first_projector)],
-                explicit_projector_asset_id: Some(first_projector.id.clone()),
-            },
-            load_options(json!({}), BrowserObservabilityMode::Off),
-        )
-        .expect("first prepare");
+        .install(BrowserInstallSource {
+            assets: vec![base.clone(), first_projector.clone()],
+            classified: vec![classified(&base), classified(&first_projector)],
+            explicit_projector_asset_id: Some(first_projector.id.clone()),
+        })
+        .expect("first install");
     assert_eq!(first.model.status, ModelStatus::Ready);
 
     let error = service
-        .prepare_load(
-            BrowserLoadSource::Local {
-                assets: vec![bad_projector.clone()],
-                classified: vec![classified(&base), classified(&bad_projector)],
-                explicit_projector_asset_id: Some(bad_projector.id),
-            },
-            load_options(json!({}), BrowserObservabilityMode::Off),
-        )
+        .install(BrowserInstallSource {
+            assets: vec![bad_projector.clone()],
+            classified: vec![classified(&base), classified(&bad_projector)],
+            explicit_projector_asset_id: Some(bad_projector.id),
+        })
         .expect_err("mismatched projector");
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));
@@ -314,7 +313,6 @@ fn browser_remote_commands_use_shared_503_retry_policy_without_cache_fallback() 
         .remote_command(BrowserRemoteCommand::Begin {
             model_urls: vec!["https://example.test/model.gguf".to_string()],
             projector_url: None,
-            options: load_options(json!({}), BrowserObservabilityMode::Off),
         })
         .expect("begin");
 
@@ -381,7 +379,6 @@ fn browser_remote_receipt_failure_cleans_the_created_asset() {
         .remote_command(BrowserRemoteCommand::Begin {
             model_urls: vec!["https://example.test/model.gguf".to_string()],
             projector_url: None,
-            options: load_options(json!({}), BrowserObservabilityMode::Off),
         })
         .expect("begin")
     else {
@@ -469,7 +466,6 @@ fn browser_remote_begin_does_not_replace_an_active_acquisition() {
         .remote_command(BrowserRemoteCommand::Begin {
             model_urls: vec!["https://example.test/first.gguf".to_string()],
             projector_url: None,
-            options: load_options(json!({}), BrowserObservabilityMode::Off),
         })
         .expect("first begin");
 
@@ -477,7 +473,6 @@ fn browser_remote_begin_does_not_replace_an_active_acquisition() {
         .remote_command(BrowserRemoteCommand::Begin {
             model_urls: vec!["https://example.test/second.gguf".to_string()],
             projector_url: None,
-            options: load_options(json!({}), BrowserObservabilityMode::Off),
         })
         .expect_err("second begin");
 

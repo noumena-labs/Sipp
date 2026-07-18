@@ -278,6 +278,8 @@ DEFAULT_MAX_TOKENS = _native.DEFAULT_MAX_TOKENS
 EndpointRef = _native.EndpointRef
 EndpointDescriptor = _native.EndpointDescriptor
 LocalEmbedOptions = _native.LocalEmbedOptions
+ManagedModel = _native.ManagedModel
+ModelStore = _native.ModelStore
 ModelLifecycleError = _native.ModelLifecycleError
 LocalTextOptions = _native.LocalTextOptions
 ModelPlacementConfig = _native.ModelPlacementConfig
@@ -309,6 +311,8 @@ __all__ = [
     "EndpointDescriptor",
     "EndpointRef",
     "LocalEmbedOptions",
+    "ManagedModel",
+    "ModelStore",
     "ModelLifecycleError",
     "LocalTextOptions",
     "ModelPlacementConfig",
