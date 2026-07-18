@@ -180,7 +180,7 @@ export default function App() {
           setStatus('Loading into memory...');
         }
       };
-      const model = await client.models.installUrls([args.modelUrl], { onProgress });
+      const model = await client.models.add([args.modelUrl], { onProgress });
       await client.add(
         'local',
         EndpointDescriptor.local(model.id, {

@@ -26,11 +26,11 @@ const { model: modelPath, input } = readLocalArgs(
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
-const model = await client.models.installFiles([modelPath]);
+const model = await client.models.add([modelPath]);
 await client.add(
   'default',
   EndpointDescriptor.local(model.id, {
-    config: runtimeConfig({ embeddings: false }),
+    runtime: runtimeConfig({ embeddings: false }),
   })
 );
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);

@@ -30,18 +30,16 @@ const {
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
-const model = await client.models.installFiles([modelPath], {
-  projectorPath,
-});
+const model = await client.models.add([modelPath, projectorPath]);
 await client.add(
   'default',
   EndpointDescriptor.local(model.id, {
-    config: runtimeConfig({ embeddings: false }),
+    runtime: runtimeConfig({ embeddings: false }),
   })
 );
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
-// Multimodal chat uses the same chat API. The projector is in runtime config;
+// Multimodal chat uses the same chat API. Model metadata pairs the projector;
 // image bytes are passed on the request.
 const run = client.chat({
   messages: [

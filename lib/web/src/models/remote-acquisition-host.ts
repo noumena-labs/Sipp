@@ -5,7 +5,7 @@ import {
   QueryError,
   type AssetRecord,
   type ClassifiedAsset,
-  type ModelInstallOptions,
+  type ModelAddOptions,
   type RegistryManifest,
 } from './types.js';
 import type {
@@ -36,7 +36,7 @@ export class RemoteAcquisitionHost {
     private readonly runtime: GgufSplitRuntime,
     private readonly manifest: RegistryManifest,
     private readonly classify: ClassifyAsset,
-    private readonly options: ModelInstallOptions
+    private readonly options: ModelAddOptions
   ) {}
 
   public async execute(action: RustRemoteAction): Promise<RemoteHostResult> {
@@ -160,24 +160,14 @@ export class RemoteAcquisitionHost {
     let createdAssetIds: readonly string[] = [];
     try {
       const journal = this.openJournal(action.acquisitionId);
-      const receipt =
-        action.role === 'model'
-          ? await this.assetStore.downloadRemoteGguf(
-              metadata,
-              this.runtime,
-              response,
-              this.options.signal,
-              this.options.onProgress,
-              journal
-            )
-          : await this.assetStore.downloadRemote(
-              metadata,
-              action.role,
-              response,
-              this.options.signal,
-              this.options.onProgress,
-              journal
-            );
+      const receipt = await this.assetStore.downloadRemoteGguf(
+        metadata,
+        this.runtime,
+        response,
+        this.options.signal,
+        this.options.onProgress,
+        journal
+      );
       createdAssetIds = receipt.createdAssetIds;
       const classified: ClassifiedAsset[] = [];
       for (const record of receipt.records) {

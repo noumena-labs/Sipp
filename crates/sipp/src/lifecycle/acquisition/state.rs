@@ -240,7 +240,6 @@ impl RemoteAcquisition {
                 acquisition_id: self.id.clone(),
                 member_id: request.member_id,
                 attempt: self.attempt,
-                role: request.role,
                 metadata: metadata.clone(),
             },
             ActiveOperation::Cleanup {
@@ -299,14 +298,10 @@ impl RemoteAcquisition {
     }
 
     fn complete_member(&mut self, asset_ids: Vec<String>, created_asset_ids: Vec<String>) {
-        let (member_id, role) = {
-            let request = self.request();
-            (request.member_id, request.role)
-        };
+        let member_id = self.request().member_id;
         self.remember_created_assets(created_asset_ids.clone());
         self.resolved.push(RemoteResolvedMember {
             member_id,
-            role,
             asset_ids,
             created_asset_ids,
         });

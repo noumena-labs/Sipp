@@ -5,7 +5,7 @@ endpoint-oriented client model.
 
 At a high level:
 
-1. Install local models through `client.models` when needed.
+1. Add local model sources through `client.models` when needed.
 2. Register an endpoint with `add`.
 3. Keep the returned `EndpointRef`.
 4. Pass that reference to `query`, `chat`, or `embed`.
@@ -19,7 +19,7 @@ gateway, through a provider, or across a hybrid setup.
 
 | Member   | Purpose                                                                      |
 | -------- | ---------------------------------------------------------------------------- |
-| `models` | Install, list, and remove models owned by this client.                       |
+| `models` | Add, list, and remove models owned by this client.                           |
 | `add`    | Register a local, gateway, or provider endpoint and return an `EndpointRef`. |
 | `remove` | Remove a registered endpoint.                                                |
 | `query`  | Generate text from a raw prompt string. No chat template is applied.         |
@@ -35,26 +35,22 @@ add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
 `add` registers an endpoint with the current client instance.
 
 The `id` is caller-defined and scoped to the client. Reusing an `id` replaces
-the existing endpoint. The returned `EndpointRef` is a lightweight handle with:
-
-| Field  | Description                                             |
-| ------ | ------------------------------------------------------- |
-| `kind` | Endpoint kind: `"local"`, `"gateway"`, or `"provider"`. |
-| `id`   | The endpoint id registered on this client.              |
+the existing endpoint. The returned `EndpointRef` is an opaque routing handle;
+applications retain it instead of constructing or inspecting endpoint kinds.
 
 Pass the returned `EndpointRef` to `query`, `chat`, or `embed` to choose where
 the operation runs.
 
 ### Local Endpoint
 
-A local endpoint loads an installed GGUF model into the current process. The
+A local endpoint loads a registered GGUF model into the current process. The
 application selects the model; the client owns storage and runtime lifecycle.
 
-Install a file or URL through `client.models`, then construct a local descriptor
+Add a path, browser `File`, or URL through `client.models`, then construct a local descriptor
 with `EndpointDescriptor.local(modelId, options)`. The descriptor selects an
-installed model; it does not own acquisition or storage.
+existing model ID; it does not own acquisition or storage.
 
-Native packages accept `config: NativeRuntimeConfig`. Browser descriptors
+All packages name the native runtime field `runtime`. Browser descriptors also
 accept browser backend and observability options plus
 `runtime: NativeRuntimeConfig`. See [Runtime Options](../reference/runtime-options.md)
 for the complete package-specific shapes.
@@ -122,8 +118,7 @@ prompts, or agent loops that render prompts themselves.
 | `prompt`          | string                       | Raw prompt text.                                                                                                                       |
 | `options`         | `SippTextOptions` optional | Shared generation options: `maxTokens`, `temperature`, `topP`, and `stop`.                                                             |
 | `local`           | `LocalTextOptions` optional  | Local-only options such as `contextKey`, `grammar`, `jsonSchema`, sampling overrides, and media inputs. Rejected by gateway endpoints. |
-| `endpointOptions` | map optional                 | Free-form options forwarded to gateway endpoint implementations.                                                                       |
-| `providerOptions` | map optional                 | Free-form options forwarded to direct provider adapters. Rejected by gateway endpoints.                                                |
+| `extra`           | map optional                 | Free-form fields interpreted by gateway or provider endpoints. Local endpoints reject them.                                           |
 | `emitTokens`      | boolean                      | When true, stream `TokenBatch` values through the returned run handle.                                                                 |
 
 ### Return Value
@@ -164,6 +159,7 @@ endpoint owns message rendering.
 | `messages`   | `{ role, content }[]` | Ordered conversation turns.                |
 | `options`    | `SippTextOptions`   | Same shared generation options as `query`. |
 | `local`      | `LocalTextOptions`    | Same local-only options as `query`.        |
+| `extra`      | map optional          | Same endpoint-specific extensions as `query`. |
 | `emitTokens` | boolean               | Same streaming control as `query`.         |
 
 ### Return Value
@@ -188,8 +184,7 @@ generation options and does not stream tokens.
 | `endpoint`        | `EndpointRef`                | Registered endpoint to target.                                   |
 | `input`           | string                       | Text to vectorize.                                               |
 | `local`           | `LocalEmbedOptions` optional | Local embedding options, including `contextKey` and `normalize`. |
-| `endpointOptions` | map optional                 | Free-form options for gateway endpoint implementations.          |
-| `providerOptions` | map optional                 | Free-form options for direct provider adapters.                  |
+| `extra`           | map optional                 | Free-form fields interpreted by gateway or provider endpoints.   |
 
 ### Return Value
 
@@ -216,7 +211,7 @@ HTTP routes to `query`, `chat`, or `embed`.
 
 ```text
 Server client:
-  model = models.installFiles(files)
+  model = models.add(files)
   add("local-model", EndpointDescriptor.local(model.id, options))
   -> route handler decodes HTTP request
   -> route handler calls client.query/chat/embed
@@ -244,7 +239,7 @@ A single client can register multiple endpoint kinds. The application chooses
 where an operation runs by passing a different endpoint reference.
 
 ```text
-model = client.models.installFiles(files)
+model = client.models.add(files)
 localRef = client.add("local", EndpointDescriptor.local(model.id, options))
 gatewayRef = client.add("gateway", EndpointDescriptor.gateway(options))
 

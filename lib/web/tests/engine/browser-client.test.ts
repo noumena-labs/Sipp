@@ -63,15 +63,29 @@ test('SippClient exposes typed inference and endpoint registration', async () =>
   assert.equal(typeof client.query, 'function');
   assert.equal(typeof client.chat, 'function');
   assert.equal(typeof client.embed, 'function');
-  assert.equal(typeof client.models.installFiles, 'function');
-  assert.equal(typeof client.models.installUrls, 'function');
+  assert.equal(typeof client.models.add, 'function');
   assert.equal(typeof client.models.list, 'function');
   assert.equal(typeof client.models.remove, 'function');
 
   await client.close();
 });
 
-test('gateway query uses custom routes, authentication, headers, and endpoint options', async () => {
+test('model sources reject empty, mixed, and unsupported inputs before storage access', async () => {
+  const client = new SippClient({ executionMode: 'main-thread' });
+
+  await assert.rejects(client.models.add([]), { code: 'INVALID_MODEL_SOURCE' });
+  await assert.rejects(
+    client.models.add([new File(['model'], 'model.gguf'), 'https://models.test/model.gguf']),
+    { code: 'INVALID_MODEL_SOURCE' }
+  );
+  await assert.rejects(client.models.add(['ftp://models.test/model.gguf']), {
+    code: 'INVALID_MODEL_SOURCE',
+  });
+
+  await client.close();
+});
+
+test('gateway query uses custom routes, authentication, headers, and extra fields', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   await withGlobalFetch(
     async (input, init) => {
@@ -96,10 +110,10 @@ test('gateway query uses custom routes, authentication, headers, and endpoint op
       const response = await client.query('hello', {
         endpoint,
         maxTokens: 12,
-        endpointOptions: { profile: 'request', seed: 7 },
+        extra: { profile: 'request', seed: 7 },
       }).response;
 
-      assert.deepEqual(endpoint, { kind: 'gateway', id: 'custom-http' });
+      assert.deepEqual(Object.keys(endpoint), []);
       assert.equal(response.text, 'custom route response');
       assert.equal(response.stats.inputTokens, 2);
       assert.equal(response.stats.outputTokens, 3);
@@ -153,11 +167,11 @@ test('gateway chat and embed preserve typed capabilities', async () => {
 
       const chat = await client.chat(
         [{ role: 'user', content: 'hello' }],
-        { endpoint, endpointOptions: { response_style: 'brief' } }
+        { endpoint, extra: { response_style: 'brief' } }
       ).response;
       const embed = await client.embed('vector input', {
         endpoint,
-        endpointOptions: { input_type: 'query' },
+        extra: { input_type: 'query' },
       }).response;
 
       assert.equal(chat.text, 'chat response');

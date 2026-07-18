@@ -189,11 +189,9 @@ class TokenUsage(TypedDict):
     output_tokens: Optional[int]
     total_tokens: Optional[int]
 
-EndpointOptions = dict[str, Any]
-ProviderOptions = dict[str, Any]
+RequestExtra = dict[str, Any]
 
 class EndpointRefDict(TypedDict):
-    kind: str
     id: str
 
 class SippTextResponse(TypedDict):
@@ -235,7 +233,7 @@ class EndpointDescriptor:
     def local(
         model_id: str,
         *,
-        config: Optional[NativeRuntimeConfig] = None,
+        runtime: Optional[NativeRuntimeConfig] = None,
     ) -> EndpointDescriptor: ...
     @staticmethod
     def gateway(
@@ -266,14 +264,7 @@ class EndpointDescriptor:
         static_headers: Optional[Sequence[tuple[str, str]]] = None,
     ) -> EndpointDescriptor: ...
 class EndpointRef:
-    @staticmethod
-    def local(id: str) -> EndpointRef: ...
-    @staticmethod
-    def gateway(id: str) -> EndpointRef: ...
-    @staticmethod
-    def provider(id: str) -> EndpointRef: ...
-    @property
-    def kind(self) -> str: ...
+    pass
 
 class ModelLifecycleError(Exception):
     code: str
@@ -288,18 +279,7 @@ class ManagedModel:
     status: str
 
 class ModelStore:
-    def install_files(
-        self,
-        model_paths: Sequence[PathLike],
-        *,
-        projector_path: Optional[PathLike] = None,
-    ) -> ManagedModel: ...
-    def install_urls(
-        self,
-        model_urls: Sequence[str],
-        *,
-        projector_url: Optional[str] = None,
-    ) -> ManagedModel: ...
+    def add(self, sources: Sequence[PathLike]) -> ManagedModel: ...
     def list(self) -> list[ManagedModel]: ...
     def remove(self, model_id: str) -> None: ...
 
@@ -358,8 +338,7 @@ class SippClient:
         endpoint: Optional[EndpointRef] = None,
         options: Optional[SippTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
-        endpoint_options: Optional[EndpointOptions] = None,
-        provider_options: Optional[ProviderOptions] = None,
+        extra: Optional[RequestExtra] = None,
         emit_tokens: bool = False,
     ) -> SippTextRun: ...
     def chat(
@@ -369,8 +348,7 @@ class SippClient:
         endpoint: Optional[EndpointRef] = None,
         options: Optional[SippTextOptions] = None,
         local: Optional[LocalTextOptions] = None,
-        endpoint_options: Optional[EndpointOptions] = None,
-        provider_options: Optional[ProviderOptions] = None,
+        extra: Optional[RequestExtra] = None,
         emit_tokens: bool = False,
     ) -> SippTextRun: ...
     def embed(
@@ -379,8 +357,7 @@ class SippClient:
         *,
         endpoint: Optional[EndpointRef] = None,
         local: Optional[LocalEmbedOptions] = None,
-        endpoint_options: Optional[EndpointOptions] = None,
-        provider_options: Optional[ProviderOptions] = None,
+        extra: Optional[RequestExtra] = None,
     ) -> SippEmbeddingRun: ...
 
 def backend_observability_json(include_details: bool = True) -> str: ...

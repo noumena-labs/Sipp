@@ -1,26 +1,7 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::lifecycle::{ModelAssetKind, ModelError};
-
-/// Role of one independently acquired remote asset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum RemoteAssetRole {
-    Model,
-    Shard,
-    Projector,
-}
-
-impl RemoteAssetRole {
-    pub(crate) const fn asset_kind(self) -> ModelAssetKind {
-        match self {
-            Self::Model => ModelAssetKind::Model,
-            Self::Shard => ModelAssetKind::Shard,
-            Self::Projector => ModelAssetKind::Projector,
-        }
-    }
-}
+use crate::lifecycle::ModelError;
 
 /// Remote metadata used as the exact cache identity for one asset member.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,7 +39,6 @@ pub(crate) struct RemoteCacheCandidate {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RemoteAcquisitionRequest {
     pub(crate) member_id: u32,
-    pub(crate) role: RemoteAssetRole,
     pub(crate) url: String,
     pub(crate) candidates: Vec<RemoteCacheCandidate>,
 }
@@ -164,7 +144,6 @@ pub(crate) enum RemoteAction {
         acquisition_id: String,
         member_id: u32,
         attempt: u8,
-        role: RemoteAssetRole,
         metadata: RemoteMetadata,
     },
     Cleanup {
@@ -309,7 +288,6 @@ impl RemoteAcquisitionEvent {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RemoteResolvedMember {
     pub(crate) member_id: u32,
-    pub(crate) role: RemoteAssetRole,
     pub(crate) asset_ids: Vec<String>,
     pub(crate) created_asset_ids: Vec<String>,
 }
@@ -330,6 +308,11 @@ pub(crate) fn canonical_remote_url(value: &str) -> Result<String, ModelError> {
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(ModelError::InvalidModelSource(
             "remote URL scheme must be http or https".to_string(),
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(ModelError::InvalidModelSource(
+            "remote URL must contain a host".to_string(),
         ));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {

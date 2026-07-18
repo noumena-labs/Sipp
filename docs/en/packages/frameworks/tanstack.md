@@ -211,8 +211,8 @@ export function LocalAnswer(): JSX.Element {
   async function run(prompt: string): Promise<void> {
     const client = new SippClient();
     try {
-      const model = await client.models.installUrls([
-        new URL('/models/model.gguf', window.location.href).href,
+      const model = await client.models.add([
+        '/models/model.gguf',
       ]);
       const endpoint = await client.add(
         'browser-local',
@@ -258,8 +258,8 @@ export function HybridAnswer(): JSX.Element {
   async function run(prompt: string): Promise<void> {
     const client = new SippClient();
     try {
-      const model = await client.models.installUrls([
-        new URL('/models/model.gguf', window.location.href).href,
+      const model = await client.models.add([
+        '/models/model.gguf',
       ]);
       const localEndpoint = await client.add(
         'browser-local',

@@ -437,17 +437,11 @@ pub extern "C" fn CE_GetEosText() -> *mut c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn CE_PairingValidate(
-    classified_json: *const c_char,
-    explicit_projector_id: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn CE_PairingValidate(classified_json: *const c_char) -> *mut c_char {
     let Some(classified_json) = required_cstr(classified_json) else {
         return owned_json_error("INVALID_MODEL_SOURCE", "classified asset JSON is missing");
     };
-    owned_string(crate::pairing::pairing_validate_json(
-        &classified_json,
-        &optional_cstr(explicit_projector_id),
-    ))
+    owned_string(crate::pairing::pairing_validate_json(&classified_json))
 }
 
 #[no_mangle]

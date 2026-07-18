@@ -16,10 +16,10 @@ npm install @sipphq/sipp
 
 ## Browser Local Query
 
-Use `@sipphq/sipp` only in browser code. Install one or more model URLs or
+Use `@sipphq/sipp` only in browser code. Add one or more model URLs or
 user-provided `File` objects through `client.models`; multiple inputs represent
-model shards. Installation returns a model ID, and an existing installed ID can
-also be passed directly to `EndpointDescriptor.local(...)`.
+model shards or a model/projector pair. `models.add` returns the model ID passed
+to `EndpointDescriptor.local(...)`.
 
 ```ts
 import { useState } from 'react';
@@ -31,8 +31,8 @@ export function LocalQuery(): JSX.Element {
   async function run(): Promise<void> {
     const client = new SippClient();
     try {
-      const model = await client.models.installUrls([
-        new URL('/models/model.gguf', window.location.href).href,
+      const model = await client.models.add([
+        '/models/model.gguf',
       ]);
       const endpoint = await client.add(
         'default',

@@ -629,7 +629,7 @@ fn query_value(
     protocol_options: &serde_json::Map<String, serde_json::Value>,
 ) -> SippResult<serde_json::Value> {
     let mut options = protocol_options.clone();
-    options.extend(request.endpoint_options);
+    options.extend(request.extra);
     serde_json::to_value(QueryBody {
         model: target.to_string(),
         prompt: request.prompt,
@@ -650,7 +650,7 @@ fn chat_value(
     protocol_options: &serde_json::Map<String, serde_json::Value>,
 ) -> SippResult<serde_json::Value> {
     let mut options = protocol_options.clone();
-    options.extend(request.endpoint_options);
+    options.extend(request.extra);
     serde_json::to_value(ChatBody {
         model: target.to_string(),
         messages: request
@@ -677,7 +677,7 @@ fn embed_value(
     protocol_options: &serde_json::Map<String, serde_json::Value>,
 ) -> SippResult<serde_json::Value> {
     let mut options = protocol_options.clone();
-    options.extend(request.endpoint_options);
+    options.extend(request.extra);
     serde_json::to_value(EmbedBody {
         model: target.to_string(),
         input: request.input,

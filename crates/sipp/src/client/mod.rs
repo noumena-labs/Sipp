@@ -41,8 +41,8 @@ pub use provider::{
     ProviderAuthConfig, ProviderDescriptor, ProviderSecret,
 };
 pub use request::{
-    EndpointOptions, LocalEmbedOptions, LocalTextOptions, ProviderOptions, SippChatRequest,
-    SippEmbedRequest, SippQueryRequest, SippRequestContext, SippTextOptions,
+    LocalEmbedOptions, LocalTextOptions, RequestExtra, SippChatRequest, SippEmbedRequest,
+    SippQueryRequest, SippRequestContext, SippTextOptions,
 };
 pub use response::{SippEmbeddingResponse, SippResponseMetadata, SippTextResponse};
 pub use run::{

@@ -3,15 +3,16 @@ import {
   SippClient,
   type BrowserTextRun,
   type ChatMessage,
+  type EndpointRef,
   type NativeRuntimeConfig,
 } from '@noumena-labs/sipp';
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
-  EXAMPLE_LOCAL_ENDPOINT,
+  EXAMPLE_LOCAL_ENDPOINT_ID,
   formatTextResult,
   readMaxTokens,
-  installModel,
+  addModel,
   readPrompt,
   renderLocalPage,
   reportError,
@@ -20,22 +21,21 @@ import {
 
 const elements = renderLocalPage('Local Chat', 'Explain the SippClient API in one sentence.', true);
 const client = new SippClient();
-let modelLoaded = false;
+let endpoint: EndpointRef | null = null;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     write(elements.output, 'Loading model...');
-    const model = await installModel(client, elements.modelUrlInput, elements.modelFileInput);
+    const model = await addModel(client, elements.modelUrlInput, elements.modelFileInput);
     if (model == null) {
       write(elements.output, 'Enter a GGUF model URL, path, or file.');
       return;
     }
-    await client.add(
-      EXAMPLE_LOCAL_ENDPOINT.id,
+    endpoint = await client.add(
+      EXAMPLE_LOCAL_ENDPOINT_ID,
       EndpointDescriptor.local(model.id, { runtime: runtimeConfig() })
     );
-    modelLoaded = true;
     write(elements.output, `Loaded ${model.name}.`);
   } catch (error) {
     reportError(elements.output, error);
@@ -44,7 +44,7 @@ elements.loadForm.addEventListener('submit', async (event) => {
 
 elements.runForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!modelLoaded) {
+  if (endpoint == null) {
     write(elements.output, 'Load a model before running chat.');
     return;
   }
@@ -57,6 +57,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   try {
     // `chat` sends role-tagged messages and streams token batches as they arrive.
     const run = client.chat(chatMessages(prompt), {
+      endpoint,
       emitTokens: true,
       maxTokens: readMaxTokens(elements.maxTokensInput),
       contextKey: 'web-chat-example',
@@ -85,7 +86,10 @@ function chatMessages(prompt: string): readonly ChatMessage[] {
   ];
 }
 
-async function streamTextRun(output: HTMLPreElement, run: BrowserTextRun): Promise<void> {
+async function streamTextRun(
+  output: HTMLPreElement,
+  run: BrowserTextRun
+): Promise<void> {
   write(output, '');
   let streamed = '';
   for await (const batch of run.tokens) {
@@ -96,5 +100,5 @@ async function streamTextRun(output: HTMLPreElement, run: BrowserTextRun): Promi
   if (streamed !== '' && streamed !== result.text) {
     throw new Error('streamed token batches did not match final response text');
   }
-  write(output, formatTextResult(EXAMPLE_LOCAL_ENDPOINT, result));
+  write(output, formatTextResult(EXAMPLE_LOCAL_ENDPOINT_ID, result));
 }

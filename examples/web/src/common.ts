@@ -2,11 +2,10 @@ import {
   EndpointDescriptor,
   QueryError,
   type EmbeddingResult,
-  type EndpointRef,
   type GatewayEndpointOptions,
   type GenerationResult,
   type ManagedModel,
-  type ModelInstallOptions,
+  type ModelAddOptions,
   type SippClient,
 } from '@noumena-labs/sipp';
 import './style.css';
@@ -14,7 +13,7 @@ import './style.css';
 export const DEFAULT_MAX_TOKENS = 2048;
 export const DEFAULT_TEMPERATURE = 0.7;
 export const DEFAULT_TOP_P = 0.8;
-export const EXAMPLE_LOCAL_ENDPOINT: EndpointRef = { kind: 'local', id: 'default' };
+export const EXAMPLE_LOCAL_ENDPOINT_ID = 'default';
 
 export interface LocalPageElements {
   readonly loadForm: HTMLFormElement;
@@ -228,18 +227,18 @@ export function renderGatewayLocalPage(defaultPrompt: string): GatewayLocalPageE
   };
 }
 
-export async function installModel(
+export async function addModel(
   client: SippClient,
   modelUrlInput: HTMLInputElement,
   fileInput: HTMLInputElement,
-  options: ModelInstallOptions = {}
+  options: ModelAddOptions = {}
 ): Promise<ManagedModel | null> {
   const file = fileInput.files?.[0];
   if (file != null) {
-    return await client.models.installFiles([file], options);
+    return await client.models.add([file], options);
   }
   const modelUrl = modelUrlInput.value.trim();
-  return modelUrl === '' ? null : await client.models.installUrls([modelUrl], options);
+  return modelUrl === '' ? null : await client.models.add([modelUrl], options);
 }
 
 export function readPrompt(input: HTMLTextAreaElement): string | null {
@@ -288,9 +287,9 @@ export function reportError(output: HTMLPreElement, error: unknown): void {
   write(output, String(error));
 }
 
-export function formatTextResult(endpoint: EndpointRef, result: GenerationResult): string {
+export function formatTextResult(endpointId: string, result: GenerationResult): string {
   const lines = [
-    `endpoint=${JSON.stringify(endpoint)}`,
+    `endpoint=${endpointId}`,
     `finish_reason=${result.finishReason}`,
     `text=${result.text.trim()}`,
   ];
@@ -304,10 +303,10 @@ export function formatTextResult(endpoint: EndpointRef, result: GenerationResult
   return lines.join('\n');
 }
 
-export function formatEmbeddingResult(endpoint: EndpointRef, result: EmbeddingResult): string {
+export function formatEmbeddingResult(endpointId: string, result: EmbeddingResult): string {
   const preview = result.values.slice(0, 8).map((value) => value.toFixed(6)).join(', ');
   return [
-    `endpoint=${JSON.stringify(endpoint)}`,
+    `endpoint=${endpointId}`,
     `dimensions=${result.values.length}`,
     `pooling=${result.pooling}`,
     `normalized=${result.normalized}`,

@@ -22,8 +22,8 @@ import {
   type ObservabilityEvent,
   type ObservabilitySnapshot,
   type ModelInfo,
-  type ModelInstallOptions,
-  type ModelInstallSource,
+  type ModelAddOptions,
+  type ModelAddSource,
   type ModelLifecycleService,
   type ModelLoadOptions,
   type EmbedOptions,
@@ -157,9 +157,9 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.workerConfig = toWorkerRuntimeConfig(config);
   }
 
-  public async install(
-    source: ModelInstallSource,
-    options: ModelInstallOptions = {}
+  public async add(
+    source: ModelAddSource,
+    options: ModelAddOptions = {}
   ): Promise<ModelInfo> {
     this.assertOpen();
     return (await this.callWorker(

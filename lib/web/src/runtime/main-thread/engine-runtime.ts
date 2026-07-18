@@ -541,15 +541,9 @@ export class MainThreadEngineRuntime implements EngineRuntime {
     );
   }
 
-  public async resolvePairing(
-    classified: readonly ClassifiedAsset[],
-    explicitProjectorId?: string | null
-  ): Promise<PairingPlan> {
+  public async resolvePairing(classified: readonly ClassifiedAsset[]): Promise<PairingPlan> {
     await this.ensureModule();
-    const response = this.getLoadedWasmBridge().validatePairing(
-      classified,
-      explicitProjectorId
-    );
+    const response = this.getLoadedWasmBridge().validatePairing(classified);
     if (response.ok && response.plan != null) {
       return response.plan;
     }

@@ -43,8 +43,8 @@ import {
   type ModelEntry,
   type ModelDetectionResult,
   type ModelInfo,
-  type ModelInstallOptions,
-  type ModelInstallSource,
+  type ModelAddOptions,
+  type ModelAddSource,
   type ModelLifecycleService,
   type ModelLoadOptions,
   type ObservabilityEvent,
@@ -73,11 +73,6 @@ import type { RuntimeBackendOverride, WasmThreadingMode } from '../engine/runtim
 interface InstalledAsset {
   record: AssetRecord;
   file: File;
-}
-
-interface SourceInstallResult {
-  assets: InstalledAsset[];
-  explicitProjectorAssetId: string | null;
 }
 
 interface AssetClassifier {
@@ -309,15 +304,15 @@ export class ModelService implements ModelLifecycleService {
     };
   }
 
-  public async install(
-    source: ModelInstallSource,
-    options: ModelInstallOptions = {}
+  public async add(
+    source: ModelAddSource,
+    options: ModelAddOptions = {}
   ): Promise<ModelInfo> {
     return this.withLifecycleLock(async () => {
       if (options.signal?.aborted) {
         throw new DOMException('Model install aborted.', 'AbortError');
       }
-      return await this.installWithRustLifecycle(source, options);
+      return await this.addWithRustLifecycle(source, options);
     });
   }
 
@@ -655,11 +650,11 @@ export class ModelService implements ModelLifecycleService {
     this.observability.markClosed();
   }
 
-  private async installWithRustLifecycle(
-    source: ModelInstallSource,
-    options: ModelInstallOptions
+  private async addWithRustLifecycle(
+    source: ModelAddSource,
+    options: ModelAddOptions
   ): Promise<ModelInfo> {
-    const installOptions: ModelInstallOptions = {
+    const addOptions: ModelAddOptions = {
       ...options,
       onProgress: (progress) => {
         options.onProgress?.(progress);
@@ -686,7 +681,7 @@ export class ModelService implements ModelLifecycleService {
             inspection: result.inspection,
           };
         },
-        installOptions
+        addOptions
       )
       : null;
     let rust: RustLifecycleBridge | null = null;
@@ -703,7 +698,7 @@ export class ModelService implements ModelLifecycleService {
             remoteAcquisitionId = acquisitionId;
           }
         )
-        : rust.install(await this.buildRustInstallSource(source, manifest, installOptions));
+        : rust.install(await this.buildRustInstallSource(source, manifest, addOptions));
       remoteAcquisitionId = null;
       await this.replaceManifest(installed.manifest);
       if (remoteHost != null) {
@@ -849,13 +844,12 @@ export class ModelService implements ModelLifecycleService {
   private async acquireRemote(
     rust: RustLifecycleBridge,
     host: RemoteAcquisitionHost,
-    source: Extract<ModelInstallSource, { kind: 'remote' }>,
+    source: Extract<ModelAddSource, { kind: 'remote' }>,
     setAcquisitionId: (acquisitionId: string | null) => void
   ): Promise<RustLifecycleInstallValue> {
     let response = rust.remoteAcquisition({
       command: 'begin',
-      modelUrls: source.modelUrls,
-      ...(source.projectorUrl == null ? {} : { projectorUrl: source.projectorUrl }),
+      urls: source.urls,
     });
     while (response.kind === 'action') {
       setAcquisitionId(response.action.acquisitionId);
@@ -896,24 +890,19 @@ export class ModelService implements ModelLifecycleService {
   }
 
   private async buildRustInstallSource(
-    source: Extract<ModelInstallSource, { kind: 'local' }>,
+    source: Extract<ModelAddSource, { kind: 'local' }>,
     manifest: RegistryManifest,
-    options: ModelInstallOptions
+    options: ModelAddOptions
   ): Promise<RustLifecycleInstallSource> {
     const installed = await this.installLocalSource(source, manifest, options);
-    const classified = await this.classifyAssets(installed.assets, options.signal);
-    const sourceProjectorAssetId = this.resolveSourceProjectorAssetId(
-      classified,
-      installed.explicitProjectorAssetId
-    );
+    const classified = await this.classifyAssets(installed, options.signal);
     return {
-      assets: installed.assets.map((asset) => asset.record),
+      assets: installed.map((asset) => asset.record),
       classified: classified.map((file) => ({
         assetId: file.assetId,
         name: file.name,
         inspection: file.inspection,
       })),
-      explicitProjectorAssetId: sourceProjectorAssetId,
     };
   }
 
@@ -1041,34 +1030,27 @@ export class ModelService implements ModelLifecycleService {
   }
 
   private async installLocalSource(
-    source: Extract<ModelInstallSource, { kind: 'local' }>,
+    source: Extract<ModelAddSource, { kind: 'local' }>,
     manifest: RegistryManifest,
-    options: ModelInstallOptions
-  ): Promise<SourceInstallResult> {
-    if (source.modelFiles.length === 0 || !source.modelFiles.every(isFile)) {
+    options: ModelAddOptions
+  ): Promise<InstalledAsset[]> {
+    if (source.files.length === 0 || !source.files.every(isFile)) {
       throw new QueryError(
         'INVALID_MODEL_SOURCE',
         'Local model source requires at least one File.'
       );
     }
-    const base = source.modelFiles.length === 1
-      ? await this.installLocalModelAssets(source.modelFiles[0], manifest, options)
+    return source.files.length === 1
+      ? await this.installLocalModelAssets(source.files[0], manifest, options)
       : await Promise.all(
-        source.modelFiles.map((file) => this.installLocalAsset(file, 'shard', manifest, options))
+        source.files.map((file) => this.installLocalAsset(file, 'shard', manifest, options))
       );
-    const projector = source.projectorFile == null
-      ? null
-      : await this.installLocalAsset(source.projectorFile, 'projector', manifest, options);
-    return {
-      assets: [...base, ...(projector == null ? [] : [projector])],
-      explicitProjectorAssetId: projector?.record.id ?? null,
-    };
   }
 
   private async installLocalModelAssets(
     file: File,
     manifest: RegistryManifest,
-    options: ModelInstallOptions
+    options: ModelAddOptions
   ): Promise<InstalledAsset[]> {
     const existingSplit = this.findLocalSplitAssets(manifest, file);
     if (existingSplit != null) {
@@ -1115,7 +1097,7 @@ export class ModelService implements ModelLifecycleService {
     file: File,
     kind: AssetRecord['kind'],
     manifest: RegistryManifest,
-    options: ModelInstallOptions
+    options: ModelAddOptions
   ): Promise<InstalledAsset> {
     const record = await this.assetStore.installFile({
       kind,
@@ -1191,17 +1173,6 @@ export class ModelService implements ModelLifecycleService {
     );
   }
 
-  private resolveSourceProjectorAssetId(
-    classified: readonly ClassifiedAssetFile[],
-    explicitProjectorAssetId: string | null
-  ): string | null {
-    if (explicitProjectorAssetId != null) {
-      return explicitProjectorAssetId;
-    }
-    const projectors = classified.filter((file) => file.inspection.role === 'projector');
-    return projectors.length === 1 ? projectors[0].assetId : null;
-  }
-
   private async getAssetFileForEntry(entry: ModelEntry, asset: AssetRecord): Promise<File> {
     try {
       return await this.assetStore.getFile(asset);
@@ -1222,7 +1193,7 @@ export class ModelService implements ModelLifecycleService {
       await this.markBroken(entry.id);
       throw new QueryError(
         'MODEL_BROKEN',
-        `Installed model "${entry.id}" is missing detection metadata; reinstall the model.`
+        `Model "${entry.id}" is missing detection metadata; add the model again.`
       );
     }
 
@@ -1234,7 +1205,7 @@ export class ModelService implements ModelLifecycleService {
           await this.markBroken(entry.id);
           throw new QueryError(
             'MODEL_BROKEN',
-            `Installed model "${entry.id}" references a missing asset.`
+            `Model "${entry.id}" references a missing asset.`
           );
         }
         try {
@@ -1254,7 +1225,7 @@ export class ModelService implements ModelLifecycleService {
           await this.markBroken(entry.id);
           throw new QueryError(
             'MODEL_BROKEN',
-            `Installed model "${entry.id}" references a missing projector.`
+            `Model "${entry.id}" references a missing projector.`
           );
         }
         try {

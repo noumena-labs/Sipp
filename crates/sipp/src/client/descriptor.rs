@@ -40,10 +40,10 @@ impl From<ProviderDescriptor> for EndpointDescriptor {
 /// Descriptor for a local GGUF model endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalDescriptor {
-    /// Installed model id returned by the client model store.
+    /// Model ID returned by the client model store.
     pub model_id: String,
     /// Native runtime configuration.
-    pub config: NativeRuntimeConfig,
+    pub runtime: NativeRuntimeConfig,
 }
 
 impl LocalDescriptor {
@@ -51,7 +51,7 @@ impl LocalDescriptor {
     pub fn new(model_id: impl Into<String>) -> Self {
         Self {
             model_id: model_id.into(),
-            config: NativeRuntimeConfig::default(),
+            runtime: NativeRuntimeConfig::default(),
         }
     }
 }

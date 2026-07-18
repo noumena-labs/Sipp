@@ -39,10 +39,10 @@ fn local_descriptor_accepts_a_managed_model_id_and_runtime_config() {
         panic!("expected local descriptor");
     };
     assert_eq!(local.model_id, "model-a");
-    assert_eq!(local.config, NativeRuntimeConfig::default());
+    assert_eq!(local.runtime, NativeRuntimeConfig::default());
 
     let mut configured = LocalDescriptor::new("model-b");
-    configured.config = NativeRuntimeConfig {
+    configured.runtime = NativeRuntimeConfig {
         context: ContextRuntimeConfig {
             n_ctx: Some(256),
             ..Default::default()
@@ -51,16 +51,14 @@ fn local_descriptor_accepts_a_managed_model_id_and_runtime_config() {
     };
 
     assert_eq!(configured.model_id, "model-b");
-    assert_eq!(configured.config.context.n_ctx, Some(256));
+    assert_eq!(configured.runtime.context.n_ctx, Some(256));
 }
 
 mod client_api {
-    use sipp::{EndpointCapabilities, EndpointDescriptor, EndpointRef, GatewayDescriptor};
+    use sipp::{EndpointCapabilities, EndpointDescriptor, GatewayDescriptor};
 
     #[test]
     fn gateway_descriptor_is_registered_through_add_contract() {
-        let endpoint = EndpointRef::gateway("service");
-        assert_eq!(endpoint.kind(), "gateway");
         let descriptor: EndpointDescriptor = GatewayDescriptor {
             target: "local".to_string(),
             base_url: "http://127.0.0.1:8080".to_string(),

@@ -46,22 +46,22 @@ examples. Real keys belong in environment variables or a secret manager.
 ## Provider Options
 
 Typed request fields should use Sipp's request options. Provider-only
-fields belong in `providerOptions`:
+fields belong in `extra`:
 
 ```ts
 const run = client.chat({
   endpoint,
   messages,
   options: { maxTokens: 128 },
-  providerOptions: {
+  extra: {
     reasoning_effort: 'low',
   },
 });
 ```
 
-`providerOptions` is for direct provider endpoints. Gateway-specific extensions
-belong in `endpointOptions` or descriptor-level `protocolOptions`, because the
-gateway implementation owns how those fields are interpreted.
+The selected provider interprets `extra`. Gateway endpoints use the same field,
+but interpretation belongs to the gateway implementation. Descriptor-level
+`protocolOptions` apply to every request sent through that gateway endpoint.
 
 ## Provider-Backed Gateway Targets
 

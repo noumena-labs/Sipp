@@ -2,7 +2,6 @@ import {
   EndpointDescriptor,
   SippClient,
   type BrowserEmbeddingRun,
-  type EndpointRef,
 } from '@noumena-labs/sipp';
 import {
   formatEmbeddingResult,
@@ -33,7 +32,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   try {
     const endpoint = await client.add('gateway', EndpointDescriptor.gateway(config));
     const run = client.embed(input, { endpoint });
-    await printEmbeddingRun(elements.output, endpoint, run);
+    await printEmbeddingRun(elements.output, run);
   } catch (error) {
     reportError(elements.output, error);
   } finally {
@@ -43,9 +42,8 @@ elements.runForm.addEventListener('submit', async (event) => {
 
 async function printEmbeddingRun(
   output: HTMLPreElement,
-  endpoint: EndpointRef,
   run: BrowserEmbeddingRun
 ): Promise<void> {
   const result = await run.response;
-  write(output, formatEmbeddingResult(endpoint, result));
+  write(output, formatEmbeddingResult('gateway', result));
 }

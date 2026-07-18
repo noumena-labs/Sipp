@@ -4,11 +4,13 @@ Sipp local inference uses GGUF model files. Text workflows need a text GGUF
 model, embedding workflows need a model that reports embedding support, and
 vision chat workflows need both a model GGUF and a projector GGUF.
 
-## Managed Models
+## Model Store
 
-Every client owns one model store. Installing files or URLs returns a
-`ManagedModel`; pass its `id` to a local endpoint descriptor. Endpoint
-descriptors select installed models and contain only load-time options.
+Every client owns one model store. `models.add` returns a `ManagedModel`; pass
+its `id` to a local endpoint descriptor. Native local paths are referenced in
+place, remote sources are stored under the client storage root, and browser
+sources are persisted in OPFS. Endpoint descriptors select models and contain
+only load-time options.
 
 Native clients store models under `.sipp-models` by default. Browser clients
 use the `sipp-models` directory in OPFS. Override the root only when an

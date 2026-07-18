@@ -42,7 +42,7 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let mut client = SippClient::new()?;
-    let model = client.models().install_files([cli.model]).await?;
+    let model = client.models().add([cli.model]).await?;
     let descriptor = LocalDescriptor::new(model.id);
     let text_endpoint = client
         .add("local-text", descriptor.clone())
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     embedding_runtime.context.embeddings = Some(true);
     embedding_runtime.context.pooling = Some(PoolingType::Mean);
     let mut embedding_descriptor = descriptor;
-    embedding_descriptor.config = embedding_runtime;
+    embedding_descriptor.runtime = embedding_runtime;
     let embedding_endpoint = client
         .add("local-embed", embedding_descriptor)
         .await

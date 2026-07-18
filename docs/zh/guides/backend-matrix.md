@@ -91,7 +91,7 @@ backend = "cpu"
 
 ```ts
 // 浏览器可以通过选项分别指定 WebGPU 和 CPU 终端
-const model = await client.models.installUrls(['./models/model.gguf']);
+const model = await client.models.add(['./models/model.gguf']);
 await client.add(
   'local-webgpu',
   EndpointDescriptor.local(model.id, { backend: 'webgpu' })

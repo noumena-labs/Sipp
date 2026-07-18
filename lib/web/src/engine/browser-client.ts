@@ -15,15 +15,16 @@ import {
   type EngineEvent,
   type EngineObservability,
   type EngineState,
-  type FileInstallOptions,
   type ManagedModel,
   ENDPOINT_DESCRIPTOR_PAYLOAD,
   type ModelLifecycleService,
+  type ModelAddOptions,
   type ModelStore,
   type QueryInput,
   type QueryOptions,
-  type UrlInstallOptions,
+  ENDPOINT_REF_PAYLOAD,
 } from '../models/types.js';
+import { resolveUrl } from '../utils/url.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
 import { FileSystemStorage } from './file-system-storage.js';
@@ -68,26 +69,46 @@ class BrowserModelStore implements ModelStore {
     private readonly assertOpen: () => void
   ) {}
 
-  public async installFiles(
-    modelFiles: readonly File[],
-    { projectorFile, ...options }: FileInstallOptions = {}
+  public async add(
+    sources: readonly (File | string | URL)[],
+    options: ModelAddOptions = {}
   ): Promise<ManagedModel> {
     this.assertOpen();
-    return managedModel(await this.service.install(
-      { kind: 'local', modelFiles, projectorFile },
-      options
-    ));
-  }
+    if (sources.length === 0) {
+      throw new QueryError('INVALID_MODEL_SOURCE', 'Model sources must not be empty.');
+    }
 
-  public async installUrls(
-    modelUrls: readonly string[],
-    { projectorUrl, ...options }: UrlInstallOptions = {}
-  ): Promise<ManagedModel> {
-    this.assertOpen();
-    return managedModel(await this.service.install(
-      { kind: 'remote', modelUrls, projectorUrl },
-      options
-    ));
+    const files: File[] = [];
+    const urls: string[] = [];
+    for (const source of sources) {
+      if (typeof source !== 'string' && !(source instanceof URL)) {
+        files.push(source);
+        continue;
+      }
+      let url: URL;
+      try {
+        url = source instanceof URL ? source : resolveUrl(source, 'model source');
+      } catch (cause) {
+        throw new QueryError('INVALID_MODEL_SOURCE', 'Model URL is invalid.', { cause });
+      }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new QueryError(
+          'INVALID_MODEL_SOURCE',
+          `Model URL scheme must be HTTP or HTTPS, not ${url.protocol}`
+        );
+      }
+      urls.push(url.href);
+    }
+    if (files.length > 0 && urls.length > 0) {
+      throw new QueryError(
+        'INVALID_MODEL_SOURCE',
+        'Browser files and remote URLs cannot be added together.'
+      );
+    }
+    const source = files.length > 0
+      ? { kind: 'local' as const, files }
+      : { kind: 'remote' as const, urls };
+    return managedModel(await this.service.add(source, options));
   }
 
   public async list(): Promise<ManagedModel[]> {
@@ -125,7 +146,7 @@ export class SippClient implements SippClientShape {
   #service: ModelLifecycleService;
   #gatewayEndpoints = new GatewayEndpointRegistry();
   #providers = new ProviderEndpointRegistry();
-  #localEndpoint: EndpointRef | null = null;
+  #localEndpointId: string | null = null;
   #closed = false;
 
   public constructor(options: SippClientOptions = {}) {
@@ -154,9 +175,6 @@ export class SippClient implements SippClientShape {
 
   /**
    * Registers or replaces an endpoint after its descriptor is validated.
-   *
-   * Replacing an endpoint with a different kind invalidates prior references
-   * for the same id.
    */
   public async add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef> {
     this.assertOpen();
@@ -167,9 +185,8 @@ export class SippClient implements SippClientShape {
       await this.#service.load(payload.modelId, payload.options);
       this.#gatewayEndpoints.remove(normalizedId);
       this.#providers.remove(normalizedId);
-      const endpoint = { kind: 'local', id: normalizedId } as const;
-      this.#localEndpoint = endpoint;
-      return endpoint;
+      this.#localEndpointId = normalizedId;
+      return { [ENDPOINT_REF_PAYLOAD]: { kind: 'local', id: normalizedId } };
     }
     if (payload.kind === 'gateway') {
       const endpoint = this.#gatewayEndpoints.prepare(normalizedId, payload.options);
@@ -186,7 +203,7 @@ export class SippClient implements SippClientShape {
   public async remove(id: string): Promise<void> {
     this.assertOpen();
     const normalizedId = normalizeEndpointId(id, 'endpoint id');
-    if (this.#localEndpoint?.id === normalizedId) {
+    if (this.#localEndpointId === normalizedId) {
       await this.removeLocalEndpoint(normalizedId);
       return;
     }
@@ -283,9 +300,9 @@ export class SippClient implements SippClientShape {
   }
 
   private async removeLocalEndpoint(id: string): Promise<void> {
-    if (this.#localEndpoint?.id === id) {
+    if (this.#localEndpointId === id) {
       await this.#service.unload();
-      this.#localEndpoint = null;
+      this.#localEndpointId = null;
     }
   }
 
@@ -293,11 +310,12 @@ export class SippClient implements SippClientShape {
     if (endpoint == null) {
       return;
     }
-    if (endpoint.kind !== 'local') {
-      throw new QueryError('MODEL_NOT_FOUND', `${endpoint.kind} endpoint not found: ${endpoint.id}`);
+    const { id, kind } = endpoint[ENDPOINT_REF_PAYLOAD];
+    if (kind !== 'local') {
+      throw new QueryError('MODEL_NOT_FOUND', `${kind} endpoint not found: ${id}`);
     }
-    if (this.#localEndpoint == null || this.#localEndpoint.id !== endpoint.id) {
-      throw new QueryError('MODEL_NOT_FOUND', `local endpoint not found: ${endpoint.id}`);
+    if (this.#localEndpointId !== id) {
+      throw new QueryError('MODEL_NOT_FOUND', `local endpoint not found: ${id}`);
     }
   }
 }
@@ -319,33 +337,28 @@ function managedModel(model: {
 }
 
 function localQueryOptions(options: QueryOptions): QueryOptions {
-  rejectLocalEndpointProviderOptions(options.endpointOptions, options.providerOptions);
+  rejectLocalExtra(options.extra);
   const {
     endpoint: _endpoint,
-    endpointOptions: _endpointOptions,
-    providerOptions: _providerOptions,
+    extra: _extra,
     ...localOptions
   } = options;
   return localOptions;
 }
 
 function localEmbedOptions(options: EmbedOptions): EmbedOptions {
-  rejectLocalEndpointProviderOptions(options.endpointOptions, options.providerOptions);
+  rejectLocalExtra(options.extra);
   const {
     endpoint: _endpoint,
-    endpointOptions: _endpointOptions,
-    providerOptions: _providerOptions,
+    extra: _extra,
     ...localOptions
   } = options;
   return localOptions;
 }
 
-function rejectLocalEndpointProviderOptions(endpointOptions: unknown, providerOptions: unknown): void {
-  if (endpointOptions != null) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'endpointOptions are not valid for local endpoints');
-  }
-  if (providerOptions != null) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'providerOptions are not valid for local endpoints');
+function rejectLocalExtra(extra: unknown): void {
+  if (extra != null) {
+    throw new QueryError('UNSUPPORTED_OPERATION', 'extra is not valid for local endpoints');
   }
 }
 

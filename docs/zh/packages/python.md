@@ -50,12 +50,12 @@ from sipp import (
 
 
 client = SippClient()
-model = client.models.install_files([sys.argv[1]])
+model = client.models.add([sys.argv[1]])
 endpoint = client.add(
     "default",
     EndpointDescriptor.local(
         model.id,
-        config=NativeRuntimeConfig(
+        runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
             scheduler=SchedulerRuntimeConfig(
                 continuous_batching=True,

@@ -9,7 +9,6 @@ use crate::lifecycle::ModelError;
 fn request(member_id: u32, candidates: Vec<RemoteCacheCandidate>) -> RemoteAcquisitionRequest {
     RemoteAcquisitionRequest {
         member_id,
-        role: RemoteAssetRole::Model,
         url: format!("https://example.test/model-{member_id}.gguf"),
         candidates,
     }

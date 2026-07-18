@@ -4,7 +4,7 @@ Sipp 各语言包（Rust、Node.js、Python、浏览器）使用同一套面向�
 
 核心流程：
 
-1. 本地推理需要先通过 `client.models` 安装模型。
+1. 本地推理需要先通过 `client.models` 添加模型来源。
 2. 调用 `add` 注册端点。
 3. 保存返回的 `EndpointRef`。
 4. 将引用传入 `query`、`chat` 或 `embed`。
@@ -17,7 +17,7 @@ Sipp 各语言包（Rust、Node.js、Python、浏览器）使用同一套面向�
 
 | 成员 | 作用 |
 | ------- | ---------------------------------------------------------------------------- |
-| `models` | 安装、列出和删除当前客户端拥有的模型。 |
+| `models` | 添加、列出和删除当前客户端拥有的模型。 |
 | `add` | 注册本地、网关或服务商端点，返回 `EndpointRef`。 |
 | `remove` | 删除已注册的端点。 |
 | `query` | 传入一段提示词文本，生成回复。不套聊天模板。 |
@@ -30,23 +30,18 @@ Sipp 各语言包（Rust、Node.js、Python、浏览器）使用同一套面向�
 add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
 ```
 
-`add` 将端点注册到当前客户端实例上。`id` 由调用方指定，在当前客户端内唯一。重复使用相同的 `id` 会覆盖之前的端点。返回的 `EndpointRef` 是一个句柄：
-
-| 字段 | 说明 |
-| ------ | ------------------------------------------------------- |
-| `kind` | 端点类型：`"local"`、`"gateway"` 或 `"provider"`。 |
-| `id` | 注册时用的 ID。 |
+`add` 将端点注册到当前客户端实例上。`id` 由调用方指定，在当前客户端内唯一。重复使用相同的 `id` 会覆盖之前的端点。返回的 `EndpointRef` 是不透明的路由句柄；应用应保存它，而不是自行构造或检查端点类型。
 
 将返回的 `EndpointRef` 传入 `query`、`chat`、`embed`，决定请求的执行目标。
 
 ### 本地端点
 
-本地端点将已安装的 GGUF 模型加载到当前进程中。应用选择模型，客户端负责存储和运行时生命周期。
+本地端点将已注册的 GGUF 模型加载到当前进程中。应用选择模型，客户端负责存储和运行时生命周期。
 
-先通过 `client.models` 安装文件或 URL，再使用
-`EndpointDescriptor.local(modelId, options)` 构造本地端点描述符。描述符只选择已安装模型，不负责下载或存储。
+先通过 `client.models` 添加路径、浏览器 `File` 或 URL，再使用
+`EndpointDescriptor.local(modelId, options)` 构造本地端点描述符。描述符只选择已有模型 ID，不负责下载或存储。
 
-原生包使用 `config: NativeRuntimeConfig`。浏览器描述符使用浏览器后端和可观测性选项，以及 `runtime: NativeRuntimeConfig`。完整的各语言配置见[运行时选项](../reference/runtime-options.md)。
+所有语言包都使用 `runtime` 表示原生运行时配置。浏览器描述符还支持浏览器后端和可观测性选项。完整配置见[运行时选项](../reference/runtime-options.md)。
 
 当前进程需要自行管理模型执行时使用本地端点。
 
@@ -103,8 +98,7 @@ query(request: SippQueryRequest) -> SippTextRun
 | `prompt` | string | 提示词文本。 |
 | `options` | `SippTextOptions`（可选） | 通用生成选项：`maxTokens`、`temperature`、`topP`、`stop`。 |
 | `local` | `LocalTextOptions`（可选） | 仅限本地的选项：`contextKey`、`grammar`、`jsonSchema`、采样覆盖、多模态输入。网关端点会拒绝。 |
-| `endpointOptions` | map（可选） | 透传给网关端点的自定义选项。 |
-| `providerOptions` | map（可选） | 透传给服务商适配器的自定义选项。网关端点会拒绝。 |
+| `extra` | map（可选） | 由网关或服务商端点解释的扩展字段。本地端点会拒绝。 |
 | `emitTokens` | boolean | 设为 true 时，通过返回的句柄流式输出 `TokenBatch`。 |
 
 ### 返回值
@@ -143,6 +137,7 @@ chat(request: SippChatRequest) -> SippTextRun
 | `messages` | `{ role, content }[]` | 有序的对话轮次。 |
 | `options` | `SippTextOptions` | 同 `query` 的生成选项。 |
 | `local` | `LocalTextOptions` | 同 `query` 的本地选项。 |
+| `extra` | map（可选） | 同 `query` 的端点扩展字段。 |
 | `emitTokens` | boolean | 同 `query` 的流式开关。 |
 
 ### 返回值
@@ -166,8 +161,7 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 | `endpoint` | `EndpointRef` | 目标端点。 |
 | `input` | string | 要向量化的文本。 |
 | `local` | `LocalEmbedOptions`（可选） | 仅限本地的选项：`contextKey`、`normalize`。 |
-| `endpointOptions` | map（可选） | 透传给网关端点的自定义选项。 |
-| `providerOptions` | map（可选） | 透传给服务商适配器的自定义选项。 |
+| `extra` | map（可选） | 由网关或服务商端点解释的扩展字段。 |
 
 ### 返回值
 
@@ -192,7 +186,7 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 
 ```text
 服务端：
-  model = models.installFiles(files)
+  model = models.add(files)
   add("local-model", EndpointDescriptor.local(model.id, options))
   -> 路由处理器解析 HTTP 请求
   -> 路由处理器调 client.query / chat / embed
@@ -217,7 +211,7 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 同一个客户端可注册多种端点。传入不同的端点引用即可将请求发往不同的目标。
 
 ```text
-model = client.models.installFiles(files)
+model = client.models.add(files)
 localRef = client.add("local", EndpointDescriptor.local(model.id, options))
 gatewayRef = client.add("gateway", EndpointDescriptor.gateway(options))
 

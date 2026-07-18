@@ -30,10 +30,10 @@ fn classified_json() -> &'static str {
 }
 
 #[test]
-fn validates_explicit_projector_pairing() {
+fn validates_projector_pairing() {
     let classified = classified_json();
 
-    let response = read_owned(pairing_validate_json(classified, "asset-projector"));
+    let response = read_owned(pairing_validate_json(classified));
 
     assert_eq!(response["ok"], true);
     assert_eq!(response["plan"]["projectorAssetId"], "asset-projector");
@@ -42,7 +42,7 @@ fn validates_explicit_projector_pairing() {
 
 #[test]
 fn returns_typed_error_for_invalid_json() {
-    let response = read_owned(pairing_validate_json("{", ""));
+    let response = read_owned(pairing_validate_json("{"));
 
     assert_eq!(response["ok"], false);
     assert_eq!(response["error"]["code"], CODE_INVALID_MODEL_SOURCE);

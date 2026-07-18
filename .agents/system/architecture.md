@@ -14,10 +14,12 @@ Sipp separates inference primitives from protocol and deployment policy.
     management (former engine crate, public paths unchanged).
   - **`client/`**: Typed query, chat, and embed dispatch re-exported at the
     crate root. `SippClient` owns a client-scoped model store and endpoint
-    registry. `client.models` installs, lists, and removes managed models;
-    local endpoint descriptors select a managed model by ID and contain its
-    load-time configuration. The module also owns provider and gateway endpoint
-    descriptors.
+    registry. `client.models` adds, lists, and removes models; local endpoint
+    descriptors select a model by ID and contain its load-time runtime
+    configuration. Native filesystem sources are referenced in place, while
+    HTTP(S) sources are downloaded under the client storage root. Missing or
+    changed native files are pruned from the registry. The module also owns
+    provider and gateway endpoint descriptors.
   - **`providers/`** (feature `providers`): Explicitly selected external provider adapters (`sipp::providers`).
   - **`gateway_core/`** (feature `gateway`): Protocol-neutral gateway execution (`sipp::gateway_core`). It owns request context, cancellation, typed pipeline ordering, streaming events, and resolver, authorizer, admission, and executor traits.
 - **`crates/sys`**: The `sipp-sys` crate — unsafe FFI bindings, native llama.cpp shims, and the vendored `llama.cpp/` source tree.
@@ -33,7 +35,13 @@ Nothing under `crates/` owns HTTP routes, JSON/SSE contracts, authentication sch
   `EndpointDescriptor.gateway(...)`.
 - **`lib/node`**, **`lib/python`**, and **`lib/web`**: Public language packages
   exposing client-owned model stores, local inference, provider adapters, and
-  gateway endpoint descriptors through the unified add API.
+  gateway endpoint descriptors through the unified add API. Browser `File`
+  and HTTP(S) sources are persisted in OPFS. Model shards and vision projectors
+  are passed together and classified from GGUF metadata before pairing.
+
+Endpoint references are returned by `SippClient.add`; endpoint kind remains an
+internal routing detail. Request-specific gateway and provider extensions use
+the single `extra` map. Local endpoints reject `extra`.
 
 Arbitrary wire formats are implemented programmatically through `ProtocolCodec`. The core client remains limited to the query, chat, and embed inference capabilities.
 

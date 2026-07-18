@@ -79,7 +79,6 @@ async fn download_read_timeout_reports_transport_failure() {
                 acquisition_id: "lease-download-timeout".to_string(),
                 member_id: 0,
                 attempt: 1,
-                role: super::super::RemoteAssetRole::Model,
                 metadata: super::super::RemoteMetadata {
                     url: format!("{}/model.gguf", server.uri()),
                     name: "model.gguf".to_string(),

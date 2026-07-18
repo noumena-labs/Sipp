@@ -21,12 +21,7 @@ fn registers_gateway_endpoint_through_add() {
     let mut client = SippClient::new().expect("client");
     let endpoint = block_on(client.add("gateway", gateway_descriptor())).expect("gateway endpoint");
 
-    assert_eq!(
-        endpoint,
-        EndpointRef::Gateway {
-            id: "gateway".to_string()
-        }
-    );
+    assert_eq!(endpoint, EndpointRef::from_id("gateway"));
     assert!(client.resolve(Some(&endpoint), "chat").is_ok());
 }
 
@@ -37,18 +32,8 @@ fn replacing_an_id_keeps_single_registered_endpoint() {
     let second =
         block_on(client.add("service", gateway_descriptor())).expect("replacement endpoint");
 
-    assert_eq!(
-        first,
-        EndpointRef::Gateway {
-            id: "service".to_string()
-        }
-    );
-    assert_eq!(
-        second,
-        EndpointRef::Gateway {
-            id: "service".to_string()
-        }
-    );
+    assert_eq!(first, EndpointRef::from_id("service"));
+    assert_eq!(second, EndpointRef::from_id("service"));
     assert!(client.resolve(Some(&second), "query").is_ok());
 }
 
@@ -64,7 +49,7 @@ fn gateway_endpoints_are_never_selected_implicitly() {
 }
 
 #[tokio::test]
-async fn remote_install_uses_the_client_model_store() {
+async fn adding_a_remote_source_uses_the_client_model_store() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     let address = listener.local_addr().expect("test server address");
     let server = thread::spawn(move || {
@@ -83,7 +68,7 @@ async fn remote_install_uses_the_client_model_store() {
     let client = SippClient::with_storage_root(root.path.clone()).expect("client");
     let error = client
         .models()
-        .install_urls([format!("http://{address}/model.gguf")])
+        .add([format!("http://{address}/model.gguf")])
         .await
         .expect_err("503 metadata response must fail");
     server.join().expect("test server");

@@ -143,7 +143,7 @@ impl TargetResolver for Resolver {
     ) -> GatewayResult<EndpointRef> {
         self.events.lock().expect("events").push("resolve");
         if target == "public" {
-            Ok(EndpointRef::gateway("resolved"))
+            Ok(EndpointRef::from_id("resolved"))
         } else {
             Err(GatewayError::new(
                 GatewayErrorKind::Resolution,
@@ -244,7 +244,7 @@ impl GatewayExecutor for Executor {
     ) -> SippEmbeddingRun {
         SippEmbeddingRun::from_response(Box::pin(async {
             Ok(SippEmbeddingResponse {
-                endpoint: EndpointRef::gateway("resolved"),
+                endpoint: EndpointRef::from_id("resolved"),
                 values: vec![1.0],
                 usage: None,
                 local_stats: None,
@@ -278,7 +278,7 @@ impl GatewayExecutor for PendingExecutor {
 
 fn text_response() -> SippTextResponse {
     SippTextResponse {
-        endpoint: EndpointRef::gateway("resolved"),
+        endpoint: EndpointRef::from_id("resolved"),
         text: "ok".to_string(),
         finish_reason: FinishReason::Stop,
         usage: None,

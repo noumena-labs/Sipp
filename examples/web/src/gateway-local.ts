@@ -8,10 +8,10 @@ import {
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
-  EXAMPLE_LOCAL_ENDPOINT,
+  EXAMPLE_LOCAL_ENDPOINT_ID,
   formatTextResult,
   readMaxTokens,
-  installModel,
+  addModel,
   readPrompt,
   readGatewayConfig,
   renderGatewayLocalPage,
@@ -21,13 +21,13 @@ import {
 
 const elements = renderGatewayLocalPage('Compare browser-local and gateway-local inference.');
 const localClient = new SippClient();
-let localModelLoaded = false;
+let localEndpoint: EndpointRef | null = null;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     write(elements.localOutput, 'Loading browser model...');
-    const model = await installModel(
+    const model = await addModel(
       localClient,
       elements.modelUrlInput,
       elements.modelFileInput
@@ -36,11 +36,10 @@ elements.loadForm.addEventListener('submit', async (event) => {
       write(elements.localOutput, 'Enter a GGUF model URL, path, or file.');
       return;
     }
-    await localClient.add(
-      EXAMPLE_LOCAL_ENDPOINT.id,
+    localEndpoint = await localClient.add(
+      EXAMPLE_LOCAL_ENDPOINT_ID,
       EndpointDescriptor.local(model.id, { runtime: runtimeConfig() })
     );
-    localModelLoaded = true;
     write(elements.localOutput, `Loaded ${model.name}.`);
   } catch (error) {
     reportError(elements.localOutput, error);
@@ -66,15 +65,16 @@ elements.runForm.addEventListener('submit', async (event) => {
     );
     const maxTokens = readMaxTokens(elements.maxTokensInput);
 
-    if (localModelLoaded) {
+    if (localEndpoint != null) {
       const localRun = localClient.query(prompt, {
+        endpoint: localEndpoint,
         emitTokens: true,
         maxTokens,
         contextKey: 'web-gateway-local-browser',
         temperature: DEFAULT_TEMPERATURE,
         topP: DEFAULT_TOP_P,
       });
-      await streamTextRun(elements.localOutput, EXAMPLE_LOCAL_ENDPOINT, localRun);
+      await streamTextRun(elements.localOutput, EXAMPLE_LOCAL_ENDPOINT_ID, localRun);
     } else {
       write(elements.localOutput, 'Load a browser model to run local browser inference.');
     }
@@ -86,7 +86,7 @@ elements.runForm.addEventListener('submit', async (event) => {
       temperature: DEFAULT_TEMPERATURE,
       topP: DEFAULT_TOP_P,
     });
-    await streamTextRun(elements.gatewayOutput, gatewayEndpoint, gatewayRun);
+    await streamTextRun(elements.gatewayOutput, 'gateway', gatewayRun);
   } catch (error) {
     reportError(elements.gatewayOutput, error);
   } finally {
@@ -105,7 +105,7 @@ function runtimeConfig(): NativeRuntimeConfig {
 
 async function streamTextRun(
   output: HTMLPreElement,
-  endpoint: EndpointRef,
+  endpointId: string,
   run: BrowserTextRun
 ): Promise<void> {
   write(output, '');
@@ -118,5 +118,5 @@ async function streamTextRun(
   if (streamed !== '' && streamed !== result.text) {
     throw new Error('streamed token batches did not match final response text');
   }
-  write(output, formatTextResult(endpoint, result));
+  write(output, formatTextResult(endpointId, result));
 }

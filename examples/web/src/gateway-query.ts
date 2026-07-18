@@ -2,7 +2,6 @@ import {
   EndpointDescriptor,
   SippClient,
   type BrowserTextRun,
-  type EndpointRef,
 } from '@noumena-labs/sipp';
 import {
   DEFAULT_TEMPERATURE,
@@ -42,7 +41,7 @@ elements.runForm.addEventListener('submit', async (event) => {
       temperature: DEFAULT_TEMPERATURE,
       topP: DEFAULT_TOP_P,
     });
-    await streamTextRun(elements.output, endpoint, run);
+    await streamTextRun(elements.output, run);
   } catch (error) {
     reportError(elements.output, error);
   } finally {
@@ -52,7 +51,6 @@ elements.runForm.addEventListener('submit', async (event) => {
 
 async function streamTextRun(
   output: HTMLPreElement,
-  endpoint: EndpointRef,
   run: BrowserTextRun
 ): Promise<void> {
   write(output, '');
@@ -65,5 +63,5 @@ async function streamTextRun(
   if (streamed !== '' && streamed !== result.text) {
     throw new Error('streamed token batches did not match final response text');
   }
-  write(output, formatTextResult(endpoint, result));
+  write(output, formatTextResult('gateway', result));
 }

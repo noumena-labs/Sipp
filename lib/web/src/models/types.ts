@@ -15,7 +15,7 @@ export type ModelModality = 'text' | 'vision';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';
 export type ModelSourceKind = 'remote' | 'local';
 export type BrowserBackendPreference = 'auto' | 'cpu' | 'webgpu';
-export type ModelBundleSourceKind = 'installed';
+export type ModelBundleSourceKind = 'managed';
 export type ModelBundleProjectorStatus =
   | 'not-required'
   | 'explicit'
@@ -51,25 +51,24 @@ export interface ModelLoadOptions {
   readonly runtime?: NativeRuntimeConfig;
 }
 
-export interface ModelInstallOptions {
+export interface ModelAddOptions {
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: ModelLoadProgress) => void;
 }
 
-export type ModelInstallSource =
+/** @internal */
+export type ModelAddSource =
   | {
     readonly kind: 'local';
-    readonly modelFiles: readonly File[];
-    readonly projectorFile?: File;
+    readonly files: readonly File[];
   }
   | {
     readonly kind: 'remote';
-    readonly modelUrls: readonly string[];
-    readonly projectorUrl?: string;
+    readonly urls: readonly string[];
   };
 
 export interface ModelInfo {
-  /** Installed model id persisted in OPFS. Pass this to a local `client.add(...)` descriptor. */
+  /** Model id persisted in OPFS. Pass this to a local `client.add(...)` descriptor. */
   id: string;
   name: string;
   modality: ModelModality;
@@ -212,10 +211,8 @@ export interface QueryOptions {
   signal?: AbortSignal;
   emitTokens?: boolean;
   grammar?: string;
-  /** Endpoint-specific request options passed only to gateway endpoints. */
-  endpointOptions?: EndpointOptions;
-  /** Provider-specific request options passed only to direct provider endpoints. */
-  providerOptions?: ProviderOptions;
+  /** Extra fields interpreted by gateway and provider endpoints. */
+  extra?: RequestExtra;
 }
 
 export type ChatInput =
@@ -225,11 +222,8 @@ export type ChatInput =
       media?: Uint8Array[];
     };
 
-/** Endpoint-specific options passed to gateway endpoint implementations. */
-export type EndpointOptions = Record<string, unknown>;
-
-/** Direct provider-specific options merged into provider request bodies after typed fields. */
-export type ProviderOptions = Record<string, unknown>;
+/** Extra request fields interpreted by gateway and provider endpoints. */
+export type RequestExtra = Record<string, unknown>;
 
 export type ChatOptions = QueryOptions;
 
@@ -406,10 +400,8 @@ export interface EmbedOptions {
   normalize?: boolean;
   contextKey?: string;
   signal?: AbortSignal;
-  /** Endpoint-specific request options passed only to gateway endpoints. */
-  endpointOptions?: EndpointOptions;
-  /** Provider-specific request options passed only to direct provider endpoints. */
-  providerOptions?: ProviderOptions;
+  /** Extra fields interpreted by gateway and provider endpoints. */
+  extra?: RequestExtra;
 }
 
 export interface EmbeddingResult {
@@ -433,20 +425,18 @@ export interface BrowserEmbeddingRun {
   cancel(reason?: unknown): void;
 }
 
-/** Stable reference returned by endpoint registration. */
-export type EndpointRef =
-  | {
-      readonly kind: 'local';
-      readonly id: string;
-    }
-  | {
-      readonly kind: 'gateway';
-      readonly id: string;
-    }
-  | {
-      readonly kind: 'provider';
-      readonly id: string;
-    };
+/** @internal */
+export const ENDPOINT_REF_PAYLOAD: unique symbol = Symbol('EndpointRef.payload');
+
+type EndpointRefPayload = {
+  readonly id: string;
+  readonly kind: 'local' | 'gateway' | 'provider';
+};
+
+/** Opaque reference returned by endpoint registration. */
+export interface EndpointRef {
+  readonly [ENDPOINT_REF_PAYLOAD]: EndpointRefPayload;
+}
 
 /** Supplies a short-lived direct provider key for BYOK browser calls. */
 export type ProviderKeyProvider = () => string | Promise<string>;
@@ -483,7 +473,7 @@ export interface GatewayEndpointOptions {
   readonly staticHeaders?: Readonly<Record<string, string>>;
   /** Request timeout in milliseconds. */
   readonly timeoutMs?: number;
-  readonly protocolOptions?: EndpointOptions;
+  readonly protocolOptions?: RequestExtra;
 }
 
 export interface ProviderStaticHeader {
@@ -505,16 +495,6 @@ export interface ProviderEndpointOptions {
   readonly authHeaderValueProvider?: ProviderKeyProvider;
   readonly staticHeaders?: readonly ProviderStaticHeader[];
 }
-
-/** Options for installing browser-local files. */
-export type FileInstallOptions = ModelInstallOptions & {
-  readonly projectorFile?: File;
-};
-
-/** Options for installing remote model URLs. */
-export type UrlInstallOptions = ModelInstallOptions & {
-  readonly projectorUrl?: string;
-};
 
 /** Options for loading a managed model into a local endpoint. */
 export type LocalEndpointOptions = ModelLoadOptions;
@@ -598,7 +578,7 @@ export interface EngineObservability {
 }
 
 export interface ModelLifecycleService {
-  install(source: ModelInstallSource, options?: ModelInstallOptions): Promise<ModelInfo>;
+  add(source: ModelAddSource, options?: ModelAddOptions): Promise<ModelInfo>;
   load(modelId: string, options?: ModelLoadOptions): Promise<ModelInfo>;
   unload(): void | Promise<void>;
   current(): ModelInfo | null;
@@ -621,19 +601,14 @@ export interface ModelLifecycleService {
 }
 
 export interface ModelStore {
-  /** Install browser-local model files into OPFS. */
-  installFiles(
-    modelFiles: readonly File[],
-    options?: FileInstallOptions
+  /** Add a model from browser files or HTTP(S) URLs. */
+  add(
+    sources: readonly (File | string | URL)[],
+    options?: ModelAddOptions
   ): Promise<ManagedModel>;
-  /** Download and install model files into OPFS. */
-  installUrls(
-    modelUrls: readonly string[],
-    options?: UrlInstallOptions
-  ): Promise<ManagedModel>;
-  /** List installed models. */
+  /** List available models. */
   list(): Promise<ManagedModel[]>;
-  /** Remove an installed model that is not used by a local endpoint. */
+  /** Remove a model that is not used by a local endpoint. */
   remove(modelId: string): Promise<void>;
 }
 
@@ -749,7 +724,7 @@ export interface ModelEntry {
 }
 
 export interface RegistryManifest {
-  version: 3;
+  version: 4;
   projectorIndexRevision: number;
   assets: Record<string, AssetRecord>;
   models: Record<string, ModelEntry>;

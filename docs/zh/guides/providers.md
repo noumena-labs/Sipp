@@ -38,20 +38,20 @@ console.log((await run.response).text);
 
 ## 服务商专属选项
 
-对于通用的请求字段，请使用 Sipp 标准的请求选项；针对特定服务商的专有字段，请将其置于 `providerOptions` 下：
+对于通用的请求字段，请使用 Sipp 标准的请求选项；针对特定服务商的专有字段，请将其置于 `extra` 下：
 
 ```ts
 const run = client.chat({
   endpoint,
   messages,
   options: { maxTokens: 128 },
-  providerOptions: {
+  extra: {
     reasoning_effort: 'low',
   },
 });
 ```
 
-`providerOptions` 仅适用于直接服务商端点。网关的扩展字段应放在 `endpointOptions` 或描述符级别的 `protocolOptions` 中，因为这些字段的解析取决于具体网关的实现。
+所选服务商负责解释 `extra`。网关端点使用同一个字段，但由网关实现解释。描述符级别的 `protocolOptions` 会应用到通过该网关端点发送的每个请求。
 
 ## 支持服务商的网关目标
 

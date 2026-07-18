@@ -1,7 +1,7 @@
 //! Filesystem layout for stored model assets and registry manifests.
 
 use std::fs::{self, File};
-use std::io::{copy, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use super::util::{invalid_source, storage_corrupt};
@@ -9,6 +9,7 @@ use super::{
     detect_model_from_gguf_bytes, AssetRecord, AssetRole, AssetSource, ModelAssetKind, ModelError,
 };
 use crate::defaults::BYTES_PER_MIB;
+use crate::lifecycle::util::sha256_hex;
 
 mod content;
 mod journal;
@@ -156,11 +157,7 @@ impl<B: StorageBackend> AssetStore<B> {
         Self { backend }
     }
 
-    pub fn install_local_path_as(
-        &self,
-        path: impl AsRef<Path>,
-        kind: Option<ModelAssetKind>,
-    ) -> Result<AssetInstallResult, ModelError> {
+    pub fn register_local_path(&self, path: impl AsRef<Path>) -> Result<AssetRecord, ModelError> {
         let path = path.as_ref();
         let metadata = fs::metadata(path)?;
         if !metadata.is_file() {
@@ -172,24 +169,36 @@ impl<B: StorageBackend> AssetStore<B> {
 
         let source_path = canonicalize_existing_path(path)?;
         let source_modified_unix_ms = modified_unix_ms(&metadata);
-        self.install_path(
-            path,
-            normalize_asset_name(path),
-            AssetSource::Local {
+        let name = normalize_asset_name(path);
+        let (hash, prefix) = inspect_local_path(path)?;
+        let inspection = detect_model_from_gguf_bytes(&name, &prefix)?.inspection;
+        let kind = match inspection.role {
+            AssetRole::Projector => ModelAssetKind::Projector,
+            AssetRole::Model | AssetRole::Unknown => ModelAssetKind::Model,
+        };
+        let identity = format!("{}\n{hash}", source_path.display());
+
+        Ok(AssetRecord {
+            id: format!("{ASSET_ID_PREFIX}{}", sha256_hex(identity.as_bytes())),
+            kind,
+            name,
+            hash,
+            bytes: metadata.len(),
+            storage_path: source_path.clone(),
+            source: AssetSource::Local {
                 path: source_path,
                 modified_unix_ms: source_modified_unix_ms,
             },
-            kind,
-            InstallPathMode::Copy,
-            None,
-        )
+            ref_count: 0,
+            created_at_unix_ms: now_unix_ms(),
+            inspection: Some(inspection),
+        })
     }
 
     pub(crate) fn install_remote_staged(
         &self,
         staged_path: &Path,
         metadata: &super::acquisition::RemoteMetadata,
-        kind: ModelAssetKind,
         journal: Option<&AcquisitionJournal<B>>,
     ) -> Result<AssetInstallResult, ModelError> {
         let bytes = fs::metadata(staged_path)?.len();
@@ -202,7 +211,7 @@ impl<B: StorageBackend> AssetStore<B> {
                 ),
             });
         }
-        self.install_path(
+        self.install_managed_path(
             staged_path,
             normalize_asset_file_name(&metadata.name),
             AssetSource::Remote {
@@ -210,14 +219,15 @@ impl<B: StorageBackend> AssetStore<B> {
                 etag: metadata.etag.clone(),
                 last_modified: metadata.last_modified.clone(),
             },
-            Some(kind),
-            InstallPathMode::Move,
             journal,
         )
     }
 
     pub fn resolve_asset_path(&self, record: &AssetRecord) -> Result<PathBuf, ModelError> {
-        let path = self.backend.resolve_storage_path(&record.storage_path);
+        let path = match &record.source {
+            AssetSource::Local { path, .. } => path.clone(),
+            AssetSource::Remote { .. } => self.backend.resolve_storage_path(&record.storage_path),
+        };
         let metadata = fs::metadata(&path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 asset_missing(&record.id)
@@ -239,18 +249,16 @@ impl<B: StorageBackend> AssetStore<B> {
         Ok(())
     }
 
-    pub fn delete_asset(&self, record: &AssetRecord) -> Result<(), ModelError> {
+    pub fn delete_managed_asset(&self, record: &AssetRecord) -> Result<(), ModelError> {
+        if matches!(record.source, AssetSource::Local { .. }) {
+            return Ok(());
+        }
         let path = self.backend.resolve_storage_path(&record.storage_path);
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(ModelError::Io(error)),
         }
-    }
-
-    pub(crate) fn incoming_path(&self) -> PathBuf {
-        self.backend
-            .resolve_storage_path(&self.backend.incoming_storage_path())
     }
 
     pub(crate) fn incoming_storage_path(&self) -> PathBuf {
@@ -275,13 +283,11 @@ impl<B: StorageBackend> AssetStore<B> {
         journal::recover_acquisition_journals(&self.backend, manifest)
     }
 
-    fn install_path(
+    fn install_managed_path(
         &self,
         path: &Path,
         name: String,
         source: AssetSource,
-        kind: Option<ModelAssetKind>,
-        mode: InstallPathMode,
         journal: Option<&AcquisitionJournal<B>>,
     ) -> Result<AssetInstallResult, ModelError> {
         self.backend.ensure_layout()?;
@@ -297,23 +303,16 @@ impl<B: StorageBackend> AssetStore<B> {
         }
 
         let inspection = detect_model_from_gguf_bytes(&name, &prefix)?.inspection;
-        let kind = kind.unwrap_or(match inspection.role {
+        let kind = match inspection.role {
             AssetRole::Projector => ModelAssetKind::Projector,
             AssetRole::Model | AssetRole::Unknown => ModelAssetKind::Model,
-        });
+        };
 
         if !already_present {
             if let Some(journal) = journal {
                 journal.record_path(&storage_path)?;
             }
-            match mode {
-                InstallPathMode::Copy => {
-                    let tmp_path = self.incoming_path();
-                    stage_local_path(path, &tmp_path)?;
-                    publish_staged_asset(&tmp_path, &final_path)?;
-                }
-                InstallPathMode::Move => publish_staged_asset(path, &final_path)?,
-            }
+            publish_staged_asset(path, &final_path)?;
         }
 
         Ok(AssetInstallResult {
@@ -334,12 +333,6 @@ impl<B: StorageBackend> AssetStore<B> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum InstallPathMode {
-    Copy,
-    Move,
-}
-
 fn validate_existing_asset(
     path: &Path,
     expected_bytes: u64,
@@ -353,27 +346,6 @@ fn validate_existing_asset(
         return Err(asset_integrity_error(asset_id, "content mismatch"));
     }
     Ok(())
-}
-
-fn stage_local_path(source_path: &Path, tmp_path: &Path) -> Result<(), ModelError> {
-    create_parent_dir(tmp_path)?;
-
-    if fs::hard_link(source_path, tmp_path).is_ok() {
-        return Ok(());
-    }
-
-    let copy_result = (|| -> Result<(), ModelError> {
-        let mut source = File::open(source_path)?;
-        let mut tmp = File::create(tmp_path)?;
-        copy(&mut source, &mut tmp)?;
-        tmp.sync_all()?;
-        Ok(())
-    })();
-
-    if copy_result.is_err() {
-        let _ = fs::remove_file(tmp_path);
-    }
-    copy_result
 }
 
 fn publish_staged_asset(tmp_path: &Path, final_path: &Path) -> Result<(), ModelError> {

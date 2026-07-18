@@ -27,13 +27,13 @@ const { model: modelPath, input } = readLocalArgs(
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 
-// Install the GGUF once, then register an endpoint with its model id.
+// Add the GGUF, then register an endpoint with its model id.
 const client = new SippClient();
-const model = await client.models.installFiles([modelPath]);
+const model = await client.models.add([modelPath]);
 await client.add(
   'default',
   EndpointDescriptor.local(model.id, {
-    config: runtimeConfig({ embeddings: false }),
+    runtime: runtimeConfig({ embeddings: false }),
   })
 );
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);

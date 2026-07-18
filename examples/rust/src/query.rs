@@ -19,9 +19,9 @@ fn main() -> support::ExampleResult<()> {
         // A client can own one or more endpoints. This example adds one local
         // GGUF model and lets requests use it as the default endpoint.
         let mut client = SippClient::new()?;
-        let model = client.models().install_files([args.model_path]).await?;
+        let model = client.models().add([args.model_path]).await?;
         let mut descriptor = LocalDescriptor::new(model.id);
-        descriptor.config = runtime_config(false);
+        descriptor.runtime = runtime_config(false);
         client.add("default", descriptor).await?;
 
         // `query` is the simplest text-generation call: one prompt in, one

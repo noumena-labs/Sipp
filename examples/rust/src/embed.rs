@@ -15,9 +15,9 @@ fn main() -> support::ExampleResult<()> {
         set_llama_log_quiet(true);
 
         let mut client = SippClient::new()?;
-        let model = client.models().install_files([args.model_path]).await?;
+        let model = client.models().add([args.model_path]).await?;
         let mut descriptor = LocalDescriptor::new(model.id);
-        descriptor.config = runtime_config(true);
+        descriptor.runtime = runtime_config(true);
         client.add("default", descriptor).await?;
 
         // Embeddings use the same client as text generation. The local runtime

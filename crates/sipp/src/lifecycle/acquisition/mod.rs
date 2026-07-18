@@ -10,9 +10,8 @@ pub(crate) mod native;
 pub(crate) use state::{RemoteAcquisition, RemoteAcquisitionIds};
 pub(crate) use types::{
     canonical_remote_url, RemoteAcquisitionEvent, RemoteAcquisitionProgress,
-    RemoteAcquisitionRequest, RemoteAction, RemoteAssetRole, RemoteCacheCandidate, RemoteFailure,
-    RemoteFailureKind, RemoteFailurePhase, RemoteMetadata, RemoteMetadataHeaders,
-    RemoteResolvedMember,
+    RemoteAcquisitionRequest, RemoteAction, RemoteCacheCandidate, RemoteFailure, RemoteFailureKind,
+    RemoteFailurePhase, RemoteMetadata, RemoteMetadataHeaders, RemoteResolvedMember,
 };
 
 /////////////////////////////////////////////////////////////////////////////////

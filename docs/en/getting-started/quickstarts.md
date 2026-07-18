@@ -35,9 +35,7 @@ const queryPrompt = [
   '<|assistant|>',
 ].join('\n');
 
-const textModel = await client.models.installUrls([
-  new URL('/models/chat.gguf', window.location.href).href,
-]);
+const textModel = await client.models.add(['/models/chat.gguf']);
 const textEndpoint = await client.add(
   'text',
   EndpointDescriptor.local(textModel.id, {
@@ -60,9 +58,7 @@ const chat = await client.chat(messages, {
   contextKey: 'browser-chat',
 }).response;
 
-const embedModel = await client.models.installUrls([
-  new URL('/models/embed.gguf', window.location.href).href,
-]);
+const embedModel = await client.models.add(['/models/embed.gguf']);
 const embedEndpoint = await client.add(
   'embed',
   EndpointDescriptor.local(embedModel.id, {
@@ -107,11 +103,11 @@ const textOptions = { maxTokens: 64 };
 const textModelPath = process.argv[2] ?? 'chat.gguf';
 const embedModelPath = process.argv[3] ?? 'embed.gguf';
 
-const textModel = await client.models.installFiles([textModelPath]);
+const textModel = await client.models.add([textModelPath]);
 const textEndpoint = await client.add(
   'text',
   EndpointDescriptor.local(textModel.id, {
-    config: { context: { n_ctx: 2048 } },
+    runtime: { context: { n_ctx: 2048 } },
   })
 );
 
@@ -131,11 +127,11 @@ const chat = await client.chat({
   local: { contextKey: 'node-chat' },
 }).response;
 
-const embedModel = await client.models.installFiles([embedModelPath]);
+const embedModel = await client.models.add([embedModelPath]);
 const embedEndpoint = await client.add(
   'embed',
   EndpointDescriptor.local(embedModel.id, {
-    config: { context: { n_ctx: 2048, embeddings: true, pooling: 'mean' } },
+    runtime: { context: { n_ctx: 2048, embeddings: true, pooling: 'mean' } },
   })
 );
 
@@ -189,7 +185,7 @@ query_prompt = "\n".join(
 )
 text_options = SippTextOptions(max_tokens=64)
 
-text_model = client.models.install_files(["chat.gguf"])
+text_model = client.models.add(["chat.gguf"])
 text_endpoint = client.add(
     "text",
     EndpointDescriptor.local(text_model.id),
@@ -211,12 +207,12 @@ chat = client.chat(
     local=LocalTextOptions(context_key="python-chat"),
 ).result()
 
-embed_model = client.models.install_files(["embed.gguf"])
+embed_model = client.models.add(["embed.gguf"])
 embed_endpoint = client.add(
     "embed",
     EndpointDescriptor.local(
         embed_model.id,
-        config=NativeRuntimeConfig(
+        runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(
                 n_ctx=2048,
                 embeddings=True,
@@ -269,7 +265,7 @@ let text_options = SippTextOptions {
     ..Default::default()
 };
 
-let text_model = client.models().install_files(["chat.gguf"]).await?;
+let text_model = client.models().add(["chat.gguf"]).await?;
 let text_endpoint = client
     .add("text", LocalDescriptor::new(text_model.id))
     .await?;
@@ -302,9 +298,9 @@ let chat = client
     })
     .await?;
 
-let embed_model = client.models().install_files(["embed.gguf"]).await?;
+let embed_model = client.models().add(["embed.gguf"]).await?;
 let mut embed_descriptor = LocalDescriptor::new(embed_model.id);
-embed_descriptor.config = embed_config();
+embed_descriptor.runtime = embed_config();
 let embed_endpoint = client
     .add("embed", embed_descriptor)
     .await?;

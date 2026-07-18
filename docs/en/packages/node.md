@@ -36,11 +36,11 @@ import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 const modelPath = process.argv[2] ?? 'model.gguf';
-const model = await client.models.installFiles([modelPath]);
+const model = await client.models.add([modelPath]);
 const endpoint = await client.add(
   'default',
   EndpointDescriptor.local(model.id, {
-    config: {
+    runtime: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
       cache: { mode: 'live_slot_prefix' },
@@ -154,7 +154,7 @@ const run = client.chat({
 console.log((await run.response).text);
 ```
 
-Pass provider-only request fields through `providerOptions`. See
+Pass provider-only request fields through `extra`. See
 [Providers](../guides/providers.md) for the full provider/gateway split.
 
 ## Gateway Profile Helpers

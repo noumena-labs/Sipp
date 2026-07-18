@@ -164,7 +164,7 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
   switch (message.kind) {
     case 'models-install':
       return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).install(message.source, {
+        ensureService(message.config).add(message.source, {
           signal,
           onProgress: postLoadProgress(message.callId),
         })

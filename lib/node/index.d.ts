@@ -30,25 +30,13 @@ export interface ManagedModel {
   readonly status: string
 }
 
-/** Options for installing model files. */
-export interface FileInstallOptions {
-  readonly projectorPath?: string
-}
-
-/** Options for installing model URLs. */
-export interface UrlInstallOptions {
-  readonly projectorUrl?: string
-}
-
-/** Persistent models owned by a Sipp client. */
+/** Models available to a Sipp client. */
 export declare class ModelStore {
-  /** Install model files from the host filesystem. */
-  installFiles(modelPaths: readonly string[], options?: FileInstallOptions): Promise<ManagedModel>
-  /** Download and install model files from HTTP(S) URLs. */
-  installUrls(modelUrls: readonly string[], options?: UrlInstallOptions): Promise<ManagedModel>
-  /** List installed models. */
+  /** Add a model from local paths or HTTP(S) URLs. */
+  add(sources: readonly (string | URL)[]): Promise<ManagedModel>
+  /** List available models. */
   list(): Promise<ManagedModel[]>
-  /** Remove an installed model that is not used by an endpoint. */
+  /** Remove a model that is not used by an endpoint. */
   remove(modelId: string): Promise<void>
 }
 
@@ -91,11 +79,10 @@ export interface ChatMessage {
   content: string
 }
 
-/** Address of a registered inference endpoint. */
-export interface EndpointRef {
-  kind: string
-  id: string
-}
+declare const endpointRefBrand: unique symbol
+
+/** Opaque reference returned by endpoint registration. */
+export type EndpointRef = { readonly [endpointRefBrand]: true }
 
 /** Shared generation options for text-producing requests. */
 export interface SippTextOptions {
@@ -127,8 +114,7 @@ export interface SippQueryRequest {
   prompt: string
   options?: SippTextOptions
   local?: LocalTextOptions
-  endpointOptions?: Record<string, unknown>
-  providerOptions?: Record<string, unknown>
+  extra?: Record<string, unknown>
   emitTokens?: boolean
 }
 
@@ -139,8 +125,7 @@ export interface SippChatRequest {
   messages: Array<ChatMessage>
   options?: SippTextOptions
   local?: LocalTextOptions
-  endpointOptions?: Record<string, unknown>
-  providerOptions?: Record<string, unknown>
+  extra?: Record<string, unknown>
   emitTokens?: boolean
 }
 
@@ -150,8 +135,7 @@ export interface SippEmbedRequest {
   endpoint?: EndpointRef
   input: string
   local?: LocalEmbedOptions
-  endpointOptions?: Record<string, unknown>
-  providerOptions?: Record<string, unknown>
+  extra?: Record<string, unknown>
 }
 
 /** Token accounting returned by an inference endpoint. */
@@ -316,7 +300,7 @@ export type EndpointDescriptor = {
 
 /** Options for a local model endpoint. */
 export interface LocalEndpointOptions {
-  readonly config?: NativeRuntimeConfig
+  readonly runtime?: NativeRuntimeConfig
 }
 
 /** Options for an explicitly selected external provider adapter. */

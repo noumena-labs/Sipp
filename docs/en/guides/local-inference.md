@@ -10,7 +10,7 @@ reference, and pass that reference to `query`, `chat`, or `embed`.
 ## Endpoint Flow
 
 1. Choose a GGUF model that supports the requested capability.
-2. Install its files or URLs through `client.models`.
+2. Add its files or URLs through `client.models`.
 3. Create a local endpoint descriptor from the returned model ID.
 4. Set load-time runtime options on the endpoint descriptor.
 5. Pass request-time options to `query`, `chat`, or `embed`.
@@ -22,19 +22,19 @@ Pass the endpoint reference returned by `add` whenever routing must be
 explicit. Omit it only when the client can select one compatible local
 endpoint unambiguously.
 
-## Model Installation
+## Model Sources
 
-All packages install models before creating local endpoints:
+All packages add models before creating local endpoints:
 
-- Browser `installFiles` and `installUrls` persist models in OPFS.
-- Node.js, Python, and Rust install filesystem paths or HTTP(S) URLs under the
-  client's storage root.
-- Both forms accept multiple shards and an optional projector for vision
-  models.
+- Browser `models.add` persists `File` uploads and HTTP(S) sources in OPFS.
+- Node.js, Python, and Rust reference local filesystem paths in place. HTTP(S)
+  sources are downloaded under the client's storage root.
+- Pass model shards and a vision projector in the same source list. GGUF
+  metadata determines their roles and validates the pairing.
 
-Installation returns a stable model ID. `EndpointDescriptor.local(model.id)`
-or `LocalDescriptor::new(model.id)` loads that installed model; it does not
-download or copy files.
+`models.add` returns a model ID. `EndpointDescriptor.local(model.id)` or
+`LocalDescriptor::new(model.id)` loads that model. If a referenced native file
+is deleted or changed, the stale registry entry is removed.
 
 Source examples and smoke workflows can use cached sample models under
 `.build/models` when running from a checkout.
@@ -45,9 +45,9 @@ Keep option layers separate:
 
 - Browser client options such as `executionMode`, `wasmThreading`, runtime
   asset URLs, and `browserCache` belong on `new SippClient(...)`.
-- Install method arguments choose files or URLs; install options provide an
-  optional projector, progress callback, and cancellation where supported.
-- Local endpoint options select the installed model ID, browser backend
+- `models.add` accepts one homogeneous list of local files or HTTP(S) URLs;
+  options provide progress and cancellation where supported.
+- Local endpoint options select the model ID, browser backend
   preference, and `NativeRuntimeConfig`.
 - Runtime config groups such as `context`, `sampling`, `scheduler`, `cache`,
   `placement`, `multimodal`, `residency`, and `observability` describe stable

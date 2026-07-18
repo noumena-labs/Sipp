@@ -313,10 +313,10 @@ export default function App() {
           setStatus(`Storing model assets... (${overallPercent}% overall)`);
         }
       };
-      const model = await nextClient.models.installUrls([trimmedModel], {
-        projectorUrl: trimmedProjector,
-        onProgress,
-      });
+      const model = await nextClient.models.add(
+        [trimmedModel, trimmedProjector],
+        { onProgress }
+      );
       await nextClient.add(
         'local',
         EndpointDescriptor.local(model.id, {

@@ -1,22 +1,22 @@
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use url::Url;
 
 #[cfg(not(target_family = "wasm"))]
 use crate::lifecycle::acquisition::native::NativeRemoteExecutor;
 use crate::lifecycle::acquisition::{
-    RemoteAcquisition, RemoteAcquisitionProgress, RemoteAcquisitionRequest, RemoteAssetRole,
-    RemoteCacheCandidate, RemoteMetadata,
+    RemoteAcquisition, RemoteAcquisitionProgress, RemoteAcquisitionRequest, RemoteCacheCandidate,
+    RemoteMetadata,
 };
 use crate::lifecycle::registry::model_entry_from_assets;
-use crate::lifecycle::storage::{hash_file, modified_unix_ms, now_unix_ms, StorageBackend};
+use crate::lifecycle::storage::{now_unix_ms, StorageBackend};
 use crate::lifecycle::util::classified_asset;
 use crate::lifecycle::{
-    AssetRecord, AssetSource, ModelAssetKind, ModelError, ModelPairing, ModelPairingReason,
-    ModelPairingState, ModelStatus, PairingResolver,
+    AssetRecord, AssetSource, ModelError, ModelPairing, ModelPairingReason, ModelPairingState,
+    ModelStatus, PairingResolver,
 };
 
-use super::helpers::{model_id_from_plan, same_path};
+use super::helpers::model_id_from_plan;
 use super::{invalid_source, ModelStoreState};
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -31,82 +31,82 @@ mod source_resolution_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-const MODEL_PATHS_REQUIRED: &str = "local model paths must not be empty";
-const MODEL_URLS_REQUIRED: &str = "remote model URLs must not be empty";
+const MODEL_SOURCES_REQUIRED: &str = "model sources must not be empty";
+
+enum ResolvedSources {
+    Local(Vec<PathBuf>),
+    Remote(Vec<String>),
+}
 
 #[derive(Debug)]
-struct InstalledAsset {
+struct AcquiredAsset {
     record: AssetRecord,
     created: bool,
 }
 
-impl<B: StorageBackend> ModelStoreState<B> {
-    pub(super) fn install_files(
-        &mut self,
-        model_paths: Vec<PathBuf>,
-        projector_path: Option<PathBuf>,
-    ) -> Result<String, ModelError> {
-        if model_paths.is_empty() {
-            return Err(invalid_source(MODEL_PATHS_REQUIRED));
-        }
-        let model_kind = (model_paths.len() > 1).then_some(ModelAssetKind::Shard);
-        let mut installed = Vec::new();
-        for path in model_paths {
-            match self.install_local_asset(path, model_kind) {
-                Ok(asset) => installed.push(asset),
-                Err(error) => return self.fail_local_install(installed, error),
-            }
-        }
-        let explicit_projector_id = if let Some(path) = projector_path {
-            match self.install_local_asset(path, Some(ModelAssetKind::Projector)) {
-                Ok(projector) => {
-                    let id = projector.record.id.clone();
-                    installed.push(projector);
-                    Some(id)
-                }
-                Err(error) => return self.fail_local_install(installed, error),
-            }
-        } else {
-            None
+fn resolve_sources(sources: Vec<PathBuf>) -> Result<ResolvedSources, ModelError> {
+    if sources.is_empty() {
+        return Err(invalid_source(MODEL_SOURCES_REQUIRED));
+    }
+    let mut local = Vec::new();
+    let mut remote = Vec::new();
+    for source in sources {
+        let Some(value) = source.to_str() else {
+            local.push(source);
+            continue;
         };
-        self.commit_installed(installed, explicit_projector_id.as_deref())
+        match Url::parse(value) {
+            Ok(url) if matches!(url.scheme(), "http" | "https") => {
+                remote.push(crate::lifecycle::acquisition::canonical_remote_url(value)?)
+            }
+            Ok(url) if value.contains("://") => {
+                return Err(invalid_source(format!(
+                    "model URL scheme must be http or https, not {}",
+                    url.scheme()
+                )));
+            }
+            Err(error) if has_http_scheme(value) => {
+                return Err(invalid_source(format!("model URL is invalid: {error}")));
+            }
+            _ => local.push(source),
+        }
+    }
+    match (local.is_empty(), remote.is_empty()) {
+        (false, true) => Ok(ResolvedSources::Local(local)),
+        (true, false) => Ok(ResolvedSources::Remote(remote)),
+        _ => Err(invalid_source(
+            "local files and remote URLs cannot be added together",
+        )),
+    }
+}
+
+fn has_http_scheme(value: &str) -> bool {
+    value.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
+
+impl<B: StorageBackend> ModelStoreState<B> {
+    pub(super) async fn add(&mut self, sources: Vec<PathBuf>) -> Result<String, ModelError> {
+        match resolve_sources(sources)? {
+            ResolvedSources::Local(paths) => self.add_local(paths),
+            ResolvedSources::Remote(urls) => self.add_remote(urls).await,
+        }
     }
 
-    fn fail_local_install<T>(
-        &self,
-        installed: Vec<InstalledAsset>,
-        error: ModelError,
-    ) -> Result<T, ModelError> {
-        for asset in installed.iter().filter(|asset| asset.created) {
-            self.assets.delete_asset(&asset.record)?;
-        }
-        Err(error)
+    fn add_local(&mut self, paths: Vec<PathBuf>) -> Result<String, ModelError> {
+        let records = paths
+            .into_iter()
+            .map(|path| self.assets.register_local_path(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.register_assets(&records)
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(super) async fn install_urls(
-        &mut self,
-        model_urls: Vec<String>,
-        projector_url: Option<String>,
-    ) -> Result<String, ModelError> {
-        if model_urls.is_empty() {
-            return Err(invalid_source(MODEL_URLS_REQUIRED));
-        }
+    async fn add_remote(&mut self, urls: Vec<String>) -> Result<String, ModelError> {
         let acquisition_id = self.acquisition_ids.issue()?;
         let journal = self.assets.acquisition_journal(acquisition_id.clone());
-        let model_role = if model_urls.len() == 1 {
-            RemoteAssetRole::Model
-        } else {
-            RemoteAssetRole::Shard
-        };
-        let mut sources: Vec<_> = model_urls
-            .into_iter()
-            .map(|url| (model_role, url))
-            .collect();
-        if let Some(projector_url) = projector_url {
-            sources.push((RemoteAssetRole::Projector, projector_url));
-        }
-        let requests = remote_requests(&self.registry.manifest.assets, sources)?;
+        let requests = remote_requests(&self.registry.manifest.assets, urls)?;
 
         let mut acquisition = RemoteAcquisition::new(acquisition_id, requests)?;
         let executor = NativeRemoteExecutor::new(self.assets.clone(), journal.clone())?;
@@ -135,21 +135,16 @@ impl<B: StorageBackend> ModelStoreState<B> {
                                 return Err(error);
                             }
                         };
-                    let installed: Vec<_> = records
+                    let acquired: Vec<_> = records
                         .into_iter()
-                        .map(|record| InstalledAsset {
+                        .map(|record| AcquiredAsset {
                             created: resolved.iter().any(|member| {
                                 member.created_asset_ids.iter().any(|id| id == &record.id)
                             }),
                             record,
                         })
                         .collect();
-                    let projector_id = resolved
-                        .iter()
-                        .find(|member| member.role == RemoteAssetRole::Projector)
-                        .and_then(|member| member.asset_ids.first())
-                        .map(String::as_str);
-                    return match self.commit_installed(installed, projector_id) {
+                    return match self.commit_acquired(acquired) {
                         Ok(model_id) => {
                             journal.clear()?;
                             Ok(model_id)
@@ -173,92 +168,32 @@ impl<B: StorageBackend> ModelStoreState<B> {
     }
 
     #[cfg(target_family = "wasm")]
-    pub(super) async fn install_urls(
-        &mut self,
-        _model_urls: Vec<String>,
-        _projector_url: Option<String>,
-    ) -> Result<String, ModelError> {
+    async fn add_remote(&mut self, _urls: Vec<String>) -> Result<String, ModelError> {
         Err(ModelError::UnsupportedOperation {
             operation: "native model service remote acquisition",
             reason: "browser acquisition is driven through BrowserLifecycleService".to_string(),
         })
     }
 
-    fn install_local_asset(
-        &self,
-        path: impl AsRef<Path>,
-        kind: Option<ModelAssetKind>,
-    ) -> Result<InstalledAsset, ModelError> {
-        let path = path.as_ref();
-        if let Some(record) = self.find_cached_local_asset(path, kind)? {
-            return Ok(InstalledAsset {
-                record,
-                created: false,
-            });
-        }
-        let installed = self.assets.install_local_path_as(path, kind)?;
-        Ok(InstalledAsset {
-            record: installed.record,
-            created: !installed.already_present,
-        })
-    }
-
-    fn find_cached_local_asset(
-        &self,
-        path: &Path,
-        kind: Option<ModelAssetKind>,
-    ) -> Result<Option<AssetRecord>, ModelError> {
-        let metadata = fs::metadata(path)?;
-        if !metadata.is_file() {
-            return Ok(None);
-        }
-
-        let source_path = fs::canonicalize(path)?;
-        let source_modified_unix_ms = modified_unix_ms(&metadata);
-        for record in self.registry.manifest.assets.values() {
-            if cached_local_record_matches(
-                record,
-                kind,
-                metadata.len(),
-                &source_path,
-                source_modified_unix_ms,
-            ) && self.assets.resolve_asset_path(record).is_ok()
-                && hash_file(path).is_ok_and(|hash| hash == record.hash)
-            {
-                return Ok(Some(record.clone()));
-            }
-        }
-        Ok(None)
-    }
-
-    fn commit_installed(
-        &mut self,
-        installed: Vec<InstalledAsset>,
-        explicit_projector_id: Option<&str>,
-    ) -> Result<String, ModelError> {
+    fn commit_acquired(&mut self, acquired: Vec<AcquiredAsset>) -> Result<String, ModelError> {
         let previous = self.registry.manifest.clone();
-        let result = self.register_installed_assets(
-            &installed
+        let result = self.register_assets(
+            &acquired
                 .iter()
                 .map(|asset| asset.record.clone())
                 .collect::<Vec<_>>(),
-            explicit_projector_id,
         );
         if result.is_err() {
             self.registry.manifest = previous;
-            for asset in installed.iter().filter(|asset| asset.created) {
-                self.assets.delete_asset(&asset.record)?;
+            for asset in acquired.iter().filter(|asset| asset.created) {
+                self.assets.delete_managed_asset(&asset.record)?;
             }
         }
         result
     }
 
-    fn register_installed_assets(
-        &mut self,
-        installed: &[AssetRecord],
-        explicit_projector_id: Option<&str>,
-    ) -> Result<String, ModelError> {
-        let classified: Vec<_> = installed
+    fn register_assets(&mut self, records: &[AssetRecord]) -> Result<String, ModelError> {
+        let classified: Vec<_> = records
             .iter()
             .map(|record| {
                 classified_asset(
@@ -268,15 +203,32 @@ impl<B: StorageBackend> ModelStoreState<B> {
                 )
             })
             .collect();
-        let plan = if let Some(projector_id) = explicit_projector_id {
-            PairingResolver::resolve_explicit(&classified, projector_id)?
-        } else {
-            PairingResolver::resolve(&classified)?
-        };
-        for record in installed {
+        let plan = PairingResolver::resolve(&classified)?;
+        let entry_id = model_id_from_plan(&plan);
+        let source_key = source_key(records);
+        let replaced: Vec<_> = self
+            .registry
+            .manifest
+            .models
+            .values()
+            .filter(|entry| entry.id != entry_id)
+            .map(|entry| {
+                Ok(
+                    (entry_source_key(&self.registry.manifest, entry)? == source_key)
+                        .then_some(entry.id.clone()),
+                )
+            })
+            .collect::<Result<Vec<_>, ModelError>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        let mut orphaned = Vec::new();
+        for model_id in replaced {
+            orphaned.extend(self.registry.remove_model(&model_id)?.orphaned_assets);
+        }
+        for record in records {
             self.registry.upsert_asset(record.clone())?;
         }
-        let entry_id = model_id_from_plan(&plan);
         let mut entry = model_entry_from_assets(&entry_id, &plan.name, &plan);
         entry.pairing = Some(ModelPairing {
             state: if plan.status == ModelStatus::Ready {
@@ -295,24 +247,68 @@ impl<B: StorageBackend> ModelStoreState<B> {
         });
         self.registry.insert_model(entry)?;
         self.registry.save()?;
+        for asset in orphaned {
+            self.assets.delete_managed_asset(&asset)?;
+        }
         Ok(entry_id)
+    }
+}
+
+fn source_key(records: &[AssetRecord]) -> Vec<String> {
+    let mut sources: Vec<_> = records.iter().map(asset_source_key).collect();
+    sources.sort();
+    sources
+}
+
+fn entry_source_key(
+    manifest: &crate::lifecycle::RegistryManifest,
+    entry: &crate::lifecycle::ModelEntry,
+) -> Result<Vec<String>, ModelError> {
+    let records = entry
+        .model_asset_ids
+        .iter()
+        .chain(entry.projector_asset_id.iter())
+        .map(|asset_id| {
+            manifest
+                .assets
+                .get(asset_id)
+                .cloned()
+                .ok_or_else(|| ModelError::AssetMissing(asset_id.clone()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(source_key(&records))
+}
+
+fn asset_source_key(record: &AssetRecord) -> String {
+    match &record.source {
+        AssetSource::Local { path, .. } => local_source_key(path),
+        AssetSource::Remote { url, .. } => format!("remote:{url}"),
+    }
+}
+
+fn local_source_key(path: &std::path::Path) -> String {
+    #[cfg(windows)]
+    {
+        format!("local:{}", path.to_string_lossy().to_ascii_lowercase())
+    }
+    #[cfg(not(windows))]
+    {
+        format!("local:{}", path.display())
     }
 }
 
 fn remote_requests(
     assets: &BTreeMap<String, AssetRecord>,
-    sources: impl IntoIterator<Item = (RemoteAssetRole, String)>,
+    urls: impl IntoIterator<Item = String>,
 ) -> Result<Vec<RemoteAcquisitionRequest>, ModelError> {
-    sources
-        .into_iter()
+    urls.into_iter()
         .enumerate()
-        .map(|(index, (role, url))| {
+        .map(|(index, url)| {
             let url = crate::lifecycle::acquisition::canonical_remote_url(&url)?;
             Ok(RemoteAcquisitionRequest {
                 member_id: u32::try_from(index)
                     .map_err(|_| invalid_source("remote model contains too many source members"))?,
-                role,
-                candidates: remote_candidates(assets, role, &url),
+                candidates: remote_candidates(assets, &url),
                 url,
             })
         })
@@ -321,12 +317,10 @@ fn remote_requests(
 
 fn remote_candidates(
     assets: &BTreeMap<String, AssetRecord>,
-    role: RemoteAssetRole,
     url: &str,
 ) -> Vec<RemoteCacheCandidate> {
     assets
         .values()
-        .filter(|record| record.kind == role.asset_kind())
         .filter_map(|record| {
             let AssetSource::Remote {
                 url: record_url,
@@ -367,28 +361,4 @@ fn resolved_records(
                 .ok_or_else(|| ModelError::AssetMissing(asset_id.clone()))
         })
         .collect()
-}
-
-fn cached_local_record_matches(
-    record: &AssetRecord,
-    kind: Option<ModelAssetKind>,
-    source_bytes: u64,
-    source_path: &Path,
-    source_modified_unix_ms: Option<u64>,
-) -> bool {
-    if kind.is_some_and(|expected| record.kind != expected) || record.bytes != source_bytes {
-        return false;
-    }
-    let AssetSource::Local {
-        path: record_source_path,
-        modified_unix_ms: record_modified_unix_ms,
-    } = &record.source
-    else {
-        return false;
-    };
-    same_path(record_source_path, source_path)
-        && match (*record_modified_unix_ms, source_modified_unix_ms) {
-            (Some(record), Some(source)) => record == source,
-            _ => true,
-        }
 }

@@ -645,44 +645,6 @@ struct PyEndpointRef {
     dto: dto::EndpointRef,
 }
 
-#[pymethods]
-impl PyEndpointRef {
-    #[staticmethod]
-    fn local(id: String) -> Self {
-        Self {
-            dto: dto::EndpointRef {
-                kind: "local".to_string(),
-                id,
-            },
-        }
-    }
-
-    #[staticmethod]
-    fn gateway(id: String) -> Self {
-        Self {
-            dto: dto::EndpointRef {
-                kind: "gateway".to_string(),
-                id,
-            },
-        }
-    }
-
-    #[staticmethod]
-    fn provider(id: String) -> Self {
-        Self {
-            dto: dto::EndpointRef {
-                kind: "provider".to_string(),
-                id,
-            },
-        }
-    }
-
-    #[getter]
-    fn kind(&self) -> &str {
-        &self.dto.kind
-    }
-}
-
 impl PyEndpointRef {
     fn to_dto(&self) -> dto::EndpointRef {
         self.dto.clone()
@@ -797,15 +759,15 @@ struct PyEndpointDescriptor {
 impl PyEndpointDescriptor {
     /// Create a local endpoint for a managed model.
     #[staticmethod]
-    #[pyo3(signature = (model_id, *, config = None))]
+    #[pyo3(signature = (model_id, *, runtime = None))]
     fn local(
         py: Python<'_>,
         model_id: String,
-        config: Option<Py<PyNativeRuntimeConfig>>,
+        runtime: Option<Py<PyNativeRuntimeConfig>>,
     ) -> PyResult<Self> {
         let mut descriptor = CoreLocalDescriptor::new(model_id);
-        if let Some(config) = config {
-            descriptor.config = NativeRuntimeConfig::try_from(&config.borrow(py).to_dto())
+        if let Some(runtime) = runtime {
+            descriptor.runtime = NativeRuntimeConfig::try_from(&runtime.borrow(py).to_dto())
                 .map_err(convert_error)?;
         }
         Ok(Self {
@@ -914,7 +876,7 @@ impl From<CoreManagedModel> for PyManagedModel {
     }
 }
 
-/// Persistent models owned by a Sipp client.
+/// Models available to a Sipp client.
 #[pyclass(name = "ModelStore")]
 struct PyModelStore {
     client: Arc<Mutex<CoreSippClient>>,
@@ -922,42 +884,8 @@ struct PyModelStore {
 
 #[pymethods]
 impl PyModelStore {
-    /// Install model files from the host filesystem.
-    #[pyo3(signature = (model_paths, *, projector_path = None))]
-    fn install_files(
-        &self,
-        py: Python<'_>,
-        model_paths: Vec<PathBuf>,
-        projector_path: Option<PathBuf>,
-    ) -> PyResult<PyManagedModel> {
-        let client = self.client.clone();
-        let model = py
-            .allow_threads(move || {
-                let client = client
-                    .lock()
-                    .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
-                match projector_path {
-                    Some(projector_path) => block_on(
-                        client
-                            .models()
-                            .install_files_with_projector(model_paths, projector_path),
-                    ),
-                    None => block_on(client.models().install_files(model_paths)),
-                }
-                .map_err(ClientError::from)
-            })
-            .map_err(to_py_client_error)?;
-        Ok(model.into())
-    }
-
-    /// Download and install model files from HTTP(S) URLs.
-    #[pyo3(signature = (model_urls, *, projector_url = None))]
-    fn install_urls(
-        &self,
-        py: Python<'_>,
-        model_urls: Vec<String>,
-        projector_url: Option<String>,
-    ) -> PyResult<PyManagedModel> {
+    /// Add a model from local paths or HTTP(S) URLs.
+    fn add(&self, py: Python<'_>, sources: Vec<PathBuf>) -> PyResult<PyManagedModel> {
         let client = self.client.clone();
         let model = py
             .allow_threads(move || {
@@ -972,35 +900,29 @@ impl PyModelStore {
                             "failed to start model download runtime: {error}"
                         ))
                     })?;
-                match projector_url {
-                    Some(projector_url) => runtime.block_on(
-                        client
-                            .models()
-                            .install_urls_with_projector(model_urls, projector_url),
-                    ),
-                    None => runtime.block_on(client.models().install_urls(model_urls)),
-                }
-                .map_err(ClientError::from)
+                runtime
+                    .block_on(client.models().add(sources))
+                    .map_err(ClientError::from)
             })
             .map_err(to_py_client_error)?;
         Ok(model.into())
     }
 
-    /// List installed models.
+    /// List available models.
     fn list(&self, py: Python<'_>) -> PyResult<Vec<PyManagedModel>> {
         let client = self.client.clone();
         py.allow_threads(move || {
             let client = client
                 .lock()
-                .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?;
-            Ok(block_on(client.models().list())
-                .into_iter()
-                .map(PyManagedModel::from)
-                .collect())
+                .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
+            block_on(client.models().list())
+                .map_err(ClientError::from)
+                .map(|models| models.into_iter().map(PyManagedModel::from).collect())
         })
+        .map_err(to_py_client_error)
     }
 
-    /// Remove an installed model that is not used by an endpoint.
+    /// Remove a model that is not used by an endpoint.
     fn remove(&self, py: Python<'_>, model_id: String) -> PyResult<()> {
         let client = self.client.clone();
         py.allow_threads(move || {
@@ -1076,7 +998,7 @@ impl PySippClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, endpoint_options = None, provider_options = None, emit_tokens = false))]
+    #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, extra = None, emit_tokens = false))]
     fn query(
         &self,
         py: Python<'_>,
@@ -1084,8 +1006,7 @@ impl PySippClient {
         endpoint: Option<Py<PyEndpointRef>>,
         options: Option<Py<PySippTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
-        endpoint_options: Option<PyObject>,
-        provider_options: Option<PyObject>,
+        extra: Option<PyObject>,
         emit_tokens: bool,
     ) -> PyResult<PySippTextRun> {
         let request = dto::SippQueryRequest {
@@ -1096,12 +1017,7 @@ impl PySippClient {
             prompt,
             options: options.as_ref().map(|value| value.borrow(py).to_dto()),
             local: local.as_ref().map(|value| value.borrow(py).to_dto()),
-            endpoint_options: endpoint_options
-                .map(|value| py_to_json(value.bind(py)))
-                .transpose()?,
-            provider_options: provider_options
-                .map(|value| py_to_json(value.bind(py)))
-                .transpose()?,
+            extra: extra.map(|value| py_to_json(value.bind(py))).transpose()?,
             emit_tokens: Some(emit_tokens),
         };
         let request = ClientQueryRequest::try_from(request).map_err(convert_error)?;
@@ -1114,7 +1030,7 @@ impl PySippClient {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, endpoint_options = None, provider_options = None, emit_tokens = false))]
+    #[pyo3(signature = (messages, *, endpoint = None, options = None, local = None, extra = None, emit_tokens = false))]
     fn chat(
         &self,
         py: Python<'_>,
@@ -1122,8 +1038,7 @@ impl PySippClient {
         endpoint: Option<Py<PyEndpointRef>>,
         options: Option<Py<PySippTextOptions>>,
         local: Option<Py<PyLocalTextOptions>>,
-        endpoint_options: Option<PyObject>,
-        provider_options: Option<PyObject>,
+        extra: Option<PyObject>,
         emit_tokens: bool,
     ) -> PyResult<PySippTextRun> {
         let request = dto::SippChatRequest {
@@ -1137,12 +1052,7 @@ impl PySippClient {
                 .collect(),
             options: options.as_ref().map(|value| value.borrow(py).to_dto()),
             local: local.as_ref().map(|value| value.borrow(py).to_dto()),
-            endpoint_options: endpoint_options
-                .map(|value| py_to_json(value.bind(py)))
-                .transpose()?,
-            provider_options: provider_options
-                .map(|value| py_to_json(value.bind(py)))
-                .transpose()?,
+            extra: extra.map(|value| py_to_json(value.bind(py))).transpose()?,
             emit_tokens: Some(emit_tokens),
         };
         let request = ClientChatRequest::try_from(request).map_err(convert_error)?;
@@ -1154,15 +1064,14 @@ impl PySippClient {
         Ok(PySippTextRun::from_core(run))
     }
 
-    #[pyo3(signature = (input, *, endpoint = None, local = None, endpoint_options = None, provider_options = None))]
+    #[pyo3(signature = (input, *, endpoint = None, local = None, extra = None))]
     fn embed(
         &self,
         py: Python<'_>,
         input: String,
         endpoint: Option<Py<PyEndpointRef>>,
         local: Option<Py<PyLocalEmbedOptions>>,
-        endpoint_options: Option<PyObject>,
-        provider_options: Option<PyObject>,
+        extra: Option<PyObject>,
     ) -> PyResult<PySippEmbeddingRun> {
         let request = dto::SippEmbedRequest {
             request_id: None,
@@ -1171,12 +1080,7 @@ impl PySippClient {
                 .map(|endpoint| endpoint.borrow(py).to_dto()),
             input,
             local: local.as_ref().map(|value| value.borrow(py).to_dto()),
-            endpoint_options: endpoint_options
-                .map(|value| py_to_json(value.bind(py)))
-                .transpose()?,
-            provider_options: provider_options
-                .map(|value| py_to_json(value.bind(py)))
-                .transpose()?,
+            extra: extra.map(|value| py_to_json(value.bind(py))).transpose()?,
         };
         let request = ClientEmbedRequest::try_from(request).map_err(convert_error)?;
         let run = self
@@ -1486,7 +1390,6 @@ fn json_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {
 fn endpoint_ref_to_dict(py: Python<'_>, endpoint: CoreEndpointRef) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new_bound(py);
     let endpoint = endpoint_ref_to_dto(endpoint);
-    dict.set_item("kind", endpoint.kind)?;
     dict.set_item("id", endpoint.id)?;
     Ok(dict.into_py(py))
 }

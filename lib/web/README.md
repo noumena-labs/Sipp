@@ -25,7 +25,7 @@ if the launcher is not active.
 import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 const client = new SippClient();
-const model = await client.models.installUrls(['/models/model.gguf']);
+const model = await client.models.add(['/models/model.gguf']);
 await client.add(
   'default',
   EndpointDescriptor.local(model.id, {
@@ -59,7 +59,7 @@ The browser runtime links the Rust WASM ABI with llama.cpp and ggml through
 Emscripten. It runs GGUF text and vision models with WebGPU on compatible
 browsers, falls back to CPU execution for compatible local workflows, and
 keeps models in OPFS after the first URL fetch or `File` import so later loads
-can reuse the installed model ID.
+can reuse the returned model ID.
 
 <!--
 Future benchmark graph placeholder:

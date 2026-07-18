@@ -16,7 +16,7 @@ mod model_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-pub const REGISTRY_MANIFEST_VERSION: u32 = 3;
+pub const REGISTRY_MANIFEST_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

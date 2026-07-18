@@ -61,9 +61,9 @@ async fn run(
     model_path: std::path::PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = SippClient::new()?;
-    let model = client.models().install_files([model_path]).await?;
+    let model = client.models().add([model_path]).await?;
     let mut descriptor = LocalDescriptor::new(model.id);
-    descriptor.config = runtime_config();
+    descriptor.runtime = runtime_config();
     let endpoint = client.add("default", descriptor).await?;
 
     let response = client
