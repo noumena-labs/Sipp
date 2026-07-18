@@ -58,21 +58,32 @@ fn t5_encoder_decoder_fixture_is_available() {
 }
 
 #[test]
-fn service_installs_and_lists_text_asset() {
-    let root = TempDir::new("service", "install-list");
-    let model = root.path.join("model.gguf");
-    fs::write(&model, b"not a gguf").expect("model");
+fn service_adds_and_lists_local_model_without_copying_it() {
+    let root = TempDir::new("service", "add-list");
+    let model_path = root.path.join("model.gguf");
+    fs::write(&model_path, b"not a gguf").expect("model");
 
-    let store = ModelStore::local(root.path.join("store")).expect("store");
-    let installed = block_on(store.install_files([model])).expect("installed");
+    let store_root = root.path.join("store");
+    let store = ModelStore::local(&store_root).expect("store");
+    let added = block_on(store.add([&model_path])).expect("added");
+    let listed = block_on(store.list()).expect("list");
     let state = block_on(store.state.lock());
     let model = state
         .registry
         .manifest
         .models
-        .get(&installed.id)
-        .expect("installed model");
+        .get(&added.id)
+        .expect("added model");
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, added.id);
     assert_eq!(model.status, ModelStatus::Ready);
+    assert_eq!(
+        fs::read_dir(store_root.join("assets"))
+            .expect("assets directory")
+            .count(),
+        0
+    );
 }
 
 #[test]
@@ -82,7 +93,7 @@ fn store_rejects_removing_a_model_in_use() {
     fs::write(&model_path, b"not a gguf").expect("model");
 
     let store = ModelStore::local(root.path.join("store")).expect("store");
-    let model = block_on(store.install_files([model_path])).expect("installed");
+    let model = block_on(store.add([&model_path])).expect("added");
     block_on(store.replace_usage(None, Some(&model.id)));
 
     let error = block_on(store.remove(&model.id)).expect_err("model is in use");
@@ -90,16 +101,17 @@ fn store_rejects_removing_a_model_in_use() {
 
     block_on(store.replace_usage(Some(&model.id), None));
     block_on(store.remove(&model.id)).expect("removed");
+    assert!(model_path.exists());
 }
 
 #[test]
-fn cached_local_asset_requires_matching_source_hash() {
-    let root = TempDir::new("service", "cache-hash");
+fn adding_a_changed_local_source_replaces_its_registry_entry() {
+    let root = TempDir::new("service", "replace-local");
     let model = root.path.join("model.gguf");
     fs::write(&model, b"first bytes").expect("model");
 
     let store = ModelStore::local(root.path.join("store")).expect("store");
-    let first = block_on(store.install_files([model.clone()])).expect("first");
+    let first = block_on(store.add([&model])).expect("first");
     let first_asset_id = block_on(store.state.lock())
         .registry
         .manifest
@@ -110,8 +122,9 @@ fn cached_local_asset_requires_matching_source_hash() {
         .clone();
 
     fs::write(&model, b"secondbytes").expect("same len replacement");
-    let second = block_on(store.install_files([model])).expect("second");
-    let second_asset_id = block_on(store.state.lock())
+    let second = block_on(store.add([&model])).expect("second");
+    let state = block_on(store.state.lock());
+    let second_asset_id = state
         .registry
         .manifest
         .models
@@ -121,12 +134,32 @@ fn cached_local_asset_requires_matching_source_hash() {
         .clone();
 
     assert_ne!(first_asset_id, second_asset_id);
+    assert_eq!(state.registry.manifest.models.len(), 1);
+    assert_eq!(state.registry.manifest.assets.len(), 1);
+}
+
+#[test]
+fn listing_prunes_a_deleted_local_source() {
+    let root = TempDir::new("service", "prune-local");
+    let model = root.path.join("model.gguf");
+    fs::write(&model, b"model bytes").expect("model");
+
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    block_on(store.add([&model])).expect("add");
+    fs::remove_file(model).expect("delete source");
+
+    assert!(block_on(store.list()).expect("list").is_empty());
+    let state = block_on(store.state.lock());
+    assert!(state.registry.manifest.models.is_empty());
+    assert!(state.registry.manifest.assets.is_empty());
 }
 
 #[test]
 fn service_rejects_unresolved_vision_model_on_load() {
     let root = TempDir::new("service", "needs-projector");
     let store = ModelStore::local(root.path.join("store")).expect("store");
+    let model_path = root.path.join("vision.gguf");
+    fs::write(&model_path, b"v").expect("model");
     let plan = vision_plan();
     let record = AssetRecord {
         id: "asset-a".to_string(),
@@ -134,9 +167,9 @@ fn service_rejects_unresolved_vision_model_on_load() {
         name: "vision.gguf".to_string(),
         hash: "a".to_string(),
         bytes: 1,
-        storage_path: PathBuf::from("assets/asset-a"),
+        storage_path: model_path.clone(),
         source: AssetSource::Local {
-            path: PathBuf::from("vision.gguf"),
+            path: model_path,
             modified_unix_ms: None,
         },
         ref_count: 0,

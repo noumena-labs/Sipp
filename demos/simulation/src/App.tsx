@@ -3,7 +3,7 @@
 // App.tsx
 //
 // - Top-level simulation app. Wires:
-//     - a single shared SippClient with a model installed from the configured
+//     - a single shared SippClient with a model added from the configured
 //       GGUF URL
 //     - a DirectorRuntime from `director.json`
 //     - four CharacterRuntime-backed chooser adapters
@@ -612,7 +612,7 @@ export default function App() {
             setStatus('Loading into memory');
           }
         };
-        const model = await nextClient.models.installUrls([url], { onProgress });
+        const model = await nextClient.models.add([url], { onProgress });
         await nextClient.add(
           'local',
           EndpointDescriptor.local(model.id, {

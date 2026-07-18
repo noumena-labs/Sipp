@@ -1,5 +1,5 @@
 import type {
-  ModelInstallSource,
+  ModelAddSource,
   ModelLoadOptions,
   ModelLoadProgress,
   EngineEvent,
@@ -46,7 +46,7 @@ export type WorkerRequestMessage =
       kind: 'models-install';
       callId: number;
       config: WorkerRuntimeConfig;
-      source: ModelInstallSource;
+      source: ModelAddSource;
     }
   | {
       kind: 'models-load';

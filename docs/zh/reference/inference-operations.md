@@ -64,7 +64,7 @@ const run = client.chat({
 ### 编码器-解码器模型的本地 query
 
 ```ts
-const model = await client.models.installFiles(['/models/t5-small-f16.gguf']);
+const model = await client.models.add(['/models/t5-small-f16.gguf']);
 const endpoint = await client.add(
   't5-local',
   EndpointDescriptor.local(model.id)
@@ -103,7 +103,7 @@ const embedding = (await run.response).values;
 
 `model` 是网关公开的目标名称。网关收到请求后，将该名称解析为具体的本地 GGUF 模型、OpenAI 端点、兼容 OpenAI 的端点或 Anthropic 端点。
 
-网关调用支持 `query` 和 `chat` 的通用文本选项：`max_tokens`、`temperature`、`top_p`、`stop`、`stream`。`contextKey`、`grammar`、`jsonSchema`、`sampling`、`media`、`normalize` 这些仅限本地的字段，网关端点会拒绝。`providerOptions` 也只对直连提供商有效，网关同样拒绝；自定义网关需自行处理提供商特定的扩展字段。
+网关调用支持 `query` 和 `chat` 的通用文本选项：`max_tokens`、`temperature`、`top_p`、`stop`、`stream`。`contextKey`、`grammar`、`jsonSchema`、`sampling`、`media`、`normalize` 这些仅限本地的字段，网关端点会拒绝。`extra` 也只对直连提供商有效，网关同样拒绝；自定义网关需自行处理提供商特定的扩展字段。
 
 ### 网关目标映射
 

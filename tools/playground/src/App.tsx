@@ -3,7 +3,7 @@ import {
   EndpointDescriptor,
   SippClient,
   type ManagedModel,
-  type ModelInstallOptions,
+  type ModelAddOptions,
   type ModelInfo,
   type ObservabilitySnapshot,
   type TokenBatch,
@@ -52,7 +52,7 @@ import {
   validateImageFile,
 } from './lib/utils';
 import {
-  installModel,
+  addModel,
   formatSize,
   getEmbeddingModels,
   getDefaultVariant,
@@ -743,7 +743,7 @@ export default function App() {
     location: ModelLocation
   ): Promise<ModelInfo> => {
     const start = performance.now();
-    const onProgress: NonNullable<ModelInstallOptions['onProgress']> = (progress) => {
+    const onProgress: NonNullable<ModelAddOptions['onProgress']> = (progress) => {
       if (progress.phase === 'download') {
         setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
       } else if (progress.phase === 'store') {
@@ -754,7 +754,7 @@ export default function App() {
         setStatus('Loading into memory');
       }
     };
-    const model = await installModel(targetClient, location, { onProgress });
+    const model = await addModel(targetClient, location, { onProgress });
     await targetClient.add(
       'playground-local',
       EndpointDescriptor.local(model.id, {

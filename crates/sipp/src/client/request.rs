@@ -10,11 +10,8 @@ pub struct SippRequestContext {
     pub request_id: Option<String>,
 }
 
-/// Endpoint-specific free-form options carried by request envelopes.
-pub type EndpointOptions = serde_json::Map<String, serde_json::Value>;
-
-/// Direct provider free-form options carried by request envelopes.
-pub type ProviderOptions = serde_json::Map<String, serde_json::Value>;
+/// Endpoint-specific free-form fields carried by request envelopes.
+pub type RequestExtra = serde_json::Map<String, serde_json::Value>;
 
 /// Text generation options shared by inference endpoints.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -80,10 +77,8 @@ pub struct SippQueryRequest {
     pub options: SippTextOptions,
     /// Local-only request options.
     pub local: LocalTextOptions,
-    /// Endpoint-specific options passed to gateway endpoint implementations.
-    pub endpoint_options: EndpointOptions,
-    /// Direct-provider-only request options passed to provider adapters.
-    pub provider_options: ProviderOptions,
+    /// Extra fields interpreted by gateway and provider endpoints.
+    pub extra: RequestExtra,
     /// Whether the returned run handle emits token batches.
     pub emit_tokens: bool,
 }
@@ -99,10 +94,8 @@ pub struct SippChatRequest {
     pub options: SippTextOptions,
     /// Local-only request options.
     pub local: LocalTextOptions,
-    /// Endpoint-specific options passed to gateway endpoint implementations.
-    pub endpoint_options: EndpointOptions,
-    /// Direct-provider-only request options passed to provider adapters.
-    pub provider_options: ProviderOptions,
+    /// Extra fields interpreted by gateway and provider endpoints.
+    pub extra: RequestExtra,
     /// Whether the returned run handle emits token batches.
     pub emit_tokens: bool,
 }
@@ -116,8 +109,6 @@ pub struct SippEmbedRequest {
     pub input: String,
     /// Local-only embedding options.
     pub local: LocalEmbedOptions,
-    /// Endpoint-specific options passed to gateway endpoint implementations.
-    pub endpoint_options: EndpointOptions,
-    /// Direct-provider-only request options passed to provider adapters.
-    pub provider_options: ProviderOptions,
+    /// Extra fields interpreted by gateway and provider endpoints.
+    pub extra: RequestExtra,
 }

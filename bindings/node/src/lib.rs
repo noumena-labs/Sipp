@@ -505,16 +505,12 @@ impl From<&NativeRuntimeConfig> for dto::NativeRuntimeConfig {
 /// Address of a registered inference endpoint.
 #[napi(object)]
 pub struct EndpointRef {
-    pub kind: String,
     pub id: String,
 }
 
 impl From<EndpointRef> for dto::EndpointRef {
     fn from(value: EndpointRef) -> Self {
-        Self {
-            kind: value.kind,
-            id: value.id,
-        }
+        Self { id: value.id }
     }
 }
 
@@ -596,10 +592,7 @@ pub struct SippQueryRequest {
     pub prompt: String,
     pub options: Option<SippTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[napi(js_name = "endpointOptions")]
-    pub endpoint_options: Option<serde_json::Value>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
     #[napi(js_name = "emitTokens")]
     pub emit_tokens: Option<bool>,
 }
@@ -612,8 +605,7 @@ impl From<SippQueryRequest> for dto::SippQueryRequest {
             prompt: value.prompt,
             options: value.options.map(dto::SippTextOptions::from),
             local: value.local.map(dto::LocalTextOptions::from),
-            endpoint_options: value.endpoint_options,
-            provider_options: value.provider_options,
+            extra: value.extra,
             emit_tokens: value.emit_tokens,
         }
     }
@@ -628,10 +620,7 @@ pub struct SippChatRequest {
     pub messages: Vec<ChatMessage>,
     pub options: Option<SippTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[napi(js_name = "endpointOptions")]
-    pub endpoint_options: Option<serde_json::Value>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
     #[napi(js_name = "emitTokens")]
     pub emit_tokens: Option<bool>,
 }
@@ -648,8 +637,7 @@ impl From<SippChatRequest> for dto::SippChatRequest {
                 .collect(),
             options: value.options.map(dto::SippTextOptions::from),
             local: value.local.map(dto::LocalTextOptions::from),
-            endpoint_options: value.endpoint_options,
-            provider_options: value.provider_options,
+            extra: value.extra,
             emit_tokens: value.emit_tokens,
         }
     }
@@ -663,10 +651,7 @@ pub struct SippEmbedRequest {
     pub endpoint: Option<EndpointRef>,
     pub input: String,
     pub local: Option<LocalEmbedOptions>,
-    #[napi(js_name = "endpointOptions")]
-    pub endpoint_options: Option<serde_json::Value>,
-    #[napi(js_name = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
 }
 
 impl From<SippEmbedRequest> for dto::SippEmbedRequest {
@@ -676,8 +661,7 @@ impl From<SippEmbedRequest> for dto::SippEmbedRequest {
             endpoint: value.endpoint.map(dto::EndpointRef::from),
             input: value.input,
             local: value.local.map(dto::LocalEmbedOptions::from),
-            endpoint_options: value.endpoint_options,
-            provider_options: value.provider_options,
+            extra: value.extra,
         }
     }
 }
@@ -740,7 +724,7 @@ pub struct EndpointDescriptor {
     pub kind: String,
     #[napi(js_name = "modelId")]
     pub model_id: Option<String>,
-    pub config: Option<NativeRuntimeConfig>,
+    pub runtime: Option<NativeRuntimeConfig>,
     #[napi(js_name = "baseUrl")]
     pub base_url: Option<String>,
     pub target: Option<String>,
@@ -775,7 +759,7 @@ impl From<&EndpointDescriptor> for dto::EndpointDescriptor {
         Self {
             kind: value.kind.clone(),
             model_id: value.model_id.clone(),
-            config: value.config.as_ref().map(dto::NativeRuntimeConfig::from),
+            runtime: value.runtime.as_ref().map(dto::NativeRuntimeConfig::from),
             base_url: value.base_url.clone(),
             target: value.target.clone(),
             authentication: value
@@ -945,10 +929,7 @@ pub struct SippResponseMetadata {
 
 fn endpoint_ref_to_node(endpoint: CoreEndpointRef) -> EndpointRef {
     let endpoint = dto::EndpointRef::from(endpoint);
-    EndpointRef {
-        kind: endpoint.kind,
-        id: endpoint.id,
-    }
+    EndpointRef { id: endpoint.id }
 }
 
 fn token_usage_to_node(usage: CoreTokenUsage) -> TokenUsage {
@@ -1013,20 +994,6 @@ pub struct TokenBatch {
     pub stats: TokenEmissionStats,
 }
 
-/// Options for installing model files.
-#[napi(object)]
-pub struct FileInstallOptions {
-    #[napi(js_name = "projectorPath")]
-    pub projector_path: Option<String>,
-}
-
-/// Options for installing model URLs.
-#[napi(object)]
-pub struct UrlInstallOptions {
-    #[napi(js_name = "projectorUrl")]
-    pub projector_url: Option<String>,
-}
-
 /// Client storage configuration.
 #[napi(object)]
 pub struct SippClientOptions {
@@ -1034,7 +1001,7 @@ pub struct SippClientOptions {
     pub storage_root: Option<String>,
 }
 
-/// Persistent models owned by a Sipp client.
+/// Models available to a Sipp client.
 #[napi(js_name = "ModelStore")]
 pub struct ModelStore {
     client: SharedSippClient,
@@ -1042,35 +1009,16 @@ pub struct ModelStore {
 
 #[napi]
 impl ModelStore {
-    /// Install model files from the host filesystem.
-    #[napi(js_name = "installFiles", ts_return_type = "Promise<ManagedModel>")]
-    pub fn install_files(
-        &self,
-        model_paths: Vec<String>,
-        options: Option<FileInstallOptions>,
-    ) -> AsyncTask<ModelInstallFilesTask> {
-        AsyncTask::new(ModelInstallFilesTask {
+    /// Add a model from local paths or HTTP(S) URLs.
+    #[napi(ts_return_type = "Promise<ManagedModel>")]
+    pub fn add(&self, sources: Vec<String>) -> AsyncTask<ModelAddTask> {
+        AsyncTask::new(ModelAddTask {
             client: self.client.clone(),
-            model_paths,
-            projector_path: options.and_then(|options| options.projector_path),
+            sources,
         })
     }
 
-    /// Download and install model files from HTTP(S) URLs.
-    #[napi(js_name = "installUrls", ts_return_type = "Promise<ManagedModel>")]
-    pub fn install_urls(
-        &self,
-        model_urls: Vec<String>,
-        options: Option<UrlInstallOptions>,
-    ) -> AsyncTask<ModelInstallUrlsTask> {
-        AsyncTask::new(ModelInstallUrlsTask {
-            client: self.client.clone(),
-            model_urls,
-            projector_url: options.and_then(|options| options.projector_url),
-        })
-    }
-
-    /// List installed models.
+    /// List available models.
     #[napi(ts_return_type = "Promise<Array<ManagedModel>>")]
     pub fn list(&self) -> AsyncTask<ModelListTask> {
         AsyncTask::new(ModelListTask {
@@ -1078,7 +1026,7 @@ impl ModelStore {
         })
     }
 
-    /// Remove an installed model that is not used by an endpoint.
+    /// Remove a model that is not used by an endpoint.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn remove(&self, model_id: String) -> AsyncTask<ModelRemoveTask> {
         AsyncTask::new(ModelRemoveTask {
@@ -1329,13 +1277,12 @@ impl Task for ClientRemoveTask {
     }
 }
 
-pub struct ModelInstallFilesTask {
+pub struct ModelAddTask {
     client: SharedSippClient,
-    model_paths: Vec<String>,
-    projector_path: Option<String>,
+    sources: Vec<String>,
 }
 
-impl Task for ModelInstallFilesTask {
+impl Task for ModelAddTask {
     type Output = ModelTaskOutput<CoreManagedModel>;
     type JsValue = ManagedModel;
 
@@ -1344,56 +1291,14 @@ impl Task for ModelInstallFilesTask {
             .client
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
-        let model_paths = std::mem::take(&mut self.model_paths);
-        let result = match self.projector_path.take() {
-            Some(projector_path) => block_on(
-                client
-                    .models()
-                    .install_files_with_projector(model_paths, projector_path),
-            ),
-            None => block_on(client.models().install_files(model_paths)),
-        };
-        Ok(result)
-    }
-
-    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        output
-            .map(managed_model_to_node)
-            .map_err(|error| model_lifecycle_error_to_node(env, error))
-    }
-}
-
-pub struct ModelInstallUrlsTask {
-    client: SharedSippClient,
-    model_urls: Vec<String>,
-    projector_url: Option<String>,
-}
-
-impl Task for ModelInstallUrlsTask {
-    type Output = ModelTaskOutput<CoreManagedModel>;
-    type JsValue = ManagedModel;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let client = self
-            .client
-            .lock()
-            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
-        let model_urls = std::mem::take(&mut self.model_urls);
+        let sources = std::mem::take(&mut self.sources);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|error| {
                 napi_error(format!("failed to start model download runtime: {error}"))
             })?;
-        let result = match self.projector_url.take() {
-            Some(projector_url) => runtime.block_on(
-                client
-                    .models()
-                    .install_urls_with_projector(model_urls, projector_url),
-            ),
-            None => runtime.block_on(client.models().install_urls(model_urls)),
-        };
-        Ok(result)
+        Ok(runtime.block_on(client.models().add(sources)))
     }
 
     fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -1408,7 +1313,7 @@ pub struct ModelListTask {
 }
 
 impl Task for ModelListTask {
-    type Output = Vec<CoreManagedModel>;
+    type Output = ModelTaskOutput<Vec<CoreManagedModel>>;
     type JsValue = Vec<ManagedModel>;
 
     fn compute(&mut self) -> Result<Self::Output> {
@@ -1419,8 +1324,10 @@ impl Task for ModelListTask {
         Ok(block_on(client.models().list()))
     }
 
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output.into_iter().map(managed_model_to_node).collect())
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(|models| models.into_iter().map(managed_model_to_node).collect())
+            .map_err(|error| model_lifecycle_error_to_node(env, error))
     }
 }
 

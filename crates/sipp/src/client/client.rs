@@ -76,8 +76,7 @@ impl SippClient {
     /// Register or replace a local, gateway, or direct provider endpoint.
     ///
     /// Reusing an id replaces the existing endpoint after the new descriptor
-    /// has been validated and constructed. Changing endpoint kind invalidates
-    /// previously returned references for that id.
+    /// has been validated and constructed.
     ///
     /// # Errors
     ///
@@ -110,7 +109,7 @@ impl SippClient {
             .load_engine(
                 &descriptor.model_id,
                 ModelLoadOptions {
-                    runtime: descriptor.config,
+                    runtime: descriptor.runtime,
                     ..ModelLoadOptions::default()
                 },
             )
@@ -125,7 +124,7 @@ impl SippClient {
         engine: SippEngine,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "local id")?;
-        let endpoint = EndpointRef::Local { id };
+        let endpoint = EndpointRef::from_id(id);
 
         let state = engine.state().await?;
         let model = state
@@ -148,7 +147,7 @@ impl SippClient {
         descriptor: crate::client::GatewayDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "gateway id")?;
-        let endpoint = EndpointRef::Gateway { id };
+        let endpoint = EndpointRef::from_id(id);
         let executor = self.io_executor()?;
         self.replace_endpoint(
             endpoint.clone(),
@@ -171,7 +170,7 @@ impl SippClient {
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "gateway id")?;
         Err(SippError::UnsupportedOperation {
-            endpoint: EndpointRef::Gateway { id },
+            endpoint: EndpointRef::from_id(id),
             operation: "gateway endpoint registration",
         })
     }
@@ -183,7 +182,7 @@ impl SippClient {
         descriptor: ProviderDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "provider id")?;
-        let endpoint = EndpointRef::Provider { id };
+        let endpoint = EndpointRef::from_id(id);
         let (model, transport, secrets) = descriptor.build()?;
         let executor = self.io_executor()?;
         self.replace_endpoint(
@@ -210,7 +209,7 @@ impl SippClient {
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "provider id")?;
         Err(SippError::UnsupportedOperation {
-            endpoint: EndpointRef::Provider { id },
+            endpoint: EndpointRef::from_id(id),
             operation: "provider endpoint registration",
         })
     }
@@ -226,7 +225,6 @@ impl SippClient {
         self.models
             .replace_usage(previous.as_deref(), model_id.as_deref())
             .await;
-        self.endpoints.retain(|registered, _| registered.id() != id);
         if let Some(model_id) = model_id {
             self.local_models.insert(id, model_id);
         }
@@ -240,13 +238,12 @@ impl SippClient {
     /// Returns an error when the id is invalid or no endpoint uses it.
     pub async fn remove(&mut self, id: &str) -> SippResult<()> {
         let id = normalize_id(id, "endpoint id")?;
-        let endpoint = self
-            .endpoints
-            .keys()
-            .find(|endpoint| endpoint.id() == id)
-            .cloned()
-            .ok_or_else(|| SippError::InvalidRequest(format!("endpoint not found: {id}")))?;
-        self.endpoints.remove(&endpoint);
+        let endpoint = EndpointRef::from_id(id.clone());
+        if self.endpoints.remove(&endpoint).is_none() {
+            return Err(SippError::InvalidRequest(format!(
+                "endpoint not found: {id}"
+            )));
+        }
         let model_id = self.local_models.remove(&id);
         self.models.replace_usage(model_id.as_deref(), None).await;
         Ok(())
@@ -329,7 +326,7 @@ impl SippClient {
         let mut matches = self
             .endpoints
             .values()
-            .filter(|endpoint| endpoint.endpoint().is_local())
+            .filter(|endpoint| self.local_models.contains_key(endpoint.endpoint().id()))
             .filter(|endpoint| {
                 endpoint.capabilities().for_operation(operation) == CapabilitySupport::Supported
             });

@@ -3,21 +3,17 @@ use serde_json::json;
 use crate::client::{validate, SippEmbedRequest, SippQueryRequest, SippTextOptions};
 
 #[test]
-fn local_requests_reject_gateway_endpoint_options() {
+fn local_requests_reject_extra_fields() {
     let mut request = SippQueryRequest::default();
-    request
-        .endpoint_options
-        .insert("trace".to_string(), json!(true));
+    request.extra.insert("trace".to_string(), json!(true));
     assert!(matches!(
         validate::local_query(&request),
         Err(crate::client::SippError::InvalidRequest(message))
-            if message == "endpoint_options are not valid for local endpoints"
+            if message == "extra fields are not valid for local endpoints"
     ));
 
     let mut embed = SippEmbedRequest::default();
-    embed
-        .endpoint_options
-        .insert("normalize".to_string(), json!(true));
+    embed.extra.insert("normalize".to_string(), json!(true));
     assert!(validate::local_embed(&embed).is_err());
 }
 

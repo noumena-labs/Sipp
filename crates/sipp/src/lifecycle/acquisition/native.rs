@@ -138,17 +138,10 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
                 acquisition_id,
                 member_id,
                 attempt,
-                role,
                 metadata,
             } => {
                 match self
-                    .download(
-                        acquisition_id,
-                        member_id,
-                        attempt,
-                        role.asset_kind(),
-                        metadata,
-                    )
+                    .download(acquisition_id, member_id, attempt, metadata)
                     .await
                 {
                     NativeDownloadResult::Succeeded { event, record } => {
@@ -252,7 +245,6 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
         acquisition_id: String,
         member_id: u32,
         attempt: u8,
-        kind: crate::lifecycle::ModelAssetKind,
         metadata: super::RemoteMetadata,
     ) -> NativeDownloadResult {
         let mut response = match self.client.get(&metadata.url).send().await {
@@ -346,7 +338,7 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
         let install_path = staged_path.clone();
         let journal = self.journal.clone();
         let install = tokio::task::spawn_blocking(move || {
-            assets.install_remote_staged(&install_path, &install_metadata, kind, Some(&journal))
+            assets.install_remote_staged(&install_path, &install_metadata, Some(&journal))
         })
         .await;
         let installed = match install {
@@ -446,7 +438,7 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
                     ),
                 );
             };
-            if let Err(error) = self.assets.delete_asset(&record) {
+            if let Err(error) = self.assets.delete_managed_asset(&record) {
                 return operation_failed(
                     acquisition_id,
                     member_id,

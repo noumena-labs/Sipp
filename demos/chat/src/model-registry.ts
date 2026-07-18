@@ -1,6 +1,6 @@
 import {
   type ManagedModel,
-  type ModelInstallOptions,
+  type ModelAddOptions,
   type SippClient,
 } from '@noumena-labs/sipp';
 
@@ -144,21 +144,25 @@ export function resolveModelSelection(
   };
 }
 
-export async function installModel(
+export async function addModel(
   client: SippClient,
   location: ModelLocation,
-  options: ModelInstallOptions = {}
+  options: ModelAddOptions = {}
 ): Promise<ManagedModel> {
   if (location.kind === 'files') {
-    return await client.models.installFiles(location.modelFiles, {
-      ...options,
-      projectorFile: location.projectorFile,
-    });
+    return await client.models.add(
+      location.projectorFile == null
+        ? location.modelFiles
+        : [...location.modelFiles, location.projectorFile],
+      options
+    );
   }
-  return await client.models.installUrls(location.modelUrls, {
-    ...options,
-    projectorUrl: location.projectorUrl,
-  });
+  return await client.models.add(
+    location.projectorUrl == null
+      ? location.modelUrls
+      : [...location.modelUrls, location.projectorUrl],
+    options
+  );
 }
 
 export function projectorRequirementMessage(

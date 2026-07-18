@@ -1,9 +1,7 @@
 //! Tests the `lifecycle::service::helpers` module in `sipp`.
 //!
-//! Covers path comparison, stable model IDs, and runtime fingerprinting using
-//! pure lifecycle/config values without native runtime loading.
-
-use std::path::Path;
+//! Covers stable model IDs and runtime fingerprinting using pure
+//! lifecycle/config values without native runtime loading.
 
 use crate::lifecycle::{
     BackendPreference, BackendSelection, ModelModality, ModelStatus, PairingPlan,
@@ -34,21 +32,6 @@ fn backend_plan(selected: &str, config: NativeRuntimeConfig) -> BackendPlan {
             reason: None,
         },
     }
-}
-
-#[test]
-fn same_path_matches_platform_case_rules() {
-    #[cfg(windows)]
-    assert!(same_path(
-        Path::new("C:/Models/Test.GGUF"),
-        Path::new("c:/models/test.gguf")
-    ));
-
-    #[cfg(not(windows))]
-    assert!(!same_path(
-        Path::new("/models/Test.GGUF"),
-        Path::new("/models/test.gguf")
-    ));
 }
 
 #[test]

@@ -115,7 +115,7 @@ impl ProtocolCodec for GatewayCodec {
             request: SippQueryRequest {
                 prompt: body.prompt,
                 options: text_options(body.max_tokens, body.temperature, body.top_p, body.stop),
-                endpoint_options: body.options,
+                extra: body.options,
                 ..SippQueryRequest::default()
             },
         })
@@ -133,7 +133,7 @@ impl ProtocolCodec for GatewayCodec {
                     .map(|message| ChatMessage::new(message.role, message.content))
                     .collect(),
                 options: text_options(body.max_tokens, body.temperature, body.top_p, body.stop),
-                endpoint_options: body.options,
+                extra: body.options,
                 ..SippChatRequest::default()
             },
         })
@@ -146,7 +146,7 @@ impl ProtocolCodec for GatewayCodec {
             stream: false,
             request: SippEmbedRequest {
                 input: body.input,
-                endpoint_options: body.options,
+                extra: body.options,
                 ..SippEmbedRequest::default()
             },
         })

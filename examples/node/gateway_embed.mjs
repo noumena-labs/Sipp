@@ -18,11 +18,11 @@ const { model: modelPath, target, input } = readGatewayArgs(
 );
 setLlamaLogQuiet(true);
 const client = new SippClient();
-const model = await client.models.installFiles([modelPath]);
+const model = await client.models.add([modelPath]);
 const localEndpoint = await client.add(
   'local',
   EndpointDescriptor.local(model.id, {
-    config: runtimeConfig({ embeddings: true }),
+    runtime: runtimeConfig({ embeddings: true }),
   })
 );
 const gatewayEndpoint = await client.add('gateway', EndpointDescriptor.gateway({

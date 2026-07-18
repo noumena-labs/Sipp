@@ -2,12 +2,13 @@ import {
   EndpointDescriptor,
   SippClient,
   type BrowserEmbeddingRun,
+  type EndpointRef,
   type NativeRuntimeConfig,
 } from '@noumena-labs/sipp';
 import {
-  EXAMPLE_LOCAL_ENDPOINT,
+  EXAMPLE_LOCAL_ENDPOINT_ID,
   formatEmbeddingResult,
-  installModel,
+  addModel,
   readPrompt,
   renderLocalPage,
   reportError,
@@ -16,22 +17,21 @@ import {
 
 const elements = renderLocalPage('Local Embed', 'SippClient embedding example input.', false);
 const client = new SippClient();
-let modelLoaded = false;
+let endpoint: EndpointRef | null = null;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     write(elements.output, 'Loading model...');
-    const model = await installModel(client, elements.modelUrlInput, elements.modelFileInput);
+    const model = await addModel(client, elements.modelUrlInput, elements.modelFileInput);
     if (model == null) {
       write(elements.output, 'Enter a GGUF model URL, path, or file.');
       return;
     }
-    await client.add(
-      EXAMPLE_LOCAL_ENDPOINT.id,
+    endpoint = await client.add(
+      EXAMPLE_LOCAL_ENDPOINT_ID,
       EndpointDescriptor.local(model.id, { runtime: runtimeConfig() })
     );
-    modelLoaded = true;
     write(elements.output, `Loaded ${model.name}.`);
   } catch (error) {
     reportError(elements.output, error);
@@ -40,7 +40,7 @@ elements.loadForm.addEventListener('submit', async (event) => {
 
 elements.runForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!modelLoaded) {
+  if (endpoint == null) {
     write(elements.output, 'Load a model before running embed.');
     return;
   }
@@ -53,6 +53,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   try {
     // Embeddings return a vector instead of generated text.
     const run = client.embed(input, {
+      endpoint,
       contextKey: 'web-embed-example',
       normalize: true,
     });
@@ -71,7 +72,10 @@ function runtimeConfig(): NativeRuntimeConfig {
   };
 }
 
-async function printEmbeddingRun(output: HTMLPreElement, run: BrowserEmbeddingRun): Promise<void> {
+async function printEmbeddingRun(
+  output: HTMLPreElement,
+  run: BrowserEmbeddingRun
+): Promise<void> {
   const result = await run.response;
-  write(output, formatEmbeddingResult(EXAMPLE_LOCAL_ENDPOINT, result));
+  write(output, formatEmbeddingResult(EXAMPLE_LOCAL_ENDPOINT_ID, result));
 }

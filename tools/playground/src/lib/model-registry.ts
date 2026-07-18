@@ -1,13 +1,13 @@
 /**
  * Curated model catalog for the Sipp browser playground.
  *
- * Each variant has a location installed through the client model store before
+ * Each variant has a location added through the client model store before
  * its model id is used to register a local endpoint.
  */
 
 import {
   type ManagedModel,
-  type ModelInstallOptions,
+  type ModelAddOptions,
   type SippClient,
 } from '@noumena-labs/sipp';
 
@@ -32,7 +32,7 @@ export interface ModelVariant {
   sizeBytes: number;
   /** Approximate projector file size in bytes */
   projectorSizeBytes?: number;
-  /** Files or URLs installed through the client model store. */
+  /** Files or URLs added through the client model store. */
   location: ModelLocation;
 }
 
@@ -55,22 +55,26 @@ export interface ModelRegistryEntry {
   defaultVariant?: number;
 }
 
-export async function installModel(
+export async function addModel(
   client: SippClient,
   location: ModelLocation,
-  options: ModelInstallOptions = {}
+  options: ModelAddOptions = {}
 ): Promise<ManagedModel> {
   switch (location.kind) {
     case 'files':
-      return await client.models.installFiles(location.modelFiles, {
-        ...options,
-        projectorFile: location.projectorFile,
-      });
+      return await client.models.add(
+        location.projectorFile == null
+          ? location.modelFiles
+          : [...location.modelFiles, location.projectorFile],
+        options
+      );
     case 'urls':
-      return await client.models.installUrls(location.modelUrls, {
-        ...options,
-        projectorUrl: location.projectorUrl,
-      });
+      return await client.models.add(
+        location.projectorUrl == null
+          ? location.modelUrls
+          : [...location.modelUrls, location.projectorUrl],
+        options
+      );
   }
 }
 

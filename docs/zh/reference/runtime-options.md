@@ -1,18 +1,17 @@
 # 运行时选项
 
-运行时配置与本地推理端点绑定。请求选项在每次调用 `query`、`chat`、`embed` 时单独传入。网关和服务商的扩展参数使用独立的选项分组，每个字段所属的层级一目了然。
+运行时配置与本地推理端点绑定。请求选项在每次调用 `query`、`chat`、`embed` 时单独传入。网关和服务商端点使用同一个 `extra` 字段解释扩展参数。
 
 ## 选项层级
 
 | 层级 | 浏览器包 | Node.js 包 | 用途 |
 | --- | --- | --- | --- |
 | 客户端选项 | `new SippClient(options)` | `new SippClient(options)` | 模型存储，以及浏览器资源、Worker、缓存策略和原生后端初始化 |
-| 模型安装 | `client.models.installFiles/installUrls` | `client.models.installFiles/installUrls` | 文件或 URL、可选投影器、进度和取消 |
-| 本地端点加载选项 | `EndpointDescriptor.local(model.id, options)` | `EndpointDescriptor.local(model.id, { config })` | 后端偏好和原生运行时配置 |
+| 模型来源 | `client.models.add(sources)` | `client.models.add(sources)` | 浏览器文件或 HTTP(S) URL；原生路径或 HTTP(S) URL。模型分片和投影器使用同一列表 |
+| 本地端点加载选项 | `EndpointDescriptor.local(model.id, options)` | `EndpointDescriptor.local(model.id, { runtime })` | 后端偏好和原生运行时配置 |
 | 文本请求选项 | `client.query(prompt, options)` | `client.query({ options })` | 输出长度、采样控制、流式、取消、停止词 |
 | 本地请求选项 | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | 仅限本地的 Prompt 状态、文法、图片、嵌入归一化 |
-| 网关扩展 | `endpointOptions` | `endpointOptions` | 网关端点实现需要的额外字段 |
-| 服务商扩展 | `providerOptions` | `providerOptions` | 直连服务商请求中才会带上的专有字段 |
+| 请求扩展 | `extra` | `extra` | 由网关或服务商端点解释的额外字段。本地端点会拒绝 |
 
 Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相同的功能。
 
@@ -41,7 +40,7 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 | `sampling` | `samplers`, `seed`, `top_k`, `top_p`, `min_p`, `temperature`, `repeat_penalty`, `mirostat`, `logit_bias` | 本地文本生成的默认采样参数 |
 | `scheduler` | `continuous_batching`, `policy`, `prefill_chunk_size`, `max_running_requests`, `max_queued_requests` | 请求调度、批处理、队列限制 |
 | `cache` | `mode`, `retained_prefix_tokens`, `snapshot_interval_tokens`, `max_snapshot_entries`, `max_snapshot_bytes` | 前缀 KV 缓存复用和快照 |
-| `multimodal` | `projector_path`, `use_gpu`, `image_min_tokens`, `image_max_tokens` | 视觉投影器和图片 Token 配置 |
+| `multimodal` | `use_gpu`, `image_min_tokens`, `image_max_tokens` | 视觉与图片 Token 配置。投影器通过 `models.add` 配对 |
 | `residency` | `max_gpu_models_per_device`, `allow_cpu_models_while_gpu_loaded`, `require_gpu_lease` | GPU 模型驻留策略，多模型 GPU 资源分配 |
 | `observability` | `runtime_metrics`, `backend_profiling` | 运行时记录延迟、吞吐量和后端诊断数据 |
 
@@ -103,9 +102,9 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 | `media` | `Vec<MediaInput>` | 多模态输入（图片等）。浏览器包支持 `File` 和 `Blob`。 |
 | `normalize` | `bool` | 嵌入返回前是否归一化。仅对 `embed` 生效。 |
 
-### 网关扩展
+### 请求扩展
 
-网关端点实现可以通过 `endpointOptions` 接收自定义字段。
+网关端点实现可以通过 `extra` 接收自定义字段。
 
 ```ts
 // Node.js
@@ -113,15 +112,13 @@ client.query({
   endpoint,
   prompt,
   options: { maxTokens: 64 },
-  endpointOptions: { custom_field: 'value' },
+  extra: { custom_field: 'value' },
 });
 ```
 
-`endpointOptions` 会原样传给网关端点的实现代码。Sipp 官方网关不会消费这些字段，但自定义网关应用可以自行处理。
+`extra` 会原样传给网关端点的实现代码。Sipp 官方网关不会消费这些字段，但自定义网关应用可以自行处理。
 
-### 服务商扩展
-
-`providerOptions` 里的字段会合并到直连服务商的请求体中。
+服务商端点会将 `extra` 合并到直连请求体中：
 
 ```ts
 // Node.js
@@ -129,13 +126,13 @@ client.chat({
   endpoint,
   messages,
   options: { maxTokens: 128 },
-  providerOptions: {
+  extra: {
     reasoning_effort: 'low',
   },
 });
 ```
 
-服务商选项不能覆盖 Sipp 已有的强类型字段（如 `model`、`messages`、`prompt`、`temperature`、`topP`/`top_p`）。这些应该在请求选项中设。
+`extra` 不能覆盖 Sipp 已有的强类型字段（如 `model`、`messages`、`prompt`、`temperature`、`topP`/`top_p`）。这些应该在请求选项中设置。本地端点会拒绝 `extra`。
 
 ## 相关文档
 

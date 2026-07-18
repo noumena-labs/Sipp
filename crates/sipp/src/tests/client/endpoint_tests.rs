@@ -3,10 +3,9 @@ use crate::core::CapabilitySupport;
 use crate::client::{EndpointCapabilities, EndpointRef};
 
 #[test]
-fn gateway_endpoint_has_closed_kind() {
-    let endpoint = EndpointRef::gateway("edge");
+fn endpoint_reference_exposes_only_its_id() {
+    let endpoint = EndpointRef::from_id("edge");
     assert_eq!(endpoint.id(), "edge");
-    assert_eq!(endpoint.kind(), "gateway");
 }
 
 #[test]

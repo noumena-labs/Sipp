@@ -69,10 +69,10 @@ def main() -> None:
     set_llama_log_quiet(True)
 
     client = SippClient()
-    model = client.models.install_files([model_path])
+    model = client.models.add([model_path])
     client.add(
         "default",
-        EndpointDescriptor.local(model.id, config=runtime_config(embeddings=False)),
+        EndpointDescriptor.local(model.id, runtime=runtime_config(embeddings=False)),
     )
 
     # `chat` sends role-tagged messages and can stream partial token batches.

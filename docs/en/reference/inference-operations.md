@@ -44,7 +44,7 @@ Use `query` when you want to own the full prompt shape, including a hand-written
 or application-provided chat template.
 
 ```ts
-const model = await client.models.installFiles(['/models/model.gguf']);
+const model = await client.models.add(['/models/model.gguf']);
 const endpoint = await client.add(
   'local',
   EndpointDescriptor.local(model.id)
@@ -96,7 +96,7 @@ Use `query` for encoder-decoder GGUF models. The source prompt is encoded
 first; Sipp then drives the decoder from the model's decoder-start token.
 
 ```ts
-const model = await client.models.installFiles(['/models/t5-small-f16.gguf']);
+const model = await client.models.add(['/models/t5-small-f16.gguf']);
 const endpoint = await client.add(
   't5-local',
   EndpointDescriptor.local(model.id)
@@ -146,7 +146,7 @@ Gateway calls accept shared text options for `query` and `chat`, such as
 `max_tokens`, `temperature`, `top_p`, `stop`, and `stream`. Local-only fields
 such as `contextKey`, `grammar`, `jsonSchema`, `sampling`, `media`, and
 `normalize` are rejected by gateway endpoints. Direct-provider
-`providerOptions` are also rejected by gateway endpoints; a custom gateway must
+`extra` are also rejected by gateway endpoints; a custom gateway must
 translate provider-specific extensions deliberately.
 
 ### Gateway Target Mapping

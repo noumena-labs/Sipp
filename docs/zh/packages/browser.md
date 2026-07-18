@@ -16,7 +16,7 @@ npm install @sipphq/sipp
 
 - 浏览器本地执行文本和视觉模型推理。
 - 浏览器运行时中调度 WebGPU 或 CPU 任务。
-- 在 OPFS 中持久安装模型。
+- 在 OPFS 中持久存储浏览器模型。
 - 通过网关发起 query、chat、embedding 调用。
 - 为演示应用构建角色和导演助手。
 
@@ -26,9 +26,7 @@ npm install @sipphq/sipp
 import { EndpointDescriptor, SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
-const model = await client.models.installUrls([
-  new URL('/models/model.gguf', window.location.href).href,
-]);
+const model = await client.models.add(['/models/model.gguf']);
 const endpoint = await client.add(
   'default',
   EndpointDescriptor.local(model.id, {
@@ -92,7 +90,7 @@ const run = client.chat(messages, {
 
 ## 浏览器运行时选项
 
-浏览器运行时通过 Emscripten 将 Sipp 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器暴露所需适配器时，引擎使用 WebGPU 运行 GGUF 文本和视觉模型；选择 CPU 后端时则使用 CPU 执行。首次获取 URL 或导入 `File` 后，已安装模型会保留在 OPFS 中，并可通过模型 ID 再次加载。
+浏览器运行时通过 Emscripten 将 Sipp 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器暴露所需适配器时，引擎使用 WebGPU 运行 GGUF 文本和视觉模型；选择 CPU 后端时则使用 CPU 执行。首次获取 URL 或导入 `File` 后，模型会保留在 OPFS 中，并可通过模型 ID 再次加载。
 
 该包在运行时自动解析其打包的 JavaScript 和 WASM 资源，通常无需手动覆盖资源 URL。只有应用需要精细控制浏览器的执行、存储或本地运行时行为时，才需要配置 `executionMode`、`wasmThreading`、`browserCache` 以及本地端点的 `options.runtime`。
 

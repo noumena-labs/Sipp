@@ -93,7 +93,6 @@ fn prepares_and_commits_text_load() {
         .install(BrowserInstallSource {
             assets: vec![model.clone()],
             classified: vec![classified(&model)],
-            explicit_projector_asset_id: None,
         })
         .expect("install");
     let prepared = service
@@ -235,7 +234,7 @@ fn browser_webgpu_requires_available_backend() {
 }
 
 #[test]
-fn explicit_projector_failure_restores_previous_entry() {
+fn incompatible_projector_failure_restores_previous_entry() {
     let base = asset(
         "asset-base",
         ModelAssetKind::Model,
@@ -258,7 +257,6 @@ fn explicit_projector_failure_restores_previous_entry() {
         .install(BrowserInstallSource {
             assets: vec![base.clone(), first_projector.clone()],
             classified: vec![classified(&base), classified(&first_projector)],
-            explicit_projector_asset_id: Some(first_projector.id.clone()),
         })
         .expect("first install");
     assert_eq!(first.model.status, ModelStatus::Ready);
@@ -267,7 +265,6 @@ fn explicit_projector_failure_restores_previous_entry() {
         .install(BrowserInstallSource {
             assets: vec![bad_projector.clone()],
             classified: vec![classified(&base), classified(&bad_projector)],
-            explicit_projector_asset_id: Some(bad_projector.id),
         })
         .expect_err("mismatched projector");
 
@@ -311,8 +308,7 @@ fn browser_remote_commands_use_shared_503_retry_policy_without_cache_fallback() 
         BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
     let mut response = service
         .remote_command(BrowserRemoteCommand::Begin {
-            model_urls: vec!["https://example.test/model.gguf".to_string()],
-            projector_url: None,
+            urls: vec!["https://example.test/model.gguf".to_string()],
         })
         .expect("begin");
 
@@ -377,8 +373,7 @@ fn browser_remote_receipt_failure_cleans_the_created_asset() {
         BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
     let BrowserRemoteCommandResponse::Action { action } = service
         .remote_command(BrowserRemoteCommand::Begin {
-            model_urls: vec!["https://example.test/model.gguf".to_string()],
-            projector_url: None,
+            urls: vec!["https://example.test/model.gguf".to_string()],
         })
         .expect("begin")
     else {
@@ -464,15 +459,13 @@ fn browser_remote_begin_does_not_replace_an_active_acquisition() {
         BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
     service
         .remote_command(BrowserRemoteCommand::Begin {
-            model_urls: vec!["https://example.test/first.gguf".to_string()],
-            projector_url: None,
+            urls: vec!["https://example.test/first.gguf".to_string()],
         })
         .expect("first begin");
 
     let error = service
         .remote_command(BrowserRemoteCommand::Begin {
-            model_urls: vec!["https://example.test/second.gguf".to_string()],
-            projector_url: None,
+            urls: vec!["https://example.test/second.gguf".to_string()],
         })
         .expect_err("second begin");
 
@@ -550,42 +543,20 @@ fn snapshot_patch_updates_supplied_fields_and_preserves_others() {
 }
 
 #[test]
-fn migrates_existing_v3_split_remote_shape_without_losing_order() {
-    let raw = r#"{
-      "version": 3,
-      "projectorIndexRevision": 0,
-      "assets": {
-        "asset-a": {
-          "id": "asset-a",
-          "kind": "shard",
-          "name": "part-1.gguf",
-          "hash": "a",
-          "bytes": 4,
-          "storagePath": "part-1.gguf",
-          "sourceUrl": "https://example.test/model.gguf",
-          "sourceEtag": "\"abc\"",
-          "sourceLastModified": "Thu, 01 Jan 1970 00:00:00 GMT",
-          "sourceBytes": 8,
-          "sourcePartIndex": 0,
-          "sourcePartCount": 2,
-          "refCount": 0,
-          "createdAt": "1970-01-01T00:00:00.000Z"
-        }
-      },
-      "models": {}
-    }"#;
-    let manifest: BrowserRegistryManifest = serde_json::from_str(raw).expect("manifest");
-    let service = BrowserLifecycleService::create(BrowserCreateConfig {
+fn rejects_previous_registry_manifest_versions() {
+    let manifest = BrowserRegistryManifest {
+        version: 3,
+        ..BrowserRegistryManifest::default()
+    };
+    let error = BrowserLifecycleService::create(BrowserCreateConfig {
         manifest: Some(manifest),
     })
-    .expect("service");
-    let asset = &service.manifest.assets["asset-a"];
-    assert_eq!(asset.source_part_index, Some(0));
-    assert_eq!(asset.source_part_count, Some(2));
-    assert_eq!(
-        asset.source_url.as_deref(),
-        Some("https://example.test/model.gguf")
-    );
+    .expect_err("previous manifest version");
+
+    assert!(matches!(
+        error,
+        ModelError::StorageCorrupt(message) if message.contains("expected browser registry manifest version 4, got 3")
+    ));
 }
 
 #[test]

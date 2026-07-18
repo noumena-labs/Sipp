@@ -17,7 +17,7 @@ import type {
   ScenarioDefinition,
   ScenarioResult,
 } from './types';
-import { installModel, type ModelLocation } from './model-registry';
+import { addModel, type ModelLocation } from './model-registry';
 import { measureAsync, round } from './utils';
 
 type BenchmarkRuntimeOptions = NonNullable<ModelLoadOptions['runtime']>;
@@ -452,7 +452,7 @@ export async function runScenarioBenchmark(
   if (!alreadyLoaded) {
     setStatus(`${scenario.label}: loading model...`);
     const measured = await measureAsync(async () => {
-      const model = await installModel(targetClient, modelLocation);
+      const model = await addModel(targetClient, modelLocation);
       return await targetClient.add(
         'playground-local',
         EndpointDescriptor.local(model.id, {
@@ -586,7 +586,7 @@ export async function runMixedLoadBenchmark(
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
     const measured = await measureAsync(async () => {
-      const model = await installModel(targetClient, modelLocation);
+      const model = await addModel(targetClient, modelLocation);
       return await targetClient.add(
         'playground-local',
         EndpointDescriptor.local(model.id, {

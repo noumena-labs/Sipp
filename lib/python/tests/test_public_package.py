@@ -70,8 +70,9 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert not hasattr(sipp, "GatewayEndpointDescriptor")
     assert not hasattr(sipp, "ProviderEndpointDescriptor")
     assert not hasattr(sipp, "ModelSource")
-    assert hasattr(sipp.ModelStore, "install_files")
-    assert hasattr(sipp.ModelStore, "install_urls")
+    assert hasattr(sipp.ModelStore, "add")
+    assert not hasattr(sipp.ModelStore, "install_files")
+    assert not hasattr(sipp.ModelStore, "install_urls")
     assert hasattr(sipp.ModelStore, "list")
     assert hasattr(sipp.ModelStore, "remove")
     assert issubclass(sipp.ModelLifecycleError, Exception)
@@ -116,7 +117,7 @@ def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(
         host, port = server.server_address
         client = sipp.SippClient()
         with pytest.raises(sipp.ModelLifecycleError) as caught:
-            client.models.install_urls([f"http://{host}:{port}/model.gguf"])
+            client.models.add([f"http://{host}:{port}/model.gguf"])
 
         assert caught.value.code == "REMOTE_METADATA_UNAVAILABLE"
         assert caught.value.status == 503

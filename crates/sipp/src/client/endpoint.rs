@@ -15,48 +15,19 @@ mod endpoint_tests;
 
 /// Addressable inference destination.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum EndpointRef {
-    /// Local engine endpoint registered in the client.
-    Local {
-        /// Client-scoped endpoint id.
-        id: String,
-    },
-    /// HTTP gateway endpoint registered in the client.
-    Gateway {
-        /// Client-scoped endpoint id.
-        id: String,
-    },
-    /// Direct provider endpoint registered in the client.
-    Provider {
-        /// Client-scoped endpoint id.
-        id: String,
-    },
+pub struct EndpointRef {
+    id: String,
 }
 
 impl EndpointRef {
     /// Return the stable client-scoped endpoint id.
     pub fn id(&self) -> &str {
-        match self {
-            Self::Local { id } | Self::Gateway { id } | Self::Provider { id } => id,
-        }
+        &self.id
     }
 
-    /// Return the stable endpoint kind label.
-    pub const fn kind(&self) -> &'static str {
-        match self {
-            Self::Local { .. } => "local",
-            Self::Gateway { .. } => "gateway",
-            Self::Provider { .. } => "provider",
-        }
-    }
-
-    pub(crate) fn is_local(&self) -> bool {
-        matches!(self, Self::Local { .. })
-    }
-
-    /// Create a reference for a gateway endpoint.
-    pub fn gateway(id: impl Into<String>) -> Self {
-        Self::Gateway { id: id.into() }
+    #[doc(hidden)]
+    pub fn from_id(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
     }
 }
 

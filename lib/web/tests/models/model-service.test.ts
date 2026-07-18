@@ -14,7 +14,7 @@ import {
   RuntimePairingValidationError,
   type InternalBundleDescriptor,
   type ModelDetectionResult,
-  type ModelInstallSource,
+  type ModelAddSource,
   type StagedModelBundle,
   type StageModelBundleOptions,
   QueryError,
@@ -60,16 +60,16 @@ function file(name: string, contents = name): File {
 function localSource(name: string, contents = name) {
   return {
     kind: 'local' as const,
-    modelFiles: [file(name, contents)],
+    files: [file(name, contents)],
   };
 }
 
 async function installAndLoad(
   service: ModelService,
-  source: ModelInstallSource,
+  source: ModelAddSource,
   options: ModelLoadOptions = {}
 ): Promise<ModelInfo> {
-  const model = await service.install(source);
+  const model = await service.add(source);
   return await service.load(model.id, options);
 }
 
@@ -149,7 +149,7 @@ function cloneManifest(manifest: RegistryManifest): RegistryManifest {
 
 class MemoryRegistryStore {
   public manifest: RegistryManifest = {
-    version: 3,
+    version: 4,
     projectorIndexRevision: 0,
     assets: {},
     models: {},
@@ -378,10 +378,7 @@ class AbortingAssetClassifier extends FakeAssetClassifier {
   }
 }
 
-function resolveFakePairing(
-  files: readonly ClassifiedAsset[],
-  explicitProjectorId: string | null
-): PairingPlan {
+function resolveFakePairing(files: readonly ClassifiedAsset[]): PairingPlan {
   if (files.length === 0) {
     throw new RuntimePairingValidationError(
       'INVALID_MODEL_SOURCE',
@@ -390,29 +387,14 @@ function resolveFakePairing(
   }
 
   const projectors = files.filter((file) => file.inspection.role === 'projector');
-  if (explicitProjectorId == null && projectors.length > 1) {
+  if (projectors.length > 1) {
     throw new RuntimePairingValidationError(
       'INVALID_MODEL_PAIRING',
       `Multiple projector assets were provided: ${projectors.map((file) => file.name).join(', ')}.`
     );
   }
 
-  const projector =
-    explicitProjectorId == null
-      ? projectors[0] ?? null
-      : files.find((file) => file.assetId === explicitProjectorId) ?? null;
-  if (explicitProjectorId != null && projector == null) {
-    throw new RuntimePairingValidationError(
-      'INVALID_MODEL_PAIRING',
-      'Explicit projector asset was not installed.'
-    );
-  }
-  if (projector != null && projector.inspection.role !== 'projector') {
-    throw new RuntimePairingValidationError(
-      'INVALID_MODEL_PAIRING',
-      `"${projector.name}" is not a projector asset.`
-    );
-  }
+  const projector = projectors[0] ?? null;
 
   const modelFiles = files
     .filter((file) => file.assetId !== projector?.assetId)
@@ -446,12 +428,6 @@ function resolveFakePairing(
   const compatibleVisionProjectorTypes =
     compatibilitySources[0]?.inspection.compatibleVisionProjectorTypes ?? [];
   if (projector != null) {
-    if (explicitProjectorId == null && !base.inspection.visionCapable) {
-      throw new RuntimePairingValidationError(
-        'INVALID_MODEL_PAIRING',
-        'Projector assets can only be auto-paired with vision-capable models.'
-      );
-    }
     const providedType = projector.inspection.providedVisionProjectorType;
     if (
       providedType != null &&
@@ -567,11 +543,8 @@ class FakeRuntime implements EngineRuntime {
     };
   }
 
-  public async resolvePairing(
-    classified: readonly ClassifiedAsset[],
-    explicitProjectorId?: string | null
-  ): Promise<PairingPlan> {
-    return resolveFakePairing(classified, explicitProjectorId ?? null);
+  public async resolvePairing(classified: readonly ClassifiedAsset[]): Promise<PairingPlan> {
+    return resolveFakePairing(classified);
   }
 
   public async stageModelBundle(
@@ -589,7 +562,7 @@ class FakeRuntime implements EngineRuntime {
     }
     const projector = descriptor.projector;
     return {
-      sourceKind: 'installed',
+      sourceKind: 'managed',
       modelPath: `/models/${this.stagedDescriptors.length}.gguf`,
       projectorPath: projector == null ? null : '/models/mmproj.gguf',
       isVisionModel: descriptor.detection.inspection.visionCapable,
@@ -838,7 +811,7 @@ class FakeRustLifecycleBridge {
   private remoteUrl: string | null = null;
   private remoteFailure: { code: string; message: string } | null = null;
   private manifest: RegistryManifest = {
-    version: 3,
+    version: 4,
     projectorIndexRevision: 0,
     assets: {},
     models: {},
@@ -855,7 +828,7 @@ class FakeRustLifecycleBridge {
   public remoteAcquisition(command: RustRemoteCommand): RustRemoteCommandValue {
     switch (command.command) {
       case 'begin': {
-        const url = command.modelUrls[0];
+        const url = command.urls[0];
         assert.ok(url);
         this.remoteUrl = url;
         return { kind: 'action', action: this.remoteMetadataAction(1) };
@@ -870,7 +843,6 @@ class FakeRustLifecycleBridge {
               acquisitionId: command.event.acquisitionId,
               memberId: command.event.memberId,
               attempt: command.event.attempt,
-              role: 'model',
               metadata: {
                 url: this.remoteUrl,
                 name: 'model.gguf',
@@ -947,9 +919,10 @@ class FakeRustLifecycleBridge {
       };
     }
 
-    const modelAssets = source.assets.filter(
-      (asset) => asset.id !== source.explicitProjectorAssetId
-    );
+    const projectorAssetId = source.classified.find(
+      (asset) => asset.inspection.role === 'projector'
+    )?.assetId;
+    const modelAssets = source.assets.filter((asset) => asset.id !== projectorAssetId);
     const primaryAsset = modelAssets[0];
     assert.ok(primaryAsset);
     const modelId = `model-${primaryAsset.id}`;
@@ -957,10 +930,10 @@ class FakeRustLifecycleBridge {
     this.manifest.models[modelId] = {
       id: modelId,
       name: primaryAsset.name,
-      modality: source.explicitProjectorAssetId == null ? 'text' : 'vision',
+      modality: projectorAssetId == null ? 'text' : 'vision',
       status: 'ready',
       modelAssetIds: modelAssets.map((asset) => asset.id),
-      projectorAssetId: source.explicitProjectorAssetId ?? undefined,
+      projectorAssetId,
       runtimeFingerprint: 'runtime-fingerprint',
       createdAt: now,
       updatedAt: now,
@@ -1329,7 +1302,7 @@ test('ModelService preserves terminal remote acquisition errors', async () => {
       const { service, rust } = createRustBackedService();
 
       await assert.rejects(
-        service.install({ kind: 'remote', modelUrls: ['https://example.test/model.gguf'] }),
+        service.add({ kind: 'remote', urls: ['https://example.test/model.gguf'] }),
         (error) =>
           error instanceof QueryError &&
           error.code === 'REMOTE_METADATA_UNAVAILABLE' &&
@@ -1366,7 +1339,7 @@ test('ModelService cleans browser remote downloads when classification fails', a
       rust.remoteDownloadMode = true;
 
       await assert.rejects(
-        service.install({ kind: 'remote', modelUrls: ['https://example.test/model.gguf'] }),
+        service.add({ kind: 'remote', urls: ['https://example.test/model.gguf'] }),
         (error) =>
           error instanceof QueryError &&
           error.code === 'REMOTE_LOAD_FAILED' &&
@@ -1405,8 +1378,8 @@ test('ModelService cleans browser remote downloads when classification is aborte
       rust.remoteDownloadMode = true;
 
       await assert.rejects(
-        service.install(
-          { kind: 'remote', modelUrls: ['https://example.test/model.gguf'] },
+        service.add(
+          { kind: 'remote', urls: ['https://example.test/model.gguf'] },
           { signal: controller.signal }
         ),
         (error) => error instanceof DOMException && error.name === 'AbortError'
@@ -1422,7 +1395,7 @@ test('ModelService cleans browser remote downloads when classification is aborte
 test('ModelService skips browser split cleanup for direct local loads', async () => {
   const { service, assets } = createService();
 
-  await service.install(localSource('direct-load.gguf'));
+  await service.add(localSource('direct-load.gguf'));
 
   assert.equal(assets.cleanupCount, 0);
 });
@@ -1431,7 +1404,7 @@ test('ModelService cleans browser split artifacts before split-capable local loa
   const { service, assets } = createService();
   assets.forceBrowserSplit = true;
 
-  await service.install(localSource('split-capable.gguf'));
+  await service.add(localSource('split-capable.gguf'));
 
   assert.equal(assets.cleanupCount, 1);
 });
@@ -1593,8 +1566,8 @@ test('ModelService rejects removal while a model is loaded', async () => {
 test('ModelService rejects queries during lifecycle transitions and serializes concurrent loads', async () => {
   const runtime = new FakeRuntime();
   const { service } = createService({ runtime });
-  const slow = await service.install(localSource('slow.gguf'));
-  const next = await service.install(localSource('next.gguf'));
+  const slow = await service.add(localSource('slow.gguf'));
+  const next = await service.add(localSource('next.gguf'));
   let releaseStage!: () => void;
   runtime.stageGate = new Promise<void>((resolve) => {
     releaseStage = resolve;
@@ -1621,7 +1594,7 @@ test('ModelService rejects queries during lifecycle transitions and serializes c
 test('ModelService surfaces OPFS unavailable as a storage error', async () => {
   const service = new ModelService(new FakeRuntime());
   await assert.rejects(
-    () => service.install(localSource('requires-opfs.gguf')),
+    () => service.add(localSource('requires-opfs.gguf')),
     (error) => error instanceof QueryError && error.code === 'STORAGE_UNAVAILABLE'
   );
 });

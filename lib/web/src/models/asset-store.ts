@@ -613,7 +613,7 @@ export class AssetStore {
     if (file == null || file.size !== record.bytes) {
       throw new QueryError(
         'MODEL_BROKEN',
-        `Installed model asset "${record.name}" is missing or corrupt.`
+        `Model asset "${record.name}" is missing or corrupt.`
       );
     }
     return toFile(file, record.name);
@@ -629,7 +629,7 @@ export class AssetStore {
       handle.close();
       throw new QueryError(
         'MODEL_BROKEN',
-        `Installed model asset "${record.name}" is missing or corrupt.`
+        `Model asset "${record.name}" is missing or corrupt.`
       );
     }
     return { name: record.name, handle, size };

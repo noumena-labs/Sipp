@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::lifecycle::storage::now_unix_ms;
-use crate::lifecycle::test_support::{gguf_name, gguf_path, strings, TempDir};
+use crate::lifecycle::test_support::{gguf_name, strings, TempDir};
 use crate::lifecycle::{
     AssetRecord, AssetRole, AssetSource, ModelAssetKind, ModelEntry, ModelModality, ModelStatus,
     ModelStore,
@@ -12,16 +12,16 @@ use crate::lifecycle::{
 use futures::executor::block_on;
 use std::fs;
 
-fn asset_record(id: &str, storage_path: impl Into<PathBuf>) -> AssetRecord {
+fn asset_record(id: &str, path: PathBuf) -> AssetRecord {
     AssetRecord {
         id: id.to_string(),
         kind: ModelAssetKind::Model,
         name: gguf_name(id),
         hash: id.to_string(),
         bytes: 1,
-        storage_path: storage_path.into(),
+        storage_path: path.clone(),
         source: AssetSource::Local {
-            path: gguf_path(id),
+            path,
             modified_unix_ms: None,
         },
         ref_count: 1,
@@ -69,13 +69,12 @@ fn resolve_load_asset_paths_rejects_missing_model_asset() {
 }
 
 #[test]
-fn resolve_load_asset_paths_returns_storage_path() {
+fn resolve_load_asset_paths_returns_local_source_path() {
     let root = TempDir::new("load-assets", "load-asset-path");
     let store = ModelStore::local(root.path.join("store")).expect("store");
-    let record = asset_record("asset-a", PathBuf::from("assets/asset-a.gguf"));
-    let stored_path = root.path.join("store").join(&record.storage_path);
-    fs::create_dir_all(stored_path.parent().expect("asset parent")).expect("asset dir");
-    fs::write(&stored_path, [0_u8]).expect("asset bytes");
+    let source_path = root.path.join("asset-a.gguf");
+    fs::write(&source_path, [0_u8]).expect("asset bytes");
+    let record = asset_record("asset-a", source_path.clone());
     let entry = model_entry(strings(&["asset-a"]));
     let mut state = block_on(store.state.lock());
     state.registry.upsert_asset(record).expect("asset");
@@ -83,6 +82,6 @@ fn resolve_load_asset_paths_returns_storage_path() {
         .resolve_load_asset_paths(&entry)
         .expect("load asset paths");
 
-    assert!(paths.model_path.ends_with("assets/asset-a.gguf"));
+    assert_eq!(paths.model_path, source_path);
     assert!(paths.projector_path.is_none());
 }

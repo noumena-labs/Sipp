@@ -114,7 +114,7 @@ Browser examples:
 
 ```ts
 // Browser local supports CPU and WebGPU backend selection per local endpoint.
-const model = await client.models.installUrls(['./models/model.gguf']);
+const model = await client.models.add(['./models/model.gguf']);
 await client.add(
   'local-webgpu',
   EndpointDescriptor.local(model.id, { backend: 'webgpu' })

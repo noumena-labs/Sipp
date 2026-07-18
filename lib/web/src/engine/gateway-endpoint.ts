@@ -11,6 +11,7 @@ import {
   type QueryOptions,
   type RequestStats,
   type GatewayEndpointOptions,
+  ENDPOINT_REF_PAYLOAD,
 } from '../models/types.js';
 import { createTimedAbortController } from '../utils/abort.js';
 
@@ -110,7 +111,7 @@ export class GatewayEndpointRegistry {
 
   public commit(endpoint: GatewayEndpoint): EndpointRef {
     this.#endpoints.set(endpoint.id, endpoint);
-    return { kind: 'gateway', id: endpoint.id };
+    return { [ENDPOINT_REF_PAYLOAD]: { kind: 'gateway', id: endpoint.id } };
   }
 
   public remove(id: string): boolean {
@@ -118,12 +119,13 @@ export class GatewayEndpointRegistry {
   }
 
   public get(endpoint: EndpointRef | undefined): GatewayEndpoint | null {
-    if (endpoint == null || endpoint.kind !== 'gateway') {
+    if (endpoint == null || endpoint[ENDPOINT_REF_PAYLOAD].kind !== 'gateway') {
       return null;
     }
-    const registered = this.#endpoints.get(endpoint.id);
+    const id = endpoint[ENDPOINT_REF_PAYLOAD].id;
+    const registered = this.#endpoints.get(id);
     if (registered == null) {
-      throw new QueryError('MODEL_NOT_FOUND', `gateway endpoint not found: ${endpoint.id}`);
+      throw new QueryError('MODEL_NOT_FOUND', `gateway endpoint not found: ${id}`);
     }
     return registered;
   }
@@ -153,7 +155,7 @@ export async function runGatewayQuery(
   const body = textBody(
     endpoint.target,
     options,
-    combineEndpointOptions(endpoint.protocolOptions, options.endpointOptions),
+    combineExtra(endpoint.protocolOptions, options.extra),
     { prompt },
     tokenBatchSink != null
   );
@@ -186,7 +188,7 @@ export async function runGatewayChat(
   const body = textBody(
     endpoint.target,
     options,
-    combineEndpointOptions(endpoint.protocolOptions, options.endpointOptions),
+    combineExtra(endpoint.protocolOptions, options.extra),
     { messages: messages.map(gatewayMessage) },
     tokenBatchSink != null
   );
@@ -211,12 +213,12 @@ export async function runGatewayEmbedding(
     throw new QueryError('QUERY_FAILED', 'input must not be empty');
   }
   rejectGatewayEmbedLocalOptions(options);
-  const body = mergeEndpointOptions(
+  const body = mergeExtra(
     {
       model: endpoint.target,
       input: embedInput,
     },
-    combineEndpointOptions(endpoint.protocolOptions, options.endpointOptions),
+    combineExtra(endpoint.protocolOptions, options.extra),
     EMBED_TYPED_FIELDS
   );
   return gatewayRequest(endpoint, endpoint.routes.embed, body, signal, async (response, token) =>
@@ -305,7 +307,7 @@ function normalizeAuthentication(
   throw new QueryError('QUERY_FAILED', 'unsupported authentication strategy');
 }
 
-function combineEndpointOptions(
+function combineExtra(
   profileOptions: Readonly<Record<string, unknown>>,
   requestOptions: unknown
 ): Record<string, unknown> {
@@ -313,7 +315,7 @@ function combineEndpointOptions(
     return { ...profileOptions };
   }
   if (typeof requestOptions !== 'object' || Array.isArray(requestOptions)) {
-    throw new QueryError('QUERY_FAILED', 'endpointOptions must be a JSON object');
+    throw new QueryError('QUERY_FAILED', 'extra must be a JSON object');
   }
   return { ...profileOptions, ...(requestOptions as Record<string, unknown>) };
 }
@@ -413,7 +415,7 @@ function rejectGatewayEmbedLocalOptions(options: EmbedOptions): void {
 function textBody(
   target: string,
   options: QueryOptions,
-  endpointOptions: unknown,
+  extra: unknown,
   payload: { readonly prompt: string } | { readonly messages: readonly unknown[] },
   stream: boolean
 ): Record<string, unknown> {
@@ -421,7 +423,7 @@ function textBody(
   const temperature = optionalTemperature(options.temperature);
   const topP = optionalTopP(options.topP);
   const stop = optionalStringArray(options.stop, 'stop');
-  return mergeEndpointOptions(
+  return mergeExtra(
     {
       model: target,
       ...payload,
@@ -431,7 +433,7 @@ function textBody(
       ...(stop == null ? {} : { stop }),
       stream,
     },
-    endpointOptions,
+    extra,
     TEXT_TYPED_FIELDS
   );
 }
@@ -485,26 +487,26 @@ function optionalStringArray(value: unknown, key: string): readonly string[] | u
   return [...value];
 }
 
-function mergeEndpointOptions(
+function mergeExtra(
   body: Record<string, unknown>,
-  endpointOptions: unknown,
+  extra: unknown,
   typedFields: ReadonlySet<string>
 ): Record<string, unknown> {
-  if (endpointOptions == null) {
+  if (extra == null) {
     return body;
   }
-  if (typeof endpointOptions !== 'object' || Array.isArray(endpointOptions)) {
-    throw new QueryError('QUERY_FAILED', 'endpointOptions must be a JSON object');
+  if (typeof extra !== 'object' || Array.isArray(extra)) {
+    throw new QueryError('QUERY_FAILED', 'extra must be a JSON object');
   }
-  if (!isJsonObject(endpointOptions)) {
-    throw new QueryError('QUERY_FAILED', 'endpointOptions must be a JSON object');
+  if (!isJsonObject(extra)) {
+    throw new QueryError('QUERY_FAILED', 'extra must be a JSON object');
   }
-  for (const [key, value] of Object.entries(endpointOptions)) {
+  for (const [key, value] of Object.entries(extra)) {
     if (typedFields.has(key)) {
-      throw new QueryError('QUERY_FAILED', `endpointOptions cannot override typed field: ${key}`);
+      throw new QueryError('QUERY_FAILED', `extra cannot override typed field: ${key}`);
     }
     if (LOCAL_ONLY_GATEWAY_FIELDS.has(key)) {
-      throw new QueryError('QUERY_FAILED', `endpointOptions cannot contain local-only field: ${key}`);
+      throw new QueryError('QUERY_FAILED', `extra cannot contain local-only field: ${key}`);
     }
     body[key] = snapshotJsonCompatibleGatewayOption(value);
   }
@@ -521,16 +523,16 @@ function snapshotJsonCompatibleValue(value: unknown, ancestors: WeakSet<object>)
   }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new QueryError('QUERY_FAILED', 'endpointOptions cannot contain non-finite numbers');
+      throw new QueryError('QUERY_FAILED', 'extra cannot contain non-finite numbers');
     }
     return value;
   }
   if (typeof value !== 'object') {
-    throw new QueryError('QUERY_FAILED', 'endpointOptions must contain JSON-compatible values');
+    throw new QueryError('QUERY_FAILED', 'extra must contain JSON-compatible values');
   }
 
   if (ancestors.has(value)) {
-    throw new QueryError('QUERY_FAILED', 'endpointOptions must contain JSON-compatible values');
+    throw new QueryError('QUERY_FAILED', 'extra must contain JSON-compatible values');
   }
   ancestors.add(value);
   try {
@@ -538,7 +540,7 @@ function snapshotJsonCompatibleValue(value: unknown, ancestors: WeakSet<object>)
       return value.map((item) => snapshotJsonCompatibleValue(item, ancestors));
     }
     if (!isJsonObject(value)) {
-      throw new QueryError('QUERY_FAILED', 'endpointOptions must contain JSON-compatible values');
+      throw new QueryError('QUERY_FAILED', 'extra must contain JSON-compatible values');
     }
     const snapshot: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {

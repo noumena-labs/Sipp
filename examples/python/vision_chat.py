@@ -70,17 +70,17 @@ def main() -> None:
     set_llama_log_quiet(True)
 
     client = SippClient()
-    model = client.models.install_files([model_path], projector_path=projector_path)
+    model = client.models.add([model_path, projector_path])
     client.add(
         "default",
         EndpointDescriptor.local(
             model.id,
-            config=runtime_config(),
+            runtime=runtime_config(),
         ),
     )
 
-    # Multimodal chat uses the same chat API. The projector is installed with
-    # the model; image bytes are passed on the request.
+    # Multimodal chat uses the same chat API. The model store pairs the
+    # projector; image bytes are passed on the request.
     run = client.chat(
         [
             ChatMessage("user", prompt),

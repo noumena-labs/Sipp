@@ -118,9 +118,7 @@ impl LocalRuntime for FakeLocalRuntime {
 
 fn endpoint(runtime: Arc<dyn LocalRuntime>) -> LocalEndpoint {
     LocalEndpoint::from_runtime(
-        EndpointRef::Local {
-            id: "local".to_string(),
-        },
+        EndpointRef::from_id("local"),
         EndpointCapabilities {
             query: crate::core::CapabilitySupport::Supported,
             chat: crate::core::CapabilitySupport::Supported,
@@ -137,10 +135,7 @@ fn query_validates_before_local_runtime_dispatch() {
     let error = block_on(endpoint.query_with_context(
         SippRequestContext::default(),
         SippQueryRequest {
-            endpoint_options: serde_json::Map::from_iter([(
-                "seed".to_string(),
-                serde_json::json!(1),
-            )]),
+            extra: serde_json::Map::from_iter([("seed".to_string(), serde_json::json!(1))]),
             ..SippQueryRequest::default()
         },
     ))

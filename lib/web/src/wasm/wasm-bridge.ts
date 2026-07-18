@@ -135,7 +135,6 @@ export interface RustLifecycleLoadSource {
 export interface RustLifecycleInstallSource {
   assets: AssetRecord[];
   classified: ClassifiedAsset[];
-  explicitProjectorAssetId?: string | null;
 }
 
 export interface RustRemoteMetadata {
@@ -179,7 +178,6 @@ export type RustRemoteAction =
     readonly acquisitionId: string;
     readonly memberId: number;
     readonly attempt: number;
-    readonly role: 'model' | 'shard' | 'projector';
     readonly metadata: RustRemoteMetadata;
   }
   | {
@@ -251,8 +249,7 @@ export type RustRemoteEvent =
 export type RustRemoteCommand =
   | {
     readonly command: 'begin';
-    readonly modelUrls: readonly string[];
-    readonly projectorUrl?: string;
+    readonly urls: readonly string[];
   }
   | {
     readonly command: 'advance';
@@ -758,14 +755,11 @@ export class WasmBridge {
     }
   }
 
-  public validatePairing(
-    classified: readonly ClassifiedAsset[],
-    explicitProjectorId?: string | null
-  ): PairingValidationResponse {
+  public validatePairing(classified: readonly ClassifiedAsset[]): PairingValidationResponse {
     const raw = this.callOwnedString(
       'CE_PairingValidate',
-      ['string', 'string'],
-      [JSON.stringify(classified), explicitProjectorId ?? '']
+      ['string'],
+      [JSON.stringify(classified)]
     );
     try {
       return JSON.parse(raw) as PairingValidationResponse;

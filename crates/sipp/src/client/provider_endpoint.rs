@@ -80,7 +80,7 @@ impl InferenceEndpoint for ProviderEndpoint {
             model: self.model(),
             prompt: request.prompt,
             options: map::provider_generation_options(request.options),
-            provider_options: request.provider_options,
+            provider_options: request.extra,
         };
         let transport = self.transport.clone();
         let endpoint = self.endpoint.clone();
@@ -136,7 +136,7 @@ impl InferenceEndpoint for ProviderEndpoint {
             model: self.model(),
             messages: request.messages,
             options: map::provider_generation_options(request.options),
-            provider_options: request.provider_options,
+            provider_options: request.extra,
         };
         let transport = self.transport.clone();
         let endpoint = self.endpoint.clone();
@@ -191,7 +191,7 @@ impl InferenceEndpoint for ProviderEndpoint {
         let provider_request = ProviderEmbedRequest {
             model: self.model(),
             input: request.input,
-            provider_options: request.provider_options,
+            provider_options: request.extra,
         };
         let transport = self.transport.clone();
         let endpoint = self.endpoint.clone();

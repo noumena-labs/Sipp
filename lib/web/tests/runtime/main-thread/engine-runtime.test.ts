@@ -153,7 +153,7 @@ test('MainThreadEngineRuntime fails projector-backed loads that do not expose a 
   };
 
   const staged: StagedModelBundle = {
-    sourceKind: 'installed',
+    sourceKind: 'managed',
     modelPath: '/models/model.gguf',
     projectorPath: '/models/mmproj.gguf',
     isVisionModel: true,

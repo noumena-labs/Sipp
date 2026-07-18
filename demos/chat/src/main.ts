@@ -5,7 +5,7 @@ import {
   type BrowserTextRun,
   type ChatInput,
   type NativeRuntimeConfig,
-  type ModelInstallOptions,
+  type ModelAddOptions,
   type WebGpuAdapterInfo,
 } from '@noumena-labs/sipp';
 
@@ -18,7 +18,7 @@ import {
 } from './chat-state.js';
 import {
   CURATED_MODELS,
-  installModel,
+  addModel,
   projectorRequirementMessage,
   resolveModelSelection,
   type ModelSelection,
@@ -301,7 +301,7 @@ async function loadSelectedModel(): Promise<void> {
 
   const nextClient = new SippClient({ wasmThreading: 'pthread' });
   try {
-    const onProgress: NonNullable<ModelInstallOptions['onProgress']> = (progress) => {
+    const onProgress: NonNullable<ModelAddOptions['onProgress']> = (progress) => {
       const phase = formatLoadPhase(progress.phase);
       const percent = progress.percent;
       loadStatus.textContent = percent == null
@@ -313,7 +313,7 @@ async function loadSelectedModel(): Promise<void> {
         loadProgress.value = percent;
       }
     };
-    const model = await installModel(nextClient, resolved.location, { onProgress });
+    const model = await addModel(nextClient, resolved.location, { onProgress });
     await nextClient.add(
       'chat-model',
       EndpointDescriptor.local(model.id, {
@@ -332,7 +332,7 @@ async function loadSelectedModel(): Promise<void> {
       throw new Error(projectorRequirementMessage(resolved));
     }
     if (!info.loaded) {
-      throw new Error(`"${resolved.name}" was installed but did not become ready.`);
+      throw new Error(`"${resolved.name}" was added but did not become ready.`);
     }
 
     const previousClient = client;

@@ -69,10 +69,10 @@ def main() -> None:
     set_llama_log_quiet(True)
 
     client = SippClient()
-    model = client.models.install_files([model_path])
+    model = client.models.add([model_path])
     local_endpoint = client.add(
         "local",
-        EndpointDescriptor.local(model.id, config=runtime_config(embeddings=False)),
+        EndpointDescriptor.local(model.id, runtime=runtime_config(embeddings=False)),
     )
     gateway_endpoint = client.add(
         "gateway",

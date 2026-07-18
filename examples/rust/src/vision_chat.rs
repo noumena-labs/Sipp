@@ -20,10 +20,10 @@ fn main() -> support::ExampleResult<()> {
         let mut client = SippClient::new()?;
         let model = client
             .models()
-            .install_files_with_projector([args.model_path], args.projector_path)
+            .add([args.model_path, args.projector_path])
             .await?;
         let mut descriptor = LocalDescriptor::new(model.id);
-        descriptor.config = runtime_config(false);
+        descriptor.runtime = runtime_config(false);
         client.add("default", descriptor).await?;
 
         // Multimodal chat uses the same chat API. The image bytes travel in

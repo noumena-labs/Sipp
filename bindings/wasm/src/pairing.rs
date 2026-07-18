@@ -23,11 +23,11 @@ struct PairingValidateError {
     message: String,
 }
 
-pub(crate) fn pairing_validate_json(classified_json: &str, explicit_projector_id: &str) -> String {
-    serialize_json_response(&validate_pairing(classified_json, explicit_projector_id))
+pub(crate) fn pairing_validate_json(classified_json: &str) -> String {
+    serialize_json_response(&validate_pairing(classified_json))
 }
 
-fn validate_pairing(raw_classified: &str, explicit_projector_id: &str) -> PairingValidateResponse {
+fn validate_pairing(raw_classified: &str) -> PairingValidateResponse {
     if raw_classified.trim().is_empty() {
         return error_response(
             CODE_INVALID_MODEL_SOURCE,
@@ -45,14 +45,7 @@ fn validate_pairing(raw_classified: &str, explicit_projector_id: &str) -> Pairin
         }
     };
 
-    let explicit_projector_id =
-        Some(explicit_projector_id.trim().to_string()).filter(|value| !value.is_empty());
-    let result = match explicit_projector_id.as_deref() {
-        Some(projector_id) => PairingResolver::resolve_explicit(&classified, projector_id),
-        None => PairingResolver::resolve(&classified),
-    };
-
-    match result {
+    match PairingResolver::resolve(&classified) {
         Ok(plan) => PairingValidateResponse {
             ok: true,
             plan: Some(plan),

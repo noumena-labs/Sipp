@@ -1,11 +1,17 @@
-import { EndpointDescriptor, SippClient, type BrowserTextRun, type NativeRuntimeConfig } from '@noumena-labs/sipp';
+import {
+  EndpointDescriptor,
+  SippClient,
+  type BrowserTextRun,
+  type EndpointRef,
+  type NativeRuntimeConfig,
+} from '@noumena-labs/sipp';
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
-  EXAMPLE_LOCAL_ENDPOINT,
+  EXAMPLE_LOCAL_ENDPOINT_ID,
   formatTextResult,
   readMaxTokens,
-  installModel,
+  addModel,
   readPrompt,
   renderLocalPage,
   reportError,
@@ -14,22 +20,21 @@ import {
 
 const elements = renderLocalPage('Local Query', 'Write one sentence about local browser inference.', true);
 const client = new SippClient();
-let modelLoaded = false;
+let endpoint: EndpointRef | null = null;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     write(elements.output, 'Loading model...');
-    const model = await installModel(client, elements.modelUrlInput, elements.modelFileInput);
+    const model = await addModel(client, elements.modelUrlInput, elements.modelFileInput);
     if (model == null) {
       write(elements.output, 'Enter a GGUF model URL, path, or file.');
       return;
     }
-    await client.add(
-      EXAMPLE_LOCAL_ENDPOINT.id,
+    endpoint = await client.add(
+      EXAMPLE_LOCAL_ENDPOINT_ID,
       EndpointDescriptor.local(model.id, { runtime: runtimeConfig() })
     );
-    modelLoaded = true;
     write(elements.output, `Loaded ${model.name}.`);
   } catch (error) {
     reportError(elements.output, error);
@@ -38,7 +43,7 @@ elements.loadForm.addEventListener('submit', async (event) => {
 
 elements.runForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!modelLoaded) {
+  if (endpoint == null) {
     write(elements.output, 'Load a model before running a query.');
     return;
   }
@@ -51,6 +56,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   try {
     // `query` is the simplest text-generation call: one prompt in, one streamed response out.
     const run = client.query(prompt, {
+      endpoint,
       emitTokens: true,
       maxTokens: readMaxTokens(elements.maxTokensInput),
       contextKey: 'web-query-example',
@@ -72,7 +78,10 @@ function runtimeConfig(): NativeRuntimeConfig {
   };
 }
 
-async function streamTextRun(output: HTMLPreElement, run: BrowserTextRun): Promise<void> {
+async function streamTextRun(
+  output: HTMLPreElement,
+  run: BrowserTextRun
+): Promise<void> {
   write(output, '');
   let streamed = '';
   for await (const batch of run.tokens) {
@@ -83,5 +92,5 @@ async function streamTextRun(output: HTMLPreElement, run: BrowserTextRun): Promi
   if (streamed !== '' && streamed !== result.text) {
     throw new Error('streamed token batches did not match final response text');
   }
-  write(output, formatTextResult(EXAMPLE_LOCAL_ENDPOINT, result));
+  write(output, formatTextResult(EXAMPLE_LOCAL_ENDPOINT_ID, result));
 }

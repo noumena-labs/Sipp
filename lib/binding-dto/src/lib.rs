@@ -573,7 +573,6 @@ impl TryFrom<&NativeRuntimeConfig> for CoreNativeRuntimeConfig {
 /// Address of a registered inference endpoint.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct EndpointRef {
-    pub kind: String,
     pub id: String,
 }
 
@@ -581,38 +580,17 @@ impl TryFrom<&EndpointRef> for CoreEndpointRef {
     type Error = ConvertError;
 
     fn try_from(value: &EndpointRef) -> Result<Self> {
-        match value.kind.as_str() {
-            "local" => Ok(Self::Local {
-                id: value.id.clone(),
-            }),
-            "gateway" => Ok(Self::Gateway {
-                id: value.id.clone(),
-            }),
-            "provider" => Ok(Self::Provider {
-                id: value.id.clone(),
-            }),
-            _ => Err(invalid_arg(
-                "endpoint kind must be local, gateway, or provider",
-            )),
-        }
+        Ok(Self::from_id(required_descriptor_string(
+            Some(&value.id),
+            "endpoint id",
+        )?))
     }
 }
 
 impl From<CoreEndpointRef> for EndpointRef {
     fn from(value: CoreEndpointRef) -> Self {
-        match value {
-            CoreEndpointRef::Local { id } => Self {
-                kind: "local".to_string(),
-                id,
-            },
-            CoreEndpointRef::Gateway { id } => Self {
-                kind: "gateway".to_string(),
-                id,
-            },
-            CoreEndpointRef::Provider { id } => Self {
-                kind: "provider".to_string(),
-                id,
-            },
+        Self {
+            id: value.id().to_string(),
         }
     }
 }
@@ -734,10 +712,7 @@ pub struct SippQueryRequest {
     pub prompt: String,
     pub options: Option<SippTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[serde(alias = "endpointOptions")]
-    pub endpoint_options: Option<serde_json::Value>,
-    #[serde(alias = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
     #[serde(alias = "emitTokens")]
     pub emit_tokens: Option<bool>,
 }
@@ -757,8 +732,7 @@ impl TryFrom<SippQueryRequest> for CoreQueryRequest {
                 .map(CoreLocalTextOptions::try_from)
                 .transpose()?
                 .unwrap_or_default(),
-            endpoint_options: endpoint_options_or_empty(value.endpoint_options)?,
-            provider_options: provider_options_or_empty(value.provider_options)?,
+            extra: json_object_or_empty(value.extra, "extra")?,
             emit_tokens: value.emit_tokens.unwrap_or(false),
         })
     }
@@ -781,10 +755,7 @@ pub struct SippChatRequest {
     pub messages: Vec<ChatMessage>,
     pub options: Option<SippTextOptions>,
     pub local: Option<LocalTextOptions>,
-    #[serde(alias = "endpointOptions")]
-    pub endpoint_options: Option<serde_json::Value>,
-    #[serde(alias = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
     #[serde(alias = "emitTokens")]
     pub emit_tokens: Option<bool>,
 }
@@ -804,8 +775,7 @@ impl TryFrom<SippChatRequest> for CoreChatRequest {
                 .map(CoreLocalTextOptions::try_from)
                 .transpose()?
                 .unwrap_or_default(),
-            endpoint_options: endpoint_options_or_empty(value.endpoint_options)?,
-            provider_options: provider_options_or_empty(value.provider_options)?,
+            extra: json_object_or_empty(value.extra, "extra")?,
             emit_tokens: value.emit_tokens.unwrap_or(false),
         })
     }
@@ -827,10 +797,7 @@ pub struct SippEmbedRequest {
     pub endpoint: Option<EndpointRef>,
     pub input: String,
     pub local: Option<LocalEmbedOptions>,
-    #[serde(alias = "endpointOptions")]
-    pub endpoint_options: Option<serde_json::Value>,
-    #[serde(alias = "providerOptions")]
-    pub provider_options: Option<serde_json::Value>,
+    pub extra: Option<serde_json::Value>,
 }
 
 impl TryFrom<SippEmbedRequest> for CoreEmbedRequest {
@@ -844,8 +811,7 @@ impl TryFrom<SippEmbedRequest> for CoreEmbedRequest {
                 .local
                 .map(|value| CoreLocalEmbedOptions::from(&value))
                 .unwrap_or_default(),
-            endpoint_options: endpoint_options_or_empty(value.endpoint_options)?,
-            provider_options: provider_options_or_empty(value.provider_options)?,
+            extra: json_object_or_empty(value.extra, "extra")?,
         })
     }
 }
@@ -880,7 +846,7 @@ pub struct ProviderStaticHeader {
 pub struct EndpointDescriptor {
     pub kind: String,
     pub model_id: Option<String>,
-    pub config: Option<NativeRuntimeConfig>,
+    pub runtime: Option<NativeRuntimeConfig>,
     #[serde(alias = "baseUrl")]
     pub base_url: Option<String>,
     pub target: Option<String>,
@@ -948,8 +914,8 @@ impl EndpointDescriptor {
             ],
             "local",
         )?;
-        let config = self
-            .config
+        let runtime = self
+            .runtime
             .as_ref()
             .map(CoreNativeRuntimeConfig::try_from)
             .transpose()?
@@ -958,7 +924,7 @@ impl EndpointDescriptor {
             self.model_id.as_ref(),
             "local descriptor modelId",
         )?);
-        descriptor.config = config;
+        descriptor.runtime = runtime;
         Ok(CoreEndpointDescriptor::Local(descriptor))
     }
 
@@ -966,7 +932,7 @@ impl EndpointDescriptor {
         reject_endpoint_descriptor_fields(
             &[
                 ("modelId", self.model_id.is_some()),
-                ("config", self.config.is_some()),
+                ("runtime", self.runtime.is_some()),
                 ("provider", self.provider.is_some()),
                 ("model", self.model.is_some()),
                 ("apiKey", self.api_key.is_some()),
@@ -1002,7 +968,10 @@ impl EndpointDescriptor {
                 request: timeout,
                 read: timeout,
             },
-            protocol_options: endpoint_options_or_empty(self.protocol_options.clone())?,
+            protocol_options: json_object_or_empty(
+                self.protocol_options.clone(),
+                "protocolOptions",
+            )?,
         }))
     }
 
@@ -1010,7 +979,7 @@ impl EndpointDescriptor {
         reject_endpoint_descriptor_fields(
             &[
                 ("modelId", self.model_id.is_some()),
-                ("config", self.config.is_some()),
+                ("runtime", self.runtime.is_some()),
                 ("target", self.target.is_some()),
                 ("authentication", self.authentication.is_some()),
                 ("queryRoute", self.query_route.is_some()),
@@ -1159,19 +1128,7 @@ impl From<CoreTokenUsage> for TokenUsage {
     }
 }
 
-fn endpoint_options_or_empty(
-    value: Option<serde_json::Value>,
-) -> Result<serde_json::Map<String, serde_json::Value>> {
-    json_options_or_empty(value, "endpointOptions")
-}
-
-fn provider_options_or_empty(
-    value: Option<serde_json::Value>,
-) -> Result<serde_json::Map<String, serde_json::Value>> {
-    json_options_or_empty(value, "providerOptions")
-}
-
-fn json_options_or_empty(
+fn json_object_or_empty(
     value: Option<serde_json::Value>,
     name: &'static str,
 ) -> Result<serde_json::Map<String, serde_json::Value>> {

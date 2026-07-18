@@ -21,7 +21,7 @@ Use this package in browser code. For server routes or Node services, use
 
 - Browser-local text and vision inference.
 - WebGPU or CPU execution through the browser runtime.
-- Persistent model installation in OPFS.
+- Persistent browser model storage in OPFS.
 - Gateway-backed query, chat, and embedding calls.
 - Character and director helpers used by demos.
 
@@ -31,9 +31,7 @@ Use this package in browser code. For server routes or Node services, use
 import { EndpointDescriptor, SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
-const model = await client.models.installUrls([
-  new URL('/models/model.gguf', window.location.href).href,
-]);
+const model = await client.models.add(['/models/model.gguf']);
 const endpoint = await client.add(
   'default',
   EndpointDescriptor.local(model.id, {
@@ -105,7 +103,7 @@ gateway tokens in browser bundles.
 The browser runtime links Sipp's Rust WASM ABI with llama.cpp and ggml
 through Emscripten. It runs GGUF text and vision models with WebGPU when the
 browser exposes the required adapter, or with CPU execution when CPU is the
-selected backend. After the first URL fetch or `File` import, installed models
+selected backend. After the first URL fetch or `File` import, registered models
 remain in OPFS and can be loaded again by model ID.
 
 The package resolves its packaged JavaScript and WASM assets at runtime. Most

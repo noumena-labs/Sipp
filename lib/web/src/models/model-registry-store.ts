@@ -9,7 +9,7 @@ const REGISTRY_FILE_NAME = 'registry.json';
 
 function emptyManifest(): RegistryManifest {
   return {
-    version: 3,
+    version: 4,
     projectorIndexRevision: 0,
     assets: {},
     models: {},
@@ -22,7 +22,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function parseManifest(text: string): RegistryManifest {
   const parsed = JSON.parse(text) as unknown;
-  if (!isObject(parsed) || parsed.version !== 3) {
+  if (!isObject(parsed) || parsed.version !== 4) {
     throw new QueryError('STORAGE_CORRUPT', 'Model registry must be manifest version 3.');
   }
   if (!isObject(parsed.assets) || !isObject(parsed.models)) {
@@ -39,7 +39,7 @@ function parseManifest(text: string): RegistryManifest {
     );
   }
   return {
-    version: 3,
+    version: 4,
     projectorIndexRevision: parsed.projectorIndexRevision,
     assets: parsed.assets as RegistryManifest['assets'],
     models: parsed.models as RegistryManifest['models'],

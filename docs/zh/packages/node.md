@@ -27,11 +27,11 @@ import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 const modelPath = process.argv[2] ?? 'model.gguf';
-const model = await client.models.installFiles([modelPath]);
+const model = await client.models.add([modelPath]);
 const endpoint = await client.add(
   'default',
   EndpointDescriptor.local(model.id, {
-    config: {
+    runtime: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
       cache: { mode: 'live_slot_prefix' },
@@ -138,7 +138,7 @@ const run = client.chat({
 console.log((await run.response).text);
 ```
 
-通过 `providerOptions` 可传递特定于该提供商的请求字段。关于提供商与网关的职责划分，请参阅[提供商](../guides/providers.md)。
+通过 `extra` 可传递特定于该提供商的请求字段。关于提供商与网关的职责划分，请参阅[提供商](../guides/providers.md)。
 
 ## 网关 Profile 助手
 

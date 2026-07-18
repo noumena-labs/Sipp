@@ -551,13 +551,13 @@ impl EndpointConfig {
                 runtime,
             } => {
                 let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
-                let installed = client
+                let managed_model = client
                     .models()
-                    .install_files([model.clone()])
+                    .add([model.clone()])
                     .await
-                    .with_context(|| format!("failed to install {}", model.display()))?;
-                let mut descriptor = LocalDescriptor::new(installed.id);
-                descriptor.config = plan.config;
+                    .with_context(|| format!("failed to add {}", model.display()))?;
+                let mut descriptor = LocalDescriptor::new(managed_model.id);
+                descriptor.runtime = plan.config;
                 Ok((
                     EndpointDescriptor::Local(descriptor),
                     TargetSummary {

@@ -14,16 +14,15 @@ use crate::collection::{
 };
 use crate::lifecycle::acquisition::{
     canonical_remote_url, RemoteAcquisition, RemoteAcquisitionEvent, RemoteAcquisitionIds,
-    RemoteAcquisitionProgress, RemoteAcquisitionRequest, RemoteAction, RemoteAssetRole,
-    RemoteCacheCandidate, RemoteMetadata,
+    RemoteAcquisitionProgress, RemoteAcquisitionRequest, RemoteAction, RemoteCacheCandidate,
+    RemoteMetadata,
 };
 use crate::lifecycle::util::{
     asset_refcount_mismatch, asset_summary, bump_projector_index_revision as bump_revision,
     classified_asset, decrement_asset_refcount, empty_asset_id, increment_asset_refcount,
-    increment_expected_asset_refcount, invalid_asset_field, invalid_pairing, invalid_source,
-    manifest_key_mismatch, media_marker_for_modality, missing_model_asset, model_missing_asset,
-    model_not_found, sha256_hex, sorted_model_asset_ids, validate_registry_manifest_version,
-    AssetSummary,
+    increment_expected_asset_refcount, invalid_asset_field, invalid_source, manifest_key_mismatch,
+    media_marker_for_modality, missing_model_asset, model_missing_asset, model_not_found,
+    sha256_hex, sorted_model_asset_ids, validate_registry_manifest_version, AssetSummary,
 };
 use crate::lifecycle::{
     AssetInspection, BackendCapabilities, BackendPlan, BackendPolicy, BackendPreference,
@@ -36,7 +35,6 @@ use crate::runtime::numeric::{
     MILLIS_PER_SECOND, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE,
 };
 
-const EXPLICIT_PROJECTOR_MISSING_ID: &str = "explicit projector did not produce a projector id";
 const NO_PENDING_BROWSER_MODEL_LOAD: &str = "no pending browser model load";
 const BROWSER_MODEL_LOAD_ALREADY_PENDING: &str = "a browser model load is already pending";
 const BROWSER_LOAD_COMMIT_MISMATCH: &str =
@@ -275,8 +273,6 @@ pub struct BrowserLoadSource {
 pub struct BrowserInstallSource {
     pub assets: Vec<BrowserAssetRecord>,
     pub classified: Vec<ClassifiedAsset>,
-    #[serde(default)]
-    pub explicit_projector_asset_id: Option<String>,
 }
 
 /// Browser host command for Rust-owned remote acquisition.
@@ -288,8 +284,7 @@ pub struct BrowserInstallSource {
 )]
 pub enum BrowserRemoteCommand {
     Begin {
-        model_urls: Vec<String>,
-        projector_url: Option<String>,
+        urls: Vec<String>,
     },
     Advance {
         event: Value,
@@ -462,7 +457,7 @@ pub struct BrowserLifecycleService {
 
 impl BrowserLifecycleService {
     pub fn create(config: BrowserCreateConfig) -> Result<Self, ModelError> {
-        let manifest = migrate_manifest(config.manifest.unwrap_or_default())?;
+        let manifest = config.manifest.unwrap_or_default();
         validate_manifest(&manifest)?;
         let now = now_iso();
         Ok(Self {
@@ -585,26 +580,24 @@ impl BrowserLifecycleService {
     ) -> Result<BrowserInstallResponse, ModelError> {
         validate_manifest(&self.manifest)?;
         self.upsert_assets(source.assets, &source.classified)?;
-        let source_projector = resolve_source_projector_asset_id(
-            &source.classified,
-            source.explicit_projector_asset_id.as_deref(),
-        );
-        let base_classified: Vec<_> = source
-            .classified
-            .iter()
-            .filter(|asset| Some(asset.asset_id.as_str()) != source_projector.as_deref())
-            .cloned()
-            .collect();
-        let base_plan = PairingResolver::resolve(&base_classified)?;
+        let plan = PairingResolver::resolve(&source.classified)?;
+        let source_projector = plan.projector_asset_id.clone();
+        let base_plan = if let Some(projector_id) = source_projector.as_deref() {
+            let base_assets: Vec<_> = source
+                .classified
+                .iter()
+                .filter(|asset| asset.asset_id != projector_id)
+                .cloned()
+                .collect();
+            PairingResolver::resolve(&base_assets)?
+        } else {
+            plan.clone()
+        };
         let mut entry = self.upsert_base_model_entry(&base_plan)?;
         if let Some(projector_id) = source_projector {
-            let plan = PairingResolver::resolve_explicit(&source.classified, &projector_id)?;
-            let projector = plan
-                .projector_asset_id
-                .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_MISSING_ID))?;
             entry = self.set_resolved_projector(
                 &entry.id,
-                &projector,
+                &projector_id,
                 &plan.compatible_vision_projector_types,
             )?;
         } else {
@@ -626,10 +619,7 @@ impl BrowserLifecycleService {
         command: BrowserRemoteCommand,
     ) -> Result<BrowserRemoteCommandResponse, ModelError> {
         match command {
-            BrowserRemoteCommand::Begin {
-                model_urls,
-                projector_url,
-            } => self.begin_remote(model_urls, projector_url),
+            BrowserRemoteCommand::Begin { urls } => self.begin_remote(urls),
             BrowserRemoteCommand::Advance {
                 event,
                 assets,
@@ -641,29 +631,16 @@ impl BrowserLifecycleService {
 
     fn begin_remote(
         &mut self,
-        model_urls: Vec<String>,
-        projector_url: Option<String>,
+        urls: Vec<String>,
     ) -> Result<BrowserRemoteCommandResponse, ModelError> {
-        if model_urls.is_empty() {
-            return Err(invalid_source("remote model URLs must not be empty"));
+        if urls.is_empty() {
+            return Err(invalid_source("remote model sources must not be empty"));
         }
         if self.pending.is_some() || self.pending_remote.is_some() {
             return Err(invalid_source(BROWSER_MODEL_LOAD_ALREADY_PENDING));
         }
         let acquisition_id = self.acquisition_ids.issue()?;
-        let model_role = if model_urls.len() == 1 {
-            RemoteAssetRole::Model
-        } else {
-            RemoteAssetRole::Shard
-        };
-        let mut sources: Vec<_> = model_urls
-            .into_iter()
-            .map(|url| (model_role, url))
-            .collect();
-        if let Some(projector_url) = projector_url {
-            sources.push((RemoteAssetRole::Projector, projector_url));
-        }
-        let requests = browser_remote_requests(&self.manifest, sources)?;
+        let requests = browser_remote_requests(&self.manifest, urls)?;
         let acquisition = RemoteAcquisition::new(acquisition_id, requests)?;
         self.pending_remote = Some(PendingRemoteAcquisition {
             acquisition,
@@ -792,16 +769,7 @@ impl BrowserLifecycleService {
                     .ok_or_else(|| invalid_source("remote asset classification is missing"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let explicit_projector_asset_id = resolved
-            .iter()
-            .find(|member| member.role == RemoteAssetRole::Projector)
-            .and_then(|member| member.asset_ids.first())
-            .cloned();
-        match self.install(BrowserInstallSource {
-            assets,
-            classified,
-            explicit_projector_asset_id,
-        }) {
+        match self.install(BrowserInstallSource { assets, classified }) {
             Ok(installed) => Ok(BrowserRemoteCommandResponse::Installed { installed }),
             Err(error) => {
                 let progress = pending.acquisition.fail_finalization(error);
@@ -1408,20 +1376,14 @@ fn accept_remote_payload(
 ) -> Result<(), ModelError> {
     match (action, event) {
         (
-            RemoteAction::Download { role, metadata, .. },
+            RemoteAction::Download { metadata, .. },
             RemoteAcquisitionEvent::DownloadSucceeded {
                 asset_ids,
                 created_asset_ids,
                 ..
             },
         ) => {
-            validate_remote_download_assets(
-                *role,
-                metadata,
-                asset_ids,
-                created_asset_ids,
-                &assets,
-            )?;
+            validate_remote_download_assets(metadata, asset_ids, created_asset_ids, &assets)?;
             insert_remote_assets(pending, assets, classified)
         }
         (
@@ -1518,7 +1480,6 @@ fn insert_remote_assets(
 }
 
 fn validate_remote_download_assets(
-    role: RemoteAssetRole,
     metadata: &RemoteMetadata,
     asset_ids: &[String],
     created_asset_ids: &[String],
@@ -1552,39 +1513,26 @@ fn validate_remote_download_assets(
             ));
         }
     }
-    validate_remote_asset_layout(role, metadata, assets)
+    validate_remote_asset_layout(metadata, assets)
 }
 
 fn validate_remote_asset_layout(
-    role: RemoteAssetRole,
     metadata: &RemoteMetadata,
     assets: &[BrowserAssetRecord],
 ) -> Result<(), ModelError> {
-    match role {
-        RemoteAssetRole::Projector
-            if assets.len() == 1 && assets[0].kind == ModelAssetKind::Projector =>
-        {
-            Ok(())
-        }
-        RemoteAssetRole::Shard if assets.len() == 1 && assets[0].kind == ModelAssetKind::Shard => {
-            Ok(())
-        }
-        RemoteAssetRole::Model if assets.len() == 1 && assets[0].kind == ModelAssetKind::Model => {
-            Ok(())
-        }
-        RemoteAssetRole::Model
-            if assets
-                .iter()
-                .all(|asset| asset.kind == ModelAssetKind::Shard) =>
-        {
-            validate_complete_browser_split(assets)
-                .map_err(|reason| remote_record_error(metadata, reason))
-        }
-        _ => Err(remote_record_error(
+    if assets.len() == 1 {
+        return Ok(());
+    }
+    if !assets
+        .iter()
+        .all(|asset| asset.kind == ModelAssetKind::Shard)
+    {
+        return Err(remote_record_error(
             metadata,
             "download receipt has an invalid asset layout",
-        )),
+        ));
     }
+    validate_complete_browser_split(assets).map_err(|reason| remote_record_error(metadata, reason))
 }
 
 fn validate_complete_browser_split(assets: &[BrowserAssetRecord]) -> Result<(), &'static str> {
@@ -1617,18 +1565,16 @@ fn remote_record_error(metadata: &RemoteMetadata, reason: &str) -> ModelError {
 
 fn browser_remote_requests(
     manifest: &BrowserRegistryManifest,
-    sources: impl IntoIterator<Item = (RemoteAssetRole, String)>,
+    urls: impl IntoIterator<Item = String>,
 ) -> Result<Vec<RemoteAcquisitionRequest>, ModelError> {
-    sources
-        .into_iter()
+    urls.into_iter()
         .enumerate()
-        .map(|(index, (role, url))| {
+        .map(|(index, url)| {
             let url = canonical_remote_url(&url)?;
             Ok(RemoteAcquisitionRequest {
                 member_id: u32::try_from(index)
                     .map_err(|_| invalid_source("remote model contains too many source members"))?,
-                role,
-                candidates: browser_remote_candidates(manifest, role, &url)?,
+                candidates: browser_remote_candidates(manifest, &url)?,
                 url,
             })
         })
@@ -1637,7 +1583,6 @@ fn browser_remote_requests(
 
 fn browser_remote_candidates(
     manifest: &BrowserRegistryManifest,
-    role: RemoteAssetRole,
     url: &str,
 ) -> Result<Vec<RemoteCacheCandidate>, ModelError> {
     type CandidateKey = (u8, u64, Option<String>, Option<String>);
@@ -1647,7 +1592,7 @@ fn browser_remote_candidates(
             continue;
         };
         let source_url = canonical_remote_url(source_url)?;
-        if source_url != url || !browser_role_accepts_kind(role, asset.kind) {
+        if source_url != url {
             continue;
         }
         let layout = u8::from(asset.source_part_count.is_some());
@@ -1696,14 +1641,6 @@ fn browser_remote_candidates(
             })
         })
         .collect()
-}
-
-fn browser_role_accepts_kind(role: RemoteAssetRole, kind: ModelAssetKind) -> bool {
-    match role {
-        RemoteAssetRole::Model => matches!(kind, ModelAssetKind::Model | ModelAssetKind::Shard),
-        RemoteAssetRole::Shard => kind == ModelAssetKind::Shard,
-        RemoteAssetRole::Projector => kind == ModelAssetKind::Projector,
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -1760,32 +1697,6 @@ fn lifecycle_error(error: ModelError) -> BrowserLifecycleError {
         retry_after_ms: error.retry_after_ms(),
         message: error.to_string(),
     }
-}
-
-fn migrate_manifest(
-    mut manifest: BrowserRegistryManifest,
-) -> Result<BrowserRegistryManifest, ModelError> {
-    validate_registry_manifest_version(BROWSER_REGISTRY_MANIFEST_LABEL, manifest.version)?;
-    for (id, asset) in &mut manifest.assets {
-        if asset.id.is_empty() {
-            asset.id = id.clone();
-        }
-        if asset.created_at.trim().is_empty() {
-            asset.created_at = now_iso();
-        }
-    }
-    for (id, model) in &mut manifest.models {
-        if model.id.is_empty() {
-            model.id = id.clone();
-        }
-        if model.created_at.trim().is_empty() {
-            model.created_at = now_iso();
-        }
-        if model.updated_at.trim().is_empty() {
-            model.updated_at = model.created_at.clone();
-        }
-    }
-    Ok(manifest)
 }
 
 fn validate_manifest(manifest: &BrowserRegistryManifest) -> Result<(), ModelError> {
@@ -1846,20 +1757,6 @@ fn validate_asset_record(asset: &BrowserAssetRecord) -> Result<(), ModelError> {
         }
     }
     Ok(())
-}
-
-fn resolve_source_projector_asset_id(
-    classified: &[ClassifiedAsset],
-    explicit_projector_asset_id: Option<&str>,
-) -> Option<String> {
-    if let Some(explicit) = explicit_projector_asset_id {
-        return Some(explicit.to_string());
-    }
-    let projectors: Vec<_> = classified
-        .iter()
-        .filter(|asset| asset.inspection.role == crate::lifecycle::AssetRole::Projector)
-        .collect();
-    (projectors.len() == 1).then(|| projectors[0].asset_id.clone())
 }
 
 fn planned_asset(record: &BrowserAssetRecord) -> BrowserPlannedAsset {

@@ -40,19 +40,16 @@ pub(crate) fn common_text_options(options: &SippTextOptions) -> Result<(), SippE
 
 pub(crate) fn local_query(request: &SippQueryRequest) -> Result<(), SippError> {
     common_text_options(&request.options)?;
-    reject_endpoint_options(&request.endpoint_options, "local endpoints")?;
-    reject_provider_options(&request.provider_options, "local endpoints")
+    reject_extra(&request.extra, "local endpoints")
 }
 
 pub(crate) fn local_chat(request: &SippChatRequest) -> Result<(), SippError> {
     common_text_options(&request.options)?;
-    reject_endpoint_options(&request.endpoint_options, "local endpoints")?;
-    reject_provider_options(&request.provider_options, "local endpoints")
+    reject_extra(&request.extra, "local endpoints")
 }
 
 pub(crate) fn local_embed(request: &SippEmbedRequest) -> Result<(), SippError> {
-    reject_endpoint_options(&request.endpoint_options, "local endpoints")?;
-    reject_provider_options(&request.provider_options, "local endpoints")
+    reject_extra(&request.extra, "local endpoints")
 }
 
 pub(crate) fn gateway_query(request: &SippQueryRequest) -> Result<(), SippError> {
@@ -62,8 +59,7 @@ pub(crate) fn gateway_query(request: &SippQueryRequest) -> Result<(), SippError>
             "local text options are not valid for gateway endpoints".to_string(),
         ));
     }
-    reject_provider_options(&request.provider_options, "gateway endpoints")?;
-    reject_local_only_endpoint_options(&request.endpoint_options)?;
+    reject_local_only_extra(&request.extra)?;
     Ok(())
 }
 
@@ -74,8 +70,7 @@ pub(crate) fn gateway_chat(request: &SippChatRequest) -> Result<(), SippError> {
             "local text options are not valid for gateway endpoints".to_string(),
         ));
     }
-    reject_provider_options(&request.provider_options, "gateway endpoints")?;
-    reject_local_only_endpoint_options(&request.endpoint_options)?;
+    reject_local_only_extra(&request.extra)?;
     Ok(())
 }
 
@@ -85,8 +80,7 @@ pub(crate) fn gateway_embed(request: &SippEmbedRequest) -> Result<(), SippError>
             "local embed options are not valid for gateway endpoints".to_string(),
         ));
     }
-    reject_provider_options(&request.provider_options, "gateway endpoints")?;
-    reject_local_only_endpoint_options(&request.endpoint_options)?;
+    reject_local_only_extra(&request.extra)?;
     Ok(())
 }
 
@@ -98,7 +92,7 @@ pub(crate) fn provider_query(request: &SippQueryRequest) -> Result<(), SippError
             "local text options are not valid for provider endpoints".to_string(),
         ));
     }
-    reject_endpoint_options(&request.endpoint_options, "provider endpoints")
+    Ok(())
 }
 
 #[cfg(feature = "providers")]
@@ -109,7 +103,7 @@ pub(crate) fn provider_chat(request: &SippChatRequest) -> Result<(), SippError> 
             "local text options are not valid for provider endpoints".to_string(),
         ));
     }
-    reject_endpoint_options(&request.endpoint_options, "provider endpoints")
+    Ok(())
 }
 
 #[cfg(feature = "providers")]
@@ -119,36 +113,23 @@ pub(crate) fn provider_embed(request: &SippEmbedRequest) -> Result<(), SippError
             "local embed options are not valid for provider endpoints".to_string(),
         ));
     }
-    reject_endpoint_options(&request.endpoint_options, "provider endpoints")
+    Ok(())
 }
 
-fn reject_endpoint_options(
-    endpoint_options: &serde_json::Map<String, serde_json::Value>,
+fn reject_extra(
+    extra: &serde_json::Map<String, serde_json::Value>,
     endpoint_label: &'static str,
 ) -> Result<(), SippError> {
-    if endpoint_options.is_empty() {
+    if extra.is_empty() {
         Ok(())
     } else {
         Err(SippError::InvalidRequest(format!(
-            "endpoint_options are not valid for {endpoint_label}"
+            "extra fields are not valid for {endpoint_label}"
         )))
     }
 }
 
-fn reject_provider_options(
-    provider_options: &serde_json::Map<String, serde_json::Value>,
-    endpoint_label: &'static str,
-) -> Result<(), SippError> {
-    if provider_options.is_empty() {
-        Ok(())
-    } else {
-        Err(SippError::InvalidRequest(format!(
-            "provider_options are not valid for {endpoint_label}"
-        )))
-    }
-}
-
-const LOCAL_ONLY_ENDPOINT_FIELDS: &[&str] = &[
+const LOCAL_ONLY_EXTRA_FIELDS: &[&str] = &[
     "context_key",
     "contextKey",
     "grammar",
@@ -160,13 +141,13 @@ const LOCAL_ONLY_ENDPOINT_FIELDS: &[&str] = &[
     "local",
 ];
 
-fn reject_local_only_endpoint_options(
-    endpoint_options: &serde_json::Map<String, serde_json::Value>,
+fn reject_local_only_extra(
+    extra: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), SippError> {
-    for key in endpoint_options.keys() {
-        if LOCAL_ONLY_ENDPOINT_FIELDS.contains(&key.as_str()) {
+    for key in extra.keys() {
+        if LOCAL_ONLY_EXTRA_FIELDS.contains(&key.as_str()) {
             return Err(SippError::InvalidRequest(format!(
-                "endpoint_options cannot contain local-only field: {key}"
+                "extra cannot contain local-only field: {key}"
             )));
         }
     }

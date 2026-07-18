@@ -11,6 +11,7 @@ import {
   type QueryInput,
   type QueryOptions,
   type RequestStats,
+  ENDPOINT_REF_PAYLOAD,
 } from '../models/types.js';
 import { createTimedAbortController } from '../utils/abort.js';
 
@@ -103,7 +104,7 @@ export class ProviderEndpointRegistry {
 
   public commit(provider: ProviderEndpoint): EndpointRef {
     this.#providers.set(provider.id, provider);
-    return { kind: 'provider', id: provider.id };
+    return { [ENDPOINT_REF_PAYLOAD]: { kind: 'provider', id: provider.id } };
   }
 
   public remove(id: string): boolean {
@@ -111,12 +112,13 @@ export class ProviderEndpointRegistry {
   }
 
   public get(endpoint: EndpointRef | undefined): ProviderEndpoint | null {
-    if (endpoint == null || endpoint.kind !== 'provider') {
+    if (endpoint == null || endpoint[ENDPOINT_REF_PAYLOAD].kind !== 'provider') {
       return null;
     }
-    const provider = this.#providers.get(endpoint.id);
+    const id = endpoint[ENDPOINT_REF_PAYLOAD].id;
+    const provider = this.#providers.get(id);
     if (provider == null) {
-      throw new QueryError('MODEL_NOT_FOUND', `provider endpoint not found: ${endpoint.id}`);
+      throw new QueryError('MODEL_NOT_FOUND', `provider endpoint not found: ${id}`);
     }
     return provider;
   }
@@ -149,7 +151,7 @@ export async function runProviderQuery(
   const body = openAiTextBody(
     endpoint.model,
     options,
-    options.providerOptions,
+    options.extra,
     { prompt },
     tokenBatchSink != null,
     OPENAI_COMPLETION_TYPED_FIELDS
@@ -186,7 +188,7 @@ export async function runProviderChat(
   const body = openAiTextBody(
     endpoint.model,
     options,
-    options.providerOptions,
+    options.extra,
     { messages: messages.map(providerMessage) },
     tokenBatchSink != null,
     OPENAI_CHAT_TYPED_FIELDS
@@ -219,13 +221,13 @@ export async function runProviderEmbedding(
       { provider: 'anthropic' }
     );
   }
-  const body = mergeProviderOptions(
+  const body = mergeExtra(
     {
       model: endpoint.model,
       input: embedInput,
       encoding_format: 'float',
     },
-    options.providerOptions,
+    options.extra,
     OPENAI_EMBED_TYPED_FIELDS
   );
   return providerRequest(endpoint, '/embeddings', body, signal, async (response, secret) =>
@@ -420,7 +422,7 @@ function normalizeStaticHeaders(
 function openAiTextBody(
   model: string,
   options: QueryOptions,
-  providerOptions: unknown,
+  extra: unknown,
   payload: { readonly prompt: string } | { readonly messages: readonly unknown[] },
   stream: boolean,
   typedFields: ReadonlySet<string>
@@ -429,7 +431,7 @@ function openAiTextBody(
   const temperature = optionalTemperature(options.temperature);
   const topP = optionalTopP(options.topP);
   const stop = optionalStringArray(options.stop, 'stop');
-  return mergeProviderOptions(
+  return mergeExtra(
     {
       model,
       ...payload,
@@ -439,7 +441,7 @@ function openAiTextBody(
       ...(stop == null ? {} : { stop }),
       ...(stream ? { stream: true } : {}),
     },
-    providerOptions,
+    extra,
     typedFields
   );
 }
@@ -478,7 +480,7 @@ function anthropicBody(
   const temperature = optionalTemperature(options.temperature);
   const topP = optionalTopP(options.topP);
   const stop = optionalStringArray(options.stop, 'stop_sequences');
-  return mergeProviderOptions(
+  return mergeExtra(
     {
       model,
       messages: conversation,
@@ -489,7 +491,7 @@ function anthropicBody(
       ...(stop == null ? {} : { stop_sequences: stop }),
       ...(stream ? { stream: true } : {}),
     },
-    options.providerOptions,
+    options.extra,
     ANTHROPIC_CHAT_TYPED_FIELDS
   );
 }
@@ -953,23 +955,23 @@ function pushText(state: TextStreamState, text: string): void {
   state.tokenBatchSink(batch);
 }
 
-function mergeProviderOptions(
+function mergeExtra(
   body: Record<string, unknown>,
-  providerOptions: unknown,
+  extra: unknown,
   typedFields: ReadonlySet<string>
 ): Record<string, unknown> {
-  if (providerOptions == null) {
+  if (extra == null) {
     return body;
   }
-  if (typeof providerOptions !== 'object' || Array.isArray(providerOptions)) {
-    throw new QueryError('QUERY_FAILED', 'providerOptions must be a JSON object');
+  if (typeof extra !== 'object' || Array.isArray(extra)) {
+    throw new QueryError('QUERY_FAILED', 'extra must be a JSON object');
   }
-  if (!isJsonObject(providerOptions)) {
-    throw new QueryError('QUERY_FAILED', 'providerOptions must be a JSON object');
+  if (!isJsonObject(extra)) {
+    throw new QueryError('QUERY_FAILED', 'extra must be a JSON object');
   }
-  for (const [key, value] of Object.entries(providerOptions)) {
+  for (const [key, value] of Object.entries(extra)) {
     if (typedFields.has(key)) {
-      throw new QueryError('QUERY_FAILED', `providerOptions cannot override typed field: ${key}`);
+      throw new QueryError('QUERY_FAILED', `extra cannot override typed field: ${key}`);
     }
     body[key] = snapshotJsonCompatibleProviderOption(value);
   }
@@ -977,9 +979,6 @@ function mergeProviderOptions(
 }
 
 function rejectProviderTextInvalidOptions(options: QueryOptions, hasMedia: boolean): void {
-  if (options.endpointOptions != null) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'endpointOptions are not valid for provider endpoints');
-  }
   if (hasMedia) {
     throw new QueryError('UNSUPPORTED_OPERATION', 'local media options are not valid for provider endpoints');
   }
@@ -991,9 +990,6 @@ function rejectProviderTextInvalidOptions(options: QueryOptions, hasMedia: boole
 }
 
 function rejectProviderEmbedInvalidOptions(options: EmbedOptions): void {
-  if (options.endpointOptions != null) {
-    throw new QueryError('UNSUPPORTED_OPERATION', 'endpointOptions are not valid for provider endpoints');
-  }
   for (const field of LOCAL_EMBED_FIELDS) {
     if ((options as Record<string, unknown>)[field] != null) {
       throw new QueryError('UNSUPPORTED_OPERATION', 'local embed options are not valid for provider endpoints');
@@ -1078,15 +1074,15 @@ function snapshotJsonCompatibleValue(value: unknown, ancestors: WeakSet<object>)
   }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new QueryError('QUERY_FAILED', 'providerOptions cannot contain non-finite numbers');
+      throw new QueryError('QUERY_FAILED', 'extra cannot contain non-finite numbers');
     }
     return value;
   }
   if (typeof value !== 'object') {
-    throw new QueryError('QUERY_FAILED', 'providerOptions must contain JSON-compatible values');
+    throw new QueryError('QUERY_FAILED', 'extra must contain JSON-compatible values');
   }
   if (ancestors.has(value)) {
-    throw new QueryError('QUERY_FAILED', 'providerOptions must contain JSON-compatible values');
+    throw new QueryError('QUERY_FAILED', 'extra must contain JSON-compatible values');
   }
   ancestors.add(value);
   try {
@@ -1094,7 +1090,7 @@ function snapshotJsonCompatibleValue(value: unknown, ancestors: WeakSet<object>)
       return value.map((item) => snapshotJsonCompatibleValue(item, ancestors));
     }
     if (!isJsonObject(value)) {
-      throw new QueryError('QUERY_FAILED', 'providerOptions must contain JSON-compatible values');
+      throw new QueryError('QUERY_FAILED', 'extra must contain JSON-compatible values');
     }
     const snapshot: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {

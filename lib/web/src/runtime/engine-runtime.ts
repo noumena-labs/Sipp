@@ -74,10 +74,7 @@ export interface EngineRuntime {
     file: Blob & { name?: string },
     signal?: AbortSignal
   ): Promise<ModelDetectionResult>;
-  resolvePairing(
-    classified: readonly ClassifiedAsset[],
-    explicitProjectorId?: string | null
-  ): Promise<PairingPlan>;
+  resolvePairing(classified: readonly ClassifiedAsset[]): Promise<PairingPlan>;
   createRustLifecycleBridge(manifest: RegistryManifest): Promise<RustLifecycleBridge>;
   probeChatTemplateBoundaryInfo(): Promise<ChatBoundaryInfo>;
   enqueueChat(

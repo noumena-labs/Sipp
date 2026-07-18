@@ -1,8 +1,6 @@
 //! Small helpers used by `ModelStore`: path comparison, asset classification,
 //! pairing-state projection, and fingerprinting.
 
-use std::path::Path;
-
 use serde_json::json;
 
 use crate::collection::sorted_values;
@@ -21,18 +19,6 @@ mod helpers_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
-pub(super) fn same_path(left: &Path, right: &Path) -> bool {
-    #[cfg(windows)]
-    {
-        left.to_string_lossy()
-            .eq_ignore_ascii_case(&right.to_string_lossy())
-    }
-    #[cfg(not(windows))]
-    {
-        left == right
-    }
-}
 
 pub(super) fn model_id_from_plan(plan: &PairingPlan) -> String {
     let ids = sorted_model_asset_ids(&plan.model_asset_ids, plan.projector_asset_id.as_ref());

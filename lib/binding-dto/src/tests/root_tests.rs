@@ -7,41 +7,20 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn endpoint_ref_maps_closed_builtin_kinds() {
-    let local_dto = EndpointRef {
-        kind: "local".to_string(),
-        id: "local-a".to_string(),
-    };
-    let local = CoreEndpointRef::try_from(&local_dto).expect("local endpoint");
-    assert!(matches!(local, CoreEndpointRef::Local { id } if id == "local-a"));
+fn endpoint_ref_maps_id() {
+    let endpoint = CoreEndpointRef::try_from(&EndpointRef {
+        id: "endpoint-a".to_string(),
+    })
+    .expect("endpoint");
 
-    let gateway_dto = EndpointRef {
-        kind: "gateway".to_string(),
-        id: "gateway-a".to_string(),
-    };
-    let gateway = CoreEndpointRef::try_from(&gateway_dto).expect("gateway endpoint");
-    assert!(matches!(gateway, CoreEndpointRef::Gateway { id } if id == "gateway-a"));
-
-    let provider_dto = EndpointRef {
-        kind: "provider".to_string(),
-        id: "provider-a".to_string(),
-    };
-    let provider = CoreEndpointRef::try_from(&provider_dto).expect("provider endpoint");
-    assert!(matches!(provider, CoreEndpointRef::Provider { id } if id == "provider-a"));
-
-    let invalid = EndpointRef {
-        kind: "custom_http".to_string(),
-        id: "bad".to_string(),
-    };
-    assert!(CoreEndpointRef::try_from(&invalid).is_err());
+    assert_eq!(endpoint.id(), "endpoint-a");
 }
 
 #[test]
-fn query_request_maps_gateway_endpoint_options() {
+fn query_request_maps_extra() {
     let request_dto = SippQueryRequest {
         request_id: Some("request-1".to_string()),
         endpoint: Some(EndpointRef {
-            kind: "gateway".to_string(),
             id: "custom".to_string(),
         }),
         prompt: "hello".to_string(),
@@ -52,19 +31,18 @@ fn query_request_maps_gateway_endpoint_options() {
             stop: None,
         }),
         local: None,
-        endpoint_options: Some(json!({ "seed": 7 })),
-        provider_options: None,
+        extra: Some(json!({ "seed": 7 })),
         emit_tokens: Some(true),
     };
     let request = CoreQueryRequest::try_from(&request_dto).expect("query request");
 
-    assert!(matches!(
-        request.endpoint,
-        Some(CoreEndpointRef::Gateway { id }) if id == "custom"
-    ));
+    assert_eq!(
+        request.endpoint.as_ref().map(CoreEndpointRef::id),
+        Some("custom")
+    );
     assert_eq!(request.prompt, "hello");
     assert_eq!(request.options.max_tokens, Some(8));
-    assert_eq!(request.endpoint_options.get("seed"), Some(&json!(7)));
+    assert_eq!(request.extra.get("seed"), Some(&json!(7)));
     assert!(request.emit_tokens);
 }
 
@@ -163,10 +141,10 @@ fn local_endpoint_rejects_provider_model() {
 }
 
 #[test]
-fn endpoint_options_must_be_json_objects() {
+fn extra_must_be_a_json_object() {
     let request = SippEmbedRequest {
         input: "hello".to_string(),
-        endpoint_options: Some(json!(["bad"])),
+        extra: Some(json!(["bad"])),
         ..SippEmbedRequest::default()
     };
 
@@ -198,10 +176,10 @@ fn chat_message_requires_valid_roles() {
 
 #[test]
 fn required_fields_do_not_deserialize_from_defaults() {
-    let missing_prompt = json!({ "endpoint": { "kind": "local", "id": "local" } });
+    let missing_prompt = json!({ "endpoint": { "id": "local" } });
     assert!(serde_json::from_value::<SippQueryRequest>(missing_prompt).is_err());
 
-    let missing_endpoint_id = json!({ "kind": "local" });
+    let missing_endpoint_id = json!({});
     assert!(serde_json::from_value::<EndpointRef>(missing_endpoint_id).is_err());
 
     let missing_gpu_count = json!({ "placement": { "gpu_layers": {} } });

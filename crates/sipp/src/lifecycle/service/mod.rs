@@ -1,6 +1,8 @@
 //! Managed model storage, acquisition, and runtime loading.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,10 +12,11 @@ use crate::engine::SippEngine;
 use crate::lifecycle::acquisition::RemoteAcquisitionIds;
 
 use super::backend_policy::BackendPolicy;
-use super::storage::{now_unix_ms, LocalStorageBackend, StorageBackend};
+use super::storage::{modified_unix_ms, now_unix_ms, LocalStorageBackend, StorageBackend};
 use super::util::{invalid_pairing, invalid_source, model_not_found};
 use super::{
-    AssetStore, ManagedModel, ModelEntry, ModelError, ModelLoadOptions, ModelRegistry, ModelStatus,
+    AssetSource, AssetStore, ManagedModel, ModelEntry, ModelError, ModelLoadOptions, ModelRegistry,
+    ModelStatus,
 };
 
 mod helpers;
@@ -40,115 +43,48 @@ impl ModelStore {
         let registry = ModelRegistry::open(backend.clone())?;
         let assets = AssetStore::new(backend);
         assets.recover_acquisition_journals(&registry.manifest)?;
+        let mut state = ModelStoreState {
+            registry,
+            assets,
+            acquisition_ids: RemoteAcquisitionIds::default(),
+            usage: BTreeMap::new(),
+        };
+        state.prune_stale_local_models()?;
         Ok(Self {
-            state: Arc::new(Mutex::new(ModelStoreState {
-                registry,
-                assets,
-                acquisition_ids: RemoteAcquisitionIds::default(),
-                usage: BTreeMap::new(),
-            })),
+            state: Arc::new(Mutex::new(state)),
         })
     }
 
-    /// Install model files from the host filesystem.
+    /// Add a model from local files or HTTP(S) URLs.
     ///
     /// # Errors
     ///
-    /// Returns an error when the files are invalid or cannot be persisted.
-    pub async fn install_files<P, I>(&self, model_paths: I) -> Result<ManagedModel, ModelError>
+    /// Returns an error when sources are invalid, mix local and remote assets,
+    /// or cannot be registered.
+    pub async fn add<S, I>(&self, sources: I) -> Result<ManagedModel, ModelError>
     where
-        P: Into<PathBuf>,
-        I: IntoIterator<Item = P>,
+        S: AsRef<OsStr>,
+        I: IntoIterator<Item = S>,
     {
-        self.install_files_with_optional_projector(model_paths, None)
-            .await
-    }
-
-    /// Install model and projector files from the host filesystem.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the files are invalid, incompatible, or cannot be
-    /// persisted.
-    pub async fn install_files_with_projector<P, I>(
-        &self,
-        model_paths: I,
-        projector_path: impl Into<PathBuf>,
-    ) -> Result<ManagedModel, ModelError>
-    where
-        P: Into<PathBuf>,
-        I: IntoIterator<Item = P>,
-    {
-        self.install_files_with_optional_projector(model_paths, Some(projector_path.into()))
-            .await
-    }
-
-    async fn install_files_with_optional_projector<P, I>(
-        &self,
-        model_paths: I,
-        projector_path: Option<PathBuf>,
-    ) -> Result<ManagedModel, ModelError>
-    where
-        P: Into<PathBuf>,
-        I: IntoIterator<Item = P>,
-    {
-        let paths = model_paths.into_iter().map(Into::into).collect();
+        let sources = sources
+            .into_iter()
+            .map(|source| PathBuf::from(source.as_ref()))
+            .collect();
         let mut state = self.state.lock().await;
-        let model_id = state.install_files(paths, projector_path)?;
-        state.model(&model_id)
-    }
-
-    /// Install model files from HTTP(S) URLs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when acquisition, validation, or persistence fails.
-    pub async fn install_urls<U, I>(&self, model_urls: I) -> Result<ManagedModel, ModelError>
-    where
-        U: Into<String>,
-        I: IntoIterator<Item = U>,
-    {
-        self.install_urls_with_optional_projector(model_urls, None)
-            .await
-    }
-
-    /// Install model and projector files from HTTP(S) URLs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when acquisition, validation, pairing, or persistence
-    /// fails.
-    pub async fn install_urls_with_projector<U, I>(
-        &self,
-        model_urls: I,
-        projector_url: impl Into<String>,
-    ) -> Result<ManagedModel, ModelError>
-    where
-        U: Into<String>,
-        I: IntoIterator<Item = U>,
-    {
-        self.install_urls_with_optional_projector(model_urls, Some(projector_url.into()))
-            .await
-    }
-
-    async fn install_urls_with_optional_projector<U, I>(
-        &self,
-        model_urls: I,
-        projector_url: Option<String>,
-    ) -> Result<ManagedModel, ModelError>
-    where
-        U: Into<String>,
-        I: IntoIterator<Item = U>,
-    {
-        let urls = model_urls.into_iter().map(Into::into).collect();
-        let mut state = self.state.lock().await;
-        let model_id = state.install_urls(urls, projector_url).await?;
+        state.prune_stale_local_models()?;
+        let model_id = state.add(sources).await?;
         state.model(&model_id)
     }
 
     /// List models in the store.
-    pub async fn list(&self) -> Vec<ManagedModel> {
-        self.state.lock().await.models()
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when stale local registrations cannot be removed.
+    pub async fn list(&self) -> Result<Vec<ManagedModel>, ModelError> {
+        let mut state = self.state.lock().await;
+        state.prune_stale_local_models()?;
+        Ok(state.models())
     }
 
     /// Remove a model and assets no other model references.
@@ -217,7 +153,7 @@ impl<B: StorageBackend> ModelStoreState<B> {
         let removed = self.registry.remove_model(model_id)?;
         self.registry.save()?;
         for asset in removed.orphaned_assets {
-            self.assets.delete_asset(&asset)?;
+            self.assets.delete_managed_asset(&asset)?;
         }
         Ok(())
     }
@@ -227,6 +163,7 @@ impl<B: StorageBackend> ModelStoreState<B> {
         model_id: &str,
         options: ModelLoadOptions,
     ) -> Result<SippEngine, ModelError> {
+        self.prune_stale_local_models()?;
         let entry = self
             .registry
             .manifest
@@ -256,6 +193,62 @@ impl<B: StorageBackend> ModelStoreState<B> {
         })?;
         self.registry.save()?;
         Ok(engine)
+    }
+
+    fn prune_stale_local_models(&mut self) -> Result<(), ModelError> {
+        let mut stale = Vec::new();
+        for entry in self.registry.manifest.models.values() {
+            if self.model_has_stale_local_asset(entry)? {
+                stale.push(entry.id.clone());
+            }
+        }
+        if stale.is_empty() {
+            return Ok(());
+        }
+
+        let mut orphaned = Vec::new();
+        for model_id in stale {
+            orphaned.extend(self.registry.remove_model(&model_id)?.orphaned_assets);
+        }
+        self.registry.save()?;
+        for asset in orphaned {
+            self.assets.delete_managed_asset(&asset)?;
+        }
+        Ok(())
+    }
+
+    fn model_has_stale_local_asset(&self, entry: &ModelEntry) -> Result<bool, ModelError> {
+        for asset_id in entry
+            .model_asset_ids
+            .iter()
+            .chain(entry.projector_asset_id.iter())
+        {
+            let record = self
+                .registry
+                .manifest
+                .assets
+                .get(asset_id)
+                .ok_or_else(|| ModelError::AssetMissing(asset_id.clone()))?;
+            let AssetSource::Local {
+                path,
+                modified_unix_ms: expected_modified,
+            } = &record.source
+            else {
+                continue;
+            };
+            let metadata = match fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+                Err(error) => return Err(ModelError::Io(error)),
+            };
+            if !metadata.is_file() || metadata.len() != record.bytes {
+                return Ok(true);
+            }
+            if expected_modified.is_some() && modified_unix_ms(&metadata) != *expected_modified {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn replace_usage(&mut self, previous: Option<&str>, next: Option<&str>) {

@@ -75,7 +75,7 @@ export class MainThreadModelLoader {
     }
 
     return {
-      sourceKind: 'installed',
+      sourceKind: 'managed',
       modelPath,
       projectorPath,
       isVisionModel: descriptor.detection.inspection.visionCapable,
