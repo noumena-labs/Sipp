@@ -78,17 +78,19 @@ fn rejects_incompatible_projector() {
 }
 
 #[test]
-fn rejects_implicit_projector_for_text_model() {
+fn accepts_projector_when_base_metadata_is_inconclusive() {
     let base = model("asset-model", "base.gguf", &[]);
     let mmproj = projector("asset-projector", "mmproj.gguf", Some("lfm2"));
 
-    let error = PairingResolver::resolve(&[base, mmproj]).expect_err("pairing error");
+    let plan = PairingResolver::resolve(&[base, mmproj]).expect("plan");
 
-    assert!(matches!(error, ModelError::InvalidModelPairing(_)));
+    assert_eq!(plan.modality, ModelModality::Vision);
+    assert_eq!(plan.status, ModelStatus::Ready);
+    assert_eq!(plan.projector_asset_id, some_string("asset-projector"));
 }
 
 #[test]
-fn rejects_multiple_implicit_projectors() {
+fn rejects_multiple_projectors() {
     let base = model("asset-model", "base.gguf", &["lfm2"]);
     let first = projector("asset-projector-a", "a.gguf", Some("lfm2"));
     let second = projector("asset-projector-b", "b.gguf", Some("lfm2"));

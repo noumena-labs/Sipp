@@ -428,12 +428,6 @@ function resolveFakePairing(files: readonly ClassifiedAsset[]): PairingPlan {
   const compatibleVisionProjectorTypes =
     compatibilitySources[0]?.inspection.compatibleVisionProjectorTypes ?? [];
   if (projector != null) {
-    if (!base.inspection.visionCapable) {
-      throw new RuntimePairingValidationError(
-        'INVALID_MODEL_PAIRING',
-        'Projector assets can only be auto-paired with vision-capable models.'
-      );
-    }
     const providedType = projector.inspection.providedVisionProjectorType;
     if (
       providedType != null &&

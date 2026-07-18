@@ -30,7 +30,7 @@ impl PairingResolver {
         let selection = select_assets(files)?;
         let base = resolve_base_model(&selection.model_files)?;
         if let Some(projector) = selection.projector {
-            validate_projector(&base, projector)?;
+            validate_projector_compatibility(&base, projector)?;
             return Ok(pairing_plan(&selection.model_files, Some(projector), base));
         }
 
@@ -146,18 +146,6 @@ fn resolve_base_model(files: &[&ClassifiedAsset]) -> Result<BaseModelResolution,
         name: base.name.clone(),
         vision_capable: !vision_candidates.is_empty(),
     })
-}
-
-fn validate_projector(
-    base: &BaseModelResolution,
-    projector: &ClassifiedAsset,
-) -> Result<(), ModelError> {
-    if !base.vision_capable {
-        return Err(invalid_pairing(
-            "projector assets can only be paired with vision-capable models",
-        ));
-    }
-    validate_projector_compatibility(base, projector)
 }
 
 fn validate_projector_compatibility(
