@@ -478,11 +478,67 @@ export interface GatewayEndpointDescriptor {
   readonly protocolOptions?: EndpointOptions;
 }
 
+/** @internal */
+export const LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD: unique symbol = Symbol(
+  'LocalEndpointDescriptor.payload'
+);
+
+/** @internal */
+export interface LocalEndpointDescriptorPayload {
+  readonly source: ModelSource;
+}
+
+/** Opaque descriptor for a browser-local model endpoint. */
 export interface LocalEndpointDescriptor {
   readonly kind: 'local';
-  readonly source: ModelSource;
-  readonly options?: ModelLoadOptions;
+  readonly options: ModelLoadOptions;
+  readonly [LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD]: LocalEndpointDescriptorPayload;
 }
+
+/** Construct browser-local endpoint descriptors from explicit model locations. */
+export const LocalEndpointDescriptor = {
+  files(
+    modelFiles: readonly File[],
+    {
+      projectorFile,
+      ...options
+    }: ModelLoadOptions & { readonly projectorFile?: File } = {}
+  ): LocalEndpointDescriptor {
+    return {
+      kind: 'local',
+      [LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD]: {
+        source: { kind: 'local', modelFiles, projectorFile },
+      },
+      options,
+    };
+  },
+
+  urls(
+    modelUrls: readonly string[],
+    {
+      projectorUrl,
+      ...options
+    }: ModelLoadOptions & { readonly projectorUrl?: string } = {}
+  ): LocalEndpointDescriptor {
+    return {
+      kind: 'local',
+      [LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD]: {
+        source: { kind: 'remote', modelUrls, projectorUrl },
+      },
+      options,
+    };
+  },
+
+  installed(modelId: string, options: ModelLoadOptions = {}): LocalEndpointDescriptor {
+    return {
+      kind: 'local',
+      [LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD]: {
+        source: { kind: 'installed', modelId },
+      },
+      options,
+    };
+  },
+};
 
 export interface ProviderStaticHeader {
   readonly name: string;
@@ -491,7 +547,7 @@ export interface ProviderStaticHeader {
 
 export interface ProviderEndpointDescriptor {
   readonly kind: 'provider';
-  readonly provider: 'openai' | 'anthropic' | 'openai_compatible' | 'openai-compatible';
+  readonly provider: 'openai' | 'anthropic' | 'openai_compatible';
   readonly model: string;
   readonly apiKey?: string;
   readonly keyProvider?: ProviderKeyProvider;

@@ -1,15 +1,15 @@
 //! Integration tests for the `sipp` crate-level public API.
 //!
 //! Covers the root client re-exports, nested native config modules, and the
-//! explicit model-source descriptors, and the `shard` and `providers` public
+//! explicit local model descriptors, and the `shard` and `providers` public
 //! surfaces without loading local models or calling gateway endpoints.
 
 use std::path::PathBuf;
 
 use sipp::{
     engine::ContextRuntimeConfig, lifecycle::BackendPreference,
-    runtime::request::GenerateResponseStatus, EndpointDescriptor, LocalModelDescriptor,
-    ModelSource, NativeRuntimeConfig, SippClient,
+    runtime::request::GenerateResponseStatus, EndpointDescriptor, LocalEndpointDescriptor,
+    NativeRuntimeConfig, SippClient, DEFAULT_STORAGE_ROOT,
 };
 
 #[test]
@@ -34,29 +34,59 @@ fn facade_reexports_lifecycle_and_runtime_modules() {
 }
 
 #[test]
-fn facade_exposes_only_explicit_model_source_variants() {
-    let source = ModelSource::Remote {
-        model_urls: vec!["https://models.example/model.gguf".to_string()],
-        projector_url: None,
-    };
-    let descriptor = EndpointDescriptor::LocalModel(LocalModelDescriptor {
-        source: source.clone(),
-        storage_root: PathBuf::from(".sipp-models"),
-        config: NativeRuntimeConfig::default(),
-    });
+fn local_endpoint_descriptor_exposes_explicit_source_constructors() {
+    let descriptors = [
+        LocalEndpointDescriptor::files(["model.gguf"]),
+        LocalEndpointDescriptor::files_with_projector(["model.gguf"], "projector.gguf"),
+        LocalEndpointDescriptor::urls(["https://models.example/model.gguf"]),
+        LocalEndpointDescriptor::urls_with_projector(
+            ["https://models.example/model.gguf"],
+            "https://models.example/projector.gguf",
+        ),
+        LocalEndpointDescriptor::installed("model-id"),
+    ];
 
-    assert!(matches!(source, ModelSource::Remote { .. }));
-    assert!(matches!(descriptor, EndpointDescriptor::LocalModel(_)));
+    assert!(descriptors
+        .into_iter()
+        .all(|descriptor| descriptor.storage_root == PathBuf::from(DEFAULT_STORAGE_ROOT)));
+}
+
+#[test]
+fn local_endpoint_descriptor_defaults_and_overrides_storage_root() {
+    let descriptor: EndpointDescriptor =
+        LocalEndpointDescriptor::urls(["https://models.example/model.gguf"]).into();
+
+    let EndpointDescriptor::Local(local) = descriptor else {
+        panic!("expected local descriptor");
+    };
+    assert_eq!(local.storage_root, PathBuf::from(DEFAULT_STORAGE_ROOT));
+    assert_eq!(local.config, NativeRuntimeConfig::default());
+
+    let mut override_descriptor = LocalEndpointDescriptor::files(["model.gguf"]);
+    override_descriptor.storage_root = ".custom-models".into();
+    override_descriptor.config = NativeRuntimeConfig {
+        context: ContextRuntimeConfig {
+            n_ctx: Some(256),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    assert_eq!(
+        override_descriptor.storage_root,
+        PathBuf::from(".custom-models")
+    );
+    assert_eq!(override_descriptor.config.context.n_ctx, Some(256));
 }
 
 mod client_api {
-    use sipp::{EndpointCapabilities, EndpointDescriptor, EndpointRef, GatewayEndpointConfig};
+    use sipp::{EndpointCapabilities, EndpointDescriptor, EndpointRef, GatewayEndpointDescriptor};
 
     #[test]
     fn gateway_descriptor_is_registered_through_add_contract() {
         let endpoint = EndpointRef::gateway("service");
         assert_eq!(endpoint.kind(), "gateway");
-        let descriptor = EndpointDescriptor::gateway(GatewayEndpointConfig {
+        let descriptor: EndpointDescriptor = GatewayEndpointDescriptor {
             target: "local".to_string(),
             base_url: "http://127.0.0.1:8080".to_string(),
             routes: Default::default(),
@@ -64,7 +94,8 @@ mod client_api {
             static_headers: Default::default(),
             timeouts: Default::default(),
             protocol_options: Default::default(),
-        });
+        }
+        .into();
         assert!(matches!(descriptor, EndpointDescriptor::Gateway(_)));
         assert_eq!(
             EndpointCapabilities::unknown().query,

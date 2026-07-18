@@ -14,7 +14,7 @@ use crate::client::local_endpoint::LocalEndpoint;
 #[cfg(all(feature = "providers", not(target_family = "wasm")))]
 use crate::client::provider_endpoint::ProviderEndpoint;
 #[cfg(feature = "providers")]
-use crate::client::ProviderEndpointConfig;
+use crate::client::ProviderEndpointDescriptor;
 use crate::client::{
     EndpointCapabilities, EndpointDescriptor, EndpointRef, SippChatRequest, SippEmbedRequest,
     SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext, SippResult, SippTextRun,
@@ -62,23 +62,23 @@ impl SippClient {
     pub async fn add(
         &mut self,
         id: impl Into<String>,
-        descriptor: EndpointDescriptor,
+        descriptor: impl Into<EndpointDescriptor>,
     ) -> SippResult<EndpointRef> {
-        match descriptor {
-            EndpointDescriptor::LocalModel(descriptor) => {
+        match descriptor.into() {
+            EndpointDescriptor::Local(descriptor) => {
                 let engine = self.acquire_local_engine(descriptor).await?;
                 self.register_local(id, engine).await
             }
-            EndpointDescriptor::Gateway(config) => self.register_gateway(id, config),
+            EndpointDescriptor::Gateway(descriptor) => self.register_gateway(id, descriptor),
             #[cfg(feature = "providers")]
-            EndpointDescriptor::Provider(config) => self.register_provider(id, config),
+            EndpointDescriptor::Provider(descriptor) => self.register_provider(id, descriptor),
         }
     }
 
     #[cfg(not(target_family = "wasm"))]
     async fn acquire_local_engine(
         &mut self,
-        descriptor: crate::client::LocalModelDescriptor,
+        descriptor: crate::client::LocalEndpointDescriptor,
     ) -> SippResult<SippEngine> {
         self.io_executor()?
             .spawn(async move {
@@ -103,7 +103,7 @@ impl SippClient {
     #[cfg(target_family = "wasm")]
     async fn acquire_local_engine(
         &mut self,
-        descriptor: crate::client::LocalModelDescriptor,
+        descriptor: crate::client::LocalEndpointDescriptor,
     ) -> SippResult<SippEngine> {
         let mut service = ModelService::local(descriptor.storage_root)?;
         service
@@ -142,14 +142,18 @@ impl SippClient {
     fn register_gateway(
         &mut self,
         id: impl Into<String>,
-        config: crate::client::GatewayEndpointConfig,
+        descriptor: crate::client::GatewayEndpointDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "gateway id")?;
         let endpoint = EndpointRef::Gateway { id };
         let executor = self.io_executor()?;
         self.replace_endpoint(
             endpoint.clone(),
-            Arc::new(GatewayEndpoint::new(endpoint.clone(), config, executor)?),
+            Arc::new(GatewayEndpoint::new(
+                endpoint.clone(),
+                descriptor,
+                executor,
+            )?),
         );
         Ok(endpoint)
     }
@@ -158,7 +162,7 @@ impl SippClient {
     fn register_gateway(
         &mut self,
         id: impl Into<String>,
-        _config: crate::client::GatewayEndpointConfig,
+        _descriptor: crate::client::GatewayEndpointDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "gateway id")?;
         Err(SippError::UnsupportedOperation {
@@ -171,11 +175,11 @@ impl SippClient {
     fn register_provider(
         &mut self,
         id: impl Into<String>,
-        config: ProviderEndpointConfig,
+        descriptor: ProviderEndpointDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "provider id")?;
         let endpoint = EndpointRef::Provider { id };
-        let (model, transport, secrets) = config.build()?;
+        let (model, transport, secrets) = descriptor.build()?;
         let executor = self.io_executor()?;
         self.replace_endpoint(
             endpoint.clone(),
@@ -195,7 +199,7 @@ impl SippClient {
     fn register_provider(
         &mut self,
         id: impl Into<String>,
-        _config: ProviderEndpointConfig,
+        _descriptor: ProviderEndpointDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "provider id")?;
         Err(SippError::UnsupportedOperation {

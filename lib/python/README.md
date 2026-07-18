@@ -36,9 +36,8 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    LocalModelDescriptor,
+    LocalEndpointDescriptor,
     LocalTextOptions,
-    ModelSource,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
     SchedulerRuntimeConfig,
@@ -48,10 +47,9 @@ from sipp import (
 client = SippClient()
 endpoint = client.add(
     "default",
-    LocalModelDescriptor(
-        ModelSource.local([sys.argv[1]]),
-        ".sipp-models",
-        NativeRuntimeConfig(
+    LocalEndpointDescriptor.files(
+        [sys.argv[1]],
+        config=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
             scheduler=SchedulerRuntimeConfig(
                 continuous_batching=True,
@@ -71,7 +69,7 @@ run = client.query(
 print(run.result()["text"])
 ```
 
-Gateway clients use `GatewayDescriptor` when a Python service or script calls a
+Gateway clients use `GatewayEndpointDescriptor` when a Python service or script calls a
 separate Sipp gateway.
 
 ## Learn More

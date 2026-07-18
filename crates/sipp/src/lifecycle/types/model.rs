@@ -22,7 +22,7 @@ pub const REGISTRY_MANIFEST_VERSION: u32 = 3;
 /// Authoritative source used to resolve and install a model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ModelSource {
+pub(crate) enum ModelSource {
     /// Resolve a model already present in the selected model store.
     Installed {
         /// Installed model identifier.

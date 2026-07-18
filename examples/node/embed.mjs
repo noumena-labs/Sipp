@@ -10,18 +10,23 @@ import {
   readLocalArgs,
 } from './_support.mjs';
 
-const { SippClient, backendObservabilityJson, setLlamaLogQuiet } = native;
+const {
+  LocalEndpointDescriptor,
+  SippClient,
+  backendObservabilityJson,
+  setLlamaLogQuiet,
+} = native;
 const { model, input } = readLocalArgs('embed', 'SippClient embedding example input.');
 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
-await client.add('default', {
-  kind: 'local',
-  source: { kind: 'local', modelPaths: [model] },
-  storageRoot: '.sipp-models',
-  config: runtimeConfig({ embeddings: true }),
-});
+await client.add(
+  'default',
+  LocalEndpointDescriptor.files([model], {
+    config: runtimeConfig({ embeddings: true }),
+  })
+);
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // Embeddings use the same local endpoint. The runtime is loaded with

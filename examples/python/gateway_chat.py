@@ -7,9 +7,8 @@ from sipp import (
     SippTextOptions,
     SippTextRun,
     ContextRuntimeConfig,
-    GatewayDescriptor,
-    LocalModelDescriptor,
-    ModelSource,
+    GatewayEndpointDescriptor,
+    LocalEndpointDescriptor,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
@@ -95,11 +94,11 @@ def main() -> None:
     client = SippClient()
     local_endpoint = client.add(
         "local",
-        LocalModelDescriptor(ModelSource.local([model]), ".sipp-models", runtime_config(embeddings=False)),
+        LocalEndpointDescriptor.files([model], config=runtime_config(embeddings=False)),
     )
     gateway_endpoint = client.add(
         "gateway",
-        GatewayDescriptor(
+        GatewayEndpointDescriptor(
             target,
             required_env("SIPP_GATEWAY_URL"),
             authentication_kind="bearer",

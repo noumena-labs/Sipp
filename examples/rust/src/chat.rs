@@ -9,8 +9,7 @@ use sipp::engine::{
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
 use sipp::{
-    EndpointDescriptor, LocalModelDescriptor, LocalTextOptions, ModelSource, SippChatRequest,
-    SippClient, SippTextOptions,
+    LocalEndpointDescriptor, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions,
 };
 
 fn main() -> support::ExampleResult<()> {
@@ -19,19 +18,9 @@ fn main() -> support::ExampleResult<()> {
         set_llama_log_quiet(true);
 
         let mut client = SippClient::new();
-        client
-            .add(
-                "default",
-                EndpointDescriptor::LocalModel(LocalModelDescriptor {
-                    source: ModelSource::Local {
-                        model_paths: vec![args.model_path],
-                        projector_path: None,
-                    },
-                    storage_root: ".sipp-models".into(),
-                    config: runtime_config(false),
-                }),
-            )
-            .await?;
+        let mut descriptor = LocalEndpointDescriptor::files([args.model_path]);
+        descriptor.config = runtime_config(false);
+        client.add("default", descriptor).await?;
 
         // `chat` accepts structured messages. Token streaming is enabled here
         // so the user can print partial output while the final response is
@@ -97,6 +86,7 @@ fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
+        multimodal: Default::default(),
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()

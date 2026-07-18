@@ -94,9 +94,9 @@ impl Default for GatewayRoutes {
     }
 }
 
-/// Construction parameters for a client-owned gateway endpoint.
+/// Descriptor for a client-owned gateway endpoint.
 #[derive(Debug, Clone, PartialEq)]
-pub struct GatewayEndpointConfig {
+pub struct GatewayEndpointDescriptor {
     /// Target name encoded in gateway profile requests.
     pub target: String,
     /// Absolute HTTP(S) service URL.

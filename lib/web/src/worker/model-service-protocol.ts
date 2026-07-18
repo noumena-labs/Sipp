@@ -22,6 +22,7 @@ export interface WorkerRuntimeConfig {
   defaultBackendOverride?: RuntimeBackendOverride | null;
   moduleOptions?: Record<string, unknown>;
   maxModelBytes?: number;
+  storageRoot?: string;
   browserCache?: BrowserCachePolicyOptions;
   trustedOrigins?: string[];
 }

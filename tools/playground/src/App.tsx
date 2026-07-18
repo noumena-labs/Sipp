@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'r
 import {
   SippClient,
   type ModelInfo,
-  type ModelSource,
   type ObservabilitySnapshot,
   type TokenBatch,
 } from '@noumena-labs/sipp';
@@ -50,6 +49,7 @@ import {
   validateImageFile,
 } from './lib/utils';
 import {
+  localEndpointDescriptor,
   formatSize,
   getEmbeddingModels,
   getDefaultVariant,
@@ -60,6 +60,7 @@ import {
   isVisionModel,
   MODEL_REGISTRY,
   type ModelCapability,
+  type ModelLocation,
   type ModelRegistryEntry,
 } from './lib/model-registry';
 import type {
@@ -184,37 +185,37 @@ async function inspectBrowserEnvironment(): Promise<Record<string, unknown>> {
   };
 }
 
-function sourceLabel(source: ModelSource): string {
-  switch (source.kind) {
+function locationLabel(location: ModelLocation): string {
+  switch (location.kind) {
     case 'installed':
-      return source.modelId;
+      return location.modelId;
     case 'local':
-      return source.modelFiles[0]?.name ?? 'model shards';
+      return location.modelFiles[0]?.name ?? 'model shards';
     case 'remote':
-      return source.modelUrls[0] ?? 'model.gguf';
+      return location.modelUrls[0] ?? 'model.gguf';
   }
 }
 
-function sourceKey(source: ModelSource): string {
-  switch (source.kind) {
+function locationKey(location: ModelLocation): string {
+  switch (location.kind) {
     case 'installed':
-      return `installed:${source.modelId}`;
+      return `installed:${location.modelId}`;
     case 'local':
-      return `local:${source.modelFiles
+      return `local:${location.modelFiles
         .map((file) => `${file.name}:${file.size}:${file.lastModified}`)
-        .join('|')};projector=${source.projectorFile?.name ?? 'none'}`;
+        .join('|')};projector=${location.projectorFile?.name ?? 'none'}`;
     case 'remote':
-      return `remote:${source.modelUrls.join('|')};projector=${source.projectorUrl ?? 'none'}`;
+      return `remote:${location.modelUrls.join('|')};projector=${location.projectorUrl ?? 'none'}`;
   }
 }
 
-function withProjector(source: ModelSource, projector?: string | File): ModelSource {
-  if (projector == null) return source;
-  if (source.kind === 'remote' && typeof projector === 'string') {
-    return { ...source, projectorUrl: projector };
+function withProjector(location: ModelLocation, projector?: string | File): ModelLocation {
+  if (projector == null) return location;
+  if (location.kind === 'remote' && typeof projector === 'string') {
+    return { ...location, projectorUrl: projector };
   }
-  if (source.kind === 'local' && projector instanceof File) {
-    return { ...source, projectorFile: projector };
+  if (location.kind === 'local' && projector instanceof File) {
+    return { ...location, projectorFile: projector };
   }
   throw new Error('Model and projector must both be URLs or both be local files.');
 }
@@ -530,7 +531,7 @@ export default function App() {
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectorFileInputRef = useRef<HTMLInputElement>(null);
-  const loadedSourceKeyRef = useRef<string | null>(null);
+  const loadedLocationKeyRef = useRef<string | null>(null);
   const responseElementRef = useRef<HTMLDivElement>(null);
 
   const createResponseRenderer = (maxStreams = 1, flushMode: 'frame' | 'immediate' = 'frame') => {
@@ -676,8 +677,8 @@ export default function App() {
     return url.length > 0 ? url : undefined;
   };
 
-  const modelSource = (): ModelSource | null => {
-    if (modelType === 'registry') return selectedVariant.source;
+  const modelLocation = (): ModelLocation | null => {
+    if (modelType === 'registry') return selectedVariant.location;
     if (modelType === 'url') {
       const projector = projectorOverride();
       return modelUrl.trim().length > 0
@@ -737,13 +738,12 @@ export default function App() {
 
   const loadLocalSelection = async (
     targetClient: SippClient,
-    source: ModelSource
+    location: ModelLocation
   ): Promise<ModelInfo> => {
     const start = performance.now();
-    await targetClient.add('playground-local', {
-      kind: 'local',
-      source,
-      options: {
+    await targetClient.add(
+      'playground-local',
+      localEndpointDescriptor(location, {
         observability: 'profile',
         runtime: getDefaultRuntimeOptions(),
         onProgress: (progress) => {
@@ -757,15 +757,15 @@ export default function App() {
             setStatus('Loading into memory');
           }
         },
-      },
-    });
+      })
+    );
     const info = targetClient.currentLocal();
     if (info == null) {
       throw new Error('Local model did not become active.');
     }
     setLastLoadMs(round(performance.now() - start));
-    setSourceInfo({ label: sourceLabel(source), bytes: info.bytes });
-    loadedSourceKeyRef.current = sourceKey(source);
+    setSourceInfo({ label: locationLabel(location), bytes: info.bytes });
+    loadedLocationKeyRef.current = locationKey(location);
     if (!modelSupportsOperation(info, operation)) {
       setOperation(defaultOperationForModel(info));
     }
@@ -783,14 +783,14 @@ export default function App() {
 
   const loadSelectedModel = async () => {
     if (client == null) return;
-    const source = modelSource();
-    if (source == null) {
+    const location = modelLocation();
+    if (location == null) {
       setStatus('Select a model source first.');
       return;
     }
     setIsBusy(true);
     try {
-      const info = await loadLocalSelection(client, source);
+      const info = await loadLocalSelection(client, location);
       setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -810,12 +810,12 @@ export default function App() {
     setResponse('');
     setLastRun(null);
     try {
-      const source = modelSource();
-      if (source == null) {
+      const location = modelLocation();
+      if (location == null) {
         setStatus('Select a model source first.');
         return;
       }
-      const nextSourceKey = sourceKey(source);
+      const nextLocationKey = locationKey(location);
       const loadedModel = client.currentLocal();
       let requestOperation = requestedOperation;
       let requestPrompt = prompt;
@@ -823,9 +823,10 @@ export default function App() {
       if (
         loadedModel == null ||
         loadedModel.status !== 'ready' ||
-        (loadedSourceKeyRef.current != null && loadedSourceKeyRef.current !== nextSourceKey)
+        (loadedLocationKeyRef.current != null &&
+          loadedLocationKeyRef.current !== nextLocationKey)
       ) {
-        const info = await loadLocalSelection(client, source);
+        const info = await loadLocalSelection(client, location);
         if (!modelSupportsOperation(info, requestOperation)) {
           setStatus(`${info.name} does not support ${requestOperation}.`);
           return;
@@ -911,8 +912,8 @@ export default function App() {
 
   const runBenchmark = async () => {
     if (client == null) return;
-    const source = modelSource();
-    if (source == null) {
+    const location = modelLocation();
+    if (location == null) {
       setStatus('Select a model source first.');
       return;
     }
@@ -936,7 +937,7 @@ export default function App() {
     let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
     try {
-      const info = await loadLocalSelection(client, source);
+      const info = await loadLocalSelection(client, location);
       if (!modelSupportsOperation(info, benchmarkOperation)) {
         benchmarkOperation = defaultOperationForModel(info);
       }
@@ -975,7 +976,7 @@ export default function App() {
             client,
             benchmarkOperation,
             scenario,
-            source,
+            location,
             warmupRuns,
             measuredRuns,
             defaultRuntime,
@@ -1000,7 +1001,7 @@ export default function App() {
           client,
           benchmarkOperation,
           mixedDefinition,
-          source,
+          location,
           warmupRuns,
           measuredRuns,
           runtimeOptionsForMixedLoad(defaultRuntime, mixedDefinition.concurrency),
@@ -1026,7 +1027,7 @@ export default function App() {
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
-          label: sourceLabel(source),
+          label: locationLabel(location),
           bytes: info.bytes,
         },
         settings: {
@@ -1134,13 +1135,13 @@ export default function App() {
   const selectedEmbeddingUseCase =
     EMBEDDING_USE_CASES.find((useCase) => useCase.value === embeddingUseCase) ??
     EMBEDDING_USE_CASES[0];
-  const selectedSourceForState = modelSource();
-  const selectedSourceKey =
-    selectedSourceForState == null ? null : sourceKey(selectedSourceForState);
+  const selectedLocation = modelLocation();
+  const selectedLocationKey =
+    selectedLocation == null ? null : locationKey(selectedLocation);
   const isLoadedSelectedSource =
     currentModel?.loaded === true &&
-    selectedSourceKey != null &&
-    loadedSourceKeyRef.current === selectedSourceKey;
+    selectedLocationKey != null &&
+    loadedLocationKeyRef.current === selectedLocationKey;
 
   const selectedRegistryOperationReason = (
     requestedOperation: BenchmarkOperation

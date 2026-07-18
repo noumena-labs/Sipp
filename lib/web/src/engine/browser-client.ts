@@ -1,5 +1,6 @@
 import { ModelService } from '../models/model-service.js';
 import { AssetStore, type BrowserCachePolicyOptions } from '../models/asset-store.js';
+import { ModelRegistryStore } from '../models/model-registry-store.js';
 import { createBrowserEmbeddingRun, createBrowserTextRun } from '../models/token-queue.js';
 import {
   QueryError,
@@ -14,14 +15,15 @@ import {
   type EngineEvent,
   type EngineObservability,
   type EngineState,
+  LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD,
   type ModelLifecycleService,
   type ModelInfo,
   type QueryInput,
   type QueryOptions,
-  type ProviderEndpointDescriptor,
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
+import { FileSystemStorage } from './file-system-storage.js';
 import {
   GatewayEndpointRegistry,
   runGatewayChat,
@@ -48,6 +50,8 @@ export interface SippClientOptions {
   wasmThreading?: 'single-thread' | 'pthread';
   moduleOptions?: EngineModuleOptions;
   maxModelBytes?: number;
+  /** Browser OPFS directory used for the managed model registry and cached assets. */
+  storageRoot?: string;
   /** Override browser OPFS split thresholds for large GGUF model files. */
   browserCache?: BrowserCachePolicyOptions;
   trustedOrigins?: string[];
@@ -82,13 +86,16 @@ export class SippClient implements SippClientShape {
   #closed = false;
 
   public constructor(options: SippClientOptions = {}) {
-    this.#service = shouldUseWorker(options)
-      ? new WorkerModelServiceClient(options)
-      : new ModelService(
+    if (shouldUseWorker(options)) {
+      this.#service = new WorkerModelServiceClient(options);
+    } else {
+      const storage = new FileSystemStorage(options.storageRoot);
+      this.#service = new ModelService(
         new MainThreadEngineRuntime(options),
-        undefined,
-        new AssetStore(undefined, options.browserCache)
+        new ModelRegistryStore(storage),
+        new AssetStore(storage, options.browserCache)
       );
+    }
     this.observability = {
       current: () => {
         this.assertOpen();
@@ -112,7 +119,8 @@ export class SippClient implements SippClientShape {
     const normalizedId = normalizeEndpointId(id, 'endpoint id');
     assertEndpointDescriptor(descriptor);
     if (descriptor.kind === 'local') {
-      await this.#service.load(descriptor.source, descriptor.options);
+      const { source } = descriptor[LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD];
+      await this.#service.load(source, descriptor.options);
       this.#gatewayEndpoints.remove(normalizedId);
       this.#providers.remove(normalizedId);
       const endpoint = { kind: 'local', id: normalizedId } as const;
@@ -125,10 +133,7 @@ export class SippClient implements SippClientShape {
       this.#providers.remove(normalizedId);
       return this.#gatewayEndpoints.commit(endpoint);
     }
-    const provider = this.#providers.prepare(
-      normalizedId,
-      descriptor as ProviderEndpointDescriptor
-    );
+    const provider = this.#providers.prepare(normalizedId, descriptor);
     await this.removeLocalEndpoint(normalizedId);
     this.#gatewayEndpoints.remove(normalizedId);
     return this.#providers.commit(provider);
@@ -317,6 +322,12 @@ function assertEndpointDescriptor(value: unknown): asserts value is EndpointDesc
     throw new QueryError(
       'QUERY_FAILED',
       'endpoint descriptor kind must be local, gateway, or provider'
+    );
+  }
+  if (kind === 'local' && !(LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD in value)) {
+    throw new QueryError(
+      'QUERY_FAILED',
+      'local endpoint descriptors must be created by LocalEndpointDescriptor'
     );
   }
 }

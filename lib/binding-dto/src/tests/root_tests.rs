@@ -5,6 +5,7 @@
 
 use super::*;
 use serde_json::json;
+use sipp::DEFAULT_STORAGE_ROOT;
 
 #[test]
 fn endpoint_ref_maps_closed_builtin_kinds() {
@@ -89,15 +90,15 @@ fn gateway_endpoint_descriptor_maps_through_add_shape() {
     let descriptor = CoreEndpointDescriptor::try_from(&descriptor_dto).expect("gateway descriptor");
 
     match descriptor {
-        CoreEndpointDescriptor::Gateway(config) => {
-            assert_eq!(config.target, "developer-model");
-            assert_eq!(config.routes.query, "/generate");
+        CoreEndpointDescriptor::Gateway(descriptor) => {
+            assert_eq!(descriptor.target, "developer-model");
+            assert_eq!(descriptor.routes.query, "/generate");
             assert_eq!(
-                config.protocol_options.get("profile"),
+                descriptor.protocol_options.get("profile"),
                 Some(&json!("custom"))
             );
             assert!(matches!(
-                config.authentication,
+                descriptor.authentication,
                 CoreGatewayAuthentication::Bearer(_)
             ));
         }
@@ -120,30 +121,59 @@ fn local_endpoint_descriptor_maps_explicit_remote_source_and_storage_root() {
     })
     .expect("local descriptor");
 
-    let CoreEndpointDescriptor::LocalModel(local) = descriptor else {
+    let CoreEndpointDescriptor::Local(local) = descriptor else {
         panic!("expected local descriptor");
     };
     assert_eq!(local.storage_root, PathBuf::from(".sipp-models"));
-    assert!(matches!(
-        local.source,
-        CoreModelSource::Remote {
-            model_urls,
-            projector_url: Some(projector_url)
-        } if model_urls == ["https://example.test/model.gguf"]
-            && projector_url == "https://example.test/mmproj.gguf"
-    ));
 }
 
 #[test]
-fn model_source_rejects_fields_from_another_variant() {
-    let source = ModelSource {
-        kind: "installed".to_string(),
-        model_id: Some("model-a".to_string()),
-        model_urls: Some(vec!["https://example.test/model.gguf".to_string()]),
-        ..ModelSource::default()
-    };
+fn local_endpoint_descriptor_defaults_storage_root() {
+    let descriptor = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
+        kind: "local".to_string(),
+        source: Some(ModelSource {
+            kind: "remote".to_string(),
+            model_urls: Some(vec!["https://example.test/model.gguf".to_string()]),
+            ..ModelSource::default()
+        }),
+        ..EndpointDescriptor::default()
+    })
+    .expect("local descriptor");
 
-    let error = CoreModelSource::try_from(&source).expect_err("mixed source fields");
+    let CoreEndpointDescriptor::Local(local) = descriptor else {
+        panic!("expected local descriptor");
+    };
+    assert_eq!(local.storage_root, PathBuf::from(DEFAULT_STORAGE_ROOT));
+}
+
+#[test]
+fn provider_endpoint_descriptor_rejects_legacy_provider_name() {
+    let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
+        kind: "provider".to_string(),
+        provider: Some("openai-compatible".to_string()),
+        model: Some("model-a".to_string()),
+        ..EndpointDescriptor::default()
+    })
+    .expect_err("legacy provider name");
+
+    assert!(error
+        .to_string()
+        .contains("provider must be one of: openai, anthropic, openai_compatible"));
+}
+
+#[test]
+fn local_endpoint_rejects_fields_from_another_source_variant() {
+    let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
+        kind: "local".to_string(),
+        source: Some(ModelSource {
+            kind: "installed".to_string(),
+            model_id: Some("model-a".to_string()),
+            model_urls: Some(vec!["https://example.test/model.gguf".to_string()]),
+            ..ModelSource::default()
+        }),
+        ..EndpointDescriptor::default()
+    })
+    .expect_err("mixed source fields");
     assert!(error.to_string().contains("modelUrls"));
 }
 

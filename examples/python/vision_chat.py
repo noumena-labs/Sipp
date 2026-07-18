@@ -8,10 +8,9 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    LocalModelDescriptor,
+    LocalEndpointDescriptor,
     LocalTextOptions,
     ModelPlacementConfig,
-    ModelSource,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
     ResidencyRuntimeConfig,
@@ -71,10 +70,10 @@ def main() -> None:
     client = SippClient()
     client.add(
         "default",
-        LocalModelDescriptor(
-            ModelSource.local([model], projector),
-            ".sipp-models",
-            runtime_config(),
+        LocalEndpointDescriptor.files(
+            [model],
+            projector_path=projector,
+            config=runtime_config(),
         ),
     )
 

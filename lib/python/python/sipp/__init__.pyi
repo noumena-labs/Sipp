@@ -230,7 +230,7 @@ class ProviderError(Exception):
     retry_after_ms: Optional[float]
     raw_body: Any
 
-class GatewayDescriptor:
+class GatewayEndpointDescriptor:
     def __init__(
         self,
         target: str,
@@ -256,37 +256,40 @@ class EndpointRef:
     @property
     def kind(self) -> str: ...
 
-class ModelSource:
+class LocalEndpointDescriptor:
     @staticmethod
-    def installed(model_id: str) -> ModelSource: ...
-    @staticmethod
-    def local(
+    def files(
         model_paths: Sequence[PathLike],
+        *,
         projector_path: Optional[PathLike] = None,
-    ) -> ModelSource: ...
-    @staticmethod
-    def remote(
-        model_urls: Sequence[str],
-        projector_url: Optional[str] = None,
-    ) -> ModelSource: ...
-
-class LocalModelDescriptor:
-    def __init__(
-        self,
-        source: ModelSource,
-        storage_root: PathLike,
+        storage_root: Optional[PathLike] = None,
         config: Optional[NativeRuntimeConfig] = None,
-    ) -> None: ...
+    ) -> LocalEndpointDescriptor: ...
+    @staticmethod
+    def urls(
+        model_urls: Sequence[str],
+        *,
+        projector_url: Optional[str] = None,
+        storage_root: Optional[PathLike] = None,
+        config: Optional[NativeRuntimeConfig] = None,
+    ) -> LocalEndpointDescriptor: ...
+    @staticmethod
+    def installed(
+        model_id: str,
+        *,
+        storage_root: Optional[PathLike] = None,
+        config: Optional[NativeRuntimeConfig] = None,
+    ) -> LocalEndpointDescriptor: ...
 
 class ModelLifecycleError(Exception):
     code: str
     status: Optional[int]
     retry_after_ms: Optional[int]
 
-class ProviderDescriptor:
+class ProviderEndpointDescriptor:
     def __init__(
         self,
-        provider: Literal["openai", "anthropic", "openai_compatible", "openai-compatible"],
+        provider: Literal["openai", "anthropic", "openai_compatible"],
         model: str,
         *,
         api_key: Optional[str] = None,
@@ -299,9 +302,9 @@ class ProviderDescriptor:
     ) -> None: ...
 
 EndpointDescriptor = Union[
-    LocalModelDescriptor,
-    ProviderDescriptor,
-    GatewayDescriptor,
+    LocalEndpointDescriptor,
+    ProviderEndpointDescriptor,
+    GatewayEndpointDescriptor,
 ]
 
 class SippTextOptions:

@@ -269,35 +269,45 @@ export interface ProviderStaticHeader {
   value: string
 }
 
-/** Authoritative source used by the native model lifecycle. */
-export type ModelSource =
-  | {
-      readonly kind: 'installed'
-      readonly modelId: string
-    }
-  | {
-      readonly kind: 'local'
-      readonly modelPaths: readonly string[]
-      readonly projectorPath?: string
-    }
-  | {
-      readonly kind: 'remote'
-      readonly modelUrls: readonly string[]
-      readonly projectorUrl?: string
-    }
+declare const localEndpointDescriptorBrand: unique symbol
 
-/** Descriptor for a local model endpoint owned by this client process. */
+/** Opaque descriptor for a local model endpoint owned by this client process. */
 export type LocalEndpointDescriptor = {
   readonly kind: 'local'
-  readonly source: ModelSource
-  readonly storageRoot: string
-  readonly config?: NativeRuntimeConfig
+  readonly [localEndpointDescriptorBrand]: true
+}
+
+/** Construct local endpoint descriptors from explicit model locations. */
+export declare const LocalEndpointDescriptor: {
+  files(
+    modelPaths: readonly string[],
+    options?: {
+      readonly projectorPath?: string
+      readonly storageRoot?: string
+      readonly config?: NativeRuntimeConfig
+    }
+  ): LocalEndpointDescriptor
+  urls(
+    modelUrls: readonly string[],
+    options?: {
+      readonly projectorUrl?: string
+      readonly storageRoot?: string
+      readonly config?: NativeRuntimeConfig
+    }
+  ): LocalEndpointDescriptor
+  installed(
+    modelId: string,
+    options?: {
+      readonly storageRoot?: string
+      readonly config?: NativeRuntimeConfig
+    }
+  ): LocalEndpointDescriptor
 }
 
 /** Descriptor for an explicitly selected external provider adapter. */
 export type ProviderEndpointDescriptor = {
   kind: 'provider'
-  provider: 'openai' | 'anthropic' | 'openai_compatible' | 'openai-compatible'
+  provider: 'openai' | 'anthropic' | 'openai_compatible'
   model: string
   apiKey?: string
   baseUrl?: string

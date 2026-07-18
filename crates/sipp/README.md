@@ -32,8 +32,8 @@ if the launcher is not active.
 
 ```rust
 use sipp::{
-    SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor,
-    LocalModelDescriptor, LocalTextOptions, ModelSource,
+    LocalEndpointDescriptor, LocalTextOptions, SippClient, SippQueryRequest,
+    SippTextOptions,
 };
 use sipp::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, KvReuseMode, NativeRuntimeConfig,
@@ -44,19 +44,9 @@ async fn run(
     model_path: std::path::PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = SippClient::new();
-    let endpoint = client
-        .add(
-            "default",
-            EndpointDescriptor::LocalModel(LocalModelDescriptor {
-                source: ModelSource::Local {
-                    model_paths: vec![model_path],
-                    projector_path: None,
-                },
-                storage_root: ".sipp-models".into(),
-                config: runtime_config(),
-            }),
-        )
-        .await?;
+    let mut descriptor = LocalEndpointDescriptor::files([model_path]);
+    descriptor.config = runtime_config();
+    let endpoint = client.add("default", descriptor).await?;
 
     let response = client
         .query(SippQueryRequest {
@@ -105,8 +95,8 @@ fn runtime_config() -> NativeRuntimeConfig {
 Register endpoints with `add(id, descriptor)`, keep the returned `EndpointRef`,
 and pass that reference on each request when routing must be explicit.
 
-Gateway clients use `EndpointDescriptor::gateway` when a Rust application calls
-a separate Sipp gateway.
+Gateway clients pass a `GatewayEndpointDescriptor` when a Rust application
+calls a separate Sipp gateway.
 
 ## Learn More
 

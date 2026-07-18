@@ -10,7 +10,7 @@ import {
   EXAMPLE_LOCAL_ENDPOINT,
   formatTextResult,
   readMaxTokens,
-  readModelSource,
+  readLocalEndpointDescriptor,
   readPrompt,
   readGatewayConfig,
   renderGatewayLocalPage,
@@ -24,19 +24,19 @@ let localModelLoaded = false;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const source = readModelSource(elements.modelInput, elements.modelFileInput);
-  if (source == null) {
+  const descriptor = readLocalEndpointDescriptor(
+    elements.modelInput,
+    elements.modelFileInput,
+    { runtime: runtimeConfig() }
+  );
+  if (descriptor == null) {
     write(elements.localOutput, 'Enter a GGUF model URL, path, or file.');
     return;
   }
 
   try {
     write(elements.localOutput, 'Loading browser model...');
-    await localClient.add(EXAMPLE_LOCAL_ENDPOINT.id, {
-      kind: 'local',
-      source,
-      options: { runtime: runtimeConfig() },
-    });
+    await localClient.add(EXAMPLE_LOCAL_ENDPOINT.id, descriptor);
     const info = localClient.currentLocal();
     if (info == null) throw new Error('Local model did not become active.');
     localModelLoaded = true;

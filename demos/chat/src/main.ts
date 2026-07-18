@@ -16,6 +16,7 @@ import {
 } from './chat-state.js';
 import {
   CURATED_MODELS,
+  localEndpointDescriptor,
   projectorRequirementMessage,
   resolveModelSelection,
   type ModelSelection,
@@ -298,10 +299,9 @@ async function loadSelectedModel(): Promise<void> {
 
   const nextClient = new SippClient({ wasmThreading: 'pthread' });
   try {
-    await nextClient.add('chat-model', {
-      kind: 'local',
-      source: resolved.source,
-      options: {
+    await nextClient.add(
+      'chat-model',
+      localEndpointDescriptor(resolved.location, {
         backend: 'webgpu',
         observability: 'runtime',
         runtime: DEFAULT_RUNTIME,
@@ -317,8 +317,8 @@ async function loadSelectedModel(): Promise<void> {
             loadProgress.value = percent;
           }
         },
-      },
-    });
+      })
+    );
     const info =
       nextClient.currentLocal() ??
       nextClient.observability.current().model;

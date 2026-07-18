@@ -10,9 +10,9 @@ use sipp::engine::{
 };
 use sipp::engine::{ChatMessage, ChatRole};
 use sipp::{
-    EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
-    GatewayTimeoutPolicy, LocalModelDescriptor, LocalTextOptions, ModelSource, SippChatRequest,
-    SippClient, SippTextOptions, SippTextResponse, SippTextRun,
+    GatewayAuthentication, GatewayEndpointDescriptor, GatewayRoutes, GatewaySecret,
+    GatewayTimeoutPolicy, LocalEndpointDescriptor, LocalTextOptions, SippChatRequest, SippClient,
+    SippTextOptions, SippTextResponse, SippTextRun,
 };
 
 fn main() -> support::ExampleResult<()> {
@@ -24,20 +24,10 @@ fn main() -> support::ExampleResult<()> {
         set_llama_log_quiet(true);
 
         let mut client = SippClient::new();
-        let local_endpoint = client
-            .add(
-                "local",
-                EndpointDescriptor::LocalModel(LocalModelDescriptor {
-                    source: ModelSource::Local {
-                        model_paths: vec![args.model_path],
-                        projector_path: None,
-                    },
-                    storage_root: ".sipp-models".into(),
-                    config: runtime_config(false),
-                }),
-            )
-            .await?;
-        let config = GatewayEndpointConfig {
+        let mut local_descriptor = LocalEndpointDescriptor::files([args.model_path]);
+        local_descriptor.config = runtime_config(false);
+        let local_endpoint = client.add("local", local_descriptor).await?;
+        let descriptor = GatewayEndpointDescriptor {
             target: args.target.clone(),
             base_url: support::required_env("SIPP_GATEWAY_URL")?,
             routes: GatewayRoutes::default(),
@@ -48,9 +38,7 @@ fn main() -> support::ExampleResult<()> {
             timeouts: GatewayTimeoutPolicy::default(),
             protocol_options: Default::default(),
         };
-        let gateway_endpoint = client
-            .add("gateway", EndpointDescriptor::gateway(config))
-            .await?;
+        let gateway_endpoint = client.add("gateway", descriptor).await?;
 
         let local_run = client.chat(SippChatRequest {
             endpoint: Some(local_endpoint),
@@ -139,6 +127,7 @@ fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
+        multimodal: Default::default(),
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()

@@ -25,20 +25,21 @@ Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 ## Local GGUF Query
 
 ```ts
-import { SippClient } from '@sipphq/sipp-server';
+import { LocalEndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
-await client.add('default', {
-  kind: 'local',
-  source: { kind: 'local', modelPaths: [process.argv[2]] },
-  storageRoot: '.sipp-models',
-  config: {
-    context: { n_ctx: 2048 },
-    scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
-    cache: { mode: 'live_slot_prefix' },
-    observability: { runtime_metrics: true },
-  },
-});
+await client.add(
+  'default',
+  LocalEndpointDescriptor.files([process.argv[2]], {
+    storageRoot: '.sipp-models',
+    config: {
+      context: { n_ctx: 2048 },
+      scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
+      cache: { mode: 'live_slot_prefix' },
+      observability: { runtime_metrics: true },
+    },
+  })
+);
 
 const run = client.query({
   prompt: 'Explain Sipp in one sentence.',

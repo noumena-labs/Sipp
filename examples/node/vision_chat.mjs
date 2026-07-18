@@ -15,17 +15,23 @@ import {
 } from './_support.mjs';
 
 const { model, projector, image, input } = readVisionArgs('Describe this image in one sentence.');
-const { SippClient, backendObservabilityJson, setLlamaLogQuiet } = native;
+const {
+  LocalEndpointDescriptor,
+  SippClient,
+  backendObservabilityJson,
+  setLlamaLogQuiet,
+} = native;
 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
-await client.add('default', {
-  kind: 'local',
-  source: { kind: 'local', modelPaths: [model], projectorPath: projector },
-  storageRoot: '.sipp-models',
-  config: runtimeConfig({ embeddings: false }),
-});
+await client.add(
+  'default',
+  LocalEndpointDescriptor.files([model], {
+    projectorPath: projector,
+    config: runtimeConfig({ embeddings: false }),
+  })
+);
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // Multimodal chat uses the same chat API. The projector is in runtime config;

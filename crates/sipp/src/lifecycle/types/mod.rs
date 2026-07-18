@@ -8,9 +8,10 @@ mod runtime;
 pub use crate::shard::{GgufMetadataInspection, ModelDetection, ModelDetectionMethod};
 pub use assets::{AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind};
 pub use error::ModelError;
+pub(crate) use model::ModelSource;
 pub use model::{
     ClassifiedAsset, ModelEntry, ModelInfo, ModelModality, ModelPairing, ModelPairingReason,
-    ModelPairingState, ModelSource, ModelSourceKind, ModelStatus, PairingPlan, RegistryManifest,
+    ModelPairingState, ModelSourceKind, ModelStatus, PairingPlan, RegistryManifest,
     REGISTRY_MANIFEST_VERSION,
 };
 pub use runtime::{

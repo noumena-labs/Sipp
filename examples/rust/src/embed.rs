@@ -7,10 +7,7 @@ use sipp::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, PoolingType, ResidencyRuntimeConfig,
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
-use sipp::{
-    EndpointDescriptor, LocalEmbedOptions, LocalModelDescriptor, ModelSource, SippClient,
-    SippEmbedRequest,
-};
+use sipp::{LocalEmbedOptions, LocalEndpointDescriptor, SippClient, SippEmbedRequest};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
@@ -18,19 +15,9 @@ fn main() -> support::ExampleResult<()> {
         set_llama_log_quiet(true);
 
         let mut client = SippClient::new();
-        client
-            .add(
-                "default",
-                EndpointDescriptor::LocalModel(LocalModelDescriptor {
-                    source: ModelSource::Local {
-                        model_paths: vec![args.model_path],
-                        projector_path: None,
-                    },
-                    storage_root: ".sipp-models".into(),
-                    config: runtime_config(true),
-                }),
-            )
-            .await?;
+        let mut descriptor = LocalEndpointDescriptor::files([args.model_path]);
+        descriptor.config = runtime_config(true);
+        client.add("default", descriptor).await?;
 
         // Embeddings use the same client as text generation. The local runtime
         // is loaded with `embeddings=true`, and this request asks for a
@@ -82,6 +69,7 @@ fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
+        multimodal: Default::default(),
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()

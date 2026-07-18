@@ -1,42 +1,77 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mock } from 'bun:test';
 
 import {
   formatRequestStats,
   toChatMessages,
   type ConversationMessage,
 } from './src/chat-state.ts';
-import {
+
+const LocalEndpointDescriptor = {
+  files(
+    modelFiles: readonly File[],
+    {
+      projectorFile,
+      ...options
+    }: Record<string, unknown> & { readonly projectorFile?: File } = {}
+  ) {
+    return {
+      kind: 'local',
+      location: { kind: 'files', modelFiles, projectorFile },
+      options,
+    };
+  },
+  urls(
+    modelUrls: readonly string[],
+    {
+      projectorUrl,
+      ...options
+    }: Record<string, unknown> & { readonly projectorUrl?: string } = {}
+  ) {
+    return {
+      kind: 'local',
+      location: { kind: 'urls', modelUrls, projectorUrl },
+      options,
+    };
+  },
+  installed(modelId: string, options: Record<string, unknown> = {}) {
+    return { kind: 'local', location: { kind: 'installed', modelId }, options };
+  },
+};
+
+mock.module('@noumena-labs/sipp', () => ({ LocalEndpointDescriptor }));
+
+const {
   getCuratedModel,
+  localEndpointDescriptor,
   projectorRequirementMessage,
   resolveModelSelection,
-} from './src/model-registry.ts';
+} = await import('./src/model-registry.ts');
 
-test('text model selection never includes a projector', () => {
+test('text model selection preserves its curated endpoint descriptor', () => {
   const resolved = resolveModelSelection({
     kind: 'curated',
     modelId: 'qwen2.5-0.5b-instruct',
   });
 
   assert.equal(resolved.capability, 'text');
-  assert.equal(resolved.source.kind, 'remote');
-  assert.equal(resolved.source.modelUrls.length, 1);
+  assert.equal(resolved.location, getCuratedModel('qwen2.5-0.5b-instruct').location);
 });
 
-test('curated vision selection owns its hidden projector source', () => {
+test('vision model selection preserves its curated endpoint descriptor', () => {
   const resolved = resolveModelSelection({
     kind: 'curated',
     modelId: 'lfm2.5-vl-450m',
   });
 
   assert.equal(resolved.capability, 'vision');
-  assert.equal(resolved.source.kind, 'remote');
-  assert.match(resolved.source.projectorUrl ?? '', /mmproj-LFM2\.5-VL-450m-F16\.gguf$/);
+  assert.equal(resolved.location, getCuratedModel('lfm2.5-vl-450m').location);
 });
 
 test('custom URL selection remains model-only after curated vision selection', () => {
   const vision = getCuratedModel('lfm2.5-vl-450m');
-  assert.equal(vision.source.kind, 'remote');
+  assert.equal(vision.location.kind, 'urls');
 
   const custom = resolveModelSelection({
     kind: 'custom-url',
@@ -44,10 +79,10 @@ test('custom URL selection remains model-only after curated vision selection', (
   });
 
   assert.equal(custom.capability, 'text');
-  assert.deepEqual(custom.source, {
-    kind: 'remote',
-    modelUrls: ['https://models.example.test/custom.gguf'],
-  });
+  assert.deepEqual(
+    localEndpointDescriptor(custom.location, {}),
+    LocalEndpointDescriptor.urls(['https://models.example.test/custom.gguf'])
+  );
   assert.equal(custom.custom, true);
 });
 
@@ -55,7 +90,10 @@ test('custom file selection remains model-only', () => {
   const file = new File(['gguf'], 'local-model.gguf');
   const resolved = resolveModelSelection({ kind: 'custom-file', file });
 
-  assert.deepEqual(resolved.source, { kind: 'local', modelFiles: [file] });
+  assert.deepEqual(
+    localEndpointDescriptor(resolved.location, {}),
+    LocalEndpointDescriptor.files([file])
+  );
   assert.equal(resolved.capability, 'text');
 });
 

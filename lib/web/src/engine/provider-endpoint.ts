@@ -98,7 +98,7 @@ export class ProviderEndpointRegistry {
 
   public prepare(id: string, descriptor: ProviderEndpointDescriptor): ProviderEndpoint {
     const normalizedId = normalizeId(id, 'provider id');
-    return normalizeProviderDescriptor(normalizedId, descriptor);
+    return normalizeProviderEndpointDescriptor(normalizedId, descriptor);
   }
 
   public commit(provider: ProviderEndpoint): EndpointRef {
@@ -233,7 +233,7 @@ export async function runProviderEmbedding(
   );
 }
 
-function normalizeProviderDescriptor(
+function normalizeProviderEndpointDescriptor(
   id: string,
   descriptor: ProviderEndpointDescriptor
 ): ProviderEndpoint {
@@ -283,8 +283,8 @@ function normalizeProviderKind(value: unknown): ProviderKind {
   if (value === 'openai' || value === 'anthropic') {
     return value;
   }
-  if (value === 'openai_compatible' || value === 'openai-compatible') {
-    return 'openai_compatible';
+  if (value === 'openai_compatible') {
+    return value;
   }
   throw new QueryError(
     'QUERY_FAILED',

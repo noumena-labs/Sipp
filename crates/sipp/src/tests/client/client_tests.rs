@@ -10,18 +10,16 @@ use std::thread;
 use futures::executor::block_on;
 
 use crate::client::{
-    EndpointDescriptor, EndpointRef, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes,
-    GatewayTimeoutPolicy, LocalModelDescriptor, SippClient, SippError,
+    EndpointRef, GatewayAuthentication, GatewayEndpointDescriptor, GatewayRoutes,
+    GatewayTimeoutPolicy, LocalEndpointDescriptor, SippClient, SippError,
 };
-use crate::engine::NativeRuntimeConfig;
 use crate::lifecycle::test_support::TempDir;
-use crate::lifecycle::{ModelError, ModelSource};
+use crate::lifecycle::ModelError;
 
 #[test]
 fn registers_gateway_endpoint_through_add() {
     let mut client = SippClient::new();
-    let endpoint = block_on(client.add("gateway", EndpointDescriptor::gateway(gateway_config())))
-        .expect("gateway endpoint");
+    let endpoint = block_on(client.add("gateway", gateway_descriptor())).expect("gateway endpoint");
 
     assert_eq!(
         endpoint,
@@ -35,10 +33,9 @@ fn registers_gateway_endpoint_through_add() {
 #[test]
 fn replacing_an_id_keeps_single_registered_endpoint() {
     let mut client = SippClient::new();
-    let first = block_on(client.add("service", EndpointDescriptor::gateway(gateway_config())))
-        .expect("first endpoint");
-    let second = block_on(client.add("service", EndpointDescriptor::gateway(gateway_config())))
-        .expect("replacement endpoint");
+    let first = block_on(client.add("service", gateway_descriptor())).expect("first endpoint");
+    let second =
+        block_on(client.add("service", gateway_descriptor())).expect("replacement endpoint");
 
     assert_eq!(
         first,
@@ -58,8 +55,7 @@ fn replacing_an_id_keeps_single_registered_endpoint() {
 #[test]
 fn gateway_endpoints_are_never_selected_implicitly() {
     let mut client = SippClient::new();
-    block_on(client.add("gateway", EndpointDescriptor::gateway(gateway_config())))
-        .expect("gateway endpoint");
+    block_on(client.add("gateway", gateway_descriptor())).expect("gateway endpoint");
 
     assert!(matches!(
         client.resolve(None, "query"),
@@ -85,18 +81,10 @@ fn remote_add_uses_the_client_owned_io_runtime() {
     });
     let root = TempDir::new("client", "remote-owned-runtime");
     let mut client = SippClient::new();
-    let error = block_on(client.add(
-        "remote",
-        EndpointDescriptor::LocalModel(LocalModelDescriptor {
-            source: ModelSource::Remote {
-                model_urls: vec![format!("http://{address}/model.gguf")],
-                projector_url: None,
-            },
-            storage_root: root.path.clone(),
-            config: NativeRuntimeConfig::default(),
-        }),
-    ))
-    .expect_err("503 metadata response must fail");
+    let mut descriptor = LocalEndpointDescriptor::urls([format!("http://{address}/model.gguf")]);
+    descriptor.storage_root = root.path.clone();
+    let error =
+        block_on(client.add("remote", descriptor)).expect_err("503 metadata response must fail");
     server.join().expect("test server");
 
     assert!(matches!(
@@ -109,8 +97,8 @@ fn remote_add_uses_the_client_owned_io_runtime() {
     ));
 }
 
-fn gateway_config() -> GatewayEndpointConfig {
-    GatewayEndpointConfig {
+fn gateway_descriptor() -> GatewayEndpointDescriptor {
+    GatewayEndpointDescriptor {
         target: "local".to_string(),
         base_url: "http://127.0.0.1:8080".to_string(),
         routes: GatewayRoutes::default(),

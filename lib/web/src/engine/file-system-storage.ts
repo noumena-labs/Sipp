@@ -8,6 +8,26 @@ interface WritableFileSink {
 }
 
 const STREAM_WRITE_BUFFER_BYTES = 4 * 1024 * 1024;
+const DEFAULT_OPFS_ROOT = 'sipp-models';
+
+function storageRootSegments(storageRoot: string): readonly string[] {
+  const trimmed = storageRoot.trim();
+  if (trimmed.length === 0) {
+    throw new Error('OPFS storage root must not be empty.');
+  }
+  const segments = trimmed.split(/[\\/]+/);
+  if (
+    segments.some((segment) =>
+      segment.length === 0 ||
+      segment === '.' ||
+      segment === '..' ||
+      segment.trim() !== segment
+    )
+  ) {
+    throw new Error('OPFS storage root must be a relative directory path.');
+  }
+  return segments;
+}
 
 function toFileSystemWriteChunk(chunk: Uint8Array): Uint8Array<ArrayBuffer> {
   if (chunk.buffer instanceof ArrayBuffer) {
@@ -35,7 +55,11 @@ export interface OpfsSyncAccessHandle {
  */
 export class FileSystemStorage {
   private root: FileSystemDirectoryHandle | null = null;
-  private readonly dirName = 'sipp-models';
+  private readonly rootPath: readonly string[];
+
+  public constructor(storageRoot = DEFAULT_OPFS_ROOT) {
+    this.rootPath = storageRootSegments(storageRoot);
+  }
 
   /**
    * Check if OPFS is supported in the current environment.
@@ -70,8 +94,11 @@ export class FileSystemStorage {
 
   private async ensureRoot(): Promise<FileSystemDirectoryHandle> {
     if (this.root) return this.root;
-    const opfsRoot = await navigator.storage.getDirectory();
-    this.root = await opfsRoot.getDirectoryHandle(this.dirName, { create: true });
+    let directory = await navigator.storage.getDirectory();
+    for (const segment of this.rootPath) {
+      directory = await directory.getDirectoryHandle(segment, { create: true });
+    }
+    this.root = directory;
     return this.root;
   }
 

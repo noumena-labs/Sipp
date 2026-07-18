@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { SippClient, type RuntimeObservation } from '@noumena-labs/sipp';
+import {
+  LocalEndpointDescriptor,
+  SippClient,
+  type RuntimeObservation,
+} from '@noumena-labs/sipp';
 import {
   DEFAULT_DRAWING_DIRECTOR_CONFIG,
   DRAWING_COLORS,
@@ -290,14 +294,10 @@ export default function App() {
       });
 
       setStatus('Downloading vision model and projector...');
-      await nextClient.add('local', {
-        kind: 'local',
-        source: {
-          kind: 'remote',
-          modelUrls: [trimmedModel],
+      await nextClient.add(
+        'local',
+        LocalEndpointDescriptor.urls([trimmedModel], {
           projectorUrl: trimmedProjector,
-        },
-        options: {
           observability: 'runtime',
           onProgress: (progress) => {
             const overallPercent = ingestProgress(progressAgg, progress.phase, progress.assetName, progress.percent);
@@ -347,8 +347,8 @@ export default function App() {
               repeat_penalty: 1.05,
             },
           },
-        },
-      });
+        })
+      );
 
       void clientRef.current?.close();
       clientRef.current = nextClient;

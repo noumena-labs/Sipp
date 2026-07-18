@@ -10,7 +10,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 
 use crate::client::dispatch::InferenceEndpoint;
-use crate::client::gateway::{GatewayAuthentication, GatewayEndpointConfig, GatewaySecret};
+use crate::client::gateway::{GatewayAuthentication, GatewayEndpointDescriptor, GatewaySecret};
 use crate::client::io_executor::IoExecutor;
 use crate::client::{
     validate, EndpointCapabilities, EndpointError, EndpointRef, SippChatRequest, SippEmbedRequest,
@@ -35,23 +35,23 @@ pub(crate) struct GatewayEndpoint {
 impl GatewayEndpoint {
     pub(crate) fn new(
         endpoint: EndpointRef,
-        config: GatewayEndpointConfig,
+        descriptor: GatewayEndpointDescriptor,
         executor: IoExecutor,
     ) -> SippResult<Self> {
-        validate_name(&config.target, "gateway target")?;
-        validate_routes(&config.routes)?;
+        validate_name(&descriptor.target, "gateway target")?;
+        validate_routes(&descriptor.routes)?;
         let transport = GatewayTransport::new(
-            config.base_url,
-            config.authentication,
-            config.static_headers,
-            config.timeouts,
+            descriptor.base_url,
+            descriptor.authentication,
+            descriptor.static_headers,
+            descriptor.timeouts,
         )?;
         Ok(Self {
             endpoint,
             capabilities: EndpointCapabilities::unknown(),
-            target: config.target,
-            routes: config.routes,
-            protocol_options: config.protocol_options,
+            target: descriptor.target,
+            routes: descriptor.routes,
+            protocol_options: descriptor.protocol_options,
             transport,
             executor,
         })

@@ -21,24 +21,20 @@ if the launcher is not active.
 ## Local GGUF Query
 
 ```ts
-import { SippClient } from '@sipphq/sipp';
+import { LocalEndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 const client = new SippClient();
-await client.add('default', {
-  kind: 'local',
-  source: {
-    kind: 'remote',
-    modelUrls: ['/models/model.gguf'],
-  },
-  options: {
+await client.add(
+  'default',
+  LocalEndpointDescriptor.urls(['/models/model.gguf'], {
     runtime: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
       cache: { mode: 'live_slot_prefix' },
       observability: { runtime_metrics: true },
     },
-  },
-});
+  })
+);
 
 const run = client.query('Explain Sipp in one sentence.', {
   emitTokens: true,

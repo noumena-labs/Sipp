@@ -13,9 +13,9 @@ use sipp::lifecycle::{
     BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
 };
 use sipp::{
-    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, LocalModelDescriptor, ModelSource,
+    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, LocalEndpointDescriptor,
     OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig,
-    ProviderEndpointConfig, ProviderSecret, SippClient,
+    ProviderEndpointDescriptor, ProviderSecret, SippClient,
 };
 use sipp_gateway::GatewayRoutes;
 
@@ -546,15 +546,11 @@ impl EndpointConfig {
                 runtime,
             } => {
                 let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
+                let mut descriptor = LocalEndpointDescriptor::files([model.clone()]);
+                descriptor.storage_root = storage_root.clone();
+                descriptor.config = plan.config;
                 Ok((
-                    EndpointDescriptor::LocalModel(LocalModelDescriptor {
-                        source: ModelSource::Local {
-                            model_paths: vec![model.clone()],
-                            projector_path: None,
-                        },
-                        storage_root: storage_root.clone(),
-                        config: plan.config,
-                    }),
+                    EndpointDescriptor::Local(descriptor),
                     TargetSummary {
                         name: target_name.to_string(),
                         kind: TargetKind::Local,
@@ -570,7 +566,7 @@ impl EndpointConfig {
                 base_url,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::provider(ProviderEndpointConfig::OpenAi(
+                EndpointDescriptor::Provider(ProviderEndpointDescriptor::OpenAi(
                     OpenAiProviderConfig {
                         model: model.clone(),
                         api_key: ProviderSecret::new(required_env(api_key_env)?),
@@ -593,7 +589,7 @@ impl EndpointConfig {
                 correlation_header,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::provider(ProviderEndpointConfig::OpenAiCompatible(
+                EndpointDescriptor::Provider(ProviderEndpointDescriptor::OpenAiCompatible(
                     OpenAiCompatibleProviderConfig {
                         model: model.clone(),
                         base_url: base_url.clone(),
@@ -620,7 +616,7 @@ impl EndpointConfig {
                 version,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::provider(ProviderEndpointConfig::Anthropic(
+                EndpointDescriptor::Provider(ProviderEndpointDescriptor::Anthropic(
                     AnthropicProviderConfig {
                         model: model.clone(),
                         api_key: ProviderSecret::new(required_env(api_key_env)?),

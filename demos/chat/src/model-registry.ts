@@ -1,6 +1,21 @@
-import type { ModelSource } from '@noumena-labs/sipp';
+import {
+  LocalEndpointDescriptor,
+  type ModelLoadOptions,
+} from '@noumena-labs/sipp';
 
 export type ModelCapability = 'text' | 'vision';
+
+export type ModelLocation =
+  | {
+      readonly kind: 'files';
+      readonly modelFiles: readonly File[];
+      readonly projectorFile?: File;
+    }
+  | {
+      readonly kind: 'urls';
+      readonly modelUrls: readonly string[];
+      readonly projectorUrl?: string;
+    };
 
 export interface CuratedModel {
   readonly id: string;
@@ -9,7 +24,7 @@ export interface CuratedModel {
   readonly detail: string;
   readonly sizeLabel: string;
   readonly capability: ModelCapability;
-  readonly source: ModelSource;
+  readonly location: ModelLocation;
   readonly recommended?: boolean;
 }
 
@@ -31,7 +46,7 @@ export interface ResolvedModelSelection {
   readonly id: string;
   readonly name: string;
   readonly capability: ModelCapability;
-  readonly source: ModelSource;
+  readonly location: ModelLocation;
   readonly custom: boolean;
 }
 
@@ -44,8 +59,8 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     sizeLabel: '429 MB',
     capability: 'text',
     recommended: true,
-    source: {
-      kind: 'remote',
+    location: {
+      kind: 'urls',
       modelUrls: [
         'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
       ],
@@ -58,8 +73,8 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     detail: 'Q8_0',
     sizeLabel: '386 MB',
     capability: 'text',
-    source: {
-      kind: 'remote',
+    location: {
+      kind: 'urls',
       modelUrls: [
         'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
       ],
@@ -72,8 +87,8 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     detail: 'F16 model and projector',
     sizeLabel: '901 MB',
     capability: 'vision',
-    source: {
-      kind: 'remote',
+    location: {
+      kind: 'urls',
       modelUrls: [
         'https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/LFM2.5-VL-450M-F16.gguf',
       ],
@@ -100,7 +115,7 @@ export function resolveModelSelection(
       id: model.id,
       name: model.name,
       capability: model.capability,
-      source: model.source,
+      location: model.location,
       custom: false,
     };
   }
@@ -113,7 +128,7 @@ export function resolveModelSelection(
       id: `custom-file:${selection.file.name}`,
       name: selection.file.name || 'Local GGUF model',
       capability: 'text',
-      source: { kind: 'local', modelFiles: [selection.file] },
+      location: { kind: 'files', modelFiles: [selection.file] },
       custom: true,
     };
   }
@@ -123,9 +138,25 @@ export function resolveModelSelection(
     id: `custom-url:${url}`,
     name: fileNameFromUrl(url),
     capability: 'text',
-    source: { kind: 'remote', modelUrls: [url] },
+    location: { kind: 'urls', modelUrls: [url] },
     custom: true,
   };
+}
+
+export function localEndpointDescriptor(
+  location: ModelLocation,
+  options: ModelLoadOptions
+): LocalEndpointDescriptor {
+  if (location.kind === 'files') {
+    return LocalEndpointDescriptor.files(location.modelFiles, {
+      ...options,
+      projectorFile: location.projectorFile,
+    });
+  }
+  return LocalEndpointDescriptor.urls(location.modelUrls, {
+    ...options,
+    projectorUrl: location.projectorUrl,
+  });
 }
 
 export function projectorRequirementMessage(

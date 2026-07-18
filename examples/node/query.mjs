@@ -12,7 +12,12 @@ import {
   readLocalArgs,
 } from './_support.mjs';
 
-const { SippClient, backendObservabilityJson, setLlamaLogQuiet } = native;
+const {
+  LocalEndpointDescriptor,
+  SippClient,
+  backendObservabilityJson,
+  setLlamaLogQuiet,
+} = native;
 const { model, input } = readLocalArgs('query', 'Write one sentence about local inference.');
 
 // Keep backend logs quiet so the example output focuses on the response.
@@ -21,12 +26,12 @@ console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 
 // The app owns a client and loads one local GGUF endpoint.
 const client = new SippClient();
-await client.add('default', {
-  kind: 'local',
-  source: { kind: 'local', modelPaths: [model] },
-  storageRoot: '.sipp-models',
-  config: runtimeConfig({ embeddings: false }),
-});
+await client.add(
+  'default',
+  LocalEndpointDescriptor.files([model], {
+    config: runtimeConfig({ embeddings: false }),
+  })
+);
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // `query` is the simplest text-generation call: one prompt in, one response out.

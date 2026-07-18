@@ -9,7 +9,12 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { SippClient, type ModelLoadProgress, type NativeRuntimeConfig } from '@noumena-labs/sipp';
+import {
+  LocalEndpointDescriptor,
+  SippClient,
+  type ModelLoadProgress,
+  type NativeRuntimeConfig,
+} from '@noumena-labs/sipp';
 import {
   CharacterEventBus,
   createCharacterFromConfigUrl,
@@ -168,10 +173,9 @@ export default function App() {
       const client = new SippClient();
 
       setStatus('Downloading and loading model?');
-      await client.add('local', {
-        kind: 'local',
-        source: { kind: 'remote', modelUrls: [args.modelUrl] },
-        options: {
+      await client.add(
+        'local',
+        LocalEndpointDescriptor.urls([args.modelUrl], {
           onProgress: (progress: ModelLoadProgress) => {
             if (progress.phase === 'download') {
               setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);
@@ -180,8 +184,8 @@ export default function App() {
             }
           },
           runtime: AVATAR_RUNTIME,
-        },
-      });
+        })
+      );
 
       const { character } = await createCharacterFromConfigUrl({
         configUrl: DEFAULT_CHARACTER_URL,

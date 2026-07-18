@@ -1,6 +1,8 @@
 import { ModelService } from '../models/model-service.js';
 import { AssetStore } from '../models/asset-store.js';
+import { ModelRegistryStore } from '../models/model-registry-store.js';
 import { QueryError, type TokenBatch } from '../models/types.js';
+import { FileSystemStorage } from '../engine/file-system-storage.js';
 import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import {
@@ -29,6 +31,7 @@ function buildServiceConfig(config: WorkerRuntimeConfig) {
     defaultBackendOverride: config.defaultBackendOverride,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
+    storageRoot: config.storageRoot,
     browserCache: config.browserCache,
     trustedOrigins: config.trustedOrigins,
   };
@@ -50,6 +53,7 @@ function ensureService(config: WorkerRuntimeConfig): ModelService {
       wasmThreading: serviceConfig.wasmThreading,
       moduleOptions: serviceConfig.moduleOptions,
       maxModelBytes: serviceConfig.maxModelBytes,
+      storageRoot: serviceConfig.storageRoot,
       browserCache: serviceConfig.browserCache,
       trustedOrigins: serviceConfig.trustedOrigins,
       executionMode: 'worker',
@@ -58,7 +62,12 @@ function ensureService(config: WorkerRuntimeConfig): ModelService {
       defaultBackendOverride: serviceConfig.defaultBackendOverride,
     }
   );
-  service = new ModelService(runtime, undefined, new AssetStore(undefined, config.browserCache));
+  const storage = new FileSystemStorage(serviceConfig.storageRoot);
+  service = new ModelService(
+    runtime,
+    new ModelRegistryStore(storage),
+    new AssetStore(storage, serviceConfig.browserCache)
+  );
   service.subscribeObservability((event) => {
     post({ kind: 'observability-event', event });
   });

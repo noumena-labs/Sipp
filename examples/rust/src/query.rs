@@ -8,8 +8,7 @@ use sipp::engine::{
     SchedulerRuntimeConfig,
 };
 use sipp::{
-    EndpointDescriptor, LocalModelDescriptor, LocalTextOptions, ModelSource, SippClient,
-    SippQueryRequest, SippTextOptions,
+    LocalEndpointDescriptor, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions,
 };
 
 fn main() -> support::ExampleResult<()> {
@@ -22,19 +21,9 @@ fn main() -> support::ExampleResult<()> {
         // A client can own one or more endpoints. This example adds one local
         // GGUF model and lets requests use it as the default endpoint.
         let mut client = SippClient::new();
-        client
-            .add(
-                "default",
-                EndpointDescriptor::LocalModel(LocalModelDescriptor {
-                    source: ModelSource::Local {
-                        model_paths: vec![args.model_path],
-                        projector_path: None,
-                    },
-                    storage_root: ".sipp-models".into(),
-                    config: runtime_config(false),
-                }),
-            )
-            .await?;
+        let mut descriptor = LocalEndpointDescriptor::files([args.model_path]);
+        descriptor.config = runtime_config(false);
+        client.add("default", descriptor).await?;
 
         // `query` is the simplest text-generation call: one prompt in, one
         // final text response out.
@@ -85,6 +74,7 @@ fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
+        multimodal: Default::default(),
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()

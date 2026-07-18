@@ -1,13 +1,32 @@
 /**
  * Curated model registry for the Sipp browser playground.
  *
- * Each entry is app-facing catalog data. Its client-facing portion is a
- * minimal `SippClient` ModelSource.
+ * Each entry is app-facing catalog data. Its client-facing portion is an
+ * explicit model location used to construct a local endpoint descriptor.
  */
 
-import type { ModelSource } from '@noumena-labs/sipp';
+import {
+  LocalEndpointDescriptor,
+  type ModelLoadOptions,
+} from '@noumena-labs/sipp';
 
 export type ModelCapability = 'text' | 'vision' | 'embedding';
+
+export type ModelLocation =
+  | {
+      readonly kind: 'installed';
+      readonly modelId: string;
+    }
+  | {
+      readonly kind: 'local';
+      readonly modelFiles: readonly File[];
+      readonly projectorFile?: File;
+    }
+  | {
+      readonly kind: 'remote';
+      readonly modelUrls: readonly string[];
+      readonly projectorUrl?: string;
+    };
 
 export interface ModelVariant {
   /** Quantization label (e.g. "Q4_0", "Q4_K_M") */
@@ -16,8 +35,8 @@ export interface ModelVariant {
   sizeBytes: number;
   /** Approximate projector file size in bytes */
   projectorSizeBytes?: number;
-  /** Source consumed by a local client.add(...) descriptor. */
-  source: ModelSource;
+  /** Location consumed by a local client.add(...) descriptor. */
+  location: ModelLocation;
 }
 
 export interface ModelRegistryEntry {
@@ -39,6 +58,26 @@ export interface ModelRegistryEntry {
   defaultVariant?: number;
 }
 
+export function localEndpointDescriptor(
+  location: ModelLocation,
+  options: ModelLoadOptions
+): LocalEndpointDescriptor {
+  switch (location.kind) {
+    case 'installed':
+      return LocalEndpointDescriptor.installed(location.modelId, options);
+    case 'local':
+      return LocalEndpointDescriptor.files(location.modelFiles, {
+        ...options,
+        projectorFile: location.projectorFile,
+      });
+    case 'remote':
+      return LocalEndpointDescriptor.urls(location.modelUrls, {
+        ...options,
+        projectorUrl: location.projectorUrl,
+      });
+  }
+}
+
 // ── Registry ─────────────────────────────────────────────────────────────
 
 export const MODEL_REGISTRY: ModelRegistryEntry[] = [
@@ -53,7 +92,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_0',
         sizeBytes: 397_000_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf'],
         },
@@ -70,7 +109,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_K_M',
         sizeBytes: 1_050_000_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf'],
         },
@@ -87,7 +126,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q8_0',
         sizeBytes: 386_000_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf'],
         },
@@ -105,7 +144,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q5_K_M',
         sizeBytes: 46_300_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/noumenalabs/t5-small-gguf/resolve/main/t5-small-q5_k_m.gguf'],
         },
@@ -124,7 +163,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_K_M',
         sizeBytes: 29_200_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/ChristianAzinn/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5.Q4_K_M.gguf'],
         },
@@ -141,7 +180,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
       {
         quant: 'Q4_K_M',
         sizeBytes: 84_100_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q4_K_M.gguf'],
         },
@@ -161,7 +200,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q4_K_M',
         sizeBytes: 1_400_000_000,
         projectorSizeBytes: 1_500_000_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/Qwen2-VL-2B-Instruct-Q4_K_M.gguf'],
           projectorUrl: 'https://huggingface.co/bartowski/Qwen2-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen2-VL-2B-Instruct-f16.gguf',
@@ -180,7 +219,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q4_K_M',
         sizeBytes: 4_080_000_000,
         projectorSizeBytes: 624_000_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf'],
           projectorUrl: 'https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf',
@@ -199,7 +238,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q8_0',
         sizeBytes: 286_000_000,
         projectorSizeBytes: 360_000_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/SmolVLM-256M-Instruct-Q8_0.gguf'],
           projectorUrl: 'https://huggingface.co/ggml-org/SmolVLM-256M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-256M-Instruct-f16.gguf',
@@ -218,7 +257,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q8_0',
         sizeBytes: 534_000_000,
         projectorSizeBytes: 360_000_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q8_0.gguf'],
           projectorUrl: 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-f16.gguf',
@@ -237,7 +276,7 @@ export const MODEL_REGISTRY: ModelRegistryEntry[] = [
         quant: 'Q4_K_M',
         sizeBytes: 4_680_000_000,
         projectorSizeBytes: 1_040_000_000,
-        source: {
+        location: {
           kind: 'remote',
           modelUrls: ['https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/MiniCPM-V-2_6-Q4_K_M.gguf'],
           projectorUrl: 'https://huggingface.co/llmware/minicpm-2.6-gguf/resolve/main/mmproj-model-f16-2.gguf',
@@ -258,14 +297,14 @@ export function getDefaultVariant(model: ModelRegistryEntry): ModelVariant {
 }
 
 export function getVariantPrimaryUrl(variant: ModelVariant): string {
-  const source = variant.source;
-  switch (source.kind) {
+  const location = variant.location;
+  switch (location.kind) {
     case 'installed':
-      return source.modelId;
+      return location.modelId;
     case 'local':
-      return source.modelFiles[0]?.name || 'model.gguf';
+      return location.modelFiles[0]?.name || 'model.gguf';
     case 'remote':
-      return source.modelUrls[0] ?? 'model.gguf';
+      return location.modelUrls[0] ?? 'model.gguf';
   }
 }
 

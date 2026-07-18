@@ -31,13 +31,14 @@ pub use browser::{
 pub use gguf::detect_model_from_gguf_bytes;
 pub use pairing::PairingResolver;
 pub use registry::{model_entry_from_assets, ModelRegistry, RemovedModel};
-pub use service::{LoadedModelInfo, ModelService};
+pub(crate) use service::ModelService;
 pub use storage::{AssetInstallResult, AssetStore, LocalStorageBackend, StorageBackend};
+pub(crate) use types::ModelSource;
 pub use types::{
     AssetInspection, AssetRecord, AssetRole, AssetSource, BackendPreference, BackendSelection,
     ClassifiedAsset, GgufMetadataInspection, ModelAssetKind, ModelDetection, ModelDetectionMethod,
     ModelEntry, ModelError, ModelInfo, ModelLoadOptions, ModelModality, ModelPairing,
-    ModelPairingReason, ModelPairingState, ModelServiceState, ModelSource, ModelSourceKind,
-    ModelStatus, PairingPlan, RegistryManifest, StatsMode, DEFAULT_MODEL_BACKEND,
-    DEFAULT_MODEL_STATS, REGISTRY_MANIFEST_VERSION,
+    ModelPairingReason, ModelPairingState, ModelServiceState, ModelSourceKind, ModelStatus,
+    PairingPlan, RegistryManifest, StatsMode, DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS,
+    REGISTRY_MANIFEST_VERSION,
 };

@@ -21,16 +21,15 @@ class SippTextRun: pass
 class SippTokenIterator: pass
 class ContextRuntimeConfig: pass
 class EndpointRef: pass
-class GatewayDescriptor: pass
+class GatewayEndpointDescriptor: pass
 class LocalEmbedOptions: pass
-class LocalModelDescriptor: pass
+class LocalEndpointDescriptor: pass
 class LocalTextOptions: pass
-class ModelSource: pass
 class ModelPlacementConfig: pass
 class MultimodalRuntimeConfig: pass
 class NativeRuntimeConfig: pass
 class ObservabilityRuntimeConfig: pass
-class ProviderDescriptor: pass
+class ProviderEndpointDescriptor: pass
 class ProviderError(Exception): pass
 class EndpointError(Exception): pass
 class ModelLifecycleError(Exception): pass
@@ -55,16 +54,20 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert callable(sipp.set_llama_log_quiet)
     assert sipp.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
     assert hasattr(sipp.SippClient, "add")
-    assert hasattr(sipp, "GatewayDescriptor")
-    assert hasattr(sipp, "ModelSource")
+    assert hasattr(sipp, "GatewayEndpointDescriptor")
+    assert hasattr(sipp, "LocalEndpointDescriptor")
+    assert hasattr(sipp.LocalEndpointDescriptor, "files")
+    assert hasattr(sipp.LocalEndpointDescriptor, "urls")
+    assert hasattr(sipp.LocalEndpointDescriptor, "installed")
+    assert hasattr(sipp, "ProviderEndpointDescriptor")
+    assert not hasattr(sipp, "ModelSource")
     assert issubclass(sipp.ModelLifecycleError, Exception)
     assert sipp.SamplingRuntimeOverride is sipp.SamplingRuntimeConfig
-    assert not hasattr(sipp.SippClient, "add_" + "local")
-    assert not hasattr(sipp.SippClient, "add_http_endpoint")
 
 
 def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import sipp
 
@@ -85,11 +88,11 @@ def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(
     thread.start()
 
     try:
+        monkeypatch.chdir(tmp_path)
         host, port = server.server_address
         client = sipp.SippClient()
-        descriptor = sipp.LocalModelDescriptor(
-            sipp.ModelSource.remote([f"http://{host}:{port}/model.gguf"]),
-            tmp_path / "models",
+        descriptor = sipp.LocalEndpointDescriptor.urls(
+            [f"http://{host}:{port}/model.gguf"]
         )
 
         with pytest.raises(sipp.ModelLifecycleError) as caught:

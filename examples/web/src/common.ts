@@ -1,10 +1,11 @@
 import {
+  LocalEndpointDescriptor,
   QueryError,
   type EmbeddingResult,
   type EndpointRef,
   type GatewayEndpointDescriptor,
   type GenerationResult,
-  type ModelSource,
+  type ModelLoadOptions,
 } from '@noumena-labs/sipp';
 import './style.css';
 
@@ -225,16 +226,17 @@ export function renderGatewayLocalPage(defaultPrompt: string): GatewayLocalPageE
   };
 }
 
-export function readModelSource(
+export function readLocalEndpointDescriptor(
   modelInput: HTMLInputElement,
-  fileInput: HTMLInputElement
-): ModelSource | null {
+  fileInput: HTMLInputElement,
+  options: ModelLoadOptions
+): LocalEndpointDescriptor | null {
   const file = fileInput.files?.[0];
   if (file != null) {
-    return { kind: 'local', modelFiles: [file] };
+    return LocalEndpointDescriptor.files([file], options);
   }
   const model = modelInput.value.trim();
-  return model === '' ? null : { kind: 'remote', modelUrls: [model] };
+  return model === '' ? null : LocalEndpointDescriptor.urls([model], options);
 }
 
 export function readPrompt(input: HTMLTextAreaElement): string | null {

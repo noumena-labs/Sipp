@@ -9,8 +9,7 @@ use sipp::engine::{
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
 use sipp::{
-    EndpointDescriptor, LocalModelDescriptor, LocalTextOptions, ModelSource, SippChatRequest,
-    SippClient, SippTextOptions,
+    LocalEndpointDescriptor, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions,
 };
 use std::fs;
 
@@ -21,19 +20,10 @@ fn main() -> support::ExampleResult<()> {
         set_llama_log_quiet(true);
 
         let mut client = SippClient::new();
-        client
-            .add(
-                "default",
-                EndpointDescriptor::LocalModel(LocalModelDescriptor {
-                    source: ModelSource::Local {
-                        model_paths: vec![args.model_path],
-                        projector_path: Some(args.projector_path),
-                    },
-                    storage_root: ".sipp-models".into(),
-                    config: runtime_config(false),
-                }),
-            )
-            .await?;
+        let mut descriptor =
+            LocalEndpointDescriptor::files_with_projector([args.model_path], args.projector_path);
+        descriptor.config = runtime_config(false);
+        client.add("default", descriptor).await?;
 
         // Multimodal chat uses the same chat API. The image bytes travel in
         // local request options, while the projector is part of runtime config.
@@ -96,6 +86,7 @@ fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
+        multimodal: Default::default(),
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()

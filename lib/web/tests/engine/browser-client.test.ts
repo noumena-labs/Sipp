@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { SippClient, QueryError } from '../../src/index.js';
+import {
+  LocalEndpointDescriptor,
+  QueryError,
+  SippClient,
+} from '../../src/index.js';
 import type {
   EndpointDescriptor,
   GatewayEndpointDescriptor,
@@ -322,6 +326,34 @@ test('gateway configuration rejects invalid and unknown fields', async () => {
       error.message === 'unsupported gateway endpoint field: policy'
   );
 
+  await client.close();
+});
+
+test('local endpoints require an explicit descriptor factory', async () => {
+  const descriptor = LocalEndpointDescriptor.urls(
+    ['https://models.example.test/model.gguf'],
+    { observability: 'runtime' }
+  );
+  assert.equal(descriptor.kind, 'local');
+  assert.equal(descriptor.options.observability, 'runtime');
+
+  const client = new SippClient({ executionMode: 'main-thread' });
+  await assert.rejects(
+    client.add(
+      'raw-local',
+      {
+        kind: 'local',
+        source: {
+          kind: 'remote',
+          modelUrls: ['https://models.example.test/model.gguf'],
+        },
+      } as unknown as EndpointDescriptor
+    ),
+    (error) =>
+      error instanceof QueryError &&
+      error.message ===
+        'local endpoint descriptors must be created by LocalEndpointDescriptor'
+  );
   await client.close();
 });
 

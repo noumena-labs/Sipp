@@ -44,9 +44,6 @@ pub mod gateway_core;
 /// Native model lifecycle helpers and backend selection types.
 pub mod lifecycle;
 
-/// Authoritative installed, local, or remote model source.
-pub use self::lifecycle::ModelSource;
-
 #[cfg(feature = "providers")]
 /// Direct provider adapters behind the `providers` feature.
 pub mod providers;

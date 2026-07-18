@@ -12,18 +12,23 @@ import {
   readLocalArgs,
 } from './_support.mjs';
 
-const { SippClient, backendObservabilityJson, setLlamaLogQuiet } = native;
+const {
+  LocalEndpointDescriptor,
+  SippClient,
+  backendObservabilityJson,
+  setLlamaLogQuiet,
+} = native;
 const { model, input } = readLocalArgs('chat', 'Explain the SippClient API in one sentence.');
 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
-await client.add('default', {
-  kind: 'local',
-  source: { kind: 'local', modelPaths: [model] },
-  storageRoot: '.sipp-models',
-  config: runtimeConfig({ embeddings: false }),
-});
+await client.add(
+  'default',
+  LocalEndpointDescriptor.files([model], {
+    config: runtimeConfig({ embeddings: false }),
+  })
+);
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // `chat` sends role-tagged messages and can stream partial token batches.

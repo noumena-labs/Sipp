@@ -105,6 +105,7 @@ function toWorkerRuntimeConfig(config: SippClientOptions): WorkerRuntimeConfig {
     defaultBackendOverride,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
+    storageRoot: config.storageRoot,
     browserCache: config.browserCache,
     trustedOrigins: config.trustedOrigins,
   };
