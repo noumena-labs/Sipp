@@ -13,9 +13,9 @@ use sipp::lifecycle::{
     BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
 };
 use sipp::{
-    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, LocalEndpointDescriptor,
-    OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig,
-    ProviderEndpointDescriptor, ProviderSecret, SippClient,
+    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, LocalDescriptor,
+    OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig, ProviderDescriptor,
+    ProviderSecret, SippClient,
 };
 use sipp_gateway::GatewayRoutes;
 
@@ -546,7 +546,7 @@ impl EndpointConfig {
                 runtime,
             } => {
                 let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
-                let mut descriptor = LocalEndpointDescriptor::files([model.clone()]);
+                let mut descriptor = LocalDescriptor::files([model.clone()]);
                 descriptor.storage_root = storage_root.clone();
                 descriptor.config = plan.config;
                 Ok((
@@ -566,14 +566,12 @@ impl EndpointConfig {
                 base_url,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::Provider(ProviderEndpointDescriptor::OpenAi(
-                    OpenAiProviderConfig {
-                        model: model.clone(),
-                        api_key: ProviderSecret::new(required_env(api_key_env)?),
-                        base_url: base_url.clone(),
-                        timeout: timeout(*timeout_seconds),
-                    },
-                )),
+                EndpointDescriptor::Provider(ProviderDescriptor::OpenAi(OpenAiProviderConfig {
+                    model: model.clone(),
+                    api_key: ProviderSecret::new(required_env(api_key_env)?),
+                    base_url: base_url.clone(),
+                    timeout: timeout(*timeout_seconds),
+                })),
                 TargetSummary {
                     name: target_name.to_string(),
                     kind: TargetKind::OpenAi,
@@ -589,7 +587,7 @@ impl EndpointConfig {
                 correlation_header,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::Provider(ProviderEndpointDescriptor::OpenAiCompatible(
+                EndpointDescriptor::Provider(ProviderDescriptor::OpenAiCompatible(
                     OpenAiCompatibleProviderConfig {
                         model: model.clone(),
                         base_url: base_url.clone(),
@@ -616,7 +614,7 @@ impl EndpointConfig {
                 version,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::Provider(ProviderEndpointDescriptor::Anthropic(
+                EndpointDescriptor::Provider(ProviderDescriptor::Anthropic(
                     AnthropicProviderConfig {
                         model: model.clone(),
                         api_key: ProviderSecret::new(required_env(api_key_env)?),

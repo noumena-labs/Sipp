@@ -276,16 +276,14 @@ ContextRuntimeConfig = _native.ContextRuntimeConfig
 DEFAULT_CONTEXT_KEY = _native.DEFAULT_CONTEXT_KEY
 DEFAULT_MAX_TOKENS = _native.DEFAULT_MAX_TOKENS
 EndpointRef = _native.EndpointRef
-GatewayEndpointDescriptor = _native.GatewayEndpointDescriptor
+EndpointDescriptor = _native.EndpointDescriptor
 LocalEmbedOptions = _native.LocalEmbedOptions
-LocalEndpointDescriptor = _native.LocalEndpointDescriptor
 ModelLifecycleError = _native.ModelLifecycleError
 LocalTextOptions = _native.LocalTextOptions
 ModelPlacementConfig = _native.ModelPlacementConfig
 MultimodalRuntimeConfig = _native.MultimodalRuntimeConfig
 NativeRuntimeConfig = _native.NativeRuntimeConfig
 ObservabilityRuntimeConfig = _native.ObservabilityRuntimeConfig
-ProviderEndpointDescriptor = _native.ProviderEndpointDescriptor
 ProviderError = _native.ProviderError
 EndpointError = _native.EndpointError
 ResidencyRuntimeConfig = _native.ResidencyRuntimeConfig
@@ -308,17 +306,15 @@ __all__ = [
     "ContextRuntimeConfig",
     "DEFAULT_CONTEXT_KEY",
     "DEFAULT_MAX_TOKENS",
+    "EndpointDescriptor",
     "EndpointRef",
-    "GatewayEndpointDescriptor",
     "LocalEmbedOptions",
-    "LocalEndpointDescriptor",
     "ModelLifecycleError",
     "LocalTextOptions",
     "ModelPlacementConfig",
     "MultimodalRuntimeConfig",
     "NativeRuntimeConfig",
     "ObservabilityRuntimeConfig",
-    "ProviderEndpointDescriptor",
     "ProviderError",
     "EndpointError",
     "ResidencyRuntimeConfig",

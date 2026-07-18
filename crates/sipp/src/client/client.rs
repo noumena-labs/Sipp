@@ -14,7 +14,7 @@ use crate::client::local_endpoint::LocalEndpoint;
 #[cfg(all(feature = "providers", not(target_family = "wasm")))]
 use crate::client::provider_endpoint::ProviderEndpoint;
 #[cfg(feature = "providers")]
-use crate::client::ProviderEndpointDescriptor;
+use crate::client::ProviderDescriptor;
 use crate::client::{
     EndpointCapabilities, EndpointDescriptor, EndpointRef, SippChatRequest, SippEmbedRequest,
     SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext, SippResult, SippTextRun,
@@ -78,7 +78,7 @@ impl SippClient {
     #[cfg(not(target_family = "wasm"))]
     async fn acquire_local_engine(
         &mut self,
-        descriptor: crate::client::LocalEndpointDescriptor,
+        descriptor: crate::client::LocalDescriptor,
     ) -> SippResult<SippEngine> {
         self.io_executor()?
             .spawn(async move {
@@ -103,7 +103,7 @@ impl SippClient {
     #[cfg(target_family = "wasm")]
     async fn acquire_local_engine(
         &mut self,
-        descriptor: crate::client::LocalEndpointDescriptor,
+        descriptor: crate::client::LocalDescriptor,
     ) -> SippResult<SippEngine> {
         let mut service = ModelService::local(descriptor.storage_root)?;
         service
@@ -142,7 +142,7 @@ impl SippClient {
     fn register_gateway(
         &mut self,
         id: impl Into<String>,
-        descriptor: crate::client::GatewayEndpointDescriptor,
+        descriptor: crate::client::GatewayDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "gateway id")?;
         let endpoint = EndpointRef::Gateway { id };
@@ -162,7 +162,7 @@ impl SippClient {
     fn register_gateway(
         &mut self,
         id: impl Into<String>,
-        _descriptor: crate::client::GatewayEndpointDescriptor,
+        _descriptor: crate::client::GatewayDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "gateway id")?;
         Err(SippError::UnsupportedOperation {
@@ -175,7 +175,7 @@ impl SippClient {
     fn register_provider(
         &mut self,
         id: impl Into<String>,
-        descriptor: ProviderEndpointDescriptor,
+        descriptor: ProviderDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "provider id")?;
         let endpoint = EndpointRef::Provider { id };
@@ -199,7 +199,7 @@ impl SippClient {
     fn register_provider(
         &mut self,
         id: impl Into<String>,
-        _descriptor: ProviderEndpointDescriptor,
+        _descriptor: ProviderDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "provider id")?;
         Err(SippError::UnsupportedOperation {

@@ -8,9 +8,7 @@ use sipp::engine::{
     ModelPlacementConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig,
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
-use sipp::{
-    LocalEndpointDescriptor, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions,
-};
+use sipp::{LocalDescriptor, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions};
 use std::fs;
 
 fn main() -> support::ExampleResult<()> {
@@ -21,7 +19,7 @@ fn main() -> support::ExampleResult<()> {
 
         let mut client = SippClient::new();
         let mut descriptor =
-            LocalEndpointDescriptor::files_with_projector([args.model_path], args.projector_path);
+            LocalDescriptor::files_with_projector([args.model_path], args.projector_path);
         descriptor.config = runtime_config(false);
         client.add("default", descriptor).await?;
 

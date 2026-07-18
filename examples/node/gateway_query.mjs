@@ -13,7 +13,7 @@ import {
   requiredEnv,
 } from './_support.mjs';
 
-const { LocalEndpointDescriptor, SippClient, setLlamaLogQuiet } = native;
+const { EndpointDescriptor, SippClient, setLlamaLogQuiet } = native;
 const { model, target, input } = readGatewayArgs(
   'gateway_query',
   'Write one sentence about gateway inference.',
@@ -22,22 +22,21 @@ setLlamaLogQuiet(true);
 const client = new SippClient();
 const localEndpoint = await client.add(
   'local',
-  LocalEndpointDescriptor.files([model], {
+  EndpointDescriptor.files([model], {
     config: runtimeConfig({ embeddings: false }),
   })
 );
 
 // The app only needs the gateway URL, gateway bearer token, and public target.
 // Provider credentials or local model paths stay in the gateway process.
-const gatewayEndpoint = await client.add('gateway', {
-  kind: 'gateway',
+const gatewayEndpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target,
   baseUrl: requiredEnv('SIPP_GATEWAY_URL'),
   authentication: {
     kind: 'bearer',
     value: requiredEnv('SIPP_GATEWAY_TOKEN'),
   },
-});
+}));
 
 const local = await client.query({
   endpoint: localEndpoint,

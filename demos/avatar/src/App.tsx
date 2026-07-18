@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  LocalEndpointDescriptor,
+  EndpointDescriptor,
   SippClient,
   type ModelLoadProgress,
   type NativeRuntimeConfig,
@@ -175,7 +175,7 @@ export default function App() {
       setStatus('Downloading and loading model?');
       await client.add(
         'local',
-        LocalEndpointDescriptor.urls([args.modelUrl], {
+        EndpointDescriptor.urls([args.modelUrl], {
           onProgress: (progress: ModelLoadProgress) => {
             if (progress.phase === 'download') {
               setStatus(`Downloading model... ${Math.floor(progress.percent ?? 0)}%`);

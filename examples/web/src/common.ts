@@ -1,9 +1,9 @@
 import {
-  LocalEndpointDescriptor,
+  EndpointDescriptor,
   QueryError,
   type EmbeddingResult,
   type EndpointRef,
-  type GatewayEndpointDescriptor,
+  type GatewayEndpointOptions,
   type GenerationResult,
   type ModelLoadOptions,
 } from '@noumena-labs/sipp';
@@ -48,7 +48,7 @@ export interface GatewayLocalPageElements {
   readonly gatewayOutput: HTMLPreElement;
 }
 
-export type GatewayInputs = Omit<GatewayEndpointDescriptor, 'kind'>;
+export type GatewayInputs = GatewayEndpointOptions;
 
 export interface GatewayInputElements {
   readonly targetInput: HTMLInputElement;
@@ -226,17 +226,17 @@ export function renderGatewayLocalPage(defaultPrompt: string): GatewayLocalPageE
   };
 }
 
-export function readLocalEndpointDescriptor(
+export function readEndpointDescriptor(
   modelInput: HTMLInputElement,
   fileInput: HTMLInputElement,
   options: ModelLoadOptions
-): LocalEndpointDescriptor | null {
+): EndpointDescriptor | null {
   const file = fileInput.files?.[0];
   if (file != null) {
-    return LocalEndpointDescriptor.files([file], options);
+    return EndpointDescriptor.files([file], options);
   }
   const model = modelInput.value.trim();
-  return model === '' ? null : LocalEndpointDescriptor.urls([model], options);
+  return model === '' ? null : EndpointDescriptor.urls([model], options);
 }
 
 export function readPrompt(input: HTMLTextAreaElement): string | null {

@@ -12,7 +12,7 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai
 const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash';
 const OPENAI_DEFAULT_MODEL = 'gpt-5-mini';
 
-const { SippClient } = native;
+const { EndpointDescriptor, SippClient } = native;
 const input =
   process.argv.slice(2).join(' ') || 'Say hello from a direct provider.';
 
@@ -31,8 +31,7 @@ function providerDescriptor() {
   const provider = providerName();
   switch (provider) {
     case 'gemini': {
-      return {
-        kind: 'provider',
+      return EndpointDescriptor.provider({
         provider: 'openai_compatible',
         model: envAny(
           ['SIPP_PROVIDER_MODEL', 'GEMINI_MODEL'],
@@ -41,12 +40,11 @@ function providerDescriptor() {
         baseUrl: env('SIPP_PROVIDER_BASE_URL') ?? GEMINI_BASE_URL,
         apiKey: requiredEnvAny(['SIPP_PROVIDER_API_KEY', 'GEMINI_API_KEY']),
         timeoutMs: providerTimeoutMs(),
-      };
+      });
     }
     case 'openai': {
       const baseUrl = envAny(['SIPP_PROVIDER_BASE_URL', 'OPENAI_BASE_URL']);
-      return {
-        kind: 'provider',
+      return EndpointDescriptor.provider({
         provider: 'openai',
         model: envAny(
           ['SIPP_PROVIDER_MODEL', 'OPENAI_MODEL'],
@@ -55,30 +53,28 @@ function providerDescriptor() {
         apiKey: requiredEnvAny(['SIPP_PROVIDER_API_KEY', 'OPENAI_API_KEY']),
         ...(baseUrl == null ? {} : { baseUrl }),
         timeoutMs: providerTimeoutMs(),
-      };
+      });
     }
     case 'anthropic': {
       const baseUrl = envAny(['SIPP_PROVIDER_BASE_URL', 'ANTHROPIC_BASE_URL']);
       const version = env('ANTHROPIC_VERSION');
-      return {
-        kind: 'provider',
+      return EndpointDescriptor.provider({
         provider: 'anthropic',
         model: requiredEnvAny(['SIPP_PROVIDER_MODEL', 'ANTHROPIC_MODEL']),
         apiKey: requiredEnvAny(['SIPP_PROVIDER_API_KEY', 'ANTHROPIC_API_KEY']),
         ...(baseUrl == null ? {} : { baseUrl }),
         ...(version == null ? {} : { version }),
         timeoutMs: providerTimeoutMs(),
-      };
+      });
     }
     case 'openai_compatible':
-      return {
-        kind: 'provider',
+      return EndpointDescriptor.provider({
         provider: 'openai_compatible',
         model: requiredEnvAny(['SIPP_PROVIDER_MODEL']),
         baseUrl: requiredEnvAny(['SIPP_PROVIDER_BASE_URL']),
         ...openAiCompatibleAuth(),
         timeoutMs: providerTimeoutMs(),
-      };
+      });
     default:
       throw new Error(
         'SIPP_PROVIDER must be gemini, openai, anthropic, or openai_compatible',

@@ -16,7 +16,7 @@ use axum::http::{
 use sipp::engine::{GpuLayerConfig, NativeRuntimeConfig};
 use sipp::lifecycle::{BackendCapabilities, StatsMode};
 use sipp::{
-    EndpointDescriptor, GatewayAuthentication, GatewayEndpointDescriptor, GatewayRoutes,
+    EndpointDescriptor, GatewayAuthentication, GatewayDescriptor, GatewayRoutes,
     GatewayTimeoutPolicy, SippClient,
 };
 use tower::ServiceExt;
@@ -50,7 +50,7 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
     let endpoint = client
         .add(
             "gateway-upstream",
-            EndpointDescriptor::Gateway(GatewayEndpointDescriptor {
+            EndpointDescriptor::Gateway(GatewayDescriptor {
                 target: "upstream".to_string(),
                 base_url: base_url.clone(),
                 routes: GatewayRoutes::default(),

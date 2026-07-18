@@ -244,86 +244,78 @@ export declare const enum PoolingType {
 
 /** Authentication strategy used by a gateway endpoint. */
 export interface GatewayAuthentication {
-  kind: 'none' | 'bearer' | 'header'
-  value?: string
-  headerName?: string
+  readonly kind: 'none' | 'bearer' | 'header'
+  readonly value?: string
+  readonly headerName?: string
 }
 
-/** Descriptor for a client-owned HTTP gateway endpoint. */
-export type GatewayEndpointDescriptor = {
-  kind: 'gateway'
-  target: string
-  baseUrl: string
-  authentication?: GatewayAuthentication
-  staticHeaders?: Array<ProviderStaticHeader>
-  timeoutMs?: number
-  queryRoute?: string
-  chatRoute?: string
-  embedRoute?: string
-  protocolOptions?: Record<string, unknown>
+/** Options for a client-owned HTTP gateway endpoint. */
+export interface GatewayEndpointOptions {
+  readonly target: string
+  readonly baseUrl: string
+  readonly authentication?: GatewayAuthentication
+  readonly staticHeaders?: readonly ProviderStaticHeader[]
+  readonly timeoutMs?: number
+  readonly queryRoute?: string
+  readonly chatRoute?: string
+  readonly embedRoute?: string
+  readonly protocolOptions?: Readonly<Record<string, unknown>>
 }
 
 /** Static HTTP header attached to every request for a provider or gateway endpoint. */
 export interface ProviderStaticHeader {
-  name: string
-  value: string
+  readonly name: string
+  readonly value: string
 }
 
-declare const localEndpointDescriptorBrand: unique symbol
+declare const endpointDescriptorBrand: unique symbol
 
-/** Opaque descriptor for a local model endpoint owned by this client process. */
-export type LocalEndpointDescriptor = {
-  readonly kind: 'local'
-  readonly [localEndpointDescriptorBrand]: true
+/** Opaque endpoint descriptor accepted by the client registration API. */
+export type EndpointDescriptor = {
+  readonly [endpointDescriptorBrand]: true
 }
 
-/** Construct local endpoint descriptors from explicit model locations. */
-export declare const LocalEndpointDescriptor: {
+/** Options shared by local file endpoint descriptors. */
+export interface FileEndpointOptions {
+  readonly projectorPath?: string
+  readonly storageRoot?: string
+  readonly config?: NativeRuntimeConfig
+}
+
+/** Options shared by remote URL endpoint descriptors. */
+export interface UrlEndpointOptions {
+  readonly projectorUrl?: string
+  readonly storageRoot?: string
+  readonly config?: NativeRuntimeConfig
+}
+
+/** Options for an explicitly selected external provider adapter. */
+export interface ProviderEndpointOptions {
+  readonly provider: 'openai' | 'anthropic' | 'openai_compatible'
+  readonly model: string
+  readonly apiKey?: string
+  readonly baseUrl?: string
+  readonly timeoutMs?: number
+  readonly version?: string
+  readonly authHeaderName?: string
+  readonly authHeaderValue?: string
+  readonly staticHeaders?: readonly ProviderStaticHeader[]
+  readonly correlationHeader?: string
+}
+
+/** Construct endpoint descriptors from explicit endpoint configuration. */
+export declare const EndpointDescriptor: {
   files(
     modelPaths: readonly string[],
-    options?: {
-      readonly projectorPath?: string
-      readonly storageRoot?: string
-      readonly config?: NativeRuntimeConfig
-    }
-  ): LocalEndpointDescriptor
+    options?: FileEndpointOptions
+  ): EndpointDescriptor
   urls(
     modelUrls: readonly string[],
-    options?: {
-      readonly projectorUrl?: string
-      readonly storageRoot?: string
-      readonly config?: NativeRuntimeConfig
-    }
-  ): LocalEndpointDescriptor
-  installed(
-    modelId: string,
-    options?: {
-      readonly storageRoot?: string
-      readonly config?: NativeRuntimeConfig
-    }
-  ): LocalEndpointDescriptor
+    options?: UrlEndpointOptions
+  ): EndpointDescriptor
+  gateway(options: GatewayEndpointOptions): EndpointDescriptor
+  provider(options: ProviderEndpointOptions): EndpointDescriptor
 }
-
-/** Descriptor for an explicitly selected external provider adapter. */
-export type ProviderEndpointDescriptor = {
-  kind: 'provider'
-  provider: 'openai' | 'anthropic' | 'openai_compatible'
-  model: string
-  apiKey?: string
-  baseUrl?: string
-  timeoutMs?: number
-  version?: string
-  authHeaderName?: string
-  authHeaderValue?: string
-  staticHeaders?: Array<ProviderStaticHeader>
-  correlationHeader?: string
-}
-
-/** Endpoint descriptors accepted by the built-in client registration API. */
-export type EndpointDescriptor =
-  | LocalEndpointDescriptor
-  | GatewayEndpointDescriptor
-  | ProviderEndpointDescriptor
 
 /** Error raised when native model acquisition or lifecycle processing fails. */
 export interface ModelLifecycleError extends Error {

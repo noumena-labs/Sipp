@@ -8,8 +8,8 @@ use sipp::engine::{
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
 use sipp::{
-    GatewayAuthentication, GatewayEndpointDescriptor, GatewayRoutes, GatewaySecret,
-    GatewayTimeoutPolicy, LocalEmbedOptions, LocalEndpointDescriptor, SippClient, SippEmbedRequest,
+    GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewaySecret, GatewayTimeoutPolicy,
+    LocalDescriptor, LocalEmbedOptions, SippClient, SippEmbedRequest,
 };
 
 fn main() -> support::ExampleResult<()> {
@@ -21,10 +21,10 @@ fn main() -> support::ExampleResult<()> {
         set_llama_log_quiet(true);
 
         let mut client = SippClient::new();
-        let mut local_descriptor = LocalEndpointDescriptor::files([args.model_path]);
+        let mut local_descriptor = LocalDescriptor::files([args.model_path]);
         local_descriptor.config = runtime_config(true);
         let local_endpoint = client.add("local", local_descriptor).await?;
-        let descriptor = GatewayEndpointDescriptor {
+        let descriptor = GatewayDescriptor {
             target: args.target.clone(),
             base_url: support::required_env("SIPP_GATEWAY_URL")?,
             routes: GatewayRoutes::default(),

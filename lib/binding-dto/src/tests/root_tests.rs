@@ -70,7 +70,7 @@ fn query_request_maps_gateway_endpoint_options() {
 }
 
 #[test]
-fn gateway_endpoint_descriptor_maps_through_add_shape() {
+fn gateway_descriptor_maps_through_add_shape() {
     let descriptor_dto = EndpointDescriptor {
         kind: "gateway".to_string(),
         base_url: Some("https://gateway.example.test".to_string()),
@@ -107,7 +107,7 @@ fn gateway_endpoint_descriptor_maps_through_add_shape() {
 }
 
 #[test]
-fn local_endpoint_descriptor_maps_explicit_remote_source_and_storage_root() {
+fn local_descriptor_maps_explicit_remote_source_and_storage_root() {
     let descriptor = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
         kind: "local".to_string(),
         source: Some(ModelSource {
@@ -128,7 +128,7 @@ fn local_endpoint_descriptor_maps_explicit_remote_source_and_storage_root() {
 }
 
 #[test]
-fn local_endpoint_descriptor_defaults_storage_root() {
+fn local_descriptor_defaults_storage_root() {
     let descriptor = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
         kind: "local".to_string(),
         source: Some(ModelSource {
@@ -147,14 +147,14 @@ fn local_endpoint_descriptor_defaults_storage_root() {
 }
 
 #[test]
-fn provider_endpoint_descriptor_rejects_legacy_provider_name() {
+fn provider_descriptor_rejects_unsupported_provider_name() {
     let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
         kind: "provider".to_string(),
         provider: Some("openai-compatible".to_string()),
         model: Some("model-a".to_string()),
         ..EndpointDescriptor::default()
     })
-    .expect_err("legacy provider name");
+    .expect_err("unsupported provider name");
 
     assert!(error
         .to_string()
@@ -162,19 +162,19 @@ fn provider_endpoint_descriptor_rejects_legacy_provider_name() {
 }
 
 #[test]
-fn local_endpoint_rejects_fields_from_another_source_variant() {
+fn local_endpoint_rejects_unknown_source_kind() {
     let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
         kind: "local".to_string(),
         source: Some(ModelSource {
             kind: "installed".to_string(),
-            model_id: Some("model-a".to_string()),
-            model_urls: Some(vec!["https://example.test/model.gguf".to_string()]),
             ..ModelSource::default()
         }),
         ..EndpointDescriptor::default()
     })
-    .expect_err("mixed source fields");
-    assert!(error.to_string().contains("modelUrls"));
+    .expect_err("unknown source kind");
+    assert!(error
+        .to_string()
+        .contains("model source kind must be local or remote"));
 }
 
 #[test]

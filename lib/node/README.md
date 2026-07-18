@@ -25,12 +25,12 @@ Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 ## Local GGUF Query
 
 ```ts
-import { LocalEndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 await client.add(
   'default',
-  LocalEndpointDescriptor.files([process.argv[2]], {
+  EndpointDescriptor.files([process.argv[2]], {
     storageRoot: '.sipp-models',
     config: {
       context: { n_ctx: 2048 },
@@ -57,16 +57,17 @@ console.log(streamed || response.text);
 await client.close();
 ```
 
-Gateway clients use `kind: 'gateway'` descriptors when a Node process calls a
-separate Sipp gateway.
+Gateway clients use `EndpointDescriptor.gateway(...)` when a Node process
+calls a separate Sipp gateway.
 
 ## Gateway Profile Helpers
 
 Use the gateway profile helpers when a Node route should behave like a
-first-party gateway endpoint for browser `kind: 'gateway'` clients:
+first-party gateway endpoint for browser gateway clients:
 
 ```ts
 import {
+  EndpointDescriptor,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -78,15 +79,14 @@ export async function handleQuery(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('gateway', {
-      kind: 'gateway',
+    const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
       target: decoded.target,
       baseUrl: process.env.SIPP_GATEWAY_URL!,
       authentication: {
         kind: 'bearer',
         value: process.env.SIPP_GATEWAY_TOKEN!,
       },
-    });
+    }));
     const run = client.query({ ...decoded.request, endpoint });
     return decoded.stream
       ? gatewayTextStreamResponse(run)

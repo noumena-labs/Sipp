@@ -7,9 +7,7 @@ use sipp::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
 };
-use sipp::{
-    LocalEndpointDescriptor, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions,
-};
+use sipp::{LocalDescriptor, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
@@ -21,7 +19,7 @@ fn main() -> support::ExampleResult<()> {
         // A client can own one or more endpoints. This example adds one local
         // GGUF model and lets requests use it as the default endpoint.
         let mut client = SippClient::new();
-        let mut descriptor = LocalEndpointDescriptor::files([args.model_path]);
+        let mut descriptor = LocalDescriptor::files([args.model_path]);
         descriptor.config = runtime_config(false);
         client.add("default", descriptor).await?;
 

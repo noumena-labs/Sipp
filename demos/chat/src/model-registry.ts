@@ -1,5 +1,5 @@
 import {
-  LocalEndpointDescriptor,
+  EndpointDescriptor,
   type ModelLoadOptions,
 } from '@noumena-labs/sipp';
 
@@ -146,14 +146,14 @@ export function resolveModelSelection(
 export function localEndpointDescriptor(
   location: ModelLocation,
   options: ModelLoadOptions
-): LocalEndpointDescriptor {
+): EndpointDescriptor {
   if (location.kind === 'files') {
-    return LocalEndpointDescriptor.files(location.modelFiles, {
+    return EndpointDescriptor.files(location.modelFiles, {
       ...options,
       projectorFile: location.projectorFile,
     });
   }
-  return LocalEndpointDescriptor.urls(location.modelUrls, {
+  return EndpointDescriptor.urls(location.modelUrls, {
     ...options,
     projectorUrl: location.projectorUrl,
   });

@@ -1,4 +1,9 @@
-import { SippClient, type BrowserTextRun, type EndpointRef } from '@noumena-labs/sipp';
+import {
+  EndpointDescriptor,
+  SippClient,
+  type BrowserTextRun,
+  type EndpointRef,
+} from '@noumena-labs/sipp';
 import {
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_P,
@@ -29,7 +34,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
   const client = new SippClient();
   try {
-    const endpoint = await client.add('gateway', { kind: 'gateway', ...config });
+    const endpoint = await client.add('gateway', EndpointDescriptor.gateway(config));
     const run = client.query(prompt, {
       endpoint,
       emitTokens: true,

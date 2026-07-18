@@ -2,13 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  LocalEndpointDescriptor,
+  EndpointDescriptor,
   QueryError,
   SippClient,
 } from '../../src/index.js';
 import type {
-  EndpointDescriptor,
-  GatewayEndpointDescriptor,
+  GatewayEndpointOptions,
   TokenBatch,
 } from '../../src/index.js';
 
@@ -46,19 +45,17 @@ function textResponse(text: string): Response {
   });
 }
 
-function endpointConfig(
-  overrides: Partial<GatewayEndpointDescriptor> = {}
-): GatewayEndpointDescriptor {
-  return {
-    kind: 'gateway',
+function gateway(overrides: Partial<GatewayEndpointOptions> = {}): EndpointDescriptor {
+  return EndpointDescriptor.gateway({
     target: 'developer-model',
     baseUrl: 'https://inference.example.test',
     authentication: { kind: 'bearer', value: 'endpoint-secret' },
     ...overrides,
-  };
+  });
 }
 
 test('SippClient exposes typed inference and endpoint registration', async () => {
+  assert.deepEqual(Object.keys(EndpointDescriptor), ['files', 'urls', 'gateway', 'provider']);
   const client = new SippClient({ executionMode: 'main-thread' });
 
   assert.equal(typeof client.add, 'function');
@@ -83,7 +80,7 @@ test('gateway query uses custom routes, authentication, headers, and endpoint op
       const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add(
         'custom-http',
-        endpointConfig({
+        gateway({
           routes: {
             query: '/generate',
             chat: '/conversation',
@@ -142,7 +139,7 @@ test('gateway chat and embed preserve typed capabilities', async () => {
       const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add(
         'typed-http',
-        endpointConfig({
+        gateway({
           routes: {
             query: '/query-custom',
             chat: '/chat-custom',
@@ -212,7 +209,7 @@ test('gateway streaming exposes token batches and terminal response', async () =
       const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add(
         'stream-http',
-        endpointConfig({ authentication: { kind: 'none' } })
+        gateway({ authentication: { kind: 'none' } })
       );
       const run = client.query('hello', { endpoint, emitTokens: true });
       const batches: TokenBatch[] = [];
@@ -245,7 +242,7 @@ test('gateway supports custom authentication headers from async providers', asyn
       const client = new SippClient({ executionMode: 'main-thread' });
       const endpoint = await client.add(
         'header-http',
-        endpointConfig({
+        gateway({
           authentication: {
             kind: 'header',
             headerName: 'x-api-key',
@@ -282,7 +279,7 @@ test('gateway errors expose protocol metadata without leaking secrets', async ()
       ),
     async () => {
       const client = new SippClient({ executionMode: 'main-thread' });
-      const endpoint = await client.add('error-http', endpointConfig());
+      const endpoint = await client.add('error-http', gateway());
 
       await assert.rejects(
         client.query('hello', { endpoint }).response,
@@ -306,7 +303,7 @@ test('gateway configuration rejects invalid and unknown fields', async () => {
   await assert.rejects(
     client.add(
       'invalid-url',
-      endpointConfig({ baseUrl: 'http://public.example.test' })
+      gateway({ baseUrl: 'http://public.example.test' })
     ),
     (error) =>
       error instanceof QueryError &&
@@ -316,10 +313,12 @@ test('gateway configuration rejects invalid and unknown fields', async () => {
   await assert.rejects(
     client.add(
       'unknown-field',
-      {
-        ...endpointConfig(),
+      EndpointDescriptor.gateway({
+        target: 'developer-model',
+        baseUrl: 'https://inference.example.test',
+        authentication: { kind: 'none' },
         policy: 'application-owned',
-      } as unknown as EndpointDescriptor
+      } as GatewayEndpointOptions)
     ),
     (error) =>
       error instanceof QueryError &&
@@ -329,13 +328,12 @@ test('gateway configuration rejects invalid and unknown fields', async () => {
   await client.close();
 });
 
-test('local endpoints require an explicit descriptor factory', async () => {
-  const descriptor = LocalEndpointDescriptor.urls(
+test('endpoints require the descriptor factory', async () => {
+  const descriptor = EndpointDescriptor.urls(
     ['https://models.example.test/model.gguf'],
     { observability: 'runtime' }
   );
-  assert.equal(descriptor.kind, 'local');
-  assert.equal(descriptor.options.observability, 'runtime');
+  assert.deepEqual(Object.keys(descriptor), []);
 
   const client = new SippClient({ executionMode: 'main-thread' });
   await assert.rejects(
@@ -351,8 +349,7 @@ test('local endpoints require an explicit descriptor factory', async () => {
     ),
     (error) =>
       error instanceof QueryError &&
-      error.message ===
-        'local endpoint descriptors must be created by LocalEndpointDescriptor'
+      error.message === 'endpoint descriptors must be created by EndpointDescriptor'
   );
   await client.close();
 });
@@ -361,7 +358,7 @@ test('gateway endpoints reject local-only inference options', async () => {
   const client = new SippClient({ executionMode: 'main-thread' });
   const endpoint = await client.add(
     'gateway-options',
-    endpointConfig({ authentication: { kind: 'none' } })
+    gateway({ authentication: { kind: 'none' } })
   );
 
   await assert.rejects(

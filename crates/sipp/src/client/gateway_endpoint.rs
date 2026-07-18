@@ -10,7 +10,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 
 use crate::client::dispatch::InferenceEndpoint;
-use crate::client::gateway::{GatewayAuthentication, GatewayEndpointDescriptor, GatewaySecret};
+use crate::client::gateway::{GatewayAuthentication, GatewayDescriptor, GatewaySecret};
 use crate::client::io_executor::IoExecutor;
 use crate::client::{
     validate, EndpointCapabilities, EndpointError, EndpointRef, SippChatRequest, SippEmbedRequest,
@@ -35,7 +35,7 @@ pub(crate) struct GatewayEndpoint {
 impl GatewayEndpoint {
     pub(crate) fn new(
         endpoint: EndpointRef,
-        descriptor: GatewayEndpointDescriptor,
+        descriptor: GatewayDescriptor,
         executor: IoExecutor,
     ) -> SippResult<Self> {
         validate_name(&descriptor.target, "gateway target")?;

@@ -15,7 +15,7 @@ import {
   type EngineEvent,
   type EngineObservability,
   type EngineState,
-  LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD,
+  ENDPOINT_DESCRIPTOR_PAYLOAD,
   type ModelLifecycleService,
   type ModelInfo,
   type QueryInput,
@@ -118,22 +118,22 @@ export class SippClient implements SippClientShape {
     this.assertOpen();
     const normalizedId = normalizeEndpointId(id, 'endpoint id');
     assertEndpointDescriptor(descriptor);
-    if (descriptor.kind === 'local') {
-      const { source } = descriptor[LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD];
-      await this.#service.load(source, descriptor.options);
+    const payload = descriptor[ENDPOINT_DESCRIPTOR_PAYLOAD];
+    if (payload.kind === 'local') {
+      await this.#service.load(payload.source, payload.options);
       this.#gatewayEndpoints.remove(normalizedId);
       this.#providers.remove(normalizedId);
       const endpoint = { kind: 'local', id: normalizedId } as const;
       this.#localEndpoint = endpoint;
       return endpoint;
     }
-    if (descriptor.kind === 'gateway') {
-      const endpoint = this.#gatewayEndpoints.prepare(normalizedId, descriptor);
+    if (payload.kind === 'gateway') {
+      const endpoint = this.#gatewayEndpoints.prepare(normalizedId, payload.options);
       await this.removeLocalEndpoint(normalizedId);
       this.#providers.remove(normalizedId);
       return this.#gatewayEndpoints.commit(endpoint);
     }
-    const provider = this.#providers.prepare(normalizedId, descriptor);
+    const provider = this.#providers.prepare(normalizedId, payload.options);
     await this.removeLocalEndpoint(normalizedId);
     this.#gatewayEndpoints.remove(normalizedId);
     return this.#providers.commit(provider);
@@ -314,20 +314,15 @@ function normalizeEndpointId(value: unknown, name: string): string {
 }
 
 function assertEndpointDescriptor(value: unknown): asserts value is EndpointDescriptor {
-  if (typeof value !== 'object' || value == null || Array.isArray(value)) {
-    throw new QueryError('QUERY_FAILED', 'endpoint descriptor must be an object');
-  }
-  const kind = (value as { readonly kind?: unknown }).kind;
-  if (kind !== 'local' && kind !== 'gateway' && kind !== 'provider') {
+  if (
+    typeof value !== 'object' ||
+    value == null ||
+    Array.isArray(value) ||
+    !(ENDPOINT_DESCRIPTOR_PAYLOAD in value)
+  ) {
     throw new QueryError(
       'QUERY_FAILED',
-      'endpoint descriptor kind must be local, gateway, or provider'
-    );
-  }
-  if (kind === 'local' && !(LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD in value)) {
-    throw new QueryError(
-      'QUERY_FAILED',
-      'local endpoint descriptors must be created by LocalEndpointDescriptor'
+      'endpoint descriptors must be created by EndpointDescriptor'
     );
   }
 }

@@ -230,9 +230,25 @@ class ProviderError(Exception):
     retry_after_ms: Optional[float]
     raw_body: Any
 
-class GatewayEndpointDescriptor:
-    def __init__(
-        self,
+class EndpointDescriptor:
+    @staticmethod
+    def files(
+        model_paths: Sequence[PathLike],
+        *,
+        projector_path: Optional[PathLike] = None,
+        storage_root: Optional[PathLike] = None,
+        config: Optional[NativeRuntimeConfig] = None,
+    ) -> EndpointDescriptor: ...
+    @staticmethod
+    def urls(
+        model_urls: Sequence[str],
+        *,
+        projector_url: Optional[str] = None,
+        storage_root: Optional[PathLike] = None,
+        config: Optional[NativeRuntimeConfig] = None,
+    ) -> EndpointDescriptor: ...
+    @staticmethod
+    def gateway(
         target: str,
         base_url: str,
         *,
@@ -245,50 +261,9 @@ class GatewayEndpointDescriptor:
         chat_route: Optional[str] = None,
         embed_route: Optional[str] = None,
         protocol_options: Optional[Mapping[str, Any]] = None,
-    ) -> None: ...
-class EndpointRef:
+    ) -> EndpointDescriptor: ...
     @staticmethod
-    def local(id: str) -> EndpointRef: ...
-    @staticmethod
-    def gateway(id: str) -> EndpointRef: ...
-    @staticmethod
-    def provider(id: str) -> EndpointRef: ...
-    @property
-    def kind(self) -> str: ...
-
-class LocalEndpointDescriptor:
-    @staticmethod
-    def files(
-        model_paths: Sequence[PathLike],
-        *,
-        projector_path: Optional[PathLike] = None,
-        storage_root: Optional[PathLike] = None,
-        config: Optional[NativeRuntimeConfig] = None,
-    ) -> LocalEndpointDescriptor: ...
-    @staticmethod
-    def urls(
-        model_urls: Sequence[str],
-        *,
-        projector_url: Optional[str] = None,
-        storage_root: Optional[PathLike] = None,
-        config: Optional[NativeRuntimeConfig] = None,
-    ) -> LocalEndpointDescriptor: ...
-    @staticmethod
-    def installed(
-        model_id: str,
-        *,
-        storage_root: Optional[PathLike] = None,
-        config: Optional[NativeRuntimeConfig] = None,
-    ) -> LocalEndpointDescriptor: ...
-
-class ModelLifecycleError(Exception):
-    code: str
-    status: Optional[int]
-    retry_after_ms: Optional[int]
-
-class ProviderEndpointDescriptor:
-    def __init__(
-        self,
+    def provider(
         provider: Literal["openai", "anthropic", "openai_compatible"],
         model: str,
         *,
@@ -299,13 +274,21 @@ class ProviderEndpointDescriptor:
         auth_header_name: Optional[str] = None,
         auth_header_value: Optional[str] = None,
         static_headers: Optional[Sequence[tuple[str, str]]] = None,
-    ) -> None: ...
+    ) -> EndpointDescriptor: ...
+class EndpointRef:
+    @staticmethod
+    def local(id: str) -> EndpointRef: ...
+    @staticmethod
+    def gateway(id: str) -> EndpointRef: ...
+    @staticmethod
+    def provider(id: str) -> EndpointRef: ...
+    @property
+    def kind(self) -> str: ...
 
-EndpointDescriptor = Union[
-    LocalEndpointDescriptor,
-    ProviderEndpointDescriptor,
-    GatewayEndpointDescriptor,
-]
+class ModelLifecycleError(Exception):
+    code: str
+    status: Optional[int]
+    retry_after_ms: Optional[int]
 
 class SippTextOptions:
     def __init__(

@@ -1,4 +1,9 @@
-import { SippClient, type BrowserEmbeddingRun, type EndpointRef } from '@noumena-labs/sipp';
+import {
+  EndpointDescriptor,
+  SippClient,
+  type BrowserEmbeddingRun,
+  type EndpointRef,
+} from '@noumena-labs/sipp';
 import {
   formatEmbeddingResult,
   readPrompt,
@@ -26,7 +31,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
   const client = new SippClient();
   try {
-    const endpoint = await client.add('gateway', { kind: 'gateway', ...config });
+    const endpoint = await client.add('gateway', EndpointDescriptor.gateway(config));
     const run = client.embed(input, { endpoint });
     await printEmbeddingRun(elements.output, endpoint, run);
   } catch (error) {

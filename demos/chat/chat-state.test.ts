@@ -8,7 +8,7 @@ import {
   type ConversationMessage,
 } from './src/chat-state.ts';
 
-const LocalEndpointDescriptor = {
+const EndpointDescriptor = {
   files(
     modelFiles: readonly File[],
     {
@@ -35,12 +35,9 @@ const LocalEndpointDescriptor = {
       options,
     };
   },
-  installed(modelId: string, options: Record<string, unknown> = {}) {
-    return { kind: 'local', location: { kind: 'installed', modelId }, options };
-  },
 };
 
-mock.module('@noumena-labs/sipp', () => ({ LocalEndpointDescriptor }));
+mock.module('@noumena-labs/sipp', () => ({ EndpointDescriptor }));
 
 const {
   getCuratedModel,
@@ -81,7 +78,7 @@ test('custom URL selection remains model-only after curated vision selection', (
   assert.equal(custom.capability, 'text');
   assert.deepEqual(
     localEndpointDescriptor(custom.location, {}),
-    LocalEndpointDescriptor.urls(['https://models.example.test/custom.gguf'])
+    EndpointDescriptor.urls(['https://models.example.test/custom.gguf'])
   );
   assert.equal(custom.custom, true);
 });
@@ -92,7 +89,7 @@ test('custom file selection remains model-only', () => {
 
   assert.deepEqual(
     localEndpointDescriptor(resolved.location, {}),
-    LocalEndpointDescriptor.files([file])
+    EndpointDescriptor.files([file])
   );
   assert.equal(resolved.capability, 'text');
 });

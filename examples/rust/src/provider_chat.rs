@@ -5,7 +5,7 @@ use std::time::Duration;
 use futures::executor::block_on;
 use sipp::core::{ChatMessage, ChatRole};
 use sipp::{
-    ProviderAuthConfig, ProviderEndpointDescriptor, ProviderSecret, SippChatRequest, SippClient,
+    ProviderAuthConfig, ProviderDescriptor, ProviderSecret, SippChatRequest, SippClient,
     SippTextOptions,
 };
 
@@ -40,9 +40,9 @@ fn main() -> support::ExampleResult<()> {
     })
 }
 
-fn provider_descriptor() -> support::ExampleResult<ProviderEndpointDescriptor> {
+fn provider_descriptor() -> support::ExampleResult<ProviderDescriptor> {
     let descriptor = match provider_name().as_str() {
-        "gemini" => ProviderEndpointDescriptor::openai_compatible(
+        "gemini" => ProviderDescriptor::openai_compatible(
             env_any(
                 &["SIPP_PROVIDER_MODEL", "GEMINI_MODEL"],
                 Some(GEMINI_DEFAULT_MODEL),
@@ -54,7 +54,7 @@ fn provider_descriptor() -> support::ExampleResult<ProviderEndpointDescriptor> {
                 "GEMINI_API_KEY",
             ])?)),
         ),
-        "openai" => ProviderEndpointDescriptor::openai(
+        "openai" => ProviderDescriptor::openai(
             env_any(
                 &["SIPP_PROVIDER_MODEL", "OPENAI_MODEL"],
                 Some(OPENAI_DEFAULT_MODEL),
@@ -64,14 +64,14 @@ fn provider_descriptor() -> support::ExampleResult<ProviderEndpointDescriptor> {
                 "OPENAI_API_KEY",
             ])?),
         ),
-        "anthropic" => ProviderEndpointDescriptor::anthropic(
+        "anthropic" => ProviderDescriptor::anthropic(
             required_env_any(&["SIPP_PROVIDER_MODEL", "ANTHROPIC_MODEL"])?,
             ProviderSecret::new(required_env_any(&[
                 "SIPP_PROVIDER_API_KEY",
                 "ANTHROPIC_API_KEY",
             ])?),
         ),
-        "openai_compatible" => ProviderEndpointDescriptor::openai_compatible(
+        "openai_compatible" => ProviderDescriptor::openai_compatible(
             required_env_any(&["SIPP_PROVIDER_MODEL"])?,
             required_env_any(&["SIPP_PROVIDER_BASE_URL"])?,
             openai_compatible_auth()?,
@@ -85,25 +85,23 @@ fn provider_descriptor() -> support::ExampleResult<ProviderEndpointDescriptor> {
     Ok(apply_provider_overrides(descriptor))
 }
 
-fn apply_provider_overrides(
-    mut descriptor: ProviderEndpointDescriptor,
-) -> ProviderEndpointDescriptor {
+fn apply_provider_overrides(mut descriptor: ProviderDescriptor) -> ProviderDescriptor {
     let timeout = Some(Duration::from_millis(
         support::env_parse("SIPP_PROVIDER_TIMEOUT_MS").unwrap_or(30_000),
     ));
     match &mut descriptor {
-        ProviderEndpointDescriptor::OpenAi(config) => {
+        ProviderDescriptor::OpenAi(config) => {
             config.base_url = support::optional_env("SIPP_PROVIDER_BASE_URL")
                 .or_else(|| support::optional_env("OPENAI_BASE_URL"));
             config.timeout = timeout;
         }
-        ProviderEndpointDescriptor::Anthropic(config) => {
+        ProviderDescriptor::Anthropic(config) => {
             config.base_url = support::optional_env("SIPP_PROVIDER_BASE_URL")
                 .or_else(|| support::optional_env("ANTHROPIC_BASE_URL"));
             config.version = support::optional_env("ANTHROPIC_VERSION");
             config.timeout = timeout;
         }
-        ProviderEndpointDescriptor::OpenAiCompatible(config) => {
+        ProviderDescriptor::OpenAiCompatible(config) => {
             config.timeout = timeout;
         }
     }

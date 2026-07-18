@@ -10,8 +10,8 @@ use std::thread;
 use futures::executor::block_on;
 
 use crate::client::{
-    EndpointRef, GatewayAuthentication, GatewayEndpointDescriptor, GatewayRoutes,
-    GatewayTimeoutPolicy, LocalEndpointDescriptor, SippClient, SippError,
+    EndpointRef, GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewayTimeoutPolicy,
+    LocalDescriptor, SippClient, SippError,
 };
 use crate::lifecycle::test_support::TempDir;
 use crate::lifecycle::ModelError;
@@ -81,7 +81,7 @@ fn remote_add_uses_the_client_owned_io_runtime() {
     });
     let root = TempDir::new("client", "remote-owned-runtime");
     let mut client = SippClient::new();
-    let mut descriptor = LocalEndpointDescriptor::urls([format!("http://{address}/model.gguf")]);
+    let mut descriptor = LocalDescriptor::urls([format!("http://{address}/model.gguf")]);
     descriptor.storage_root = root.path.clone();
     let error =
         block_on(client.add("remote", descriptor)).expect_err("503 metadata response must fail");
@@ -97,8 +97,8 @@ fn remote_add_uses_the_client_owned_io_runtime() {
     ));
 }
 
-fn gateway_descriptor() -> GatewayEndpointDescriptor {
-    GatewayEndpointDescriptor {
+fn gateway_descriptor() -> GatewayDescriptor {
+    GatewayDescriptor {
         target: "local".to_string(),
         base_url: "http://127.0.0.1:8080".to_string(),
         routes: GatewayRoutes::default(),

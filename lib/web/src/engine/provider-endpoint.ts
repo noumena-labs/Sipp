@@ -7,7 +7,7 @@ import {
   type EndpointRef,
   type FinishReason,
   type GenerationResult,
-  type ProviderEndpointDescriptor,
+  type ProviderEndpointOptions,
   type QueryInput,
   type QueryOptions,
   type RequestStats,
@@ -96,9 +96,9 @@ const DEFAULT_ANTHROPIC_MAX_TOKENS = 1024;
 export class ProviderEndpointRegistry {
   readonly #providers = new Map<string, ProviderEndpoint>();
 
-  public prepare(id: string, descriptor: ProviderEndpointDescriptor): ProviderEndpoint {
+  public prepare(id: string, options: ProviderEndpointOptions): ProviderEndpoint {
     const normalizedId = normalizeId(id, 'provider id');
-    return normalizeProviderEndpointDescriptor(normalizedId, descriptor);
+    return normalizeProvider(normalizedId, options);
   }
 
   public commit(provider: ProviderEndpoint): EndpointRef {
@@ -233,24 +233,24 @@ export async function runProviderEmbedding(
   );
 }
 
-function normalizeProviderEndpointDescriptor(
+function normalizeProvider(
   id: string,
-  descriptor: ProviderEndpointDescriptor
+  options: ProviderEndpointOptions
 ): ProviderEndpoint {
-  if (typeof descriptor !== 'object' || descriptor == null || Array.isArray(descriptor)) {
-    throw new QueryError('QUERY_FAILED', 'provider descriptor must be an object');
+  if (typeof options !== 'object' || options == null || Array.isArray(options)) {
+    throw new QueryError('QUERY_FAILED', 'provider options must be an object');
   }
-  const provider = normalizeProviderKind(descriptor.provider);
-  const model = normalizeId(descriptor.model, 'provider model');
-  const timeoutMs = optionalPositiveNumber(descriptor.timeoutMs, 'provider timeoutMs');
-  const baseUrl = providerBaseUrl(provider, descriptor.baseUrl);
+  const provider = normalizeProviderKind(options.provider);
+  const model = normalizeId(options.model, 'provider model');
+  const timeoutMs = optionalPositiveNumber(options.timeoutMs, 'provider timeoutMs');
+  const baseUrl = providerBaseUrl(provider, options.baseUrl);
   validateProviderBaseUrl(baseUrl, 'provider baseUrl');
-  const staticHeaders = normalizeStaticHeaders(descriptor.staticHeaders);
+  const staticHeaders = normalizeStaticHeaders(options.staticHeaders);
   if (provider === 'openai' || provider === 'anthropic') {
     if (
-      descriptor.authHeaderName != null ||
-      descriptor.authHeaderValue != null ||
-      descriptor.authHeaderValueProvider != null ||
+      options.authHeaderName != null ||
+      options.authHeaderValue != null ||
+      options.authHeaderValueProvider != null ||
       staticHeaders.length > 0
     ) {
       throw new QueryError(
@@ -259,7 +259,7 @@ function normalizeProviderEndpointDescriptor(
       );
     }
   }
-  const auth = normalizeProviderAuth(provider, descriptor);
+  const auth = normalizeProviderAuth(provider, options);
   return {
     id,
     provider,
@@ -270,7 +270,7 @@ function normalizeProviderEndpointDescriptor(
     timeoutMs,
     version:
       provider === 'anthropic'
-        ? descriptor.version ?? DEFAULT_ANTHROPIC_VERSION
+        ? options.version ?? DEFAULT_ANTHROPIC_VERSION
         : undefined,
     authHeaderName: auth.authHeaderName,
     authHeaderValue: auth.authHeaderValue,
@@ -323,7 +323,7 @@ function providerBaseUrl(provider: ProviderKind, baseUrl: unknown): string {
 
 function normalizeProviderAuth(
   provider: ProviderKind,
-  descriptor: ProviderEndpointDescriptor
+  options: ProviderEndpointOptions
 ): {
   readonly apiKey?: string;
   readonly keyProvider?: () => string | Promise<string>;
@@ -331,21 +331,21 @@ function normalizeProviderAuth(
   readonly authHeaderValue?: string;
   readonly authHeaderValueProvider?: () => string | Promise<string>;
 } {
-  const hasApiKey = descriptor.apiKey != null;
-  const hasKeyProvider = descriptor.keyProvider != null;
-  const hasHeader = descriptor.authHeaderName != null || descriptor.authHeaderValue != null;
-  const hasHeaderProvider = descriptor.authHeaderValueProvider != null;
+  const hasApiKey = options.apiKey != null;
+  const hasKeyProvider = options.keyProvider != null;
+  const hasHeader = options.authHeaderName != null || options.authHeaderValue != null;
+  const hasHeaderProvider = options.authHeaderValueProvider != null;
   if (provider === 'openai' || provider === 'anthropic') {
     if (hasApiKey === hasKeyProvider) {
       throw new QueryError('QUERY_FAILED', 'provider requires apiKey or keyProvider, not both');
     }
-    if (descriptor.apiKey != null) {
-      validateProviderSecret(descriptor.apiKey, 'provider apiKey');
+    if (options.apiKey != null) {
+      validateProviderSecret(options.apiKey, 'provider apiKey');
     }
-    if (descriptor.keyProvider != null && typeof descriptor.keyProvider !== 'function') {
+    if (options.keyProvider != null && typeof options.keyProvider !== 'function') {
       throw new QueryError('QUERY_FAILED', 'provider keyProvider must be a function');
     }
-    return { apiKey: descriptor.apiKey, keyProvider: descriptor.keyProvider };
+    return { apiKey: options.apiKey, keyProvider: options.keyProvider };
   }
   if (hasApiKey || hasKeyProvider) {
     if (hasApiKey === hasKeyProvider || hasHeader || hasHeaderProvider) {
@@ -355,47 +355,47 @@ function normalizeProviderAuth(
           'authHeaderName with authHeaderValue/authHeaderValueProvider'
       );
     }
-    if (descriptor.apiKey != null) {
-      validateProviderSecret(descriptor.apiKey, 'provider apiKey');
+    if (options.apiKey != null) {
+      validateProviderSecret(options.apiKey, 'provider apiKey');
     }
-    return { apiKey: descriptor.apiKey, keyProvider: descriptor.keyProvider };
+    return { apiKey: options.apiKey, keyProvider: options.keyProvider };
   }
-  if (descriptor.authHeaderName == null) {
+  if (options.authHeaderName == null) {
     throw new QueryError('QUERY_FAILED', 'provider authHeaderName is required');
   }
-  if (typeof descriptor.authHeaderName !== 'string' || descriptor.authHeaderName.trim().length === 0) {
+  if (typeof options.authHeaderName !== 'string' || options.authHeaderName.trim().length === 0) {
     throw new QueryError('QUERY_FAILED', 'provider authHeaderName must not be empty');
   }
-  if (descriptor.authHeaderValue != null && descriptor.authHeaderValueProvider != null) {
+  if (options.authHeaderValue != null && options.authHeaderValueProvider != null) {
     throw new QueryError(
       'QUERY_FAILED',
       'provider must set authHeaderValue or authHeaderValueProvider, not both'
     );
   }
-  if (descriptor.authHeaderValue == null && descriptor.authHeaderValueProvider == null) {
+  if (options.authHeaderValue == null && options.authHeaderValueProvider == null) {
     throw new QueryError(
       'QUERY_FAILED',
       'provider authHeaderValue or authHeaderValueProvider is required'
     );
   }
-  if (descriptor.authHeaderValue != null) {
-    validateProviderSecret(descriptor.authHeaderValue, 'provider authHeaderValue');
+  if (options.authHeaderValue != null) {
+    validateProviderSecret(options.authHeaderValue, 'provider authHeaderValue');
   }
   if (
-    descriptor.authHeaderValueProvider != null &&
-    typeof descriptor.authHeaderValueProvider !== 'function'
+    options.authHeaderValueProvider != null &&
+    typeof options.authHeaderValueProvider !== 'function'
   ) {
     throw new QueryError('QUERY_FAILED', 'provider authHeaderValueProvider must be a function');
   }
   return {
-    authHeaderName: descriptor.authHeaderName,
-    authHeaderValue: descriptor.authHeaderValue,
-    authHeaderValueProvider: descriptor.authHeaderValueProvider,
+    authHeaderName: options.authHeaderName,
+    authHeaderValue: options.authHeaderValue,
+    authHeaderValueProvider: options.authHeaderValueProvider,
   };
 }
 
 function normalizeStaticHeaders(
-  headers: ProviderEndpointDescriptor['staticHeaders']
+  headers: ProviderEndpointOptions['staticHeaders']
 ): readonly { readonly name: string; readonly value: string }[] {
   if (headers == null) {
     return [];

@@ -1,4 +1,5 @@
 import {
+  EndpointDescriptor,
   SippClient,
   type BrowserTextRun,
   type EndpointRef,
@@ -10,7 +11,7 @@ import {
   EXAMPLE_LOCAL_ENDPOINT,
   formatTextResult,
   readMaxTokens,
-  readLocalEndpointDescriptor,
+  readEndpointDescriptor,
   readPrompt,
   readGatewayConfig,
   renderGatewayLocalPage,
@@ -24,7 +25,7 @@ let localModelLoaded = false;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const descriptor = readLocalEndpointDescriptor(
+  const descriptor = readEndpointDescriptor(
     elements.modelInput,
     elements.modelFileInput,
     { runtime: runtimeConfig() }
@@ -61,7 +62,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   try {
     const gatewayEndpoint = await gatewayClient.add(
       'gateway',
-      { kind: 'gateway', ...gateway }
+      EndpointDescriptor.gateway(gateway)
     );
     const maxTokens = readMaxTokens(elements.maxTokensInput);
 

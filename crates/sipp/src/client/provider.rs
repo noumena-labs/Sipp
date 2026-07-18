@@ -68,7 +68,7 @@ impl ProviderAuthConfig {
 
 /// Direct provider endpoint descriptor.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProviderEndpointDescriptor {
+pub enum ProviderDescriptor {
     /// OpenAI API endpoint.
     OpenAi(OpenAiProviderConfig),
     /// Anthropic API endpoint.
@@ -77,7 +77,7 @@ pub enum ProviderEndpointDescriptor {
     OpenAiCompatible(OpenAiCompatibleProviderConfig),
 }
 
-impl ProviderEndpointDescriptor {
+impl ProviderDescriptor {
     /// Create an OpenAI endpoint descriptor.
     pub fn openai(model: impl Into<String>, api_key: ProviderSecret) -> Self {
         Self::OpenAi(OpenAiProviderConfig {

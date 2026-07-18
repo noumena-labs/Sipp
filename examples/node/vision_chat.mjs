@@ -16,7 +16,7 @@ import {
 
 const { model, projector, image, input } = readVisionArgs('Describe this image in one sentence.');
 const {
-  LocalEndpointDescriptor,
+  EndpointDescriptor,
   SippClient,
   backendObservabilityJson,
   setLlamaLogQuiet,
@@ -27,7 +27,7 @@ console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
 await client.add(
   'default',
-  LocalEndpointDescriptor.files([model], {
+  EndpointDescriptor.files([model], {
     projectorPath: projector,
     config: runtimeConfig({ embeddings: false }),
   })

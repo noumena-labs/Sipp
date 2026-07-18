@@ -10,7 +10,7 @@ import {
   type QueryInput,
   type QueryOptions,
   type RequestStats,
-  type GatewayEndpointDescriptor,
+  type GatewayEndpointOptions,
 } from '../models/types.js';
 import { createTimedAbortController } from '../utils/abort.js';
 
@@ -76,7 +76,6 @@ const LOCAL_ONLY_GATEWAY_FIELDS = new Set([
   'local',
 ]);
 const ENDPOINT_CONFIG_FIELDS = new Set([
-  'kind',
   'target',
   'baseUrl',
   'routes',
@@ -104,9 +103,9 @@ const UTF8_DECODER = new TextDecoder();
 export class GatewayEndpointRegistry {
   readonly #endpoints = new Map<string, GatewayEndpoint>();
 
-  public prepare(id: string, config: GatewayEndpointDescriptor): GatewayEndpoint {
+  public prepare(id: string, options: GatewayEndpointOptions): GatewayEndpoint {
     const normalizedId = normalizeId(id, 'endpoint id');
-    return normalizeConfig(normalizedId, config);
+    return normalizeGateway(normalizedId, options);
   }
 
   public commit(endpoint: GatewayEndpoint): EndpointRef {
@@ -225,36 +224,36 @@ export async function runGatewayEmbedding(
   );
 }
 
-function normalizeConfig(id: string, config: GatewayEndpointDescriptor): GatewayEndpoint {
-  if (typeof config !== 'object' || config == null || Array.isArray(config)) {
-    throw new QueryError('QUERY_FAILED', 'gateway endpoint config must be an object');
+function normalizeGateway(id: string, options: GatewayEndpointOptions): GatewayEndpoint {
+  if (typeof options !== 'object' || options == null || Array.isArray(options)) {
+    throw new QueryError('QUERY_FAILED', 'gateway endpoint options must be an object');
   }
-  rejectUnknownEndpointConfigFields(config);
-  const target = normalizeId(config.target, 'endpoint target');
-  if (typeof config.baseUrl !== 'string') {
+  rejectUnknownGatewayFields(options);
+  const target = normalizeId(options.target, 'endpoint target');
+  if (typeof options.baseUrl !== 'string') {
     throw new QueryError('QUERY_FAILED', 'gateway endpoint baseUrl must be a string');
   }
-  const trimmedBaseUrl = config.baseUrl.trim();
+  const trimmedBaseUrl = options.baseUrl.trim();
   if (trimmedBaseUrl.length === 0) {
     throw new QueryError('QUERY_FAILED', 'gateway endpoint baseUrl must not be empty');
   }
-  if (trimmedBaseUrl !== config.baseUrl) {
+  if (trimmedBaseUrl !== options.baseUrl) {
     throw new QueryError(
       'QUERY_FAILED',
       'gateway endpoint baseUrl must not contain surrounding whitespace'
     );
   }
-  const baseUrl = config.baseUrl.replace(/\/+$/, '');
+  const baseUrl = options.baseUrl.replace(/\/+$/, '');
   if (baseUrl.length === 0) {
     throw new QueryError('QUERY_FAILED', 'gateway endpoint baseUrl must not be empty');
   }
   validateEndpointBaseUrl(baseUrl);
-  const authentication = normalizeAuthentication(config.authentication);
+  const authentication = normalizeAuthentication(options.authentication);
   if (
-    config.timeoutMs != null &&
-    (typeof config.timeoutMs !== 'number' ||
-      !Number.isFinite(config.timeoutMs) ||
-      config.timeoutMs <= 0)
+    options.timeoutMs != null &&
+    (typeof options.timeoutMs !== 'number' ||
+      !Number.isFinite(options.timeoutMs) ||
+      options.timeoutMs <= 0)
   ) {
     throw new QueryError('QUERY_FAILED', 'gateway endpoint timeoutMs must be positive');
   }
@@ -263,19 +262,19 @@ function normalizeConfig(id: string, config: GatewayEndpointDescriptor): Gateway
     target,
     baseUrl,
     routes: {
-      query: config.routes?.query ?? '/v1/query',
-      chat: config.routes?.chat ?? '/v1/chat',
-      embed: config.routes?.embed ?? '/v1/embed',
+      query: options.routes?.query ?? '/v1/query',
+      chat: options.routes?.chat ?? '/v1/chat',
+      embed: options.routes?.embed ?? '/v1/embed',
     },
     authentication,
-    staticHeaders: config.staticHeaders ?? {},
-    timeoutMs: config.timeoutMs,
-    protocolOptions: config.protocolOptions ?? {},
+    staticHeaders: options.staticHeaders ?? {},
+    timeoutMs: options.timeoutMs,
+    protocolOptions: options.protocolOptions ?? {},
   };
 }
 
-function rejectUnknownEndpointConfigFields(config: GatewayEndpointDescriptor): void {
-  for (const field of Object.keys(config)) {
+function rejectUnknownGatewayFields(options: GatewayEndpointOptions): void {
+  for (const field of Object.keys(options)) {
     if (!ENDPOINT_CONFIG_FIELDS.has(field)) {
       throw new QueryError('QUERY_FAILED', `unsupported gateway endpoint field: ${field}`);
     }
@@ -283,7 +282,7 @@ function rejectUnknownEndpointConfigFields(config: GatewayEndpointDescriptor): v
 }
 
 function normalizeAuthentication(
-  authentication: GatewayEndpointDescriptor['authentication']
+  authentication: GatewayEndpointOptions['authentication']
 ): GatewayEndpoint['authentication'] {
   if (authentication == null || authentication.kind === 'none') {
     return { kind: 'none' };

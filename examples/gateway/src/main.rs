@@ -19,7 +19,7 @@ use futures_util::{stream, Stream, StreamExt};
 use sipp::engine::{NativeRuntimeConfig, PoolingType};
 use sipp::gateway_core::{GatewayStreamEvent, Operation};
 use sipp::{
-    EndpointRef, LocalEndpointDescriptor, SippClient, SippRequestContext, SippTextResponseFuture,
+    EndpointRef, LocalDescriptor, SippClient, SippRequestContext, SippTextResponseFuture,
     SippTokenBatches,
 };
 use sipp_gateway::{request_id, GatewayCodec, GatewayHttpError, ProtocolCodec};
@@ -42,7 +42,7 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let mut client = SippClient::new();
-    let descriptor = LocalEndpointDescriptor::files([cli.model]);
+    let descriptor = LocalDescriptor::files([cli.model]);
     let text_endpoint = client
         .add("local-text", descriptor.clone())
         .await

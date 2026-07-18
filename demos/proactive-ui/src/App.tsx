@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  LocalEndpointDescriptor,
+  EndpointDescriptor,
   SippClient,
   type RuntimeObservation,
 } from '@noumena-labs/sipp';
@@ -296,7 +296,7 @@ export default function App() {
       setStatus('Downloading vision model and projector...');
       await nextClient.add(
         'local',
-        LocalEndpointDescriptor.urls([trimmedModel], {
+        EndpointDescriptor.urls([trimmedModel], {
           projectorUrl: trimmedProjector,
           observability: 'runtime',
           onProgress: (progress) => {

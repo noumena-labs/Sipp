@@ -8,9 +8,7 @@ use sipp::engine::{
     ModelPlacementConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig,
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
-use sipp::{
-    LocalEndpointDescriptor, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions,
-};
+use sipp::{LocalDescriptor, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
@@ -18,7 +16,7 @@ fn main() -> support::ExampleResult<()> {
         set_llama_log_quiet(true);
 
         let mut client = SippClient::new();
-        let mut descriptor = LocalEndpointDescriptor::files([args.model_path]);
+        let mut descriptor = LocalDescriptor::files([args.model_path]);
         descriptor.config = runtime_config(false);
         client.add("default", descriptor).await?;
 

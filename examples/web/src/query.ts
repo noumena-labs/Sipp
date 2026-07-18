@@ -5,7 +5,7 @@ import {
   EXAMPLE_LOCAL_ENDPOINT,
   formatTextResult,
   readMaxTokens,
-  readLocalEndpointDescriptor,
+  readEndpointDescriptor,
   readPrompt,
   renderLocalPage,
   reportError,
@@ -18,7 +18,7 @@ let modelLoaded = false;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const descriptor = readLocalEndpointDescriptor(
+  const descriptor = readEndpointDescriptor(
     elements.modelInput,
     elements.modelFileInput,
     { runtime: runtimeConfig() }

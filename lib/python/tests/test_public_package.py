@@ -21,15 +21,17 @@ class SippTextRun: pass
 class SippTokenIterator: pass
 class ContextRuntimeConfig: pass
 class EndpointRef: pass
-class GatewayEndpointDescriptor: pass
+class EndpointDescriptor:
+    files = object()
+    urls = object()
+    gateway = object()
+    provider = object()
 class LocalEmbedOptions: pass
-class LocalEndpointDescriptor: pass
 class LocalTextOptions: pass
 class ModelPlacementConfig: pass
 class MultimodalRuntimeConfig: pass
 class NativeRuntimeConfig: pass
 class ObservabilityRuntimeConfig: pass
-class ProviderEndpointDescriptor: pass
 class ProviderError(Exception): pass
 class EndpointError(Exception): pass
 class ModelLifecycleError(Exception): pass
@@ -54,15 +56,29 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert callable(sipp.set_llama_log_quiet)
     assert sipp.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
     assert hasattr(sipp.SippClient, "add")
-    assert hasattr(sipp, "GatewayEndpointDescriptor")
-    assert hasattr(sipp, "LocalEndpointDescriptor")
-    assert hasattr(sipp.LocalEndpointDescriptor, "files")
-    assert hasattr(sipp.LocalEndpointDescriptor, "urls")
-    assert hasattr(sipp.LocalEndpointDescriptor, "installed")
-    assert hasattr(sipp, "ProviderEndpointDescriptor")
+    assert hasattr(sipp, "EndpointDescriptor")
+    assert hasattr(sipp.EndpointDescriptor, "files")
+    assert hasattr(sipp.EndpointDescriptor, "urls")
+    assert hasattr(sipp.EndpointDescriptor, "gateway")
+    assert hasattr(sipp.EndpointDescriptor, "provider")
+    assert not hasattr(sipp.EndpointDescriptor, "installed")
+    assert not hasattr(sipp, "LocalEndpointDescriptor")
+    assert not hasattr(sipp, "GatewayEndpointDescriptor")
+    assert not hasattr(sipp, "ProviderEndpointDescriptor")
     assert not hasattr(sipp, "ModelSource")
     assert issubclass(sipp.ModelLifecycleError, Exception)
     assert sipp.SamplingRuntimeOverride is sipp.SamplingRuntimeConfig
+
+    gateway = sipp.EndpointDescriptor.gateway(
+        "model-a", "http://127.0.0.1:8080"
+    )
+    provider = sipp.EndpointDescriptor.provider(
+        "openai", "model-a", api_key="test-key"
+    )
+    assert type(gateway) is sipp.EndpointDescriptor
+    assert type(provider) is sipp.EndpointDescriptor
+    with pytest.raises(TypeError):
+        sipp.EndpointDescriptor()
 
 
 def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(
@@ -91,7 +107,7 @@ def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(
         monkeypatch.chdir(tmp_path)
         host, port = server.server_address
         client = sipp.SippClient()
-        descriptor = sipp.LocalEndpointDescriptor.urls(
+        descriptor = sipp.EndpointDescriptor.urls(
             [f"http://{host}:{port}/model.gguf"]
         )
 

@@ -36,7 +36,7 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    LocalEndpointDescriptor,
+    EndpointDescriptor,
     LocalTextOptions,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
@@ -47,7 +47,7 @@ from sipp import (
 client = SippClient()
 endpoint = client.add(
     "default",
-    LocalEndpointDescriptor.files(
+    EndpointDescriptor.files(
         [sys.argv[1]],
         config=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
@@ -69,7 +69,7 @@ run = client.query(
 print(run.result()["text"])
 ```
 
-Gateway clients use `GatewayEndpointDescriptor` when a Python service or script calls a
+Gateway clients use `EndpointDescriptor` when a Python service or script calls a
 separate Sipp gateway.
 
 ## Learn More

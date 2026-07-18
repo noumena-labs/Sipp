@@ -44,11 +44,11 @@ export interface ModelLoadProgress {
 }
 
 export interface ModelLoadOptions {
-  signal?: AbortSignal;
-  onProgress?: (progress: ModelLoadProgress) => void;
-  backend?: BrowserBackendPreference;
-  observability?: ObservabilityMode;
-  runtime?: NativeRuntimeConfig;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: ModelLoadProgress) => void;
+  readonly backend?: BrowserBackendPreference;
+  readonly observability?: ObservabilityMode;
+  readonly runtime?: NativeRuntimeConfig;
 }
 
 export type ModelSource =
@@ -459,9 +459,8 @@ export type GatewayAuthentication =
       readonly valueProvider?: GatewaySecretProvider;
     };
 
-/** Browser-safe gateway endpoint descriptor. */
-export interface GatewayEndpointDescriptor {
-  readonly kind: 'gateway';
+/** Options for a browser gateway endpoint. */
+export interface GatewayEndpointOptions {
   /** Target encoded in profile requests. */
   readonly target: string;
   /** Service base URL. */
@@ -478,75 +477,13 @@ export interface GatewayEndpointDescriptor {
   readonly protocolOptions?: EndpointOptions;
 }
 
-/** @internal */
-export const LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD: unique symbol = Symbol(
-  'LocalEndpointDescriptor.payload'
-);
-
-/** @internal */
-export interface LocalEndpointDescriptorPayload {
-  readonly source: ModelSource;
-}
-
-/** Opaque descriptor for a browser-local model endpoint. */
-export interface LocalEndpointDescriptor {
-  readonly kind: 'local';
-  readonly options: ModelLoadOptions;
-  readonly [LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD]: LocalEndpointDescriptorPayload;
-}
-
-/** Construct browser-local endpoint descriptors from explicit model locations. */
-export const LocalEndpointDescriptor = {
-  files(
-    modelFiles: readonly File[],
-    {
-      projectorFile,
-      ...options
-    }: ModelLoadOptions & { readonly projectorFile?: File } = {}
-  ): LocalEndpointDescriptor {
-    return {
-      kind: 'local',
-      [LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD]: {
-        source: { kind: 'local', modelFiles, projectorFile },
-      },
-      options,
-    };
-  },
-
-  urls(
-    modelUrls: readonly string[],
-    {
-      projectorUrl,
-      ...options
-    }: ModelLoadOptions & { readonly projectorUrl?: string } = {}
-  ): LocalEndpointDescriptor {
-    return {
-      kind: 'local',
-      [LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD]: {
-        source: { kind: 'remote', modelUrls, projectorUrl },
-      },
-      options,
-    };
-  },
-
-  installed(modelId: string, options: ModelLoadOptions = {}): LocalEndpointDescriptor {
-    return {
-      kind: 'local',
-      [LOCAL_ENDPOINT_DESCRIPTOR_PAYLOAD]: {
-        source: { kind: 'installed', modelId },
-      },
-      options,
-    };
-  },
-};
-
 export interface ProviderStaticHeader {
   readonly name: string;
   readonly value: string;
 }
 
-export interface ProviderEndpointDescriptor {
-  readonly kind: 'provider';
+/** Options for a direct browser provider endpoint. */
+export interface ProviderEndpointOptions {
   readonly provider: 'openai' | 'anthropic' | 'openai_compatible';
   readonly model: string;
   readonly apiKey?: string;
@@ -560,10 +497,79 @@ export interface ProviderEndpointDescriptor {
   readonly staticHeaders?: readonly ProviderStaticHeader[];
 }
 
-export type EndpointDescriptor =
-  | LocalEndpointDescriptor
-  | GatewayEndpointDescriptor
-  | ProviderEndpointDescriptor;
+/** Options for a browser-local file endpoint. */
+export type FileEndpointOptions = ModelLoadOptions & {
+  readonly projectorFile?: File;
+};
+
+/** Options for a browser-local URL endpoint. */
+export type UrlEndpointOptions = ModelLoadOptions & {
+  readonly projectorUrl?: string;
+};
+
+/** @internal */
+export const ENDPOINT_DESCRIPTOR_PAYLOAD: unique symbol = Symbol('EndpointDescriptor.payload');
+
+type EndpointDescriptorPayload =
+  | {
+      readonly kind: 'local';
+      readonly source: ModelSource;
+      readonly options: ModelLoadOptions;
+    }
+  | {
+      readonly kind: 'gateway';
+      readonly options: GatewayEndpointOptions;
+    }
+  | {
+      readonly kind: 'provider';
+      readonly options: ProviderEndpointOptions;
+    };
+
+/** Opaque endpoint descriptor accepted by the browser client. */
+export interface EndpointDescriptor {
+  readonly [ENDPOINT_DESCRIPTOR_PAYLOAD]: EndpointDescriptorPayload;
+}
+
+/** Construct endpoint descriptors from explicit endpoint configuration. */
+export const EndpointDescriptor = {
+  files(
+    modelFiles: readonly File[],
+    { projectorFile, ...options }: FileEndpointOptions = {}
+  ): EndpointDescriptor {
+    return {
+      [ENDPOINT_DESCRIPTOR_PAYLOAD]: {
+        kind: 'local',
+        source: { kind: 'local', modelFiles, projectorFile },
+        options,
+      },
+    };
+  },
+
+  urls(
+    modelUrls: readonly string[],
+    { projectorUrl, ...options }: UrlEndpointOptions = {}
+  ): EndpointDescriptor {
+    return {
+      [ENDPOINT_DESCRIPTOR_PAYLOAD]: {
+        kind: 'local',
+        source: { kind: 'remote', modelUrls, projectorUrl },
+        options,
+      },
+    };
+  },
+
+  gateway(options: GatewayEndpointOptions): EndpointDescriptor {
+    return {
+      [ENDPOINT_DESCRIPTOR_PAYLOAD]: { kind: 'gateway', options },
+    };
+  },
+
+  provider(options: ProviderEndpointOptions): EndpointDescriptor {
+    return {
+      [ENDPOINT_DESCRIPTOR_PAYLOAD]: { kind: 'provider', options },
+    };
+  },
+};
 
 export type EngineEvent =
   | { type: 'state'; state: EngineState }

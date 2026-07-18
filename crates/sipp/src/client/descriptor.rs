@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use crate::engine::NativeRuntimeConfig;
 use crate::lifecycle::ModelSource;
 
-use crate::client::GatewayEndpointDescriptor;
+use crate::client::GatewayDescriptor;
 #[cfg(feature = "providers")]
-use crate::client::ProviderEndpointDescriptor;
+use crate::client::ProviderDescriptor;
 
 /// Default native registry and managed-asset root for local endpoints.
 pub const DEFAULT_STORAGE_ROOT: &str = ".sipp-models";
@@ -14,36 +14,36 @@ pub const DEFAULT_STORAGE_ROOT: &str = ".sipp-models";
 #[derive(Debug, Clone, PartialEq)]
 pub enum EndpointDescriptor {
     /// Local GGUF model loaded into this process.
-    Local(LocalEndpointDescriptor),
+    Local(LocalDescriptor),
     /// First-party HTTP gateway endpoint.
-    Gateway(GatewayEndpointDescriptor),
+    Gateway(GatewayDescriptor),
     /// Direct provider endpoint using caller-owned credentials.
     #[cfg(feature = "providers")]
-    Provider(ProviderEndpointDescriptor),
+    Provider(ProviderDescriptor),
 }
 
-impl From<LocalEndpointDescriptor> for EndpointDescriptor {
-    fn from(descriptor: LocalEndpointDescriptor) -> Self {
+impl From<LocalDescriptor> for EndpointDescriptor {
+    fn from(descriptor: LocalDescriptor) -> Self {
         Self::Local(descriptor)
     }
 }
 
-impl From<GatewayEndpointDescriptor> for EndpointDescriptor {
-    fn from(descriptor: GatewayEndpointDescriptor) -> Self {
+impl From<GatewayDescriptor> for EndpointDescriptor {
+    fn from(descriptor: GatewayDescriptor) -> Self {
         Self::Gateway(descriptor)
     }
 }
 
 #[cfg(feature = "providers")]
-impl From<ProviderEndpointDescriptor> for EndpointDescriptor {
-    fn from(descriptor: ProviderEndpointDescriptor) -> Self {
+impl From<ProviderDescriptor> for EndpointDescriptor {
+    fn from(descriptor: ProviderDescriptor) -> Self {
         Self::Provider(descriptor)
     }
 }
 
 /// Descriptor for a local GGUF model endpoint.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LocalEndpointDescriptor {
+pub struct LocalDescriptor {
     pub(crate) source: ModelSource,
     /// Lifecycle registry and asset-store root.
     pub storage_root: PathBuf,
@@ -51,7 +51,7 @@ pub struct LocalEndpointDescriptor {
     pub config: NativeRuntimeConfig,
 }
 
-impl LocalEndpointDescriptor {
+impl LocalDescriptor {
     /// Create a local endpoint from host filesystem model files.
     pub fn files<P, I>(model_paths: I) -> Self
     where
@@ -97,13 +97,6 @@ impl LocalEndpointDescriptor {
         Self::from_source(ModelSource::Remote {
             model_urls: model_urls.into_iter().map(Into::into).collect(),
             projector_url: Some(projector_url.into()),
-        })
-    }
-
-    /// Create a local endpoint from a model already present in the model store.
-    pub fn installed(model_id: impl Into<String>) -> Self {
-        Self::from_source(ModelSource::Installed {
-            model_id: model_id.into(),
         })
     }
 

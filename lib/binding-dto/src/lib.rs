@@ -26,18 +26,15 @@ use sipp::runtime::config::{
 use sipp::{
     AnthropicProviderConfig as CoreAnthropicProviderConfig,
     EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
-    GatewayAuthentication as CoreGatewayAuthentication,
-    GatewayEndpointDescriptor as CoreGatewayEndpointDescriptor, GatewayRoutes as CoreGatewayRoutes,
-    GatewaySecret as CoreGatewaySecret, GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy,
-    LocalEmbedOptions as CoreLocalEmbedOptions,
-    LocalEndpointDescriptor as CoreLocalEndpointDescriptor,
-    LocalTextOptions as CoreLocalTextOptions,
+    GatewayAuthentication as CoreGatewayAuthentication, GatewayDescriptor as CoreGatewayDescriptor,
+    GatewayRoutes as CoreGatewayRoutes, GatewaySecret as CoreGatewaySecret,
+    GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy, LocalDescriptor as CoreLocalDescriptor,
+    LocalEmbedOptions as CoreLocalEmbedOptions, LocalTextOptions as CoreLocalTextOptions,
     OpenAiCompatibleProviderConfig as CoreOpenAiCompatibleProviderConfig,
     OpenAiProviderConfig as CoreOpenAiProviderConfig, ProviderAuthConfig as CoreProviderAuthConfig,
-    ProviderEndpointDescriptor as CoreProviderEndpointDescriptor,
-    ProviderSecret as CoreProviderSecret, SippChatRequest as CoreChatRequest,
-    SippEmbedRequest as CoreEmbedRequest, SippQueryRequest as CoreQueryRequest,
-    SippTextOptions as CoreTextOptions,
+    ProviderDescriptor as CoreProviderDescriptor, ProviderSecret as CoreProviderSecret,
+    SippChatRequest as CoreChatRequest, SippEmbedRequest as CoreEmbedRequest,
+    SippQueryRequest as CoreQueryRequest, SippTextOptions as CoreTextOptions,
 };
 use thiserror::Error;
 
@@ -915,12 +912,11 @@ pub struct EndpointDescriptor {
     pub protocol_options: Option<serde_json::Value>,
 }
 
-/// Authoritative local, installed, or remote model source.
+/// Authoritative local or remote model source.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSource {
     pub kind: String,
-    pub model_id: Option<String>,
     pub model_paths: Option<Vec<String>>,
     pub projector_path: Option<String>,
     pub model_urls: Option<Vec<String>>,
@@ -928,27 +924,12 @@ pub struct ModelSource {
 }
 
 impl ModelSource {
-    fn to_local_endpoint_descriptor(&self) -> Result<CoreLocalEndpointDescriptor> {
+    fn to_local_descriptor(&self) -> Result<CoreLocalDescriptor> {
         match self.kind.as_str() {
-            "installed" => {
-                reject_model_source_fields(
-                    self,
-                    &[
-                        ("modelPaths", self.model_paths.is_some()),
-                        ("projectorPath", self.projector_path.is_some()),
-                        ("modelUrls", self.model_urls.is_some()),
-                        ("projectorUrl", self.projector_url.is_some()),
-                    ],
-                )?;
-                Ok(CoreLocalEndpointDescriptor::installed(
-                    required_descriptor_string(self.model_id.as_ref(), "model source modelId")?,
-                ))
-            }
             "local" => {
                 reject_model_source_fields(
                     self,
                     &[
-                        ("modelId", self.model_id.is_some()),
                         ("modelUrls", self.model_urls.is_some()),
                         ("projectorUrl", self.projector_url.is_some()),
                     ],
@@ -961,18 +942,17 @@ impl ModelSource {
                 .map(PathBuf::from)
                 .collect::<Vec<_>>();
                 match &self.projector_path {
-                    Some(projector_path) => Ok(CoreLocalEndpointDescriptor::files_with_projector(
+                    Some(projector_path) => Ok(CoreLocalDescriptor::files_with_projector(
                         model_paths,
                         PathBuf::from(projector_path),
                     )),
-                    None => Ok(CoreLocalEndpointDescriptor::files(model_paths)),
+                    None => Ok(CoreLocalDescriptor::files(model_paths)),
                 }
             }
             "remote" => {
                 reject_model_source_fields(
                     self,
                     &[
-                        ("modelId", self.model_id.is_some()),
                         ("modelPaths", self.model_paths.is_some()),
                         ("projectorPath", self.projector_path.is_some()),
                     ],
@@ -982,16 +962,14 @@ impl ModelSource {
                     "model source modelUrls",
                 )?;
                 match &self.projector_url {
-                    Some(projector_url) => Ok(CoreLocalEndpointDescriptor::urls_with_projector(
+                    Some(projector_url) => Ok(CoreLocalDescriptor::urls_with_projector(
                         model_urls,
                         projector_url,
                     )),
-                    None => Ok(CoreLocalEndpointDescriptor::urls(model_urls)),
+                    None => Ok(CoreLocalDescriptor::urls(model_urls)),
                 }
             }
-            _ => Err(invalid_arg(
-                "model source kind must be installed, local, or remote",
-            )),
+            _ => Err(invalid_arg("model source kind must be local or remote")),
         }
     }
 }
@@ -1056,7 +1034,7 @@ impl EndpointDescriptor {
             .map(CoreNativeRuntimeConfig::try_from)
             .transpose()?
             .unwrap_or_default();
-        let mut descriptor = source.to_local_endpoint_descriptor()?;
+        let mut descriptor = source.to_local_descriptor()?;
         if let Some(storage_root) = &self.storage_root {
             descriptor.storage_root = PathBuf::from(storage_root);
         }
@@ -1085,30 +1063,28 @@ impl EndpointDescriptor {
         assign_if_some(&mut routes.query, self.query_route.clone());
         assign_if_some(&mut routes.chat, self.chat_route.clone());
         assign_if_some(&mut routes.embed, self.embed_route.clone());
-        Ok(CoreEndpointDescriptor::Gateway(
-            CoreGatewayEndpointDescriptor {
-                target: required_descriptor_string(self.target.as_ref(), "gateway target")?,
-                base_url: required_descriptor_string(self.base_url.as_ref(), "gateway baseUrl")?,
-                routes,
-                authentication: gateway_authentication(self.authentication.as_ref())?,
-                static_headers: self
-                    .static_headers
-                    .as_ref()
-                    .map(|headers| {
-                        headers
-                            .iter()
-                            .map(|header| (header.name.clone(), header.value.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                timeouts: CoreGatewayTimeoutPolicy {
-                    connect: timeout,
-                    request: timeout,
-                    read: timeout,
-                },
-                protocol_options: endpoint_options_or_empty(self.protocol_options.clone())?,
+        Ok(CoreEndpointDescriptor::Gateway(CoreGatewayDescriptor {
+            target: required_descriptor_string(self.target.as_ref(), "gateway target")?,
+            base_url: required_descriptor_string(self.base_url.as_ref(), "gateway baseUrl")?,
+            routes,
+            authentication: gateway_authentication(self.authentication.as_ref())?,
+            static_headers: self
+                .static_headers
+                .as_ref()
+                .map(|headers| {
+                    headers
+                        .iter()
+                        .map(|header| (header.name.clone(), header.value.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            timeouts: CoreGatewayTimeoutPolicy {
+                connect: timeout,
+                request: timeout,
+                read: timeout,
             },
-        ))
+            protocol_options: endpoint_options_or_empty(self.protocol_options.clone())?,
+        }))
     }
 
     fn provider_to_core(&self) -> Result<CoreEndpointDescriptor> {
@@ -1141,7 +1117,7 @@ impl EndpointDescriptor {
                     ],
                     "OpenAI provider",
                 )?;
-                CoreProviderEndpointDescriptor::OpenAi(CoreOpenAiProviderConfig {
+                CoreProviderDescriptor::OpenAi(CoreOpenAiProviderConfig {
                     model,
                     api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
                     base_url: self.base_url.clone(),
@@ -1158,7 +1134,7 @@ impl EndpointDescriptor {
                     ],
                     "Anthropic provider",
                 )?;
-                CoreProviderEndpointDescriptor::Anthropic(CoreAnthropicProviderConfig {
+                CoreProviderDescriptor::Anthropic(CoreAnthropicProviderConfig {
                     model,
                     api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
                     base_url: self.base_url.clone(),
@@ -1171,33 +1147,31 @@ impl EndpointDescriptor {
                     &[("version", self.version.is_some())],
                     "OpenAI-compatible provider",
                 )?;
-                CoreProviderEndpointDescriptor::OpenAiCompatible(
-                    CoreOpenAiCompatibleProviderConfig {
-                        model,
-                        base_url: required_descriptor_string(
-                            self.base_url.as_ref(),
-                            "provider baseUrl",
-                        )?,
-                        auth: provider_auth(self)?,
-                        static_headers: self
-                            .static_headers
-                            .as_ref()
-                            .map(|headers| {
-                                headers
-                                    .iter()
-                                    .map(|header| {
-                                        (
-                                            header.name.clone(),
-                                            CoreProviderSecret::new(header.value.clone()),
-                                        )
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
-                        correlation_header: self.correlation_header.clone(),
-                        timeout,
-                    },
-                )
+                CoreProviderDescriptor::OpenAiCompatible(CoreOpenAiCompatibleProviderConfig {
+                    model,
+                    base_url: required_descriptor_string(
+                        self.base_url.as_ref(),
+                        "provider baseUrl",
+                    )?,
+                    auth: provider_auth(self)?,
+                    static_headers: self
+                        .static_headers
+                        .as_ref()
+                        .map(|headers| {
+                            headers
+                                .iter()
+                                .map(|header| {
+                                    (
+                                        header.name.clone(),
+                                        CoreProviderSecret::new(header.value.clone()),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    correlation_header: self.correlation_header.clone(),
+                    timeout,
+                })
             }
             _ => {
                 return Err(invalid_arg(

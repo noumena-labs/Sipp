@@ -11,7 +11,7 @@ import {
   requiredEnv,
 } from './_support.mjs';
 
-const { LocalEndpointDescriptor, SippClient, setLlamaLogQuiet } = native;
+const { EndpointDescriptor, SippClient, setLlamaLogQuiet } = native;
 const { model, target, input } = readGatewayArgs(
   'gateway_embed',
   'SippClient gateway embedding example input.',
@@ -20,19 +20,18 @@ setLlamaLogQuiet(true);
 const client = new SippClient();
 const localEndpoint = await client.add(
   'local',
-  LocalEndpointDescriptor.files([model], {
+  EndpointDescriptor.files([model], {
     config: runtimeConfig({ embeddings: true }),
   })
 );
-const gatewayEndpoint = await client.add('gateway', {
-  kind: 'gateway',
+const gatewayEndpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target,
   baseUrl: requiredEnv('SIPP_GATEWAY_URL'),
   authentication: {
     kind: 'bearer',
     value: requiredEnv('SIPP_GATEWAY_TOKEN'),
   },
-});
+}));
 
 const local = await client.embed({
   endpoint: localEndpoint,

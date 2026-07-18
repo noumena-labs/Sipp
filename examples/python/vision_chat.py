@@ -8,7 +8,7 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    LocalEndpointDescriptor,
+    EndpointDescriptor,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
@@ -70,7 +70,7 @@ def main() -> None:
     client = SippClient()
     client.add(
         "default",
-        LocalEndpointDescriptor.files(
+        EndpointDescriptor.files(
             [model],
             projector_path=projector,
             config=runtime_config(),
