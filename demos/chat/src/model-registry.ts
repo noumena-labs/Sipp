@@ -1,6 +1,22 @@
-import type { ModelSource } from '@noumena-labs/sipp';
+import {
+  type ManagedModel,
+  type ModelInstallOptions,
+  type SippClient,
+} from '@noumena-labs/sipp';
 
 export type ModelCapability = 'text' | 'vision';
+
+export type ModelLocation =
+  | {
+      readonly kind: 'files';
+      readonly modelFiles: readonly File[];
+      readonly projectorFile?: File;
+    }
+  | {
+      readonly kind: 'urls';
+      readonly modelUrls: readonly string[];
+      readonly projectorUrl?: string;
+    };
 
 export interface CuratedModel {
   readonly id: string;
@@ -9,7 +25,7 @@ export interface CuratedModel {
   readonly detail: string;
   readonly sizeLabel: string;
   readonly capability: ModelCapability;
-  readonly source: ModelSource;
+  readonly location: ModelLocation;
   readonly recommended?: boolean;
 }
 
@@ -31,7 +47,7 @@ export interface ResolvedModelSelection {
   readonly id: string;
   readonly name: string;
   readonly capability: ModelCapability;
-  readonly source: ModelSource;
+  readonly location: ModelLocation;
   readonly custom: boolean;
 }
 
@@ -44,8 +60,12 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     sizeLabel: '429 MB',
     capability: 'text',
     recommended: true,
-    source:
-      'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
+    location: {
+      kind: 'urls',
+      modelUrls: [
+        'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf',
+      ],
+    },
   },
   {
     id: 'smollm2-360m-instruct',
@@ -54,8 +74,12 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     detail: 'Q8_0',
     sizeLabel: '386 MB',
     capability: 'text',
-    source:
-      'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
+    location: {
+      kind: 'urls',
+      modelUrls: [
+        'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf',
+      ],
+    },
   },
   {
     id: 'lfm2.5-vl-450m',
@@ -64,10 +88,12 @@ export const CURATED_MODELS: readonly CuratedModel[] = [
     detail: 'F16 model and projector',
     sizeLabel: '901 MB',
     capability: 'vision',
-    source: {
-      model:
+    location: {
+      kind: 'urls',
+      modelUrls: [
         'https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/LFM2.5-VL-450M-F16.gguf',
-      projector:
+      ],
+      projectorUrl:
         'https://huggingface.co/LiquidAI/LFM2.5-VL-450M-GGUF/resolve/main/mmproj-LFM2.5-VL-450m-F16.gguf',
     },
   },
@@ -90,7 +116,7 @@ export function resolveModelSelection(
       id: model.id,
       name: model.name,
       capability: model.capability,
-      source: model.source,
+      location: model.location,
       custom: false,
     };
   }
@@ -103,7 +129,7 @@ export function resolveModelSelection(
       id: `custom-file:${selection.file.name}`,
       name: selection.file.name || 'Local GGUF model',
       capability: 'text',
-      source: selection.file,
+      location: { kind: 'files', modelFiles: [selection.file] },
       custom: true,
     };
   }
@@ -113,9 +139,26 @@ export function resolveModelSelection(
     id: `custom-url:${url}`,
     name: fileNameFromUrl(url),
     capability: 'text',
-    source: url,
+    location: { kind: 'urls', modelUrls: [url] },
     custom: true,
   };
+}
+
+export async function installModel(
+  client: SippClient,
+  location: ModelLocation,
+  options: ModelInstallOptions = {}
+): Promise<ManagedModel> {
+  if (location.kind === 'files') {
+    return await client.models.installFiles(location.modelFiles, {
+      ...options,
+      projectorFile: location.projectorFile,
+    });
+  }
+  return await client.models.installUrls(location.modelUrls, {
+    ...options,
+    projectorUrl: location.projectorUrl,
+  });
 }
 
 export function projectorRequirementMessage(

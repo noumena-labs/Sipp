@@ -106,13 +106,17 @@ interface PairingValidationResponse {
   };
 }
 
+export interface RustLifecycleError {
+  readonly code: QueryErrorCode | string;
+  readonly message: string;
+  readonly status?: number;
+  readonly retryAfterMs?: number;
+}
+
 interface RustLifecycleResponse<T> {
   ok: boolean;
   value?: T;
-  error?: {
-    code: QueryErrorCode | string;
-    message: string;
-  };
+  error?: RustLifecycleError;
 }
 
 type RustLifecycleHandle = number;
@@ -124,23 +128,148 @@ interface RustLifecycleCreateValue {
   snapshot: ObservabilitySnapshot;
 }
 
-interface RustLifecycleLoadSourceInstalled {
-  kind: 'installed';
-  id: string;
-  classifiedProjectors?: ClassifiedAsset[];
+export interface RustLifecycleLoadSource {
+  modelId: string;
 }
 
-interface RustLifecycleLoadSourceAssets {
-  kind: 'assets';
+export interface RustLifecycleInstallSource {
   assets: AssetRecord[];
   classified: ClassifiedAsset[];
   explicitProjectorAssetId?: string | null;
-  classifiedProjectors?: ClassifiedAsset[];
 }
 
-export type RustLifecycleLoadSource =
-  | RustLifecycleLoadSourceInstalled
-  | RustLifecycleLoadSourceAssets;
+export interface RustRemoteMetadata {
+  readonly url: string;
+  readonly name: string;
+  readonly bytes: number;
+  readonly etag?: string;
+  readonly lastModified?: string;
+}
+
+export interface RustRemoteCacheCandidate {
+  readonly candidateId: string;
+  readonly assetIds: readonly string[];
+  readonly metadata: RustRemoteMetadata;
+}
+
+export type RustRemoteAction =
+  | {
+    readonly kind: 'fetch_metadata';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly url: string;
+  }
+  | {
+    readonly kind: 'wait';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly delayMs: number;
+  }
+  | {
+    readonly kind: 'validate_cache';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly candidate: RustRemoteCacheCandidate;
+  }
+  | {
+    readonly kind: 'download';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly role: 'model' | 'shard' | 'projector';
+    readonly metadata: RustRemoteMetadata;
+  }
+  | {
+    readonly kind: 'cleanup';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly assetIds: readonly string[];
+  };
+
+export type RustRemoteFailure = {
+  readonly phase: 'metadata' | 'download' | 'cache_validation' | 'cleanup';
+  readonly kind: 'transport' | 'http' | 'invalid_response' | 'integrity' | 'storage';
+  readonly status?: number;
+  readonly retryAfter?: string;
+  readonly reason: string;
+};
+
+export type RustRemoteEvent =
+  | {
+    readonly kind: 'metadata_succeeded';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly headers: {
+      readonly contentLength?: number;
+      readonly linkedSize?: number;
+      readonly etag?: string;
+      readonly linkedEtag?: string;
+      readonly lastModified?: string;
+    };
+  }
+  | {
+    readonly kind: 'operation_failed';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly failure: RustRemoteFailure;
+    readonly createdAssetIds: readonly string[];
+  }
+  | {
+    readonly kind: 'wait_completed';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+  }
+  | {
+    readonly kind: 'cache_validated';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly assetIds: readonly string[];
+  }
+  | {
+    readonly kind: 'download_succeeded';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+    readonly assetIds: readonly string[];
+    readonly createdAssetIds: readonly string[];
+  }
+  | {
+    readonly kind: 'cleanup_succeeded';
+    readonly acquisitionId: string;
+    readonly memberId: number;
+    readonly attempt: number;
+  };
+
+export type RustRemoteCommand =
+  | {
+    readonly command: 'begin';
+    readonly modelUrls: readonly string[];
+    readonly projectorUrl?: string;
+  }
+  | {
+    readonly command: 'advance';
+    readonly event: RustRemoteEvent;
+    readonly assets?: readonly AssetRecord[];
+    readonly classified?: readonly ClassifiedAsset[];
+  }
+  | {
+    readonly command: 'cancel';
+    readonly acquisitionId: string;
+  };
+
+export type RustRemoteCommandValue =
+  | { readonly kind: 'action'; readonly action: RustRemoteAction }
+  | { readonly kind: 'installed'; readonly installed: RustLifecycleInstallValue }
+  | { readonly kind: 'cancelled'; readonly snapshot: ObservabilitySnapshot }
+  | { readonly kind: 'failed'; readonly error: RustLifecycleError };
 
 interface RustLifecycleLoadOptions {
   backend?: RustLifecycleBackendPreference;
@@ -164,6 +293,13 @@ export interface RustLifecyclePrepareLoadValue {
   loadRequired: boolean;
   assets: RustLifecyclePlannedAsset[];
   projector?: RustLifecyclePlannedAsset | null;
+  manifest: RegistryManifest;
+  snapshot: ObservabilitySnapshot;
+  events: ObservabilityEvent[];
+}
+
+export interface RustLifecycleInstallValue {
+  model: ModelInfo;
   manifest: RegistryManifest;
   snapshot: ObservabilitySnapshot;
   events: ObservabilityEvent[];
@@ -245,6 +381,20 @@ export class RustLifecycleBridge {
     );
   }
 
+  public install(source: RustLifecycleInstallSource): RustLifecycleInstallValue {
+    return unwrapLifecycleResponse(
+      this.bridge.modelServiceInstall(this.handle, source),
+      'install model'
+    );
+  }
+
+  public remoteAcquisition(command: RustRemoteCommand): RustRemoteCommandValue {
+    return unwrapLifecycleResponse(
+      this.bridge.modelServiceRemoteAcquisitionCommand(this.handle, command),
+      'advance remote model acquisition'
+    );
+  }
+
   public commitLoad(commit: RustLifecycleCommitLoad): RustLifecycleCommitLoadValue {
     return unwrapLifecycleResponse(
       this.bridge.modelServiceCommitLoad(this.handle, commit),
@@ -310,9 +460,18 @@ export function unwrapLifecycleResponse<T>(
   if (response.ok && 'value' in response) {
     return response.value as T;
   }
-  const code = normalizeLifecycleErrorCode(response.error?.code);
-  const message = response.error?.message ?? `Rust lifecycle failed to ${label}.`;
-  throw new QueryError(code, message);
+  throw queryErrorFromLifecycleError(response.error, `Rust lifecycle failed to ${label}.`);
+}
+
+export function queryErrorFromLifecycleError(
+  error: RustLifecycleError | undefined,
+  fallbackMessage: string
+): QueryError {
+  const code = normalizeLifecycleErrorCode(error?.code);
+  return new QueryError(code, error?.message ?? fallbackMessage, {
+    status: error?.status,
+    retryAfterMs: error?.retryAfterMs,
+  });
 }
 
 function normalizeLifecycleErrorCode(code: string | undefined): QueryErrorCode {
@@ -329,6 +488,8 @@ function normalizeLifecycleErrorCode(code: string | undefined): QueryErrorCode {
     case 'STORAGE_CORRUPT':
     case 'REMOTE_METADATA_UNAVAILABLE':
     case 'REMOTE_LOAD_FAILED':
+    case 'ACQUISITION_CANCELLED':
+    case 'STALE_ACQUISITION_RESULT':
     case 'QUERY_FAILED':
       return code;
     default:
@@ -706,6 +867,28 @@ export class WasmBridge {
       'CE_ModelServicePrepareLoad',
       ['number', 'string', 'string'],
       [handle, JSON.stringify(source), JSON.stringify(options)]
+    );
+  }
+
+  public modelServiceInstall(
+    handle: RustLifecycleHandle,
+    source: RustLifecycleInstallSource
+  ): RustLifecycleResponse<RustLifecycleInstallValue> {
+    return this.callLifecycleJson<RustLifecycleInstallValue>(
+      'CE_ModelServiceInstall',
+      ['number', 'string'],
+      [handle, JSON.stringify(source)]
+    );
+  }
+
+  public modelServiceRemoteAcquisitionCommand(
+    handle: RustLifecycleHandle,
+    command: RustRemoteCommand
+  ): RustLifecycleResponse<RustRemoteCommandValue> {
+    return this.callLifecycleJson<RustRemoteCommandValue>(
+      'CE_ModelServiceRemoteAcquisitionCommand',
+      ['number', 'string'],
+      [handle, JSON.stringify(command)]
     );
   }
 

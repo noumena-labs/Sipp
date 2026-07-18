@@ -5,8 +5,8 @@ use std::time::Duration;
 use futures::executor::block_on;
 use sipp::core::{ChatMessage, ChatRole};
 use sipp::{
-    EndpointDescriptor, ProviderAuthConfig, ProviderEndpointConfig, ProviderSecret,
-    SippChatRequest, SippClient, SippTextOptions,
+    ProviderAuthConfig, ProviderDescriptor, ProviderSecret, SippChatRequest, SippClient,
+    SippTextOptions,
 };
 
 const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai/";
@@ -25,10 +25,8 @@ fn main() -> support::ExampleResult<()> {
         // Direct providers belong in trusted Rust processes. Browser code
         // should call a gateway or application route instead of holding
         // provider credentials.
-        let mut client = SippClient::new();
-        let endpoint = client
-            .add("provider", EndpointDescriptor::provider(provider_config()?))
-            .await?;
+        let mut client = SippClient::new()?;
+        let endpoint = client.add("provider", provider_descriptor()?).await?;
         let response = client
             .chat(SippChatRequest {
                 endpoint: Some(endpoint),
@@ -42,9 +40,9 @@ fn main() -> support::ExampleResult<()> {
     })
 }
 
-fn provider_config() -> support::ExampleResult<ProviderEndpointConfig> {
-    let config = match provider_name().as_str() {
-        "gemini" => ProviderEndpointConfig::openai_compatible(
+fn provider_descriptor() -> support::ExampleResult<ProviderDescriptor> {
+    let descriptor = match provider_name().as_str() {
+        "gemini" => ProviderDescriptor::openai_compatible(
             env_any(
                 &["SIPP_PROVIDER_MODEL", "GEMINI_MODEL"],
                 Some(GEMINI_DEFAULT_MODEL),
@@ -56,7 +54,7 @@ fn provider_config() -> support::ExampleResult<ProviderEndpointConfig> {
                 "GEMINI_API_KEY",
             ])?)),
         ),
-        "openai" => ProviderEndpointConfig::openai(
+        "openai" => ProviderDescriptor::openai(
             env_any(
                 &["SIPP_PROVIDER_MODEL", "OPENAI_MODEL"],
                 Some(OPENAI_DEFAULT_MODEL),
@@ -66,14 +64,14 @@ fn provider_config() -> support::ExampleResult<ProviderEndpointConfig> {
                 "OPENAI_API_KEY",
             ])?),
         ),
-        "anthropic" => ProviderEndpointConfig::anthropic(
+        "anthropic" => ProviderDescriptor::anthropic(
             required_env_any(&["SIPP_PROVIDER_MODEL", "ANTHROPIC_MODEL"])?,
             ProviderSecret::new(required_env_any(&[
                 "SIPP_PROVIDER_API_KEY",
                 "ANTHROPIC_API_KEY",
             ])?),
         ),
-        "openai_compatible" => ProviderEndpointConfig::openai_compatible(
+        "openai_compatible" => ProviderDescriptor::openai_compatible(
             required_env_any(&["SIPP_PROVIDER_MODEL"])?,
             required_env_any(&["SIPP_PROVIDER_BASE_URL"])?,
             openai_compatible_auth()?,
@@ -84,30 +82,30 @@ fn provider_config() -> support::ExampleResult<ProviderEndpointConfig> {
             ));
         }
     };
-    Ok(with_optional_provider_config(config))
+    Ok(apply_provider_overrides(descriptor))
 }
 
-fn with_optional_provider_config(mut config: ProviderEndpointConfig) -> ProviderEndpointConfig {
+fn apply_provider_overrides(mut descriptor: ProviderDescriptor) -> ProviderDescriptor {
     let timeout = Some(Duration::from_millis(
         support::env_parse("SIPP_PROVIDER_TIMEOUT_MS").unwrap_or(30_000),
     ));
-    match &mut config {
-        ProviderEndpointConfig::OpenAi(config) => {
+    match &mut descriptor {
+        ProviderDescriptor::OpenAi(config) => {
             config.base_url = support::optional_env("SIPP_PROVIDER_BASE_URL")
                 .or_else(|| support::optional_env("OPENAI_BASE_URL"));
             config.timeout = timeout;
         }
-        ProviderEndpointConfig::Anthropic(config) => {
+        ProviderDescriptor::Anthropic(config) => {
             config.base_url = support::optional_env("SIPP_PROVIDER_BASE_URL")
                 .or_else(|| support::optional_env("ANTHROPIC_BASE_URL"));
             config.version = support::optional_env("ANTHROPIC_VERSION");
             config.timeout = timeout;
         }
-        ProviderEndpointConfig::OpenAiCompatible(config) => {
+        ProviderDescriptor::OpenAiCompatible(config) => {
             config.timeout = timeout;
         }
     }
-    config
+    descriptor
 }
 
 fn openai_compatible_auth() -> support::ExampleResult<ProviderAuthConfig> {

@@ -8,8 +8,8 @@ use serde_json::Value;
 use sipp::lifecycle::{
     browser_lifecycle_error_response, browser_lifecycle_response_json,
     browser_lifecycle_success_response, BrowserCommitLoadRequest, BrowserCreateConfig,
-    BrowserLifecycleEnvelope, BrowserLifecycleService, BrowserLoadOptions, BrowserLoadSource,
-    BrowserObservabilityEventType, ModelError,
+    BrowserInstallSource, BrowserLifecycleEnvelope, BrowserLifecycleService, BrowserLoadOptions,
+    BrowserLoadSource, BrowserObservabilityEventType, BrowserRemoteCommand, ModelError,
 };
 
 #[derive(Debug, Serialize)]
@@ -67,6 +67,23 @@ pub(crate) fn model_service_prepare_load_json(
         let source = parse_json_arg::<BrowserLoadSource>(source_json)?;
         let options = parse_json_arg::<BrowserLoadOptions>(options_json)?;
         service.prepare_load(source, options)
+    })
+}
+
+pub(crate) fn model_service_install_json(service: usize, source_json: &str) -> String {
+    service_result_response(service, |service| {
+        let source = parse_json_arg::<BrowserInstallSource>(source_json)?;
+        service.install(source)
+    })
+}
+
+pub(crate) fn model_service_remote_acquisition_command_json(
+    service: usize,
+    command_json: &str,
+) -> String {
+    service_result_response(service, |service| {
+        let command = parse_json_arg::<BrowserRemoteCommand>(command_json)?;
+        service.remote_command(command)
     })
 }
 

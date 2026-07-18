@@ -183,6 +183,10 @@ pub enum SippError {
     #[error(transparent)]
     Local(#[from] crate::error::Error),
 
+    /// Model acquisition or lifecycle error.
+    #[error(transparent)]
+    ModelLifecycle(#[from] crate::lifecycle::ModelError),
+
     /// Gateway endpoint error.
     #[error(transparent)]
     Endpoint(EndpointError),

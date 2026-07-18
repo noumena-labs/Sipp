@@ -8,10 +8,9 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    LocalModelDescriptor,
+    EndpointDescriptor,
     LocalTextOptions,
     ModelPlacementConfig,
-    MultimodalRuntimeConfig,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
     ResidencyRuntimeConfig,
@@ -34,7 +33,7 @@ from _support import (
 )
 
 
-def runtime_config(projector_path: str) -> NativeRuntimeConfig:
+def runtime_config() -> NativeRuntimeConfig:
     return NativeRuntimeConfig(
         placement=ModelPlacementConfig(gpu_layers=gpu_layers()),
         context=ContextRuntimeConfig(
@@ -51,7 +50,6 @@ def runtime_config(projector_path: str) -> NativeRuntimeConfig:
             prefill_chunk_size=0,
         ),
         cache=CacheRuntimeConfig(mode="live_slot_prefix"),
-        multimodal=MultimodalRuntimeConfig(projector_path=projector_path),
         residency=ResidencyRuntimeConfig(max_gpu_models_per_device=1),
         observability=ObservabilityRuntimeConfig(runtime_metrics=True),
     )
@@ -66,14 +64,23 @@ def text_options() -> SippTextOptions:
 
 
 def main() -> None:
-    model, projector, image, prompt = read_vision_args("Describe this image in one sentence.")
+    model_path, projector_path, image, prompt = read_vision_args(
+        "Describe this image in one sentence."
+    )
     set_llama_log_quiet(True)
 
     client = SippClient()
-    client.add("default", LocalModelDescriptor(model, runtime_config(projector)))
+    model = client.models.install_files([model_path], projector_path=projector_path)
+    client.add(
+        "default",
+        EndpointDescriptor.local(
+            model.id,
+            config=runtime_config(),
+        ),
+    )
 
-    # Multimodal chat uses the same chat API. The projector is in runtime
-    # config; image bytes are passed on the request.
+    # Multimodal chat uses the same chat API. The projector is installed with
+    # the model; image bytes are passed on the request.
     run = client.chat(
         [
             ChatMessage("user", prompt),

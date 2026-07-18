@@ -25,13 +25,13 @@ use sipp::runtime::config::{
 use sipp::{
     AnthropicProviderConfig as CoreAnthropicProviderConfig,
     EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
-    GatewayAuthentication as CoreGatewayAuthentication,
-    GatewayEndpointConfig as CoreGatewayEndpointConfig, GatewayRoutes as CoreGatewayRoutes,
-    GatewaySecret as CoreGatewaySecret, GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy,
+    GatewayAuthentication as CoreGatewayAuthentication, GatewayDescriptor as CoreGatewayDescriptor,
+    GatewayRoutes as CoreGatewayRoutes, GatewaySecret as CoreGatewaySecret,
+    GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy, LocalDescriptor as CoreLocalDescriptor,
     LocalEmbedOptions as CoreLocalEmbedOptions, LocalTextOptions as CoreLocalTextOptions,
     OpenAiCompatibleProviderConfig as CoreOpenAiCompatibleProviderConfig,
     OpenAiProviderConfig as CoreOpenAiProviderConfig, ProviderAuthConfig as CoreProviderAuthConfig,
-    ProviderEndpointConfig as CoreProviderEndpointConfig, ProviderSecret as CoreProviderSecret,
+    ProviderDescriptor as CoreProviderDescriptor, ProviderSecret as CoreProviderSecret,
     SippChatRequest as CoreChatRequest, SippEmbedRequest as CoreEmbedRequest,
     SippQueryRequest as CoreQueryRequest, SippTextOptions as CoreTextOptions,
 };
@@ -876,10 +876,10 @@ pub struct ProviderStaticHeader {
 
 /// Local or direct provider endpoint descriptor accepted by add.
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EndpointDescriptor {
     pub kind: String,
-    #[serde(alias = "modelPath")]
-    pub model_path: Option<String>,
+    pub model_id: Option<String>,
     pub config: Option<NativeRuntimeConfig>,
     #[serde(alias = "baseUrl")]
     pub base_url: Option<String>,
@@ -948,23 +948,24 @@ impl EndpointDescriptor {
             ],
             "local",
         )?;
-        let model_path = self
-            .model_path
-            .clone()
-            .ok_or_else(|| invalid_arg("local descriptor modelPath is required"))?;
         let config = self
             .config
             .as_ref()
             .map(CoreNativeRuntimeConfig::try_from)
             .transpose()?
             .unwrap_or_default();
-        Ok(CoreEndpointDescriptor::local(model_path, config))
+        let mut descriptor = CoreLocalDescriptor::new(required_descriptor_string(
+            self.model_id.as_ref(),
+            "local descriptor modelId",
+        )?);
+        descriptor.config = config;
+        Ok(CoreEndpointDescriptor::Local(descriptor))
     }
 
     fn gateway_to_core(&self) -> Result<CoreEndpointDescriptor> {
         reject_endpoint_descriptor_fields(
             &[
-                ("modelPath", self.model_path.is_some()),
+                ("modelId", self.model_id.is_some()),
                 ("config", self.config.is_some()),
                 ("provider", self.provider.is_some()),
                 ("model", self.model.is_some()),
@@ -981,7 +982,7 @@ impl EndpointDescriptor {
         assign_if_some(&mut routes.query, self.query_route.clone());
         assign_if_some(&mut routes.chat, self.chat_route.clone());
         assign_if_some(&mut routes.embed, self.embed_route.clone());
-        Ok(CoreEndpointDescriptor::gateway(CoreGatewayEndpointConfig {
+        Ok(CoreEndpointDescriptor::Gateway(CoreGatewayDescriptor {
             target: required_descriptor_string(self.target.as_ref(), "gateway target")?,
             base_url: required_descriptor_string(self.base_url.as_ref(), "gateway baseUrl")?,
             routes,
@@ -1008,7 +1009,7 @@ impl EndpointDescriptor {
     fn provider_to_core(&self) -> Result<CoreEndpointDescriptor> {
         reject_endpoint_descriptor_fields(
             &[
-                ("modelPath", self.model_path.is_some()),
+                ("modelId", self.model_id.is_some()),
                 ("config", self.config.is_some()),
                 ("target", self.target.is_some()),
                 ("authentication", self.authentication.is_some()),
@@ -1022,7 +1023,7 @@ impl EndpointDescriptor {
         let model = required_descriptor_string(self.model.as_ref(), "provider model")?;
         let provider = required_descriptor_string(self.provider.as_ref(), "provider")?;
         let timeout = endpoint_timeout(self.timeout_ms)?;
-        let config = match provider.as_str() {
+        let descriptor = match provider.as_str() {
             "openai" => {
                 reject_endpoint_descriptor_fields(
                     &[
@@ -1034,7 +1035,7 @@ impl EndpointDescriptor {
                     ],
                     "OpenAI provider",
                 )?;
-                CoreProviderEndpointConfig::OpenAi(CoreOpenAiProviderConfig {
+                CoreProviderDescriptor::OpenAi(CoreOpenAiProviderConfig {
                     model,
                     api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
                     base_url: self.base_url.clone(),
@@ -1051,7 +1052,7 @@ impl EndpointDescriptor {
                     ],
                     "Anthropic provider",
                 )?;
-                CoreProviderEndpointConfig::Anthropic(CoreAnthropicProviderConfig {
+                CoreProviderDescriptor::Anthropic(CoreAnthropicProviderConfig {
                     model,
                     api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
                     base_url: self.base_url.clone(),
@@ -1059,12 +1060,12 @@ impl EndpointDescriptor {
                     timeout,
                 })
             }
-            "openai_compatible" | "openai-compatible" => {
+            "openai_compatible" => {
                 reject_endpoint_descriptor_fields(
                     &[("version", self.version.is_some())],
                     "OpenAI-compatible provider",
                 )?;
-                CoreProviderEndpointConfig::OpenAiCompatible(CoreOpenAiCompatibleProviderConfig {
+                CoreProviderDescriptor::OpenAiCompatible(CoreOpenAiCompatibleProviderConfig {
                     model,
                     base_url: required_descriptor_string(
                         self.base_url.as_ref(),
@@ -1096,7 +1097,7 @@ impl EndpointDescriptor {
                 ));
             }
         };
-        Ok(CoreEndpointDescriptor::provider(config))
+        Ok(CoreEndpointDescriptor::Provider(descriptor))
     }
 }
 

@@ -6,8 +6,9 @@
 
 | 层级 | 浏览器包 | Node.js 包 | 用途 |
 | --- | --- | --- | --- |
-| 客户端选项 | `new SippClient(options)` | 环境和进程设置 | 管理浏览器资源、Worker、缓存、后端选择 |
-| 端点加载选项 | `client.add(..., { kind: 'local', options })` | `client.add(..., { kind: 'local', config })` | 模型来源、后端偏好、加载进度、原生运行时 |
+| 客户端选项 | `new SippClient(options)` | `new SippClient(options)` | 模型存储，以及浏览器资源、Worker、缓存策略和原生后端初始化 |
+| 模型安装 | `client.models.installFiles/installUrls` | `client.models.installFiles/installUrls` | 文件或 URL、可选投影器、进度和取消 |
+| 本地端点加载选项 | `EndpointDescriptor.local(model.id, options)` | `EndpointDescriptor.local(model.id, { config })` | 后端偏好和原生运行时配置 |
 | 文本请求选项 | `client.query(prompt, options)` | `client.query({ options })` | 输出长度、采样控制、流式、取消、停止词 |
 | 本地请求选项 | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | 仅限本地的 Prompt 状态、文法、图片、嵌入归一化 |
 | 网关扩展 | `endpointOptions` | `endpointOptions` | 网关端点实现需要的额外字段 |
@@ -21,6 +22,7 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 | 选项 | 说明 |
 | --- | --- |
+| `storageRoot` | 选择客户端模型存储使用的 OPFS 目录。 |
 | `executionMode` | `auto` 优先使用 Worker；`worker` 强制 Worker 传输；`main-thread` 用于调试或受限环境。 |
 | `wasmThreading` | `pthread` 加载内置多线程运行时。`single-thread` 仅在显式提供自定义 `moduleUrl` 和 `wasmUrl` 资源时有效。 |
 | `moduleUrl`, `wasmUrl` | 重写当前选择的运行时资源 URL。两个必须一起设。 |

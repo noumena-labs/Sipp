@@ -63,6 +63,39 @@ test('FileSystemStorage removes partial files when streamToDisk fails', async ()
   });
 });
 
+test('FileSystemStorage scopes files under a custom OPFS storage root', async () => {
+  const directories: string[] = [];
+  const fileNames: string[] = [];
+  type TestDirectory = {
+    getDirectoryHandle(name: string): Promise<TestDirectory>;
+    getFileHandle(name: string): Promise<{ getFile(): Promise<File> }>;
+  };
+  const directory: TestDirectory = {
+    getDirectoryHandle: async (name: string) => {
+      directories.push(name);
+      return directory;
+    },
+    getFileHandle: async (name: string) => {
+      fileNames.push(name);
+      return {
+        getFile: async () => new File(['model'], name),
+      };
+    },
+  };
+
+  await withNavigatorStorage({
+    getDirectory: async () => directory,
+  } as unknown as Navigator['storage'], async () => {
+    const storage = new FileSystemStorage('tenant-a/models');
+
+    const stored = await storage.getFile('model.gguf');
+
+    assert.equal(stored?.name, 'model.gguf');
+    assert.deepEqual(directories, ['tenant-a', 'models']);
+    assert.deepEqual(fileNames, ['model.gguf']);
+  });
+});
+
 test('FileSystemStorage batches small stream chunks into one OPFS write', async () => {
   const writes: Uint8Array[] = [];
 

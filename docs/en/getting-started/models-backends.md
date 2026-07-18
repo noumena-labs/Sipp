@@ -4,15 +4,28 @@ Sipp local inference uses GGUF model files. Text workflows need a text GGUF
 model, embedding workflows need a model that reports embedding support, and
 vision chat workflows need both a model GGUF and a projector GGUF.
 
-## Model Sources
+## Managed Models
 
-For local package usage, pass an explicit GGUF model path in Node.js, Python,
-or Rust, or serve a GGUF model URL to browser code:
+Every client owns one model store. Installing files or URLs returns a
+`ManagedModel`; pass its `id` to a local endpoint descriptor. Endpoint
+descriptors select installed models and contain only load-time options.
 
-- Browser: `source: '/models/model.gguf'`
-- Node.js: `modelPath: '/path/to/model.gguf'`
-- Python: `LocalModelDescriptor('/path/to/model.gguf')`
-- Rust: `EndpointDescriptor::local(model_path, config)`
+Native clients store models under `.sipp-models` by default. Browser clients
+use the `sipp-models` directory in OPFS. Override the root only when an
+application needs a separate store:
+
+- Browser: `new SippClient({ storageRoot: 'tenant/models' })` selects an OPFS directory.
+- Node.js: `new SippClient({ storageRoot: '/custom/models' })`.
+- Python: `SippClient(storage_root='/custom/models')`.
+- Rust: `SippClient::with_storage_root("/custom/models")?`.
+
+Remove a local endpoint with `client.remove(endpointId)` before removing its
+model with `client.models.remove(modelId)`. A model used by an endpoint cannot
+be removed.
+
+Remote acquisition uses one Rust policy in browser and native runtimes: exact
+validator matching, bounded retries for transient HTTP failures, no stale-cache
+fallback, and cleanup of assets created by a failed or cancelled acquisition.
 
 Source examples and smoke workflows can use a cached sample model under
 `.build/models`; see [Source Builds](../maintainers/source-builds.md).

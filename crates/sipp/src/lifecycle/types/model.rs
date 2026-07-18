@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -18,34 +17,6 @@ mod model_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 pub const REGISTRY_MANIFEST_VERSION: u32 = 3;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelAsset {
-    Path { path: PathBuf },
-    Url { url: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelAssets {
-    Path { path: PathBuf },
-    Paths { paths: Vec<PathBuf> },
-    Url { url: String },
-    Urls { urls: Vec<String> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelSource {
-    Installed {
-        id: String,
-    },
-    Assets {
-        model: ModelAssets,
-        projector: Option<ModelAsset>,
-    },
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -113,6 +84,22 @@ pub struct ModelInfo {
     pub media_marker: Option<String>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
+}
+
+/// Model managed by a client model store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedModel {
+    /// Stable id used to create local endpoint descriptors.
+    pub id: String,
+    /// Display name read from model metadata or the source filename.
+    pub name: String,
+    /// Total bytes occupied by the model and optional projector.
+    pub bytes: u64,
+    /// Inference modality detected from model metadata.
+    pub modality: ModelModality,
+    /// Current installation and pairing state.
+    pub status: ModelStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

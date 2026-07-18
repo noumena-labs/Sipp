@@ -230,9 +230,15 @@ class ProviderError(Exception):
     retry_after_ms: Optional[float]
     raw_body: Any
 
-class GatewayDescriptor:
-    def __init__(
-        self,
+class EndpointDescriptor:
+    @staticmethod
+    def local(
+        model_id: str,
+        *,
+        config: Optional[NativeRuntimeConfig] = None,
+    ) -> EndpointDescriptor: ...
+    @staticmethod
+    def gateway(
         target: str,
         base_url: str,
         *,
@@ -245,7 +251,20 @@ class GatewayDescriptor:
         chat_route: Optional[str] = None,
         embed_route: Optional[str] = None,
         protocol_options: Optional[Mapping[str, Any]] = None,
-    ) -> None: ...
+    ) -> EndpointDescriptor: ...
+    @staticmethod
+    def provider(
+        provider: Literal["openai", "anthropic", "openai_compatible"],
+        model: str,
+        *,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+        version: Optional[str] = None,
+        auth_header_name: Optional[str] = None,
+        auth_header_value: Optional[str] = None,
+        static_headers: Optional[Sequence[tuple[str, str]]] = None,
+    ) -> EndpointDescriptor: ...
 class EndpointRef:
     @staticmethod
     def local(id: str) -> EndpointRef: ...
@@ -256,33 +275,33 @@ class EndpointRef:
     @property
     def kind(self) -> str: ...
 
-class LocalModelDescriptor:
-    def __init__(
-        self,
-        model_path: PathLike,
-        config: Optional[NativeRuntimeConfig] = None,
-    ) -> None: ...
+class ModelLifecycleError(Exception):
+    code: str
+    status: Optional[int]
+    retry_after_ms: Optional[int]
 
-class ProviderDescriptor:
-    def __init__(
+class ManagedModel:
+    id: str
+    name: str
+    bytes: int
+    modality: str
+    status: str
+
+class ModelStore:
+    def install_files(
         self,
-        provider: Literal["openai", "anthropic", "openai_compatible", "openai-compatible"],
-        model: str,
+        model_paths: Sequence[PathLike],
         *,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        timeout_ms: Optional[int] = None,
-        version: Optional[str] = None,
-        auth_header_name: Optional[str] = None,
-        auth_header_value: Optional[str] = None,
-        static_headers: Optional[Sequence[tuple[str, str]]] = None,
-    ) -> None: ...
-
-EndpointDescriptor = Union[
-    LocalModelDescriptor,
-    ProviderDescriptor,
-    GatewayDescriptor,
-]
+        projector_path: Optional[PathLike] = None,
+    ) -> ManagedModel: ...
+    def install_urls(
+        self,
+        model_urls: Sequence[str],
+        *,
+        projector_url: Optional[str] = None,
+    ) -> ManagedModel: ...
+    def list(self) -> list[ManagedModel]: ...
+    def remove(self, model_id: str) -> None: ...
 
 class SippTextOptions:
     def __init__(
@@ -323,12 +342,15 @@ class SippEmbeddingRun:
     def result(self) -> SippEmbeddingResponse: ...
 
 class SippClient:
-    def __init__(self) -> None: ...
+    def __init__(self, *, storage_root: Optional[PathLike] = None) -> None: ...
+    @property
+    def models(self) -> ModelStore: ...
     def add(
         self,
         id: str,
         descriptor: EndpointDescriptor,
     ) -> EndpointRef: ...
+    def remove(self, id: str) -> None: ...
     def query(
         self,
         prompt: str,

@@ -2,15 +2,54 @@
 /* eslint-disable */
 /** Client facade for registered inference endpoints. */
 export declare class SippClient {
-  constructor()
+  constructor(options?: SippClientOptions)
+  readonly models: ModelStore
   /** Register or replace a local, gateway, or direct provider endpoint. */
   add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef>
+  /** Remove a registered endpoint. */
+  remove(id: string): Promise<void>
   /** Start raw-prompt text generation and return the run handle. */
   query(request: SippQueryRequest): SippTextRun
   /** Start chat generation from ordered role/content messages. */
   chat(request: SippChatRequest): SippTextRun
   /** Start a single-input embedding request. */
   embed(request: SippEmbedRequest): SippEmbeddingRun
+}
+
+/** Client storage configuration. */
+export interface SippClientOptions {
+  readonly storageRoot?: string
+}
+
+/** Model managed by a client model store. */
+export interface ManagedModel {
+  readonly id: string
+  readonly name: string
+  readonly bytes: number
+  readonly modality: string
+  readonly status: string
+}
+
+/** Options for installing model files. */
+export interface FileInstallOptions {
+  readonly projectorPath?: string
+}
+
+/** Options for installing model URLs. */
+export interface UrlInstallOptions {
+  readonly projectorUrl?: string
+}
+
+/** Persistent models owned by a Sipp client. */
+export declare class ModelStore {
+  /** Install model files from the host filesystem. */
+  installFiles(modelPaths: readonly string[], options?: FileInstallOptions): Promise<ManagedModel>
+  /** Download and install model files from HTTP(S) URLs. */
+  installUrls(modelUrls: readonly string[], options?: UrlInstallOptions): Promise<ManagedModel>
+  /** List installed models. */
+  list(): Promise<ManagedModel[]>
+  /** Remove an installed model that is not used by an endpoint. */
+  remove(modelId: string): Promise<void>
 }
 
 /** Text generation handle with a final response and optional token stream. */
@@ -244,58 +283,69 @@ export declare const enum PoolingType {
 
 /** Authentication strategy used by a gateway endpoint. */
 export interface GatewayAuthentication {
-  kind: 'none' | 'bearer' | 'header'
-  value?: string
-  headerName?: string
+  readonly kind: 'none' | 'bearer' | 'header'
+  readonly value?: string
+  readonly headerName?: string
 }
 
-/** Descriptor for a client-owned HTTP gateway endpoint. */
-export type GatewayEndpointDescriptor = {
-  kind: 'gateway'
-  target: string
-  baseUrl: string
-  authentication?: GatewayAuthentication
-  staticHeaders?: Array<ProviderStaticHeader>
-  timeoutMs?: number
-  queryRoute?: string
-  chatRoute?: string
-  embedRoute?: string
-  protocolOptions?: Record<string, unknown>
+/** Options for a client-owned HTTP gateway endpoint. */
+export interface GatewayEndpointOptions {
+  readonly target: string
+  readonly baseUrl: string
+  readonly authentication?: GatewayAuthentication
+  readonly staticHeaders?: readonly ProviderStaticHeader[]
+  readonly timeoutMs?: number
+  readonly queryRoute?: string
+  readonly chatRoute?: string
+  readonly embedRoute?: string
+  readonly protocolOptions?: Readonly<Record<string, unknown>>
 }
 
 /** Static HTTP header attached to every request for a provider or gateway endpoint. */
 export interface ProviderStaticHeader {
-  name: string
-  value: string
+  readonly name: string
+  readonly value: string
 }
 
-/** Descriptor for a local model endpoint owned by this client process. */
-export type LocalEndpointDescriptor = {
-  kind: 'local'
-  modelPath: string
-  config?: NativeRuntimeConfig
+declare const endpointDescriptorBrand: unique symbol
+
+/** Opaque endpoint descriptor accepted by the client registration API. */
+export type EndpointDescriptor = {
+  readonly [endpointDescriptorBrand]: true
 }
 
-/** Descriptor for an explicitly selected external provider adapter. */
-export type ProviderEndpointDescriptor = {
-  kind: 'provider'
-  provider: 'openai' | 'anthropic' | 'openai_compatible' | 'openai-compatible'
-  model: string
-  apiKey?: string
-  baseUrl?: string
-  timeoutMs?: number
-  version?: string
-  authHeaderName?: string
-  authHeaderValue?: string
-  staticHeaders?: Array<ProviderStaticHeader>
-  correlationHeader?: string
+/** Options for a local model endpoint. */
+export interface LocalEndpointOptions {
+  readonly config?: NativeRuntimeConfig
 }
 
-/** Endpoint descriptors accepted by the built-in client registration API. */
-export type EndpointDescriptor =
-  | LocalEndpointDescriptor
-  | GatewayEndpointDescriptor
-  | ProviderEndpointDescriptor
+/** Options for an explicitly selected external provider adapter. */
+export interface ProviderEndpointOptions {
+  readonly provider: 'openai' | 'anthropic' | 'openai_compatible'
+  readonly model: string
+  readonly apiKey?: string
+  readonly baseUrl?: string
+  readonly timeoutMs?: number
+  readonly version?: string
+  readonly authHeaderName?: string
+  readonly authHeaderValue?: string
+  readonly staticHeaders?: readonly ProviderStaticHeader[]
+  readonly correlationHeader?: string
+}
+
+/** Construct endpoint descriptors from explicit endpoint configuration. */
+export declare const EndpointDescriptor: {
+  local(modelId: string, options?: LocalEndpointOptions): EndpointDescriptor
+  gateway(options: GatewayEndpointOptions): EndpointDescriptor
+  provider(options: ProviderEndpointOptions): EndpointDescriptor
+}
+
+/** Error raised when native model acquisition or lifecycle processing fails. */
+export interface ModelLifecycleError extends Error {
+  readonly code: string
+  readonly status?: number
+  readonly retryAfterMs?: number
+}
 
 /** Local runtime timing, cache, and throughput statistics. */
 export interface RequestStats {

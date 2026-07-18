@@ -1,7 +1,5 @@
 mod support;
 
-use std::path::PathBuf;
-
 use futures::executor::block_on;
 use sipp::backend::set_llama_log_quiet;
 use sipp::engine::{
@@ -9,7 +7,7 @@ use sipp::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
 };
-use sipp::{EndpointDescriptor, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions};
+use sipp::{LocalDescriptor, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
@@ -20,13 +18,11 @@ fn main() -> support::ExampleResult<()> {
 
         // A client can own one or more endpoints. This example adds one local
         // GGUF model and lets requests use it as the default endpoint.
-        let mut client = SippClient::new();
-        client
-            .add(
-                "default",
-                EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
-            )
-            .await?;
+        let mut client = SippClient::new()?;
+        let model = client.models().install_files([args.model_path]).await?;
+        let mut descriptor = LocalDescriptor::new(model.id);
+        descriptor.config = runtime_config(false);
+        client.add("default", descriptor).await?;
 
         // `query` is the simplest text-generation call: one prompt in, one
         // final text response out.
@@ -47,7 +43,7 @@ fn main() -> support::ExampleResult<()> {
     })
 }
 
-fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRuntimeConfig {
+fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
     NativeRuntimeConfig {
         placement: ModelPlacementConfig {
             gpu_layers: support::env_parse("SIPP_GPU_LAYERS")
@@ -77,10 +73,7 @@ fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRu
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
-        multimodal: sipp::engine::MultimodalRuntimeConfig {
-            projector_path: projector_path.map(|path| path.to_string_lossy().into_owned()),
-            ..Default::default()
-        },
+        multimodal: Default::default(),
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()

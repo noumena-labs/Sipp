@@ -1,7 +1,7 @@
 import {
+  EndpointDescriptor,
   type SippClient,
   type ModelLoadOptions,
-  type ModelSource,
   type TokenBatch,
 } from '@noumena-labs/sipp';
 import type {
@@ -17,6 +17,7 @@ import type {
   ScenarioDefinition,
   ScenarioResult,
 } from './types';
+import { installModel, type ModelLocation } from './model-registry';
 import { measureAsync, round } from './utils';
 
 type BenchmarkRuntimeOptions = NonNullable<ModelLoadOptions['runtime']>;
@@ -438,7 +439,7 @@ export async function runScenarioBenchmark(
   targetClient: SippClient,
   operation: BenchmarkOperation,
   scenario: ScenarioDefinition,
-  modelSource: ModelSource,
+  modelLocation: ModelLocation,
   warmupRuns: number,
   measuredRuns: number,
   runtime: BenchmarkRuntimeOptions,
@@ -450,13 +451,16 @@ export async function runScenarioBenchmark(
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
     setStatus(`${scenario.label}: loading model...`);
-    const measured = await measureAsync(() =>
-      targetClient.add('playground-local', {
-        kind: 'local',
-        source: modelSource,
-        options: { runtime, observability: 'profile' },
-      })
-    );
+    const measured = await measureAsync(async () => {
+      const model = await installModel(targetClient, modelLocation);
+      return await targetClient.add(
+        'playground-local',
+        EndpointDescriptor.local(model.id, {
+          runtime,
+          observability: 'profile',
+        })
+      );
+    });
     loadRuntimeMs = measured.ms;
   }
 
@@ -570,7 +574,7 @@ export async function runMixedLoadBenchmark(
   targetClient: SippClient,
   operation: Exclude<BenchmarkOperation, 'embed'>,
   definition: import('./types').MixedLoadDefinition,
-  modelSource: ModelSource,
+  modelLocation: ModelLocation,
   warmupRuns: number,
   measuredRuns: number,
   runtime: BenchmarkRuntimeOptions,
@@ -581,13 +585,16 @@ export async function runMixedLoadBenchmark(
 ): Promise<import('./types').MixedLoadResult> {
   let loadRuntimeMs = 0;
   if (!alreadyLoaded) {
-    const measured = await measureAsync(() =>
-      targetClient.add('playground-local', {
-        kind: 'local',
-        source: modelSource,
-        options: { runtime, observability: 'profile' },
-      })
-    );
+    const measured = await measureAsync(async () => {
+      const model = await installModel(targetClient, modelLocation);
+      return await targetClient.add(
+        'playground-local',
+        EndpointDescriptor.local(model.id, {
+          runtime,
+          observability: 'profile',
+        })
+      );
+    });
     loadRuntimeMs = measured.ms;
   }
 

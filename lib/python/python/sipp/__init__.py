@@ -37,6 +37,7 @@ def _add_windows_dll_directories() -> None:
         value = os.environ.get(env_name)
         if value:
             candidates.append(Path(value) / "bin")
+            candidates.append(Path(value) / "bin" / "x64")
 
     seen = set()
     for path in candidates:
@@ -276,15 +277,16 @@ ContextRuntimeConfig = _native.ContextRuntimeConfig
 DEFAULT_CONTEXT_KEY = _native.DEFAULT_CONTEXT_KEY
 DEFAULT_MAX_TOKENS = _native.DEFAULT_MAX_TOKENS
 EndpointRef = _native.EndpointRef
-GatewayDescriptor = _native.GatewayDescriptor
+EndpointDescriptor = _native.EndpointDescriptor
 LocalEmbedOptions = _native.LocalEmbedOptions
-LocalModelDescriptor = _native.LocalModelDescriptor
+ManagedModel = _native.ManagedModel
+ModelStore = _native.ModelStore
+ModelLifecycleError = _native.ModelLifecycleError
 LocalTextOptions = _native.LocalTextOptions
 ModelPlacementConfig = _native.ModelPlacementConfig
 MultimodalRuntimeConfig = _native.MultimodalRuntimeConfig
 NativeRuntimeConfig = _native.NativeRuntimeConfig
 ObservabilityRuntimeConfig = _native.ObservabilityRuntimeConfig
-ProviderDescriptor = _native.ProviderDescriptor
 ProviderError = _native.ProviderError
 EndpointError = _native.EndpointError
 ResidencyRuntimeConfig = _native.ResidencyRuntimeConfig
@@ -307,16 +309,17 @@ __all__ = [
     "ContextRuntimeConfig",
     "DEFAULT_CONTEXT_KEY",
     "DEFAULT_MAX_TOKENS",
+    "EndpointDescriptor",
     "EndpointRef",
-    "GatewayDescriptor",
     "LocalEmbedOptions",
-    "LocalModelDescriptor",
+    "ManagedModel",
+    "ModelStore",
+    "ModelLifecycleError",
     "LocalTextOptions",
     "ModelPlacementConfig",
     "MultimodalRuntimeConfig",
     "NativeRuntimeConfig",
     "ObservabilityRuntimeConfig",
-    "ProviderDescriptor",
     "ProviderError",
     "EndpointError",
     "ResidencyRuntimeConfig",

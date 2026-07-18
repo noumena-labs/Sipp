@@ -1,7 +1,5 @@
 mod support;
 
-use std::path::PathBuf;
-
 use futures::executor::block_on;
 use sipp::backend::set_llama_log_quiet;
 use sipp::engine::{
@@ -10,8 +8,8 @@ use sipp::engine::{
     SchedulerRuntimeConfig,
 };
 use sipp::{
-    EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
-    GatewayTimeoutPolicy, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions,
+    GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewaySecret, GatewayTimeoutPolicy,
+    LocalDescriptor, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions,
 };
 
 fn main() -> support::ExampleResult<()> {
@@ -22,14 +20,12 @@ fn main() -> support::ExampleResult<()> {
         )?;
         set_llama_log_quiet(true);
 
-        let mut client = SippClient::new();
-        let local_endpoint = client
-            .add(
-                "local",
-                EndpointDescriptor::local(args.model_path, runtime_config(false, None)),
-            )
-            .await?;
-        let config = GatewayEndpointConfig {
+        let mut client = SippClient::new()?;
+        let model = client.models().install_files([args.model_path]).await?;
+        let mut local_descriptor = LocalDescriptor::new(model.id);
+        local_descriptor.config = runtime_config(false);
+        let local_endpoint = client.add("local", local_descriptor).await?;
+        let descriptor = GatewayDescriptor {
             target: args.target.clone(),
             base_url: support::required_env("SIPP_GATEWAY_URL")?,
             routes: GatewayRoutes::default(),
@@ -40,9 +36,7 @@ fn main() -> support::ExampleResult<()> {
             timeouts: GatewayTimeoutPolicy::default(),
             protocol_options: Default::default(),
         };
-        let gateway_endpoint = client
-            .add("gateway", EndpointDescriptor::gateway(config))
-            .await?;
+        let gateway_endpoint = client.add("gateway", descriptor).await?;
 
         let local = client
             .query(SippQueryRequest {
@@ -74,7 +68,7 @@ fn main() -> support::ExampleResult<()> {
     })
 }
 
-fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRuntimeConfig {
+fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
     NativeRuntimeConfig {
         placement: ModelPlacementConfig {
             gpu_layers: support::env_parse("SIPP_GPU_LAYERS")
@@ -104,10 +98,7 @@ fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRu
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
-        multimodal: sipp::engine::MultimodalRuntimeConfig {
-            projector_path: projector_path.map(|path| path.to_string_lossy().into_owned()),
-            ..Default::default()
-        },
+        multimodal: Default::default(),
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()

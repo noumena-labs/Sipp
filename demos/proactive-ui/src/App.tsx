@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { SippClient, type RuntimeObservation } from '@noumena-labs/sipp';
+import {
+  EndpointDescriptor,
+  SippClient,
+  type RuntimeObservation,
+} from '@noumena-labs/sipp';
 import {
   DEFAULT_DRAWING_DIRECTOR_CONFIG,
   DRAWING_COLORS,
@@ -290,30 +294,34 @@ export default function App() {
       });
 
       setStatus('Downloading vision model and projector...');
-      await nextClient.add('local', {
-        kind: 'local',
-        source: { model: trimmedModel, projector: trimmedProjector },
-        options: {
+      const onProgress = (progress: ModelLoadProgress) => {
+        const overallPercent = ingestProgress(progressAgg, progress.phase, progress.assetName, progress.percent);
+        setLoadProgress({
+          phase: progress.phase,
+          ...(progress.assetName ? { assetName: progress.assetName } : {}),
+          percent: progress.percent,
+          overallPercent,
+        });
+        if (progress.phase === 'download') {
+          const asset = progress.assetName ? ` ${progress.assetName}` : '';
+          setStatus(`Downloading${asset}... ${Math.floor(progress.percent ?? 0)}% (${overallPercent}% overall)`);
+        } else if (progress.phase === 'load') {
+          setStatus(`Loading fast vision runtime... (${overallPercent}% overall)`);
+        } else if (progress.phase === 'metadata') {
+          setStatus(`Resolving model metadata... (${overallPercent}% overall)`);
+        } else if (progress.phase === 'store') {
+          setStatus(`Storing model assets... (${overallPercent}% overall)`);
+        }
+      };
+      const model = await nextClient.models.installUrls([trimmedModel], {
+        projectorUrl: trimmedProjector,
+        onProgress,
+      });
+      await nextClient.add(
+        'local',
+        EndpointDescriptor.local(model.id, {
           observability: 'runtime',
-          onProgress: (progress) => {
-            const overallPercent = ingestProgress(progressAgg, progress.phase, progress.assetName, progress.percent);
-            setLoadProgress({
-              phase: progress.phase,
-              ...(progress.assetName ? { assetName: progress.assetName } : {}),
-              percent: progress.percent,
-              overallPercent,
-            });
-            if (progress.phase === 'download') {
-              const asset = progress.assetName ? ` ${progress.assetName}` : '';
-              setStatus(`Downloading${asset}... ${Math.floor(progress.percent ?? 0)}% (${overallPercent}% overall)`);
-            } else if (progress.phase === 'load') {
-              setStatus(`Loading fast vision runtime... (${overallPercent}% overall)`);
-            } else if (progress.phase === 'metadata') {
-              setStatus(`Resolving model metadata... (${overallPercent}% overall)`);
-            } else if (progress.phase === 'store') {
-              setStatus(`Storing model assets... (${overallPercent}% overall)`);
-            }
-          },
+          onProgress,
           runtime: {
             context: {
               n_ctx: 1024,
@@ -343,8 +351,8 @@ export default function App() {
               repeat_penalty: 1.05,
             },
           },
-        },
-      });
+        })
+      );
 
       void clientRef.current?.close();
       clientRef.current = nextClient;

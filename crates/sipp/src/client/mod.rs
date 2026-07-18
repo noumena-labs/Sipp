@@ -27,19 +27,18 @@ mod run;
 mod validate;
 
 pub use client::SippClient;
-pub use descriptor::{EndpointDescriptor, LocalModelDescriptor};
+pub use descriptor::{EndpointDescriptor, LocalDescriptor, DEFAULT_STORAGE_ROOT};
 pub use endpoint::{EndpointCapabilities, EndpointRef};
 pub use error::{EndpointError, SippError, SippResult};
 #[cfg(feature = "providers")]
 pub use error::{ProviderEndpointError, ProviderEndpointErrorKind};
 pub use gateway::{
-    GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
-    GatewayTimeoutPolicy,
+    GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewaySecret, GatewayTimeoutPolicy,
 };
 #[cfg(feature = "providers")]
 pub use provider::{
     AnthropicProviderConfig, OpenAiCompatibleProviderConfig, OpenAiProviderConfig,
-    ProviderAuthConfig, ProviderEndpointConfig, ProviderSecret,
+    ProviderAuthConfig, ProviderDescriptor, ProviderSecret,
 };
 pub use request::{
     EndpointOptions, LocalEmbedOptions, LocalTextOptions, ProviderOptions, SippChatRequest,

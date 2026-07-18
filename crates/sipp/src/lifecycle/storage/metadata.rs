@@ -40,6 +40,15 @@ pub(super) fn normalize_asset_name(path: &Path) -> String {
     }
 }
 
+pub(super) fn normalize_asset_file_name(name: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        DEFAULT_MODEL_FILE_NAME.to_string()
+    } else {
+        name.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "-")
+    }
+}
+
 pub(super) fn unique_temp_suffix() -> String {
     format!(
         "{}-{}",

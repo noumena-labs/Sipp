@@ -44,10 +44,11 @@ Use `query` when you want to own the full prompt shape, including a hand-written
 or application-provided chat template.
 
 ```ts
-const endpoint = await client.add('local', {
-  kind: 'local',
-  modelPath: '/models/model.gguf',
-});
+const model = await client.models.installFiles(['/models/model.gguf']);
+const endpoint = await client.add(
+  'local',
+  EndpointDescriptor.local(model.id)
+);
 
 const prompt = [
   '<|system|>',
@@ -95,10 +96,11 @@ Use `query` for encoder-decoder GGUF models. The source prompt is encoded
 first; Sipp then drives the decoder from the model's decoder-start token.
 
 ```ts
-const endpoint = await client.add('t5-local', {
-  kind: 'local',
-  modelPath: '/models/t5-small-f16.gguf',
-});
+const model = await client.models.installFiles(['/models/t5-small-f16.gguf']);
+const endpoint = await client.add(
+  't5-local',
+  EndpointDescriptor.local(model.id)
+);
 
 const run = client.query({
   endpoint,
@@ -163,15 +165,16 @@ an OpenAI-compatible target may expose chat but not completions, so gateway
 ### Gateway Client Chat
 
 ```ts
-const endpoint = await client.add('gateway-openai', {
-  kind: 'gateway',
+import { EndpointDescriptor } from '@sipphq/sipp-server';
+
+const endpoint = await client.add('gateway-openai', EndpointDescriptor.gateway({
   target: 'openai-chat',
   baseUrl: process.env.SIPP_GATEWAY_URL!,
   authentication: {
     kind: 'bearer',
     value: process.env.SIPP_GATEWAY_TOKEN!,
   },
-});
+}));
 
 const run = client.chat({
   endpoint,

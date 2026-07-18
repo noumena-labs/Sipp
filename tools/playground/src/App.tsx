@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
+  EndpointDescriptor,
   SippClient,
+  type ManagedModel,
+  type ModelInstallOptions,
   type ModelInfo,
-  type ModelSource,
   type ObservabilitySnapshot,
   type TokenBatch,
 } from '@noumena-labs/sipp';
@@ -50,6 +52,7 @@ import {
   validateImageFile,
 } from './lib/utils';
 import {
+  installModel,
   formatSize,
   getEmbeddingModels,
   getDefaultVariant,
@@ -60,6 +63,7 @@ import {
   isVisionModel,
   MODEL_REGISTRY,
   type ModelCapability,
+  type ModelLocation,
   type ModelRegistryEntry,
 } from './lib/model-registry';
 import type {
@@ -184,57 +188,35 @@ async function inspectBrowserEnvironment(): Promise<Record<string, unknown>> {
   };
 }
 
-function sourceLabel(source: ModelSource): string {
-  if (typeof source === 'string') return source;
-  if (source instanceof File) return source.name;
-  if (Array.isArray(source)) {
-    const first = source[0];
-    return typeof first === 'string' ? first : first?.name ?? 'model shards';
+function locationLabel(location: ModelLocation): string {
+  switch (location.kind) {
+    case 'files':
+      return location.modelFiles[0]?.name ?? 'model shards';
+    case 'urls':
+      return location.modelUrls[0] ?? 'model.gguf';
   }
-  if ('model' in source) {
-    return sourceLabel(source.model);
-  }
-  return 'model.gguf';
 }
 
-function isModelSourceObject(
-  source: ModelSource
-): source is Extract<ModelSource, { model: ModelSource }> {
-  return (
-    typeof source === 'object' &&
-    source != null &&
-    !(source instanceof File) &&
-    !Array.isArray(source) &&
-    'model' in source
-  );
+function locationKey(location: ModelLocation): string {
+  switch (location.kind) {
+    case 'files':
+      return `files:${location.modelFiles
+        .map((file) => `${file.name}:${file.size}:${file.lastModified}`)
+        .join('|')};projector=${location.projectorFile?.name ?? 'none'}`;
+    case 'urls':
+      return `urls:${location.modelUrls.join('|')};projector=${location.projectorUrl ?? 'none'}`;
+  }
 }
 
-function sourceKey(source: ModelSource): string {
-  if (typeof source === 'string') return `string:${source}`;
-  if (source instanceof File) {
-    return `file:${source.name}:${source.size}:${source.lastModified}`;
+function withProjector(location: ModelLocation, projector?: string | File): ModelLocation {
+  if (projector == null) return location;
+  if (location.kind === 'urls' && typeof projector === 'string') {
+    return { ...location, projectorUrl: projector };
   }
-  if (Array.isArray(source)) {
-    return `array:[${source.map((item) => sourceKey(item)).join('|')}]`;
+  if (location.kind === 'files' && projector instanceof File) {
+    return { ...location, projectorFile: projector };
   }
-  if (!isModelSourceObject(source)) {
-    return 'unknown:model-source';
-  }
-  return `pair:model=${sourceKey(source.model)};projector=${source.projector == null ? 'none' : sourceKey(source.projector)
-    }`;
-}
-
-function withProjector(source: ModelSource, projector?: string | File): ModelSource {
-  if (projector == null) return source;
-  if (
-    typeof source === 'object' &&
-    source != null &&
-    !(source instanceof File) &&
-    !Array.isArray(source)
-  ) {
-    return { ...source, projector };
-  }
-  return { model: source, projector };
+  throw new Error('Model and projector must both be URLs or both be local files.');
 }
 
 async function fetchImageBytes(source: string): Promise<Uint8Array[]> {
@@ -283,7 +265,7 @@ const DEFAULT_VISION_PROMPT =
 const DEFAULT_EMBED_PROMPT = 'search_query: browser-hosted inference playground observability';
 const DEFAULT_TOKEN_COUNT = 64;
 const ENCODER_DECODER_TOKEN_COUNT = 32;
-type ModelSourceType = 'registry' | 'url' | 'file';
+type ModelSelectionMode = 'registry' | 'url' | 'file';
 type PlaygroundView =
   | 'requests'
   | 'vision'
@@ -402,8 +384,11 @@ function defaultTokenCountForRegistryEntry(model: ModelRegistryEntry): number {
     : DEFAULT_TOKEN_COUNT;
 }
 
-const MODEL_SOURCE_OPTIONS: readonly { readonly label: string; readonly value: ModelSourceType }[] = [
-  { label: 'Library', value: 'registry' },
+const MODEL_SELECTION_OPTIONS: readonly {
+  readonly label: string;
+  readonly value: ModelSelectionMode;
+}[] = [
+  { label: 'Catalog', value: 'registry' },
   { label: 'URL', value: 'url' },
   { label: 'Local File', value: 'file' },
 ];
@@ -504,7 +489,7 @@ export default function App() {
   const [status, setStatus] = useState('booting');
   const [isBusy, setIsBusy] = useState(false);
   const [activeView, setActiveView] = useState<PlaygroundView>('requests');
-  const [modelType, setModelType] = useState<ModelSourceType>('registry');
+  const [selectionMode, setSelectionMode] = useState<ModelSelectionMode>('registry');
   const [selectedRegistryId, setSelectedRegistryId] = useState(MODEL_REGISTRY[0].id);
   const selectedModel = getModelById(selectedRegistryId) ?? MODEL_REGISTRY[0];
   const selectedVariant = getDefaultVariant(selectedModel);
@@ -522,7 +507,7 @@ export default function App() {
   const [imageMeta, setImageMeta] = useState<ImageSelectionMeta | null>(null);
   const [imageEnabled, setImageEnabled] = useState(false);
   const [currentModel, setCurrentModel] = useState<ModelInfo | null>(null);
-  const [installedModels, setInstalledModels] = useState<ModelInfo[]>([]);
+  const [installedModels, setInstalledModels] = useState<ManagedModel[]>([]);
   const [observability, setObservability] = useState<ObservabilitySnapshot | null>(null);
   const [response, setResponse] = useState('');
   const [lastRun, setLastRun] = useState<{
@@ -548,7 +533,7 @@ export default function App() {
   const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectorFileInputRef = useRef<HTMLInputElement>(null);
-  const loadedSourceKeyRef = useRef<string | null>(null);
+  const loadedLocationKeyRef = useRef<string | null>(null);
   const responseElementRef = useRef<HTMLDivElement>(null);
 
   const createResponseRenderer = (maxStreams = 1, flushMode: 'frame' | 'immediate' = 'frame') => {
@@ -650,9 +635,9 @@ export default function App() {
           originalUnsubscribe();
         };
         setClient(nextClient);
-        setCurrentModel(nextClient.currentLocal());
+        setCurrentModel(nextClient.observability.current().model);
         setObservability(nextClient.observability.current());
-        setInstalledModels(await nextClient.listLocal());
+        setInstalledModels(await nextClient.models.list());
         setStatus('idle');
       } catch (error) {
         if (disposed) {
@@ -694,16 +679,18 @@ export default function App() {
     return url.length > 0 ? url : undefined;
   };
 
-  const modelSource = (): ModelSource | null => {
-    if (modelType === 'registry') return selectedVariant.source;
-    if (modelType === 'url') {
+  const modelLocation = (): ModelLocation | null => {
+    if (selectionMode === 'registry') return selectedVariant.location;
+    if (selectionMode === 'url') {
       const projector = projectorOverride();
-      return modelUrl.trim().length > 0 ? withProjector(modelUrl.trim(), projector) : null;
+      return modelUrl.trim().length > 0
+        ? withProjector({ kind: 'urls', modelUrls: [modelUrl.trim()] }, projector)
+        : null;
     }
     const files = Array.from(fileInputRef.current?.files ?? []);
     if (files.length === 0) return null;
     const projector = projectorOverride();
-    return withProjector(files.length === 1 ? files[0] : files, projector);
+    return withProjector({ kind: 'files', modelFiles: files }, projector);
   };
 
   const applyEmbeddingUseCase = (value: EmbeddingUseCase): void => {
@@ -746,42 +733,43 @@ export default function App() {
   };
 
   const refreshModels = async (targetClient: SippClient) => {
-    setCurrentModel(targetClient.currentLocal());
+    setCurrentModel(targetClient.observability.current().model);
     setObservability(targetClient.observability.current());
-    setInstalledModels(await targetClient.listLocal());
+    setInstalledModels(await targetClient.models.list());
   };
 
-  const loadLocalSelection = async (
+  const activateModel = async (
     targetClient: SippClient,
-    source: ModelSource
+    location: ModelLocation
   ): Promise<ModelInfo> => {
     const start = performance.now();
-    await targetClient.add('playground-local', {
-      kind: 'local',
-      source,
-      options: {
+    const onProgress: NonNullable<ModelInstallOptions['onProgress']> = (progress) => {
+      if (progress.phase === 'download') {
+        setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
+      } else if (progress.phase === 'store') {
+        setStatus(`Storing model ${Math.floor(progress.percent ?? 0)}%`);
+      } else if (progress.phase === 'split') {
+        setStatus(`Preparing model shards ${Math.floor(progress.percent ?? 0)}%`);
+      } else if (progress.phase === 'load') {
+        setStatus('Loading into memory');
+      }
+    };
+    const model = await installModel(targetClient, location, { onProgress });
+    await targetClient.add(
+      'playground-local',
+      EndpointDescriptor.local(model.id, {
         observability: 'profile',
         runtime: getDefaultRuntimeOptions(),
-        onProgress: (progress) => {
-          if (progress.phase === 'download') {
-            setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
-          } else if (progress.phase === 'store') {
-            setStatus(`Storing model ${Math.floor(progress.percent ?? 0)}%`);
-          } else if (progress.phase === 'split') {
-            setStatus(`Preparing model shards ${Math.floor(progress.percent ?? 0)}%`);
-          } else if (progress.phase === 'load') {
-            setStatus('Loading into memory');
-          }
-        },
-      },
-    });
-    const info = targetClient.currentLocal();
+        onProgress,
+      })
+    );
+    const info = targetClient.observability.current().model;
     if (info == null) {
       throw new Error('Local model did not become active.');
     }
     setLastLoadMs(round(performance.now() - start));
-    setSourceInfo({ label: sourceLabel(source), bytes: info.bytes });
-    loadedSourceKeyRef.current = sourceKey(source);
+    setSourceInfo({ label: locationLabel(location), bytes: info.bytes });
+    loadedLocationKeyRef.current = locationKey(location);
     if (!modelSupportsOperation(info, operation)) {
       setOperation(defaultOperationForModel(info));
     }
@@ -799,14 +787,14 @@ export default function App() {
 
   const loadSelectedModel = async () => {
     if (client == null) return;
-    const source = modelSource();
-    if (source == null) {
-      setStatus('Select a model source first.');
+    const location = modelLocation();
+    if (location == null) {
+      setStatus('Choose a model first.');
       return;
     }
     setIsBusy(true);
     try {
-      const info = await loadLocalSelection(client, source);
+      const info = await activateModel(client, location);
       setStatus(info.status === 'ready' ? `loaded ${info.name}` : `${info.name}: ${info.status}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -826,22 +814,23 @@ export default function App() {
     setResponse('');
     setLastRun(null);
     try {
-      const source = modelSource();
-      if (source == null) {
-        setStatus('Select a model source first.');
+      const location = modelLocation();
+      if (location == null) {
+        setStatus('Choose a model first.');
         return;
       }
-      const nextSourceKey = sourceKey(source);
-      const loadedModel = client.currentLocal();
+      const nextLocationKey = locationKey(location);
+      const loadedModel = client.observability.current().model;
       let requestOperation = requestedOperation;
       let requestPrompt = prompt;
       let requestTokenCount = tokenCount;
       if (
         loadedModel == null ||
         loadedModel.status !== 'ready' ||
-        (loadedSourceKeyRef.current != null && loadedSourceKeyRef.current !== nextSourceKey)
+        (loadedLocationKeyRef.current != null &&
+          loadedLocationKeyRef.current !== nextLocationKey)
       ) {
-        const info = await loadLocalSelection(client, source);
+        const info = await activateModel(client, location);
         if (!modelSupportsOperation(info, requestOperation)) {
           setStatus(`${info.name} does not support ${requestOperation}.`);
           return;
@@ -927,9 +916,9 @@ export default function App() {
 
   const runBenchmark = async () => {
     if (client == null) return;
-    const source = modelSource();
-    if (source == null) {
-      setStatus('Select a model source first.');
+    const location = modelLocation();
+    if (location == null) {
+      setStatus('Choose a model first.');
       return;
     }
 
@@ -940,7 +929,7 @@ export default function App() {
     setMemorySnapshots([]);
     setBenchmarkReport(null);
     let benchmarkOperation = operation;
-    const loadedModel = client.currentLocal();
+    const loadedModel = client.observability.current().model;
     let benchmarkPrompt = prompt;
     let benchmarkTokenCount = tokenCount;
     if (loadedModel != null && !modelSupportsOperation(loadedModel, benchmarkOperation)) {
@@ -952,7 +941,7 @@ export default function App() {
     let benchmarkTokenObserver: BenchmarkTokenObserver | undefined;
 
     try {
-      const info = await loadLocalSelection(client, source);
+      const info = await activateModel(client, location);
       if (!modelSupportsOperation(info, benchmarkOperation)) {
         benchmarkOperation = defaultOperationForModel(info);
       }
@@ -991,7 +980,7 @@ export default function App() {
             client,
             benchmarkOperation,
             scenario,
-            source,
+            location,
             warmupRuns,
             measuredRuns,
             defaultRuntime,
@@ -1016,7 +1005,7 @@ export default function App() {
           client,
           benchmarkOperation,
           mixedDefinition,
-          source,
+          location,
           warmupRuns,
           measuredRuns,
           runtimeOptionsForMixedLoad(defaultRuntime, mixedDefinition.concurrency),
@@ -1042,7 +1031,7 @@ export default function App() {
         generatedAt: new Date().toISOString(),
         model: info,
         source: {
-          label: sourceLabel(source),
+          label: locationLabel(location),
           bytes: info.bytes,
         },
         settings: {
@@ -1150,18 +1139,18 @@ export default function App() {
   const selectedEmbeddingUseCase =
     EMBEDDING_USE_CASES.find((useCase) => useCase.value === embeddingUseCase) ??
     EMBEDDING_USE_CASES[0];
-  const selectedSourceForState = modelSource();
-  const selectedSourceKey =
-    selectedSourceForState == null ? null : sourceKey(selectedSourceForState);
+  const selectedLocation = modelLocation();
+  const selectedLocationKey =
+    selectedLocation == null ? null : locationKey(selectedLocation);
   const isLoadedSelectedSource =
     currentModel?.loaded === true &&
-    selectedSourceKey != null &&
-    loadedSourceKeyRef.current === selectedSourceKey;
+    selectedLocationKey != null &&
+    loadedLocationKeyRef.current === selectedLocationKey;
 
   const selectedRegistryOperationReason = (
     requestedOperation: BenchmarkOperation
   ): string | null => {
-    if (modelType !== 'registry') {
+    if (selectionMode !== 'registry') {
       return null;
     }
     if (registryModelSupportsOperation(selectedModel, requestedOperation)) {
@@ -1191,13 +1180,13 @@ export default function App() {
   const textOperation: TextOperation = operation === 'query' ? 'query' : 'chat';
   const textRequestDisabledReason = operationDisabledReason(textOperation);
   const visionDisabledReason =
-    modelType === 'registry' && !isVisionModel(selectedModel)
+    selectionMode === 'registry' && !isVisionModel(selectedModel)
       ? `${selectedModel.name} is a ${capabilityLabel(selectedModel.capability)} model. Select a Vision model to enable image inputs.`
       : isLoadedSelectedSource && currentModel != null && currentModel.modality !== 'vision'
         ? `${currentModel.name} is loaded as a ${currentModel.modality} model. Load a Vision model to enable image inputs.`
         : null;
   const embeddingDisabledReason =
-    modelType === 'registry' && !isEmbeddingModel(selectedModel)
+    selectionMode === 'registry' && !isEmbeddingModel(selectedModel)
       ? `${selectedModel.name} is a ${capabilityLabel(selectedModel.capability)} model. Select an Embed model to generate vectors.`
       : isLoadedSelectedSource &&
           currentModel?.capabilities != null &&
@@ -1208,7 +1197,7 @@ export default function App() {
     projectorUrl.trim().length > 0 ||
     (projectorFileInputRef.current?.files?.length ?? 0) > 0;
   const projectorDetail =
-    modelType === 'registry'
+    selectionMode === 'registry'
       ? isVisionModel(selectedModel)
         ? 'registry/default'
         : 'n/a'
@@ -1216,14 +1205,14 @@ export default function App() {
         ? 'url/file override'
         : 'not provided';
   const sourceDetailRows =
-    modelType === 'registry'
+    selectionMode === 'registry'
       ? [
           { label: 'Capability', value: capabilityLabel(selectedModel.capability) },
           { label: 'Variant', value: getDefaultVariant(selectedModel).quant },
           { label: 'Download', value: formatSize(totalVariantSize(selectedModel)) },
           { label: 'Projector', value: projectorDetail },
         ]
-      : modelType === 'url'
+      : selectionMode === 'url'
         ? [
             { label: 'Capability', value: currentModel?.capabilities == null ? 'unknown until load' : 'loaded' },
             { label: 'Model URL', value: modelUrl.trim().length > 0 ? 'provided' : 'missing' },
@@ -1438,20 +1427,20 @@ export default function App() {
 
       <main className="app-layout">
         <aside className="control-rail">
-          <Panel title="Model Source">
+          <Panel title="Model">
             <div className="form-stack">
               <div className="field">
                 <label>Source Type</label>
                 <SegmentedControl
-                  ariaLabel="Model source type"
-                  onChange={setModelType}
-                  options={MODEL_SOURCE_OPTIONS}
-                  value={modelType}
+                  ariaLabel="Model selection"
+                  onChange={setSelectionMode}
+                  options={MODEL_SELECTION_OPTIONS}
+                  value={selectionMode}
                 />
               </div>
               <div className="field">
                 <label>Model</label>
-                {modelType === 'registry' ? (
+                {selectionMode === 'registry' ? (
                   <select
                     value={selectedRegistryId}
                     onChange={(event) => {
@@ -1466,7 +1455,7 @@ export default function App() {
                       </option>
                     ))}
                   </select>
-                ) : modelType === 'url' ? (
+                ) : selectionMode === 'url' ? (
                   <input
                     value={modelUrl}
                     onChange={(event) => setModelUrl(event.target.value)}
@@ -1477,7 +1466,7 @@ export default function App() {
                 )}
               </div>
               {renderDetailTable(sourceDetailRows)}
-              {modelType !== 'registry' ? (
+              {selectionMode !== 'registry' ? (
                 <div className="field">
                   <label>Projector (optional)</label>
                   <input
@@ -1647,7 +1636,7 @@ export default function App() {
                 }
               >
                 <div className="form-stack">
-                  {modelType === 'registry' ? (
+                  {selectionMode === 'registry' ? (
                     <div className="field">
                       <label>Vision Model</label>
                       <select
@@ -1788,7 +1777,7 @@ export default function App() {
                 }
               >
                 <div className="form-stack">
-                  {modelType === 'registry' ? (
+                  {selectionMode === 'registry' ? (
                     <div className="field">
                       <label>Embedding Model</label>
                       <select

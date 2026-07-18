@@ -44,8 +44,8 @@ CPU 原生后端是基础能力，不需要 Cargo feature。其他后端特性�
 
 ```rust
 use sipp::{
-    SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor,
-    LocalTextOptions,
+    LocalDescriptor, LocalTextOptions, SippClient, SippQueryRequest,
+    SippTextOptions,
 };
 use sipp::engine::{
     CacheRuntimeConfig, ContextRuntimeConfig, KvReuseMode, NativeRuntimeConfig,
@@ -55,13 +55,11 @@ use sipp::engine::{
 async fn run(
     model_path: std::path::PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = SippClient::new();
-    let endpoint = client
-        .add(
-            "default",
-            EndpointDescriptor::local(model_path, runtime_config()),
-        )
-        .await?;
+    let mut client = SippClient::new()?;
+    let model = client.models().install_files([model_path]).await?;
+    let mut descriptor = LocalDescriptor::new(model.id);
+    descriptor.config = runtime_config();
+    let endpoint = client.add("default", descriptor).await?;
 
     let response = client
         .query(SippQueryRequest {
@@ -112,16 +110,15 @@ fn runtime_config() -> NativeRuntimeConfig {
 
 ```rust
 use sipp::{
-    SippClient, SippQueryRequest, SippTextOptions, EndpointDescriptor,
-    GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
-    GatewayTimeoutPolicy,
+    GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewaySecret,
+    GatewayTimeoutPolicy, SippClient, SippQueryRequest, SippTextOptions,
 };
 
-let mut client = SippClient::new();
+let mut client = SippClient::new()?;
 let endpoint = client
     .add(
         "gateway",
-        EndpointDescriptor::gateway(GatewayEndpointConfig {
+        GatewayDescriptor {
             target: std::env::var("SIPP_GATEWAY_TARGET")?,
             base_url: std::env::var("SIPP_GATEWAY_URL")?,
             routes: GatewayRoutes::default(),
@@ -131,7 +128,7 @@ let endpoint = client
             static_headers: Default::default(),
             timeouts: GatewayTimeoutPolicy::default(),
             protocol_options: Default::default(),
-        }),
+        },
     )
     .await?;
 

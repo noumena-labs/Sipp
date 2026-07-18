@@ -19,7 +19,7 @@ use sipp::engine::protocol::RequestStats as CoreRequestStats;
 use sipp::engine::{PoolingType as CorePoolingType, TokenBatch as CoreTokenBatch};
 use sipp::{
     EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
-    ProviderEndpointError as CoreProviderEndpointError,
+    ManagedModel as CoreManagedModel, ProviderEndpointError as CoreProviderEndpointError,
     ProviderEndpointErrorKind as CoreProviderEndpointErrorKind,
     SippCancellationHandle as CoreCancellationHandle,
     SippCancellationReason as CoreCancellationReason, SippClient as CoreClient,
@@ -43,6 +43,7 @@ type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>
 type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
 type SharedClientTokenBatches = Arc<Mutex<Option<CoreClientTokenBatches>>>;
 type ClientTaskOutput<T> = std::result::Result<T, CoreClientError>;
+type ModelTaskOutput<T> = std::result::Result<T, sipp::lifecycle::ModelError>;
 
 const CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
@@ -733,12 +734,12 @@ impl From<&ProviderStaticHeader> for dto::ProviderStaticHeader {
     }
 }
 
-/// Local or direct provider endpoint descriptor accepted by add.
+/// Local, gateway, or direct provider endpoint descriptor accepted by add.
 #[napi(object)]
 pub struct EndpointDescriptor {
     pub kind: String,
-    #[napi(js_name = "modelPath")]
-    pub model_path: Option<String>,
+    #[napi(js_name = "modelId")]
+    pub model_id: Option<String>,
     pub config: Option<NativeRuntimeConfig>,
     #[napi(js_name = "baseUrl")]
     pub base_url: Option<String>,
@@ -773,7 +774,7 @@ impl From<&EndpointDescriptor> for dto::EndpointDescriptor {
     fn from(value: &EndpointDescriptor) -> Self {
         Self {
             kind: value.kind.clone(),
-            model_path: value.model_path.clone(),
+            model_id: value.model_id.clone(),
             config: value.config.as_ref().map(dto::NativeRuntimeConfig::from),
             base_url: value.base_url.clone(),
             target: value.target.clone(),
@@ -800,6 +801,26 @@ impl From<&EndpointDescriptor> for dto::EndpointDescriptor {
             embed_route: value.embed_route.clone(),
             protocol_options: value.protocol_options.clone(),
         }
+    }
+}
+
+/// Model managed by a client model store.
+#[napi(object)]
+pub struct ManagedModel {
+    pub id: String,
+    pub name: String,
+    pub bytes: f64,
+    pub modality: String,
+    pub status: String,
+}
+
+fn managed_model_to_node(model: CoreManagedModel) -> ManagedModel {
+    ManagedModel {
+        id: model.id,
+        name: model.name,
+        bytes: model.bytes as f64,
+        modality: model.modality.as_str().to_string(),
+        status: model.status.as_str().to_string(),
     }
 }
 
@@ -992,6 +1013,81 @@ pub struct TokenBatch {
     pub stats: TokenEmissionStats,
 }
 
+/// Options for installing model files.
+#[napi(object)]
+pub struct FileInstallOptions {
+    #[napi(js_name = "projectorPath")]
+    pub projector_path: Option<String>,
+}
+
+/// Options for installing model URLs.
+#[napi(object)]
+pub struct UrlInstallOptions {
+    #[napi(js_name = "projectorUrl")]
+    pub projector_url: Option<String>,
+}
+
+/// Client storage configuration.
+#[napi(object)]
+pub struct SippClientOptions {
+    #[napi(js_name = "storageRoot")]
+    pub storage_root: Option<String>,
+}
+
+/// Persistent models owned by a Sipp client.
+#[napi(js_name = "ModelStore")]
+pub struct ModelStore {
+    client: SharedSippClient,
+}
+
+#[napi]
+impl ModelStore {
+    /// Install model files from the host filesystem.
+    #[napi(js_name = "installFiles", ts_return_type = "Promise<ManagedModel>")]
+    pub fn install_files(
+        &self,
+        model_paths: Vec<String>,
+        options: Option<FileInstallOptions>,
+    ) -> AsyncTask<ModelInstallFilesTask> {
+        AsyncTask::new(ModelInstallFilesTask {
+            client: self.client.clone(),
+            model_paths,
+            projector_path: options.and_then(|options| options.projector_path),
+        })
+    }
+
+    /// Download and install model files from HTTP(S) URLs.
+    #[napi(js_name = "installUrls", ts_return_type = "Promise<ManagedModel>")]
+    pub fn install_urls(
+        &self,
+        model_urls: Vec<String>,
+        options: Option<UrlInstallOptions>,
+    ) -> AsyncTask<ModelInstallUrlsTask> {
+        AsyncTask::new(ModelInstallUrlsTask {
+            client: self.client.clone(),
+            model_urls,
+            projector_url: options.and_then(|options| options.projector_url),
+        })
+    }
+
+    /// List installed models.
+    #[napi(ts_return_type = "Promise<Array<ManagedModel>>")]
+    pub fn list(&self) -> AsyncTask<ModelListTask> {
+        AsyncTask::new(ModelListTask {
+            client: self.client.clone(),
+        })
+    }
+
+    /// Remove an installed model that is not used by an endpoint.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn remove(&self, model_id: String) -> AsyncTask<ModelRemoveTask> {
+        AsyncTask::new(ModelRemoveTask {
+            client: self.client.clone(),
+            model_id,
+        })
+    }
+}
+
 /// Client facade for registered inference endpoints.
 #[napi(js_name = "SippClient")]
 pub struct SippClient {
@@ -1001,10 +1097,23 @@ pub struct SippClient {
 #[napi]
 impl SippClient {
     #[napi(constructor)]
-    pub fn new() -> Result<Self> {
+    pub fn new(options: Option<SippClientOptions>) -> Result<Self> {
+        let storage_root = options.and_then(|options| options.storage_root);
+        let client = match storage_root {
+            Some(storage_root) => CoreClient::with_storage_root(storage_root),
+            None => CoreClient::new(),
+        }
+        .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
         Ok(Self {
-            inner: Arc::new(Mutex::new(CoreClient::new())),
+            inner: Arc::new(Mutex::new(client)),
         })
+    }
+
+    #[napi(getter)]
+    pub fn models(&self) -> ModelStore {
+        ModelStore {
+            client: self.inner.clone(),
+        }
     }
 
     /// Register or replace an endpoint and return its current reference.
@@ -1022,6 +1131,15 @@ impl SippClient {
                 CoreEndpointDescriptor::try_from(&descriptor).map_err(convert_error)?
             },
         }))
+    }
+
+    /// Remove a registered endpoint.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn remove(&self, id: String) -> AsyncTask<ClientRemoveTask> {
+        AsyncTask::new(ClientRemoveTask {
+            client: self.inner.clone(),
+            id,
+        })
     }
 
     #[napi(ts_return_type = "SippTextRun")]
@@ -1186,6 +1304,145 @@ impl Task for ClientAddTask {
         output
             .map(endpoint_ref_to_node)
             .map_err(|error| client_error_to_node(env, error))
+    }
+}
+
+pub struct ClientRemoveTask {
+    client: SharedSippClient,
+    id: String,
+}
+
+impl Task for ClientRemoveTask {
+    type Output = ClientTaskOutput<()>;
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        Ok(block_on(client.remove(&self.id)))
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output.map_err(|error| client_error_to_node(env, error))
+    }
+}
+
+pub struct ModelInstallFilesTask {
+    client: SharedSippClient,
+    model_paths: Vec<String>,
+    projector_path: Option<String>,
+}
+
+impl Task for ModelInstallFilesTask {
+    type Output = ModelTaskOutput<CoreManagedModel>;
+    type JsValue = ManagedModel;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        let model_paths = std::mem::take(&mut self.model_paths);
+        let result = match self.projector_path.take() {
+            Some(projector_path) => block_on(
+                client
+                    .models()
+                    .install_files_with_projector(model_paths, projector_path),
+            ),
+            None => block_on(client.models().install_files(model_paths)),
+        };
+        Ok(result)
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(managed_model_to_node)
+            .map_err(|error| model_lifecycle_error_to_node(env, error))
+    }
+}
+
+pub struct ModelInstallUrlsTask {
+    client: SharedSippClient,
+    model_urls: Vec<String>,
+    projector_url: Option<String>,
+}
+
+impl Task for ModelInstallUrlsTask {
+    type Output = ModelTaskOutput<CoreManagedModel>;
+    type JsValue = ManagedModel;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        let model_urls = std::mem::take(&mut self.model_urls);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                napi_error(format!("failed to start model download runtime: {error}"))
+            })?;
+        let result = match self.projector_url.take() {
+            Some(projector_url) => runtime.block_on(
+                client
+                    .models()
+                    .install_urls_with_projector(model_urls, projector_url),
+            ),
+            None => runtime.block_on(client.models().install_urls(model_urls)),
+        };
+        Ok(result)
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(managed_model_to_node)
+            .map_err(|error| model_lifecycle_error_to_node(env, error))
+    }
+}
+
+pub struct ModelListTask {
+    client: SharedSippClient,
+}
+
+impl Task for ModelListTask {
+    type Output = Vec<CoreManagedModel>;
+    type JsValue = Vec<ManagedModel>;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        Ok(block_on(client.models().list()))
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        Ok(output.into_iter().map(managed_model_to_node).collect())
+    }
+}
+
+pub struct ModelRemoveTask {
+    client: SharedSippClient,
+    model_id: String,
+}
+
+impl Task for ModelRemoveTask {
+    type Output = ModelTaskOutput<()>;
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        Ok(block_on(client.models().remove(&self.model_id)))
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output.map_err(|error| model_lifecycle_error_to_node(env, error))
     }
 }
 
@@ -1354,6 +1611,30 @@ fn endpoint_error_to_node(env: Env, error: sipp::EndpointError) -> Error {
     }
 }
 
+fn model_lifecycle_error_to_node(env: Env, error: sipp::lifecycle::ModelError) -> Error {
+    match model_lifecycle_error_to_node_result(env, error) {
+        Ok(error) => error,
+        Err(error) => error,
+    }
+}
+
+fn model_lifecycle_error_to_node_result(
+    env: Env,
+    error: sipp::lifecycle::ModelError,
+) -> Result<Error> {
+    let mut object = env.create_error(Error::new(Status::GenericFailure, error.to_string()))?;
+    object.set("name", "ModelLifecycleError")?;
+    object.set("code", error.code())?;
+    object.set("status", error.status())?;
+    object.set(
+        "retryAfterMs",
+        error
+            .retry_after_ms()
+            .map(|milliseconds| milliseconds as f64),
+    )?;
+    Ok(Error::from(object.to_unknown()))
+}
+
 fn endpoint_error_to_node_result(env: Env, error: sipp::EndpointError) -> Result<Error> {
     let mut object = env.create_error(Error::new(Status::GenericFailure, error.to_string()))?;
     object.set("name", "EndpointError")?;
@@ -1391,6 +1672,7 @@ fn provider_error_to_node_result(env: Env, error: CoreProviderEndpointError) -> 
 fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
+        CoreClientError::ModelLifecycle(error) => model_lifecycle_error_to_node(env, error),
         CoreClientError::Endpoint(error) => endpoint_error_to_node(env, error),
         CoreClientError::Provider(error) => provider_error_to_node(env, error),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),

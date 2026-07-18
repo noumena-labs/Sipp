@@ -15,7 +15,7 @@ credential lifecycle and application policy. This is the recommended framework
 route pattern for Next.js and TanStack server code.
 
 ```ts
-import { SippClient } from '@sipphq/sipp-server';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -26,12 +26,11 @@ function requiredEnv(name: string): string {
 }
 
 const client = new SippClient();
-const endpoint = await client.add('provider', {
-  kind: 'provider',
+const endpoint = await client.add('provider', EndpointDescriptor.provider({
   provider: 'openai',
   model: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
   apiKey: requiredEnv('OPENAI_API_KEY'),
-});
+}));
 
 const run = client.chat({
   endpoint,

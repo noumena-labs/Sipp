@@ -2,14 +2,18 @@
 
 Sipp 本地推理依赖 GGUF 模型文件。文本工作流需要文本 GGUF 模型，嵌入工作流需要模型明确支持并开启嵌入特性，视觉对话工作流则同时需要模型 GGUF 和其专属的 projector 文件。
 
-## 指定模型路径
+## 托管模型
 
-在本地环境使用 Node.js、Python 或 Rust 包时，传入显式的 GGUF 模型路径；浏览器端代码则传入 GGUF 模型的 URL：
+每个客户端拥有一个模型存储。安装文件或 URL 会返回 `ManagedModel`；将其 `id` 传给本地端点描述符。端点描述符只选择已安装模型并保存加载选项。
 
-- 浏览器：`source: '/models/model.gguf'`
-- Node.js：`modelPath: '/path/to/model.gguf'`
-- Python：`LocalModelDescriptor('/path/to/model.gguf')`
-- Rust：`EndpointDescriptor::local(model_path, config)`
+原生客户端默认使用 `.sipp-models`，浏览器客户端默认使用 OPFS 中的 `sipp-models` 目录。只有需要隔离模型时才覆盖根目录：
+
+- 浏览器：`new SippClient({ storageRoot: 'tenant/models' })` 选择 OPFS 内的目录。
+- Node.js：`new SippClient({ storageRoot: '/custom/models' })`。
+- Python：`SippClient(storage_root='/custom/models')`。
+- Rust：`SippClient::with_storage_root("/custom/models")?`。
+
+删除模型前，先用 `client.remove(endpointId)` 删除本地端点，再用 `client.models.remove(modelId)` 删除模型。正在被端点使用的模型不能删除。
 
 源码示例和冒烟测试可直接加载 `.build/models` 目录下缓存的示例模型，详情见[源码构建](../maintainers/source-builds.md)。
 

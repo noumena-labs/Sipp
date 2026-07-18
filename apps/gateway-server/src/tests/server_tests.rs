@@ -16,7 +16,7 @@ use axum::http::{
 use sipp::engine::{GpuLayerConfig, NativeRuntimeConfig};
 use sipp::lifecycle::{BackendCapabilities, StatsMode};
 use sipp::{
-    EndpointDescriptor, GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes,
+    EndpointDescriptor, GatewayAuthentication, GatewayDescriptor, GatewayRoutes,
     GatewayTimeoutPolicy, SippClient,
 };
 use tower::ServiceExt;
@@ -46,11 +46,11 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
         metrics: Some("/telemetry".to_string()),
         admin: Some("/admin".to_string()),
     };
-    let mut client = SippClient::new();
+    let mut client = SippClient::new().expect("client");
     let endpoint = client
         .add(
             "gateway-upstream",
-            EndpointDescriptor::gateway(GatewayEndpointConfig {
+            EndpointDescriptor::Gateway(GatewayDescriptor {
                 target: "upstream".to_string(),
                 base_url: base_url.clone(),
                 routes: GatewayRoutes::default(),
@@ -109,6 +109,7 @@ fn test_security_config() -> SecurityConfig {
 
 fn test_gateway_config() -> GatewayServerConfig {
     GatewayServerConfig {
+        storage_root: ".sipp-models".into(),
         public_bind: "127.0.0.1:8080".parse().expect("public bind"),
         management_bind: "127.0.0.1:9090".parse().expect("management bind"),
         max_request_bytes: 1024,

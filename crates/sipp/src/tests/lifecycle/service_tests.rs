@@ -1,11 +1,10 @@
 //! Tests the `lifecycle::service` module in `sipp`.
 //!
-//! Covers lifecycle registry, storage, browser, service, and pairing behavior with temporary storage and pure fixtures instead of native runtime loading.
+//! Covers registry, storage, service, and pairing behavior with temporary
+//! storage and pure fixtures instead of native runtime loading.
 
 use super::helpers::model_id_from_plan;
 use super::*;
-use crate::engine::protocol::EngineStatus;
-use crate::engine::{ChatMessage, ChatRequest, ChatRole, EmbedOptions, EmbedRequest, QueryRequest};
 use crate::lifecycle::test_support::{some_string, strings, TempDir};
 use crate::lifecycle::{
     model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind,
@@ -64,15 +63,33 @@ fn service_installs_and_lists_text_asset() {
     let model = root.path.join("model.gguf");
     fs::write(&model, b"not a gguf").expect("model");
 
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
-    let source = model_source_from_path(&model);
-    let result = service.resolve_source(source).expect("resolved");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    let installed = block_on(store.install_files([model])).expect("installed");
+    let state = block_on(store.state.lock());
+    let model = state
+        .registry
+        .manifest
+        .models
+        .get(&installed.id)
+        .expect("installed model");
+    assert_eq!(model.status, ModelStatus::Ready);
+}
 
-    let models = service.list();
-    assert_eq!(models.len(), 1);
-    assert_eq!(models[0].id, result.entry_id);
-    assert_eq!(models[0].status, ModelStatus::Ready);
-    assert_eq!(models[0].bytes, 10);
+#[test]
+fn store_rejects_removing_a_model_in_use() {
+    let root = TempDir::new("service", "remove-in-use");
+    let model_path = root.path.join("model.gguf");
+    fs::write(&model_path, b"not a gguf").expect("model");
+
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    let model = block_on(store.install_files([model_path])).expect("installed");
+    block_on(store.replace_usage(None, Some(&model.id)));
+
+    let error = block_on(store.remove(&model.id)).expect_err("model is in use");
+    assert!(matches!(error, ModelError::ModelInUse(id) if id == model.id));
+
+    block_on(store.replace_usage(Some(&model.id), None));
+    block_on(store.remove(&model.id)).expect("removed");
 }
 
 #[test]
@@ -81,28 +98,24 @@ fn cached_local_asset_requires_matching_source_hash() {
     let model = root.path.join("model.gguf");
     fs::write(&model, b"first bytes").expect("model");
 
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
-    let first = service
-        .resolve_source(model_source_from_path(&model))
-        .expect("first");
-    let first_asset_id = service
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    let first = block_on(store.install_files([model.clone()])).expect("first");
+    let first_asset_id = block_on(store.state.lock())
         .registry
         .manifest
         .models
-        .get(&first.entry_id)
+        .get(&first.id)
         .expect("first model")
         .model_asset_ids[0]
         .clone();
 
     fs::write(&model, b"secondbytes").expect("same len replacement");
-    let second = service
-        .resolve_source(model_source_from_path(&model))
-        .expect("second");
-    let second_asset_id = service
+    let second = block_on(store.install_files([model])).expect("second");
+    let second_asset_id = block_on(store.state.lock())
         .registry
         .manifest
         .models
-        .get(&second.entry_id)
+        .get(&second.id)
         .expect("second model")
         .model_asset_ids[0]
         .clone();
@@ -113,9 +126,9 @@ fn cached_local_asset_requires_matching_source_hash() {
 #[test]
 fn service_rejects_unresolved_vision_model_on_load() {
     let root = TempDir::new("service", "needs-projector");
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
     let plan = vision_plan();
-    let mut record = AssetRecord {
+    let record = AssetRecord {
         id: "asset-a".to_string(),
         kind: ModelAssetKind::Model,
         name: "vision.gguf".to_string(),
@@ -137,62 +150,18 @@ fn service_rejects_unresolved_vision_model_on_load() {
             provided_vision_projector_type: None,
         }),
     };
-    service
-        .registry
-        .upsert_asset(record.clone())
-        .expect("asset");
     let entry_id = model_id_from_plan(&plan);
-    let entry = model_entry_from_assets(&entry_id, "vision", &plan);
-    service.registry.insert_model(entry).expect("model");
-    record.ref_count = 1;
+    {
+        let mut state = block_on(store.state.lock());
+        state.registry.upsert_asset(record).expect("asset");
+        let entry = model_entry_from_assets(&entry_id, "vision", &plan);
+        state.registry.insert_model(entry).expect("model");
+    }
 
-    let error = block_on(service.load(
-        ModelSource::Installed {
-            id: entry_id.clone(),
-        },
-        ModelLoadOptions::default(),
-    ))
-    .expect_err("not ready");
+    let error = match block_on(store.load_engine(&entry_id, ModelLoadOptions::default())) {
+        Ok(_) => panic!("unresolved vision model loaded"),
+        Err(error) => error,
+    };
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));
-}
-
-#[test]
-fn unloaded_service_reports_idle_and_rejects_runtime_facades() {
-    let root = TempDir::new("service", "unloaded-facades");
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
-
-    let state = block_on(service.state()).expect("idle state");
-    assert_eq!(state.status, EngineStatus::Idle);
-    assert!(state.model.is_none());
-    block_on(service.unload()).expect("unload without current model is a no-op");
-
-    let query_error = service
-        .query(QueryRequest::new("hello"))
-        .err()
-        .expect("query without a loaded model");
-    let chat_error = service
-        .chat(ChatRequest::new(vec![ChatMessage::new(
-            ChatRole::User,
-            "hello",
-        )]))
-        .err()
-        .expect("chat without a loaded model");
-    let embed_error = service
-        .embed(EmbedRequest {
-            input: "hello".to_string(),
-            options: EmbedOptions::default(),
-        })
-        .err()
-        .expect("embed without a loaded model");
-    let subscribe_error = service
-        .subscribe_events()
-        .expect_err("subscribe without a loaded model");
-
-    for error in [query_error, chat_error, embed_error, subscribe_error] {
-        assert!(matches!(
-            error,
-            ModelError::ModelNotFound(message) if message == "no model is loaded"
-        ));
-    }
 }

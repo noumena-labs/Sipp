@@ -22,9 +22,10 @@ import {
   type ObservabilityEvent,
   type ObservabilitySnapshot,
   type ModelInfo,
+  type ModelInstallOptions,
+  type ModelInstallSource,
   type ModelLifecycleService,
   type ModelLoadOptions,
-  type ModelSource,
   type EmbedOptions,
   type EmbeddingResult,
   type GenerationResult,
@@ -105,6 +106,7 @@ function toWorkerRuntimeConfig(config: SippClientOptions): WorkerRuntimeConfig {
     defaultBackendOverride,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
+    storageRoot: config.storageRoot,
     browserCache: config.browserCache,
     trustedOrigins: config.trustedOrigins,
   };
@@ -155,13 +157,31 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.workerConfig = toWorkerRuntimeConfig(config);
   }
 
-  public async load(source: ModelSource, options: ModelLoadOptions = {}): Promise<ModelInfo> {
+  public async install(
+    source: ModelInstallSource,
+    options: ModelInstallOptions = {}
+  ): Promise<ModelInfo> {
+    this.assertOpen();
+    return (await this.callWorker(
+      {
+        kind: 'models-install',
+        config: this.workerConfig,
+        source,
+      },
+      {
+        signal: options.signal,
+        onProgress: options.onProgress,
+      }
+    )) as ModelInfo;
+  }
+
+  public async load(modelId: string, options: ModelLoadOptions = {}): Promise<ModelInfo> {
     this.assertOpen();
     const result = (await this.callWorker(
       {
         kind: 'models-load',
         config: this.workerConfig,
-        source,
+        modelId,
         options: {
           backend: options.backend,
           observability: options.observability,

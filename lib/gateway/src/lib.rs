@@ -9,8 +9,7 @@ mod toolkit;
 
 pub use profile::GatewayCodec;
 pub use sipp::{
-    GatewayAuthentication, GatewayEndpointConfig, GatewayRoutes, GatewaySecret,
-    GatewayTimeoutPolicy,
+    GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewaySecret, GatewayTimeoutPolicy,
 };
 pub use toolkit::{
     request_context, request_id, AuthenticatedRequest, Authenticator, DecodedRequest,

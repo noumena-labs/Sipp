@@ -4,11 +4,11 @@
 //! Covers deterministic source-resolution error paths, cached-local matching,
 //! and remote-unavailable branches with temporary local fixtures only.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::lifecycle::test_support::{gguf_name, TempDir};
-use crate::lifecycle::{AssetRecord, AssetSource};
+use crate::lifecycle::{AssetRecord, AssetSource, ModelStore};
+use futures::executor::block_on;
 
 use super::*;
 
@@ -31,15 +31,11 @@ fn local_record(id: &str, path: impl Into<PathBuf>, bytes: u64) -> AssetRecord {
 }
 
 #[test]
-fn installed_source_rejects_missing_model_id() {
+fn remove_rejects_missing_model_id() {
     let root = TempDir::new("source-resolution", "missing-installed");
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
 
-    let error = service
-        .resolve_source(ModelSource::Installed {
-            id: "missing".to_string(),
-        })
-        .expect_err("missing installed model");
+    let error = block_on(store.remove("missing")).expect_err("missing installed model");
 
     assert!(matches!(error, ModelError::ModelNotFound(id) if id == "missing"));
 }
@@ -47,14 +43,9 @@ fn installed_source_rejects_missing_model_id() {
 #[test]
 fn empty_model_paths_are_invalid_before_storage_access() {
     let root = TempDir::new("source-resolution", "empty-paths");
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
 
-    let error = service
-        .resolve_source(ModelSource::Assets {
-            model: ModelAssets::Paths { paths: Vec::new() },
-            projector: None,
-        })
-        .expect_err("empty paths");
+    let error = block_on(store.install_files(Vec::<PathBuf>::new())).expect_err("empty paths");
 
     assert!(
         matches!(error, ModelError::InvalidModelSource(message) if message == MODEL_PATHS_REQUIRED)
@@ -62,35 +53,14 @@ fn empty_model_paths_are_invalid_before_storage_access() {
 }
 
 #[test]
-fn remote_model_and_projector_sources_are_unavailable() {
+fn invalid_remote_url_is_rejected_before_http_access() {
     let root = TempDir::new("source-resolution", "remote");
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
 
-    let model_error = service
-        .resolve_source(ModelSource::Assets {
-            model: ModelAssets::Url {
-                url: "https://example.test/model.gguf".to_string(),
-            },
-            projector: None,
-        })
-        .expect_err("remote model");
-    assert!(
-        matches!(model_error, ModelError::RemoteUnavailable(url) if url.ends_with("model.gguf"))
-    );
+    let error =
+        block_on(store.install_urls(["file:///model.gguf"])).expect_err("invalid remote URL");
 
-    let model = root.path.join("model.gguf");
-    fs::write(&model, b"not a gguf").expect("model");
-    let projector_error = service
-        .resolve_source(ModelSource::Assets {
-            model: ModelAssets::Path { path: model },
-            projector: Some(ModelAsset::Url {
-                url: "https://example.test/mmproj.gguf".to_string(),
-            }),
-        })
-        .expect_err("remote projector");
-    assert!(
-        matches!(projector_error, ModelError::RemoteUnavailable(url) if url.ends_with("mmproj.gguf"))
-    );
+    assert!(matches!(error, ModelError::InvalidModelSource(message) if message.contains("http")));
 }
 
 #[test]
@@ -149,16 +119,9 @@ fn cached_local_record_matching_rejects_remote_sources() {
 #[test]
 fn directory_asset_path_is_rejected_as_invalid_source() {
     let root = TempDir::new("source-resolution", "directory");
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
 
-    let error = service
-        .resolve_source(ModelSource::Assets {
-            model: ModelAssets::Path {
-                path: root.path.clone(),
-            },
-            projector: None,
-        })
-        .expect_err("directory source");
+    let error = block_on(store.install_files([root.path.clone()])).expect_err("directory source");
 
     assert!(
         matches!(error, ModelError::InvalidModelSource(message) if message.contains("not a file"))

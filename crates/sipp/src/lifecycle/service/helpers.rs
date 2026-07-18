@@ -1,4 +1,4 @@
-//! Small helpers used by `ModelService`: path comparison, asset classification,
+//! Small helpers used by `ModelStore`: path comparison, asset classification,
 //! pairing-state projection, and fingerprinting.
 
 use std::path::Path;

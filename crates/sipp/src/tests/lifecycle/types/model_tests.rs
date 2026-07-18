@@ -3,8 +3,6 @@
 //! Covers model lifecycle value contracts, serde wire names, and default
 //! manifest boundaries with pure value fixtures.
 
-use std::path::PathBuf;
-
 use serde_json::json;
 
 use super::*;
@@ -18,86 +16,6 @@ fn model_enum_as_str_values_match_wire_names() {
     assert_eq!(ModelStatus::Broken.as_str(), "broken");
     assert_eq!(ModelSourceKind::Local.as_str(), "local");
     assert_eq!(ModelSourceKind::Remote.as_str(), "remote");
-}
-
-#[test]
-fn model_source_variants_use_snake_case_tags() {
-    let source: ModelSource = serde_json::from_value(json!({
-        "assets": {
-            "model": { "paths": { "paths": ["a.gguf", "b.gguf"] } },
-            "projector": { "path": { "path": "mmproj.gguf" } }
-        }
-    }))
-    .expect("model source");
-
-    assert!(matches!(
-        source,
-        ModelSource::Assets {
-            model: ModelAssets::Paths { .. },
-            projector: Some(ModelAsset::Path { .. })
-        }
-    ));
-
-    let installed: ModelSource =
-        serde_json::from_value(json!({ "installed": { "id": "model-a" } }))
-            .expect("installed source");
-    assert_eq!(
-        installed,
-        ModelSource::Installed {
-            id: "model-a".to_string()
-        }
-    );
-}
-
-#[test]
-fn model_asset_variants_round_trip_with_snake_case_tags() {
-    let path_asset: ModelAsset =
-        serde_json::from_value(json!({ "path": { "path": "local.gguf" } })).expect("path asset");
-    assert_eq!(
-        path_asset,
-        ModelAsset::Path {
-            path: PathBuf::from("local.gguf")
-        }
-    );
-
-    let url_asset: ModelAsset =
-        serde_json::from_value(json!({ "url": { "url": "https://example.test/mmproj.gguf" } }))
-            .expect("url asset");
-    assert_eq!(
-        url_asset,
-        ModelAsset::Url {
-            url: "https://example.test/mmproj.gguf".to_string()
-        }
-    );
-
-    let urls: ModelAssets = serde_json::from_value(json!({
-        "urls": { "urls": ["https://example.test/a.gguf", "https://example.test/b.gguf"] }
-    }))
-    .expect("urls");
-    assert_eq!(
-        urls,
-        ModelAssets::Urls {
-            urls: vec![
-                "https://example.test/a.gguf".to_string(),
-                "https://example.test/b.gguf".to_string()
-            ]
-        }
-    );
-
-    assert_eq!(
-        serde_json::to_value(ModelAssets::Path {
-            path: PathBuf::from("model.gguf")
-        })
-        .expect("model path"),
-        json!({ "path": { "path": "model.gguf" } })
-    );
-    assert_eq!(
-        serde_json::to_value(ModelAssets::Url {
-            url: "https://example.test/model.gguf".to_string()
-        })
-        .expect("model url"),
-        json!({ "url": { "url": "https://example.test/model.gguf" } })
-    );
 }
 
 #[test]

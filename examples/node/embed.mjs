@@ -10,17 +10,27 @@ import {
   readLocalArgs,
 } from './_support.mjs';
 
-const { SippClient, backendObservabilityJson, setLlamaLogQuiet } = native;
-const { model, input } = readLocalArgs('embed', 'SippClient embedding example input.');
+const {
+  EndpointDescriptor,
+  SippClient,
+  backendObservabilityJson,
+  setLlamaLogQuiet,
+} = native;
+const { model: modelPath, input } = readLocalArgs(
+  'embed',
+  'SippClient embedding example input.',
+);
 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
-await client.add('default', {
-  kind: 'local',
-  modelPath: model,
-  config: runtimeConfig({ embeddings: true }),
-});
+const model = await client.models.installFiles([modelPath]);
+await client.add(
+  'default',
+  EndpointDescriptor.local(model.id, {
+    config: runtimeConfig({ embeddings: true }),
+  })
+);
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // Embeddings use the same local endpoint. The runtime is loaded with
@@ -34,8 +44,7 @@ const result = await client.embed({
 }).response;
 printEmbedding(result);
 
-function runtimeConfig({ embeddings, projectorPath = undefined }) {
-  const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };
+function runtimeConfig({ embeddings }) {
   return {
     placement: { gpu_layers: gpuLayers() },
     context: {
@@ -51,7 +60,6 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
     },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },
-    multimodal,
     residency: { max_gpu_models_per_device: 1 },
     observability: { runtime_metrics: true },
   };

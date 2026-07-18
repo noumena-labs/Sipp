@@ -2,6 +2,7 @@ public_bind = "0.0.0.0:8080"
 management_bind = "0.0.0.0:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 4
+storage_root = "/models/.sipp"
 allowed_origins = []
 admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"
 

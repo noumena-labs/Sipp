@@ -1,4 +1,5 @@
 import {
+  EndpointDescriptor,
   SippClient,
   type BrowserTextRun,
   type EndpointRef,
@@ -10,7 +11,7 @@ import {
   EXAMPLE_LOCAL_ENDPOINT,
   formatTextResult,
   readMaxTokens,
-  readModelSource,
+  installModel,
   readPrompt,
   readGatewayConfig,
   renderGatewayLocalPage,
@@ -24,23 +25,23 @@ let localModelLoaded = false;
 
 elements.loadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const source = readModelSource(elements.modelInput, elements.modelFileInput);
-  if (source == null) {
-    write(elements.localOutput, 'Enter a GGUF model URL, path, or file.');
-    return;
-  }
-
   try {
     write(elements.localOutput, 'Loading browser model...');
-    await localClient.add(EXAMPLE_LOCAL_ENDPOINT.id, {
-      kind: 'local',
-      source,
-      options: { runtime: runtimeConfig() },
-    });
-    const info = localClient.currentLocal();
-    if (info == null) throw new Error('Local model did not become active.');
+    const model = await installModel(
+      localClient,
+      elements.modelUrlInput,
+      elements.modelFileInput
+    );
+    if (model == null) {
+      write(elements.localOutput, 'Enter a GGUF model URL, path, or file.');
+      return;
+    }
+    await localClient.add(
+      EXAMPLE_LOCAL_ENDPOINT.id,
+      EndpointDescriptor.local(model.id, { runtime: runtimeConfig() })
+    );
     localModelLoaded = true;
-    write(elements.localOutput, `Loaded ${info.name}.`);
+    write(elements.localOutput, `Loaded ${model.name}.`);
   } catch (error) {
     reportError(elements.localOutput, error);
   }
@@ -61,7 +62,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   try {
     const gatewayEndpoint = await gatewayClient.add(
       'gateway',
-      { kind: 'gateway', ...gateway }
+      EndpointDescriptor.gateway(gateway)
     );
     const maxTokens = readMaxTokens(elements.maxTokensInput);
 

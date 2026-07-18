@@ -1,17 +1,18 @@
 //! Integration tests for the `sipp` crate-level public API.
 //!
 //! Covers the root client re-exports, nested native config modules, and the
-//! `shard`, client, and `providers` public surfaces without loading local
-//! models or calling gateway endpoints.
+//! explicit local model descriptors, and the `shard` and `providers` public
+//! surfaces without loading local models or calling gateway endpoints.
 
 use sipp::{
     engine::ContextRuntimeConfig, lifecycle::BackendPreference,
-    runtime::request::GenerateResponseStatus, NativeRuntimeConfig, SippClient,
+    runtime::request::GenerateResponseStatus, EndpointDescriptor, LocalDescriptor,
+    NativeRuntimeConfig, SippClient,
 };
 
 #[test]
 fn facade_reexports_client_and_native_runtime_config() {
-    let client = SippClient::new();
+    let client = SippClient::new().expect("client");
     let config = NativeRuntimeConfig {
         context: ContextRuntimeConfig {
             n_ctx: Some(128),
@@ -30,14 +31,37 @@ fn facade_reexports_lifecycle_and_runtime_modules() {
     assert_eq!(GenerateResponseStatus::Completed.as_str(), "completed");
 }
 
+#[test]
+fn local_descriptor_accepts_a_managed_model_id_and_runtime_config() {
+    let descriptor: EndpointDescriptor = LocalDescriptor::new("model-a").into();
+
+    let EndpointDescriptor::Local(local) = descriptor else {
+        panic!("expected local descriptor");
+    };
+    assert_eq!(local.model_id, "model-a");
+    assert_eq!(local.config, NativeRuntimeConfig::default());
+
+    let mut configured = LocalDescriptor::new("model-b");
+    configured.config = NativeRuntimeConfig {
+        context: ContextRuntimeConfig {
+            n_ctx: Some(256),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    assert_eq!(configured.model_id, "model-b");
+    assert_eq!(configured.config.context.n_ctx, Some(256));
+}
+
 mod client_api {
-    use sipp::{EndpointCapabilities, EndpointDescriptor, EndpointRef, GatewayEndpointConfig};
+    use sipp::{EndpointCapabilities, EndpointDescriptor, EndpointRef, GatewayDescriptor};
 
     #[test]
     fn gateway_descriptor_is_registered_through_add_contract() {
         let endpoint = EndpointRef::gateway("service");
         assert_eq!(endpoint.kind(), "gateway");
-        let descriptor = EndpointDescriptor::gateway(GatewayEndpointConfig {
+        let descriptor: EndpointDescriptor = GatewayDescriptor {
             target: "local".to_string(),
             base_url: "http://127.0.0.1:8080".to_string(),
             routes: Default::default(),
@@ -45,7 +69,8 @@ mod client_api {
             static_headers: Default::default(),
             timeouts: Default::default(),
             protocol_options: Default::default(),
-        });
+        }
+        .into();
         assert!(matches!(descriptor, EndpointDescriptor::Gateway(_)));
         assert_eq!(
             EndpointCapabilities::unknown().query,

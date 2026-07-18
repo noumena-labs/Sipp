@@ -4,19 +4,22 @@ Sipp 各语言包（Rust、Node.js、Python、浏览器）使用同一套面向�
 
 核心流程：
 
-1. 调用 `add` 注册端点。
-2. 保存返回的 `EndpointRef`。
-3. 将引用传入 `query`、`chat` 或 `embed`。
+1. 本地推理需要先通过 `client.models` 安装模型。
+2. 调用 `add` 注册端点。
+3. 保存返回的 `EndpointRef`。
+4. 将引用传入 `query`、`chat` 或 `embed`。
 
 无论本地运行、通过网关、直连服务商还是混合模式，应用代码的调用方式完全一致。
 
 ## SippClient使用方法
 
-`SippClient` 提供四个主要方法：
+`SippClient` 提供端点操作和模型存储：
 
-| 方法 | 作用 |
+| 成员 | 作用 |
 | ------- | ---------------------------------------------------------------------------- |
+| `models` | 安装、列出和删除当前客户端拥有的模型。 |
 | `add` | 注册本地、网关或服务商端点，返回 `EndpointRef`。 |
+| `remove` | 删除已注册的端点。 |
 | `query` | 传入一段提示词文本，生成回复。不套聊天模板。 |
 | `chat` | 传入有序的 `{ role, content }` 消息列表，生成回复。 |
 | `embed` | 传入文本，生成嵌入向量。 |
@@ -38,13 +41,12 @@ add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
 
 ### 本地端点
 
-本地端点将 GGUF 模型加载到当前进程中。应用全权负责模型选择、运行时生命周期管理和资源清理。
+本地端点将已安装的 GGUF 模型加载到当前进程中。应用选择模型，客户端负责存储和运行时生命周期。
 
-| 字段 | 类型 | 说明 |
-| ----------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `kind` | `"local"` | 端点类型。 |
-| `modelPath` | string / `PathBuf` | GGUF 文件的路径或浏览器 URL。 |
-| `config` | `NativeRuntimeConfig`（可选） | 加载时的运行时配置，包括上下文大小、GPU 分配、调度策略、缓存模式、默认采样参数、可观测性等。 |
+先通过 `client.models` 安装文件或 URL，再使用
+`EndpointDescriptor.local(modelId, options)` 构造本地端点描述符。描述符只选择已安装模型，不负责下载或存储。
+
+原生包使用 `config: NativeRuntimeConfig`。浏览器描述符使用浏览器后端和可观测性选项，以及 `runtime: NativeRuntimeConfig`。完整的各语言配置见[运行时选项](../reference/runtime-options.md)。
 
 当前进程需要自行管理模型执行时使用本地端点。
 
@@ -190,7 +192,8 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 
 ```text
 服务端：
-  add("local-model", LocalDescriptor { modelPath, config })
+  model = models.installFiles(files)
+  add("local-model", EndpointDescriptor.local(model.id, options))
   -> 路由处理器解析 HTTP 请求
   -> 路由处理器调 client.query / chat / embed
   -> 路由处理器编码 HTTP 响应
@@ -204,7 +207,7 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 
 ```text
 客户端：
-  add("remote", GatewayDescriptor { target, baseUrl, authentication })
+  add("remote", EndpointDescriptor.gateway(options))
   -> client.query / chat / embed({ endpoint: ref, ... })
    -> 请求通过 HTTP 发送至网关
 ```
@@ -214,8 +217,9 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 同一个客户端可注册多种端点。传入不同的端点引用即可将请求发往不同的目标。
 
 ```text
-localRef = client.add("local", LocalDescriptor { ... })
-gatewayRef = client.add("gateway", GatewayDescriptor { ... })
+model = client.models.installFiles(files)
+localRef = client.add("local", EndpointDescriptor.local(model.id, options))
+gatewayRef = client.add("gateway", EndpointDescriptor.gateway(options))
 
 client.query({ endpoint: localRef, prompt, ... })
 client.query({ endpoint: gatewayRef, prompt, ... })

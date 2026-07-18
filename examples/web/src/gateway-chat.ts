@@ -1,4 +1,5 @@
 import {
+  EndpointDescriptor,
   SippClient,
   type BrowserTextRun,
   type ChatMessage,
@@ -34,7 +35,7 @@ elements.runForm.addEventListener('submit', async (event) => {
 
   const client = new SippClient();
   try {
-    const endpoint = await client.add('gateway', { kind: 'gateway', ...config });
+    const endpoint = await client.add('gateway', EndpointDescriptor.gateway(config));
     // Gateway chat uses the same message and streaming shape as local chat.
     const run = client.chat(chatMessages(prompt), {
       endpoint,

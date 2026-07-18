@@ -1,6 +1,7 @@
 //! Tests the `lifecycle::browser` module in `sipp`.
 //!
-//! Covers lifecycle registry, storage, browser, service, and pairing behavior with temporary storage and pure fixtures instead of native runtime loading.
+//! Covers browser registry, pairing, remote acquisition, cleanup, and
+//! observability with pure fixtures instead of native runtime loading.
 
 use super::*;
 use crate::lifecycle::AssetRole;
@@ -88,13 +89,17 @@ fn prepares_and_commits_text_load() {
     let mut service =
         BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
 
+    let installed = service
+        .install(BrowserInstallSource {
+            assets: vec![model.clone()],
+            classified: vec![classified(&model)],
+            explicit_projector_asset_id: None,
+        })
+        .expect("install");
     let prepared = service
         .prepare_load(
-            BrowserLoadSource::Assets {
-                assets: vec![model.clone()],
-                classified: vec![classified(&model)],
-                explicit_projector_asset_id: None,
-                classified_projectors: Vec::new(),
+            BrowserLoadSource {
+                model_id: installed.model.id,
             },
             load_options(
                 json!({ "context": { "n_ctx": 1024 } }),
@@ -250,28 +255,20 @@ fn explicit_projector_failure_restores_previous_entry() {
         BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
 
     let first = service
-        .prepare_load(
-            BrowserLoadSource::Assets {
-                assets: vec![base.clone(), first_projector.clone()],
-                classified: vec![classified(&base), classified(&first_projector)],
-                explicit_projector_asset_id: Some(first_projector.id.clone()),
-                classified_projectors: Vec::new(),
-            },
-            load_options(json!({}), BrowserObservabilityMode::Off),
-        )
-        .expect("first prepare");
+        .install(BrowserInstallSource {
+            assets: vec![base.clone(), first_projector.clone()],
+            classified: vec![classified(&base), classified(&first_projector)],
+            explicit_projector_asset_id: Some(first_projector.id.clone()),
+        })
+        .expect("first install");
     assert_eq!(first.model.status, ModelStatus::Ready);
 
     let error = service
-        .prepare_load(
-            BrowserLoadSource::Assets {
-                assets: vec![bad_projector.clone()],
-                classified: vec![classified(&base), classified(&bad_projector)],
-                explicit_projector_asset_id: Some(bad_projector.id),
-                classified_projectors: Vec::new(),
-            },
-            load_options(json!({}), BrowserObservabilityMode::Off),
-        )
+        .install(BrowserInstallSource {
+            assets: vec![bad_projector.clone()],
+            classified: vec![classified(&base), classified(&bad_projector)],
+            explicit_projector_asset_id: Some(bad_projector.id),
+        })
         .expect_err("mismatched projector");
 
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));
@@ -301,11 +298,201 @@ fn browser_error_response_preserves_unsupported_operation_code() {
     });
 
     let error = response.error.expect("error");
-    assert_eq!(error.code, CODE_UNSUPPORTED_OPERATION);
+    assert_eq!(error.code, "UNSUPPORTED_OPERATION");
     assert_eq!(
         error.message,
         "unsupported operation chat: model has no chat template"
     );
+}
+
+#[test]
+fn browser_remote_commands_use_shared_503_retry_policy_without_cache_fallback() {
+    let mut service =
+        BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
+    let mut response = service
+        .remote_command(BrowserRemoteCommand::Begin {
+            model_urls: vec!["https://example.test/model.gguf".to_string()],
+            projector_url: None,
+        })
+        .expect("begin");
+
+    for attempt in 1..=4 {
+        let BrowserRemoteCommandResponse::Action { action } = response else {
+            panic!("expected metadata action");
+        };
+        assert_eq!(action["kind"], "fetch_metadata");
+        let acquisition_id = action["acquisitionId"]
+            .as_str()
+            .expect("acquisition id")
+            .to_string();
+        let result = service.remote_command(BrowserRemoteCommand::Advance {
+            event: json!({
+                "kind": "operation_failed",
+                "acquisitionId": acquisition_id,
+                "memberId": 0,
+                "attempt": attempt,
+                "failure": {
+                    "phase": "metadata",
+                    "kind": "http",
+                    "status": 503,
+                    "reason": "HTTP 503"
+                },
+                "createdAssetIds": []
+            }),
+            assets: Vec::new(),
+            classified: Vec::new(),
+        });
+        if attempt == 4 {
+            let BrowserRemoteCommandResponse::Failed { error } =
+                result.expect("terminal remote failure")
+            else {
+                panic!("expected failed response");
+            };
+            assert_eq!(error.code, "REMOTE_METADATA_UNAVAILABLE");
+            assert_eq!(error.status, Some(503));
+            break;
+        }
+        let BrowserRemoteCommandResponse::Action { action } = result.expect("wait") else {
+            panic!("expected wait action");
+        };
+        assert_eq!(action["kind"], "wait");
+        response = service
+            .remote_command(BrowserRemoteCommand::Advance {
+                event: json!({
+                    "kind": "wait_completed",
+                    "acquisitionId": action["acquisitionId"],
+                    "memberId": 0,
+                    "attempt": attempt
+                }),
+                assets: Vec::new(),
+                classified: Vec::new(),
+            })
+            .expect("next metadata action");
+    }
+}
+
+#[test]
+fn browser_remote_receipt_failure_cleans_the_created_asset() {
+    let mut service =
+        BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
+    let BrowserRemoteCommandResponse::Action { action } = service
+        .remote_command(BrowserRemoteCommand::Begin {
+            model_urls: vec!["https://example.test/model.gguf".to_string()],
+            projector_url: None,
+        })
+        .expect("begin")
+    else {
+        panic!("expected metadata action");
+    };
+    let acquisition_id = action["acquisitionId"]
+        .as_str()
+        .expect("acquisition id")
+        .to_string();
+    let BrowserRemoteCommandResponse::Action { action } = service
+        .remote_command(BrowserRemoteCommand::Advance {
+            event: json!({
+                "kind": "metadata_succeeded",
+                "acquisitionId": acquisition_id,
+                "memberId": 0,
+                "attempt": 1,
+                "headers": {
+                    "contentLength": 8,
+                    "etag": "current"
+                }
+            }),
+            assets: Vec::new(),
+            classified: Vec::new(),
+        })
+        .expect("download action")
+    else {
+        panic!("expected download action");
+    };
+    let mut record = asset(
+        "asset-new",
+        ModelAssetKind::Model,
+        inspection(AssetRole::Model, false, &[], None),
+    );
+    record.name = "model.gguf".to_string();
+    record.bytes = 8;
+    record.source_url = Some("https://example.test/model.gguf".to_string());
+    record.source_etag = Some("current".to_string());
+    record.source_bytes = Some(8);
+    let mut wrong_classification = classified(&record);
+    wrong_classification.name = "wrong.gguf".to_string();
+
+    let BrowserRemoteCommandResponse::Action { action } = service
+        .remote_command(BrowserRemoteCommand::Advance {
+            event: json!({
+                "kind": "download_succeeded",
+                "acquisitionId": action["acquisitionId"],
+                "memberId": 0,
+                "attempt": 1,
+                "assetIds": ["asset-new"],
+                "createdAssetIds": ["asset-new"]
+            }),
+            assets: vec![record],
+            classified: vec![wrong_classification],
+        })
+        .expect("cleanup action")
+    else {
+        panic!("expected cleanup action");
+    };
+    assert_eq!(action["kind"], "cleanup");
+    assert_eq!(action["assetIds"], json!(["asset-new"]));
+
+    let result = service
+        .remote_command(BrowserRemoteCommand::Advance {
+            event: json!({
+                "kind": "cleanup_succeeded",
+                "acquisitionId": action["acquisitionId"],
+                "memberId": 0,
+                "attempt": 1
+            }),
+            assets: Vec::new(),
+            classified: Vec::new(),
+        })
+        .expect("failed response");
+    let BrowserRemoteCommandResponse::Failed { error } = result else {
+        panic!("expected failed response");
+    };
+    assert_eq!(error.code, "INVALID_MODEL_SOURCE");
+}
+
+#[test]
+fn browser_remote_begin_does_not_replace_an_active_acquisition() {
+    let mut service =
+        BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
+    service
+        .remote_command(BrowserRemoteCommand::Begin {
+            model_urls: vec!["https://example.test/first.gguf".to_string()],
+            projector_url: None,
+        })
+        .expect("first begin");
+
+    let error = service
+        .remote_command(BrowserRemoteCommand::Begin {
+            model_urls: vec!["https://example.test/second.gguf".to_string()],
+            projector_url: None,
+        })
+        .expect_err("second begin");
+
+    assert!(matches!(error, ModelError::InvalidModelSource(_)));
+}
+
+#[test]
+fn browser_remote_error_envelope_preserves_http_retry_metadata() {
+    let response: BrowserLifecycleEnvelope<()> =
+        error_response(ModelError::RemoteMetadataUnavailable {
+            url: "https://example.test/model.gguf".to_string(),
+            status: Some(503),
+            retry_after_ms: Some(2_000),
+            reason: "HTTP 503".to_string(),
+        });
+
+    let error = response.error.expect("error");
+    assert_eq!(error.code, "REMOTE_METADATA_UNAVAILABLE");
+    assert_eq!(error.status, Some(503));
+    assert_eq!(error.retry_after_ms, Some(2_000));
 }
 
 #[test]

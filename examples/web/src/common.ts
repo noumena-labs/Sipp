@@ -1,10 +1,13 @@
 import {
+  EndpointDescriptor,
   QueryError,
   type EmbeddingResult,
   type EndpointRef,
-  type GatewayEndpointDescriptor,
+  type GatewayEndpointOptions,
   type GenerationResult,
-  type ModelSource,
+  type ManagedModel,
+  type ModelInstallOptions,
+  type SippClient,
 } from '@noumena-labs/sipp';
 import './style.css';
 
@@ -16,7 +19,7 @@ export const EXAMPLE_LOCAL_ENDPOINT: EndpointRef = { kind: 'local', id: 'default
 export interface LocalPageElements {
   readonly loadForm: HTMLFormElement;
   readonly runForm: HTMLFormElement;
-  readonly modelInput: HTMLInputElement;
+  readonly modelUrlInput: HTMLInputElement;
   readonly modelFileInput: HTMLInputElement;
   readonly promptInput: HTMLTextAreaElement;
   readonly maxTokensInput?: HTMLInputElement;
@@ -36,7 +39,7 @@ export interface GatewayPageElements {
 export interface GatewayLocalPageElements {
   readonly loadForm: HTMLFormElement;
   readonly runForm: HTMLFormElement;
-  readonly modelInput: HTMLInputElement;
+  readonly modelUrlInput: HTMLInputElement;
   readonly modelFileInput: HTMLInputElement;
   readonly targetInput: HTMLInputElement;
   readonly baseUrlInput: HTMLInputElement;
@@ -47,7 +50,7 @@ export interface GatewayLocalPageElements {
   readonly gatewayOutput: HTMLPreElement;
 }
 
-export type GatewayInputs = Omit<GatewayEndpointDescriptor, 'kind'>;
+export type GatewayInputs = GatewayEndpointOptions;
 
 export interface GatewayInputElements {
   readonly targetInput: HTMLInputElement;
@@ -111,7 +114,7 @@ export function renderLocalPage(
   return {
     loadForm: element('model-form'),
     runForm: element('run-form'),
-    modelInput: element('model'),
+    modelUrlInput: element('model'),
     modelFileInput: element('model-file'),
     promptInput: element('prompt'),
     maxTokensInput: includeMaxTokens ? element<HTMLInputElement>('max-tokens') : undefined,
@@ -213,7 +216,7 @@ export function renderGatewayLocalPage(defaultPrompt: string): GatewayLocalPageE
   return {
     loadForm: element('model-form'),
     runForm: element('run-form'),
-    modelInput: element('model'),
+    modelUrlInput: element('model'),
     modelFileInput: element('model-file'),
     targetInput: element('target'),
     baseUrlInput: element('base-url'),
@@ -225,16 +228,18 @@ export function renderGatewayLocalPage(defaultPrompt: string): GatewayLocalPageE
   };
 }
 
-export function readModelSource(
-  modelInput: HTMLInputElement,
-  fileInput: HTMLInputElement
-): ModelSource | null {
+export async function installModel(
+  client: SippClient,
+  modelUrlInput: HTMLInputElement,
+  fileInput: HTMLInputElement,
+  options: ModelInstallOptions = {}
+): Promise<ManagedModel | null> {
   const file = fileInput.files?.[0];
   if (file != null) {
-    return file;
+    return await client.models.installFiles([file], options);
   }
-  const model = modelInput.value.trim();
-  return model === '' ? null : model;
+  const modelUrl = modelUrlInput.value.trim();
+  return modelUrl === '' ? null : await client.models.installUrls([modelUrl], options);
 }
 
 export function readPrompt(input: HTMLTextAreaElement): string | null {

@@ -32,19 +32,22 @@ the best packaged backend for that host.
 ## Local GGUF Query
 
 ```ts
-import { SippClient } from '@sipphq/sipp-server';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
-const endpoint = await client.add('default', {
-  kind: 'local',
-  modelPath: process.argv[2],
-  config: {
-    context: { n_ctx: 2048 },
-    scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
-    cache: { mode: 'live_slot_prefix' },
-    observability: { runtime_metrics: true },
-  },
-});
+const modelPath = process.argv[2] ?? 'model.gguf';
+const model = await client.models.installFiles([modelPath]);
+const endpoint = await client.add(
+  'default',
+  EndpointDescriptor.local(model.id, {
+    config: {
+      context: { n_ctx: 2048 },
+      scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
+      cache: { mode: 'live_slot_prefix' },
+      observability: { runtime_metrics: true },
+    },
+  })
+);
 const queryPrompt = [
   '<|system|>',
   'Answer concisely.',
@@ -84,6 +87,8 @@ only by an x64 Node process; native arm64 Node should use arm64 packages.
 ## Gateway Chat
 
 ```ts
+import { EndpointDescriptor } from '@sipphq/sipp-server';
+
 function requiredEnv(name: string): string {
   const value = process.env[name];
   if (value == null || value === '') {
@@ -92,15 +97,14 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
+const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target: requiredEnv('SIPP_GATEWAY_TARGET'),
   baseUrl: requiredEnv('SIPP_GATEWAY_URL'),
   authentication: {
     kind: 'bearer',
     value: requiredEnv('SIPP_GATEWAY_TOKEN'),
   },
-});
+}));
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain gateway inference.' },
@@ -123,6 +127,8 @@ key in the server environment; `OPENAI_API_KEY="<mock-openai-key>"` is only a
 placeholder value in examples.
 
 ```ts
+import { EndpointDescriptor } from '@sipphq/sipp-server';
+
 function requiredEnv(name: string): string {
   const value = process.env[name];
   if (value == null || value === '') {
@@ -131,12 +137,11 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const endpoint = await client.add('provider', {
-  kind: 'provider',
+const endpoint = await client.add('provider', EndpointDescriptor.provider({
   provider: 'openai',
   model: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
   apiKey: requiredEnv('OPENAI_API_KEY'),
-});
+}));
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain provider inference.' },
@@ -155,13 +160,14 @@ Pass provider-only request fields through `providerOptions`. See
 ## Gateway Profile Helpers
 
 Use the gateway profile helpers when a Node route should behave like a
-first-party gateway endpoint for browser `kind: 'gateway'` clients. The helpers
+first-party gateway endpoint for browser gateway clients. The helpers
 decode `model`, `prompt`, `messages`, `input`, and snake_case generation
 options, then format JSON or SSE responses. The route can execute the decoded
 request against a provider, a local endpoint, or a separate gateway.
 
 ```ts
 import {
+  EndpointDescriptor,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -181,12 +187,11 @@ export async function handleQuery(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('provider', {
-      kind: 'provider',
+    const endpoint = await client.add('provider', EndpointDescriptor.provider({
       provider: 'openai',
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),
-    });
+    }));
     const run = client.query({ ...decoded.request, endpoint });
     return decoded.stream
       ? gatewayTextStreamResponse(run)

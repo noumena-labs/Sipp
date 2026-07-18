@@ -2040,6 +2040,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "httpdate",
  "reqwest",
  "serde",
  "serde_json",
@@ -2047,6 +2048,7 @@ dependencies = [
  "sipp-sys",
  "thiserror 2.0.18",
  "tokio",
+ "url",
  "wiremock",
 ]
 

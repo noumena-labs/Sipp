@@ -64,10 +64,11 @@ const run = client.chat({
 ### 编码器-解码器模型的本地 query
 
 ```ts
-const endpoint = await client.add('t5-local', {
-  kind: 'local',
-  modelPath: '/models/t5-small-f16.gguf',
-});
+const model = await client.models.installFiles(['/models/t5-small-f16.gguf']);
+const endpoint = await client.add(
+  't5-local',
+  EndpointDescriptor.local(model.id)
+);
 
 const run = client.query({
   endpoint,
@@ -118,15 +119,16 @@ const embedding = (await run.response).values;
 ### 网关客户端示例
 
 ```ts
-const endpoint = await client.add('gateway-openai', {
-  kind: 'gateway',
+import { EndpointDescriptor } from '@sipphq/sipp-server';
+
+const endpoint = await client.add('gateway-openai', EndpointDescriptor.gateway({
   target: 'openai-chat',
   baseUrl: process.env.SIPP_GATEWAY_URL!,
   authentication: {
     kind: 'bearer',
     value: process.env.SIPP_GATEWAY_TOKEN!,
   },
-});
+}));
 
 const run = client.chat({
   endpoint,

@@ -44,21 +44,28 @@ export interface ModelLoadProgress {
 }
 
 export interface ModelLoadOptions {
-  signal?: AbortSignal;
-  onProgress?: (progress: ModelLoadProgress) => void;
-  backend?: BrowserBackendPreference;
-  observability?: ObservabilityMode;
-  runtime?: NativeRuntimeConfig;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: ModelLoadProgress) => void;
+  readonly backend?: BrowserBackendPreference;
+  readonly observability?: ObservabilityMode;
+  readonly runtime?: NativeRuntimeConfig;
 }
 
-export type ModelSource =
-  | string
-  | File
-  | readonly string[]
-  | readonly File[]
+export interface ModelInstallOptions {
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: ModelLoadProgress) => void;
+}
+
+export type ModelInstallSource =
   | {
-    model: string | File | readonly string[] | readonly File[];
-    projector?: string | File;
+    readonly kind: 'local';
+    readonly modelFiles: readonly File[];
+    readonly projectorFile?: File;
+  }
+  | {
+    readonly kind: 'remote';
+    readonly modelUrls: readonly string[];
+    readonly projectorUrl?: string;
   };
 
 export interface ModelInfo {
@@ -77,6 +84,14 @@ export interface ModelInfo {
   createdAt: string;
   updatedAt: string;
   capabilities?: ModelCapabilities;
+}
+
+export interface ManagedModel {
+  readonly id: string;
+  readonly name: string;
+  readonly bytes: number;
+  readonly modality: ModelModality;
+  readonly status: ModelStatus;
 }
 
 export type ModelClass = 'decoder_only' | 'encoder_decoder' | 'encoder_only';
@@ -453,9 +468,8 @@ export type GatewayAuthentication =
       readonly valueProvider?: GatewaySecretProvider;
     };
 
-/** Browser-safe gateway endpoint descriptor. */
-export interface GatewayEndpointDescriptor {
-  readonly kind: 'gateway';
+/** Options for a browser gateway endpoint. */
+export interface GatewayEndpointOptions {
   /** Target encoded in profile requests. */
   readonly target: string;
   /** Service base URL. */
@@ -472,20 +486,14 @@ export interface GatewayEndpointDescriptor {
   readonly protocolOptions?: EndpointOptions;
 }
 
-export interface LocalEndpointDescriptor {
-  readonly kind: 'local';
-  readonly source: ModelSource;
-  readonly options?: ModelLoadOptions;
-}
-
 export interface ProviderStaticHeader {
   readonly name: string;
   readonly value: string;
 }
 
-export interface ProviderEndpointDescriptor {
-  readonly kind: 'provider';
-  readonly provider: 'openai' | 'anthropic' | 'openai_compatible' | 'openai-compatible';
+/** Options for a direct browser provider endpoint. */
+export interface ProviderEndpointOptions {
+  readonly provider: 'openai' | 'anthropic' | 'openai_compatible';
   readonly model: string;
   readonly apiKey?: string;
   readonly keyProvider?: ProviderKeyProvider;
@@ -498,10 +506,66 @@ export interface ProviderEndpointDescriptor {
   readonly staticHeaders?: readonly ProviderStaticHeader[];
 }
 
-export type EndpointDescriptor =
-  | LocalEndpointDescriptor
-  | GatewayEndpointDescriptor
-  | ProviderEndpointDescriptor;
+/** Options for installing browser-local files. */
+export type FileInstallOptions = ModelInstallOptions & {
+  readonly projectorFile?: File;
+};
+
+/** Options for installing remote model URLs. */
+export type UrlInstallOptions = ModelInstallOptions & {
+  readonly projectorUrl?: string;
+};
+
+/** Options for loading a managed model into a local endpoint. */
+export type LocalEndpointOptions = ModelLoadOptions;
+
+/** @internal */
+export const ENDPOINT_DESCRIPTOR_PAYLOAD: unique symbol = Symbol('EndpointDescriptor.payload');
+
+type EndpointDescriptorPayload =
+  | {
+      readonly kind: 'local';
+      readonly modelId: string;
+      readonly options: ModelLoadOptions;
+    }
+  | {
+      readonly kind: 'gateway';
+      readonly options: GatewayEndpointOptions;
+    }
+  | {
+      readonly kind: 'provider';
+      readonly options: ProviderEndpointOptions;
+    };
+
+/** Opaque endpoint descriptor accepted by the browser client. */
+export interface EndpointDescriptor {
+  readonly [ENDPOINT_DESCRIPTOR_PAYLOAD]: EndpointDescriptorPayload;
+}
+
+/** Construct endpoint descriptors from explicit endpoint configuration. */
+export const EndpointDescriptor = {
+  local(modelId: string, options: LocalEndpointOptions = {}): EndpointDescriptor {
+    return {
+      [ENDPOINT_DESCRIPTOR_PAYLOAD]: {
+        kind: 'local',
+        modelId,
+        options,
+      },
+    };
+  },
+
+  gateway(options: GatewayEndpointOptions): EndpointDescriptor {
+    return {
+      [ENDPOINT_DESCRIPTOR_PAYLOAD]: { kind: 'gateway', options },
+    };
+  },
+
+  provider(options: ProviderEndpointOptions): EndpointDescriptor {
+    return {
+      [ENDPOINT_DESCRIPTOR_PAYLOAD]: { kind: 'provider', options },
+    };
+  },
+};
 
 export type EngineEvent =
   | { type: 'state'; state: EngineState }
@@ -534,7 +598,8 @@ export interface EngineObservability {
 }
 
 export interface ModelLifecycleService {
-  load(source: ModelSource, options?: ModelLoadOptions): Promise<ModelInfo>;
+  install(source: ModelInstallSource, options?: ModelInstallOptions): Promise<ModelInfo>;
+  load(modelId: string, options?: ModelLoadOptions): Promise<ModelInfo>;
   unload(): void | Promise<void>;
   current(): ModelInfo | null;
   list(): Promise<ModelInfo[]>;
@@ -555,16 +620,30 @@ export interface ModelLifecycleService {
   close(): void | Promise<void>;
 }
 
+export interface ModelStore {
+  /** Install browser-local model files into OPFS. */
+  installFiles(
+    modelFiles: readonly File[],
+    options?: FileInstallOptions
+  ): Promise<ManagedModel>;
+  /** Download and install model files into OPFS. */
+  installUrls(
+    modelUrls: readonly string[],
+    options?: UrlInstallOptions
+  ): Promise<ManagedModel>;
+  /** List installed models. */
+  list(): Promise<ManagedModel[]>;
+  /** Remove an installed model that is not used by a local endpoint. */
+  remove(modelId: string): Promise<void>;
+}
+
 export interface SippClient {
   readonly observability: EngineObservability;
+  readonly models: ModelStore;
   /** Register or replace a local, gateway, or direct provider endpoint. */
   add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef>;
-  /** Return the currently loaded local model, if one is active. */
-  currentLocal(): ModelInfo | null;
-  /** List installed local models. */
-  listLocal(): Promise<ModelInfo[]>;
-  /** Remove an installed local model by id. */
-  removeLocal(id: string): Promise<void>;
+  /** Remove a registered endpoint. */
+  remove(id: string): Promise<void>;
   query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
   chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
   embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;
@@ -577,6 +656,7 @@ export type QueryErrorCode =
   | 'ENGINE_CLOSED'
   | 'MODEL_NOT_READY'
   | 'MODEL_NOT_FOUND'
+  | 'MODEL_IN_USE'
   | 'MODEL_BROKEN'
   | 'UNSUPPORTED_OPERATION'
   | 'INVALID_MODEL_SOURCE'
@@ -586,6 +666,8 @@ export type QueryErrorCode =
   | 'STORAGE_CORRUPT'
   | 'REMOTE_METADATA_UNAVAILABLE'
   | 'REMOTE_LOAD_FAILED'
+  | 'ACQUISITION_CANCELLED'
+  | 'STALE_ACQUISITION_RESULT'
   | 'STREAMING_UNAVAILABLE'
   | 'QUERY_FAILED';
 

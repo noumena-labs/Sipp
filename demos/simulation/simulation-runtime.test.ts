@@ -13,6 +13,7 @@ import type {
   BrowserTextRun,
   ChatInput,
   ChatOptions,
+  EngineState,
   GenerationResult,
   RequestStats,
   TokenBatch,
@@ -118,7 +119,9 @@ function createTimeoutClient(): DirectorRuntimeClient & { cancelCalls: number[] 
 
   return {
     cancelCalls,
-    currentLocal: () => ({ mediaMarker: '<image>' }),
+    observability: {
+      current: () => ({ model: { mediaMarker: '<image>' } }) as EngineState,
+    },
     chat(_input, options = {}) {
       return createTextRun((async () => {
         const signal = options.signal;
@@ -141,7 +144,9 @@ function createOutputClient(outputText: string): DirectorRuntimeClient & { gramm
   let grammar: string | undefined;
   let promptText: string | undefined;
   return {
-    currentLocal: () => ({ mediaMarker: '<image>' }),
+    observability: {
+      current: () => ({ model: { mediaMarker: '<image>' } }) as EngineState,
+    },
     get grammar() {
       return grammar;
     },

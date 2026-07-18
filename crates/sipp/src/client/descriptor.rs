@@ -1,49 +1,57 @@
-use std::path::PathBuf;
-
+use crate::client::GatewayDescriptor;
+#[cfg(feature = "providers")]
+use crate::client::ProviderDescriptor;
 use crate::engine::NativeRuntimeConfig;
 
-use crate::client::GatewayEndpointConfig;
-#[cfg(feature = "providers")]
-use crate::client::ProviderEndpointConfig;
+/// Default native registry and managed-asset root for a client.
+pub const DEFAULT_STORAGE_ROOT: &str = ".sipp-models";
 
-/// Configuration used by `SippClient::add` to register an endpoint.
+/// Descriptor used by `SippClient::add` to register an endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EndpointDescriptor {
     /// Local GGUF model loaded into this process.
-    LocalModel(LocalModelDescriptor),
+    Local(LocalDescriptor),
     /// First-party HTTP gateway endpoint.
-    Gateway(GatewayEndpointConfig),
+    Gateway(GatewayDescriptor),
     /// Direct provider endpoint using caller-owned credentials.
     #[cfg(feature = "providers")]
-    Provider(ProviderEndpointConfig),
+    Provider(ProviderDescriptor),
 }
 
-impl EndpointDescriptor {
-    /// Create a local model descriptor.
-    pub fn local(model_path: impl Into<PathBuf>, config: NativeRuntimeConfig) -> Self {
-        Self::LocalModel(LocalModelDescriptor {
-            model_path: model_path.into(),
-            config,
-        })
-    }
-
-    /// Create a gateway endpoint descriptor.
-    pub fn gateway(config: GatewayEndpointConfig) -> Self {
-        Self::Gateway(config)
-    }
-
-    /// Create a direct provider descriptor.
-    #[cfg(feature = "providers")]
-    pub fn provider(config: ProviderEndpointConfig) -> Self {
-        Self::Provider(config)
+impl From<LocalDescriptor> for EndpointDescriptor {
+    fn from(descriptor: LocalDescriptor) -> Self {
+        Self::Local(descriptor)
     }
 }
 
-/// Local GGUF model descriptor.
+impl From<GatewayDescriptor> for EndpointDescriptor {
+    fn from(descriptor: GatewayDescriptor) -> Self {
+        Self::Gateway(descriptor)
+    }
+}
+
+#[cfg(feature = "providers")]
+impl From<ProviderDescriptor> for EndpointDescriptor {
+    fn from(descriptor: ProviderDescriptor) -> Self {
+        Self::Provider(descriptor)
+    }
+}
+
+/// Descriptor for a local GGUF model endpoint.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LocalModelDescriptor {
-    /// Path to the local model artifact.
-    pub model_path: PathBuf,
+pub struct LocalDescriptor {
+    /// Installed model id returned by the client model store.
+    pub model_id: String,
     /// Native runtime configuration.
     pub config: NativeRuntimeConfig,
+}
+
+impl LocalDescriptor {
+    /// Create a local endpoint for a model in the client model store.
+    pub fn new(model_id: impl Into<String>) -> Self {
+        Self {
+            model_id: model_id.into(),
+            config: NativeRuntimeConfig::default(),
+        }
+    }
 }

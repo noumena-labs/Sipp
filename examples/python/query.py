@@ -5,7 +5,7 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    LocalModelDescriptor,
+    EndpointDescriptor,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
@@ -66,13 +66,14 @@ def text_options() -> SippTextOptions:
 
 
 def main() -> None:
-    model, prompt = read_local_args("query", "Write one sentence about local inference.")
+    model_path, prompt = read_local_args("query", "Write one sentence about local inference.")
     set_llama_log_quiet(True)
 
     client = SippClient()
+    model = client.models.install_files([model_path])
     client.add(
         "default",
-        LocalModelDescriptor(model, runtime_config(embeddings=False)),
+        EndpointDescriptor.local(model.id, config=runtime_config(embeddings=False)),
     )
 
     # `query` is the simplest text-generation call: one prompt in, one response out.

@@ -1,7 +1,5 @@
 mod support;
 
-use std::path::PathBuf;
-
 use futures::executor::block_on;
 use sipp::backend::set_llama_log_quiet;
 use sipp::engine::{
@@ -9,20 +7,18 @@ use sipp::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, PoolingType, ResidencyRuntimeConfig,
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
-use sipp::{EndpointDescriptor, LocalEmbedOptions, SippClient, SippEmbedRequest};
+use sipp::{LocalDescriptor, LocalEmbedOptions, SippClient, SippEmbedRequest};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
         let args = support::local_args("SippClient embedding example input.", "embed")?;
         set_llama_log_quiet(true);
 
-        let mut client = SippClient::new();
-        client
-            .add(
-                "default",
-                EndpointDescriptor::local(args.model_path, runtime_config(true, None)),
-            )
-            .await?;
+        let mut client = SippClient::new()?;
+        let model = client.models().install_files([args.model_path]).await?;
+        let mut descriptor = LocalDescriptor::new(model.id);
+        descriptor.config = runtime_config(true);
+        client.add("default", descriptor).await?;
 
         // Embeddings use the same client as text generation. The local runtime
         // is loaded with `embeddings=true`, and this request asks for a
@@ -43,7 +39,7 @@ fn main() -> support::ExampleResult<()> {
     })
 }
 
-fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRuntimeConfig {
+fn runtime_config(embeddings: bool) -> NativeRuntimeConfig {
     NativeRuntimeConfig {
         placement: ModelPlacementConfig {
             gpu_layers: support::env_parse("SIPP_GPU_LAYERS")
@@ -74,10 +70,7 @@ fn runtime_config(embeddings: bool, projector_path: Option<PathBuf>) -> NativeRu
             mode: KvReuseMode::LiveSlotPrefix,
             ..Default::default()
         },
-        multimodal: sipp::engine::MultimodalRuntimeConfig {
-            projector_path: projector_path.map(|path| path.to_string_lossy().into_owned()),
-            ..Default::default()
-        },
+        multimodal: Default::default(),
         residency: ResidencyRuntimeConfig {
             max_gpu_models_per_device: 1,
             ..Default::default()

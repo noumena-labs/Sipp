@@ -3,7 +3,8 @@
 // App.tsx
 //
 // - Top-level simulation app. Wires:
-//     - a single shared SippClient, loaded from the configured .gguf URL
+//     - a single shared SippClient with a model installed from the configured
+//       GGUF URL
 //     - a DirectorRuntime from `director.json`
 //     - four CharacterRuntime-backed chooser adapters
 //     - an app-local SimulationRuntime that owns the world loop
@@ -13,7 +14,12 @@
 //////////////////////////////////////////////////////////////////////////////
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { SippClient, type ModelLoadProgress, type NativeRuntimeConfig } from '@noumena-labs/sipp';
+import {
+  EndpointDescriptor,
+  SippClient,
+  type ModelLoadProgress,
+  type NativeRuntimeConfig,
+} from '@noumena-labs/sipp';
 import { createCharacterFromConfigUrl } from '@noumena-labs/sipp/character';
 import { createDirectorFromConfigUrl } from '@noumena-labs/sipp/director';
 import { BrainActivityHud } from './components/BrainActivityHud';
@@ -599,21 +605,22 @@ export default function App() {
         nextClient = new SippClient();
 
         setStatus('Downloading model');
-        await nextClient.add('local', {
-          kind: 'local',
-          source: url,
-          options: {
-            onProgress: (progress: ModelLoadProgress) => {
-              if (progress.phase === 'download') {
-                setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
-              } else if (progress.phase === 'load') {
-                setStatus('Loading into memory');
-              }
-            },
+        const onProgress = (progress: ModelLoadProgress) => {
+          if (progress.phase === 'download') {
+            setStatus(`Downloading model ${Math.floor(progress.percent ?? 0)}%`);
+          } else if (progress.phase === 'load') {
+            setStatus('Loading into memory');
+          }
+        };
+        const model = await nextClient.models.installUrls([url], { onProgress });
+        await nextClient.add(
+          'local',
+          EndpointDescriptor.local(model.id, {
+            onProgress,
             observability: 'runtime',
             runtime: SIMULATION_RUNTIME,
-          },
-        });
+          })
+        );
 
         setStatus('Loading director config');
         const directorBrain = BRAIN_DEFINITIONS.find((brain) => brain.id === 'director');

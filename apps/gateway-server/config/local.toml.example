@@ -2,6 +2,7 @@ public_bind = "127.0.0.1:8080"
 management_bind = "127.0.0.1:9090"
 max_request_bytes = 1048576
 max_concurrent_requests = 2
+storage_root = ".build/model-store"
 allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 admin_password_env = "SIPP_GATEWAY_ADMIN_PASSWORD"
 

@@ -12,7 +12,7 @@ import type {
   BrowserTextRun,
   ChatInput,
   ChatOptions,
-  ModelInfo,
+  EngineObservability,
 } from '../models/types.js';
 import type { ChatMessage } from '../engine/inference-types.js';
 import { createTimedAbortController } from '../utils/abort.js';
@@ -35,7 +35,7 @@ import type {
 /** Minimal chat client required by director runtimes. */
 export interface DirectorRuntimeClient {
   chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
-  currentLocal?(): Pick<ModelInfo, 'mediaMarker'> | null;
+  readonly observability?: Pick<EngineObservability, 'current'>;
 }
 
 export class DirectorRuntime {
@@ -182,7 +182,7 @@ export class DirectorRuntime {
   }
 
   private getMediaMarker(): string | null {
-    return this.client.currentLocal?.()?.mediaMarker ?? null;
+    return this.client.observability?.current().model?.mediaMarker ?? null;
   }
 
   private getTaskContextKey(taskName: string): string {

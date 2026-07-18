@@ -1,7 +1,7 @@
 import type {
+  ModelInstallSource,
   ModelLoadOptions,
   ModelLoadProgress,
-  ModelSource,
   EngineEvent,
   ObservabilityEvent,
   QueryErrorCode,
@@ -22,6 +22,7 @@ export interface WorkerRuntimeConfig {
   defaultBackendOverride?: RuntimeBackendOverride | null;
   moduleOptions?: Record<string, unknown>;
   maxModelBytes?: number;
+  storageRoot?: string;
   browserCache?: BrowserCachePolicyOptions;
   trustedOrigins?: string[];
 }
@@ -42,10 +43,16 @@ export type WorkerQueryOptions =
 
 export type WorkerRequestMessage =
   | {
+      kind: 'models-install';
+      callId: number;
+      config: WorkerRuntimeConfig;
+      source: ModelInstallSource;
+    }
+  | {
       kind: 'models-load';
       callId: number;
       config: WorkerRuntimeConfig;
-      source: ModelSource;
+      modelId: string;
       options: Pick<ModelLoadOptions, 'backend' | 'observability' | 'runtime'>;
     }
   | {

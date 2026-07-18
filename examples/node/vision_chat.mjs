@@ -14,17 +14,31 @@ import {
   readVisionArgs,
 } from './_support.mjs';
 
-const { model, projector, image, input } = readVisionArgs('Describe this image in one sentence.');
-const { SippClient, backendObservabilityJson, setLlamaLogQuiet } = native;
+const {
+  model: modelPath,
+  projector: projectorPath,
+  image,
+  input,
+} = readVisionArgs('Describe this image in one sentence.');
+const {
+  EndpointDescriptor,
+  SippClient,
+  backendObservabilityJson,
+  setLlamaLogQuiet,
+} = native;
 
 setLlamaLogQuiet(true);
 console.log(`backend_before_load=${backendObservabilityJson(true)}`);
 const client = new SippClient();
-await client.add('default', {
-  kind: 'local',
-  modelPath: model,
-  config: runtimeConfig({ embeddings: false, projectorPath: projector }),
+const model = await client.models.installFiles([modelPath], {
+  projectorPath,
 });
+await client.add(
+  'default',
+  EndpointDescriptor.local(model.id, {
+    config: runtimeConfig({ embeddings: false }),
+  })
+);
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // Multimodal chat uses the same chat API. The projector is in runtime config;
@@ -52,8 +66,7 @@ if (streamed !== result.text) {
 }
 printText(result);
 
-function runtimeConfig({ embeddings, projectorPath = undefined }) {
-  const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };
+function runtimeConfig({ embeddings }) {
   return {
     placement: { gpu_layers: gpuLayers() },
     context: {
@@ -68,7 +81,6 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
     },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },
-    multimodal,
     residency: { max_gpu_models_per_device: 1 },
     observability: { runtime_metrics: true },
   };

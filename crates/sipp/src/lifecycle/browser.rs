@@ -12,6 +12,11 @@ use serde_json::{json, Value};
 use crate::collection::{
     remove_matching_values, sorted_ref_deltas, sorted_unique_strings, sorted_values,
 };
+use crate::lifecycle::acquisition::{
+    canonical_remote_url, RemoteAcquisition, RemoteAcquisitionEvent, RemoteAcquisitionIds,
+    RemoteAcquisitionProgress, RemoteAcquisitionRequest, RemoteAction, RemoteAssetRole,
+    RemoteCacheCandidate, RemoteMetadata,
+};
 use crate::lifecycle::util::{
     asset_refcount_mismatch, asset_summary, bump_projector_index_revision as bump_revision,
     classified_asset, decrement_asset_refcount, empty_asset_id, increment_asset_refcount,
@@ -33,17 +38,10 @@ use crate::runtime::numeric::{
 
 const EXPLICIT_PROJECTOR_MISSING_ID: &str = "explicit projector did not produce a projector id";
 const NO_PENDING_BROWSER_MODEL_LOAD: &str = "no pending browser model load";
+const BROWSER_MODEL_LOAD_ALREADY_PENDING: &str = "a browser model load is already pending";
 const BROWSER_LOAD_COMMIT_MISMATCH: &str =
     "browser model load commit does not match the pending load";
 const BROWSER_REGISTRY_MANIFEST_LABEL: &str = "browser registry manifest";
-const CODE_INVALID_MODEL_SOURCE: &str = "INVALID_MODEL_SOURCE";
-const CODE_INVALID_MODEL_PAIRING: &str = "INVALID_MODEL_PAIRING";
-const CODE_STORAGE_UNAVAILABLE: &str = "STORAGE_UNAVAILABLE";
-const CODE_STORAGE_CORRUPT: &str = "STORAGE_CORRUPT";
-const CODE_MODEL_BROKEN: &str = "MODEL_BROKEN";
-const CODE_MODEL_NOT_FOUND: &str = "MODEL_NOT_FOUND";
-const CODE_REMOTE_LOAD_FAILED: &str = "REMOTE_LOAD_FAILED";
-const CODE_UNSUPPORTED_OPERATION: &str = "UNSUPPORTED_OPERATION";
 const CODE_QUERY_FAILED: &str = "QUERY_FAILED";
 const QUERY_STATUS_FAILED: &str = "failed";
 const BROWSER_MODEL_ID_HASH_CHARS: usize = 24;
@@ -266,21 +264,64 @@ pub struct BrowserLoadOptions {
     pub observability: BrowserObservabilityMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserLoadSource {
+    pub model_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum BrowserLoadSource {
-    Installed {
-        id: String,
-        #[serde(default)]
-        classified_projectors: Vec<ClassifiedAsset>,
+#[serde(rename_all = "camelCase")]
+pub struct BrowserInstallSource {
+    pub assets: Vec<BrowserAssetRecord>,
+    pub classified: Vec<ClassifiedAsset>,
+    #[serde(default)]
+    pub explicit_projector_asset_id: Option<String>,
+}
+
+/// Browser host command for Rust-owned remote acquisition.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(
+    tag = "command",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum BrowserRemoteCommand {
+    Begin {
+        model_urls: Vec<String>,
+        projector_url: Option<String>,
     },
-    Assets {
+    Advance {
+        event: Value,
+        #[serde(default)]
         assets: Vec<BrowserAssetRecord>,
+        #[serde(default)]
         classified: Vec<ClassifiedAsset>,
-        #[serde(default)]
-        explicit_projector_asset_id: Option<String>,
-        #[serde(default)]
-        classified_projectors: Vec<ClassifiedAsset>,
+    },
+    Cancel {
+        acquisition_id: String,
+    },
+}
+
+/// Rust acquisition response consumed by the browser I/O executor.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum BrowserRemoteCommandResponse {
+    Action {
+        action: Value,
+    },
+    Installed {
+        installed: BrowserInstallResponse,
+    },
+    Cancelled {
+        snapshot: BrowserObservabilitySnapshot,
+    },
+    Failed {
+        error: BrowserLifecycleError,
     },
 }
 
@@ -306,6 +347,16 @@ pub struct BrowserPrepareLoadResponse {
     pub assets: Vec<BrowserPlannedAsset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projector: Option<BrowserPlannedAsset>,
+    pub manifest: BrowserRegistryManifest,
+    pub snapshot: BrowserObservabilitySnapshot,
+    #[serde(default)]
+    pub events: Vec<BrowserObservabilityEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserInstallResponse {
+    pub model: BrowserModelInfo,
     pub manifest: BrowserRegistryManifest,
     pub snapshot: BrowserObservabilitySnapshot,
     #[serde(default)]
@@ -372,6 +423,10 @@ where
 pub struct BrowserLifecycleError {
     pub code: &'static str,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -381,17 +436,26 @@ struct PendingLoad {
     runtime_fingerprint: String,
 }
 
+#[derive(Debug)]
+struct PendingRemoteAcquisition {
+    acquisition: RemoteAcquisition,
+    assets: BTreeMap<String, BrowserAssetRecord>,
+    classified: BTreeMap<String, ClassifiedAsset>,
+}
+
 struct BrowserResponseContext {
     manifest: BrowserRegistryManifest,
     snapshot: BrowserObservabilitySnapshot,
     events: Vec<BrowserObservabilityEvent>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BrowserLifecycleService {
     pub manifest: BrowserRegistryManifest,
     current: Option<BrowserLoadedModelState>,
     pending: Option<PendingLoad>,
+    pending_remote: Option<PendingRemoteAcquisition>,
+    acquisition_ids: RemoteAcquisitionIds,
     pub snapshot: BrowserObservabilitySnapshot,
     events: VecDeque<BrowserObservabilityEvent>,
 }
@@ -405,6 +469,8 @@ impl BrowserLifecycleService {
             manifest,
             current: None,
             pending: None,
+            pending_remote: None,
+            acquisition_ids: RemoteAcquisitionIds::default(),
             snapshot: BrowserObservabilitySnapshot {
                 mode: BrowserObservabilityMode::Off,
                 state: BrowserLifecycleState::Idle,
@@ -444,67 +510,16 @@ impl BrowserLifecycleService {
         source: BrowserLoadSource,
         options: BrowserLoadOptions,
     ) -> Result<BrowserPrepareLoadResponse, ModelError> {
+        self.pending_remote = None;
         validate_manifest(&self.manifest)?;
-        let entry = match source {
-            BrowserLoadSource::Installed {
-                id,
-                classified_projectors,
-            } => {
-                let entry = self
-                    .manifest
-                    .models
-                    .get(&id)
-                    .cloned()
-                    .ok_or_else(|| model_not_found(&id))?;
-                let base_plan = self.derive_base_plan_for_entry(&entry)?;
-                self.resolve_entry_for_loading(entry, &base_plan, &classified_projectors)?
-            }
-            BrowserLoadSource::Assets {
-                assets,
-                classified,
-                explicit_projector_asset_id,
-                classified_projectors,
-            } => {
-                self.upsert_assets(assets, &classified)?;
-                let source_projector = resolve_source_projector_asset_id(
-                    &classified,
-                    explicit_projector_asset_id.as_deref(),
-                );
-                let base_classified: Vec<_> = classified
-                    .iter()
-                    .filter(|asset| Some(asset.asset_id.as_str()) != source_projector.as_deref())
-                    .cloned()
-                    .collect();
-                let base_plan = PairingResolver::resolve(&base_classified)?;
-                let mut entry = self.upsert_base_model_entry(&base_plan)?;
-
-                if let Some(projector_id) = source_projector {
-                    let previous = entry.clone();
-                    match PairingResolver::resolve_explicit(&classified, &projector_id) {
-                        Ok(plan) => {
-                            let projector = plan
-                                .projector_asset_id
-                                .clone()
-                                .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_MISSING_ID))?;
-                            entry = self.set_resolved_projector(
-                                &entry.id,
-                                &projector,
-                                &plan.compatible_vision_projector_types,
-                            )?;
-                        }
-                        Err(error) => {
-                            self.restore_entry(previous)?;
-                            return Err(error);
-                        }
-                    }
-                } else {
-                    entry =
-                        self.resolve_entry_for_loading(entry, &base_plan, &classified_projectors)?;
-                }
-                validate_manifest(&self.manifest)?;
-                entry
-            }
-        };
+        let entry = self
+            .manifest
+            .models
+            .get(&source.model_id)
+            .cloned()
+            .ok_or_else(|| model_not_found(&source.model_id))?;
+        let base_plan = self.derive_base_plan_for_entry(&entry)?;
+        let entry = self.resolve_entry_for_loading(entry, &base_plan)?;
 
         let backend_plan = browser_backend_plan(&options)?;
         let runtime_config = serde_json::to_value(&backend_plan.config)?;
@@ -550,6 +565,250 @@ impl BrowserLifecycleService {
             snapshot: response.snapshot,
             events: response.events,
         })
+    }
+
+    pub fn install(
+        &mut self,
+        source: BrowserInstallSource,
+    ) -> Result<BrowserInstallResponse, ModelError> {
+        let previous = self.manifest.clone();
+        let result = self.install_inner(source);
+        if result.is_err() {
+            self.manifest = previous;
+        }
+        result
+    }
+
+    fn install_inner(
+        &mut self,
+        source: BrowserInstallSource,
+    ) -> Result<BrowserInstallResponse, ModelError> {
+        validate_manifest(&self.manifest)?;
+        self.upsert_assets(source.assets, &source.classified)?;
+        let source_projector = resolve_source_projector_asset_id(
+            &source.classified,
+            source.explicit_projector_asset_id.as_deref(),
+        );
+        let base_classified: Vec<_> = source
+            .classified
+            .iter()
+            .filter(|asset| Some(asset.asset_id.as_str()) != source_projector.as_deref())
+            .cloned()
+            .collect();
+        let base_plan = PairingResolver::resolve(&base_classified)?;
+        let mut entry = self.upsert_base_model_entry(&base_plan)?;
+        if let Some(projector_id) = source_projector {
+            let plan = PairingResolver::resolve_explicit(&source.classified, &projector_id)?;
+            let projector = plan
+                .projector_asset_id
+                .ok_or_else(|| invalid_pairing(EXPLICIT_PROJECTOR_MISSING_ID))?;
+            entry = self.set_resolved_projector(
+                &entry.id,
+                &projector,
+                &plan.compatible_vision_projector_types,
+            )?;
+        } else {
+            entry = self.resolve_entry_for_loading(entry, &base_plan)?;
+        }
+        validate_manifest(&self.manifest)?;
+        let model = self.model_info_from_entry(&entry);
+        let response = self.response_context();
+        Ok(BrowserInstallResponse {
+            model,
+            manifest: response.manifest,
+            snapshot: response.snapshot,
+            events: response.events,
+        })
+    }
+
+    pub fn remote_command(
+        &mut self,
+        command: BrowserRemoteCommand,
+    ) -> Result<BrowserRemoteCommandResponse, ModelError> {
+        match command {
+            BrowserRemoteCommand::Begin {
+                model_urls,
+                projector_url,
+            } => self.begin_remote(model_urls, projector_url),
+            BrowserRemoteCommand::Advance {
+                event,
+                assets,
+                classified,
+            } => self.advance_remote(event, assets, classified),
+            BrowserRemoteCommand::Cancel { acquisition_id } => self.cancel_remote(acquisition_id),
+        }
+    }
+
+    fn begin_remote(
+        &mut self,
+        model_urls: Vec<String>,
+        projector_url: Option<String>,
+    ) -> Result<BrowserRemoteCommandResponse, ModelError> {
+        if model_urls.is_empty() {
+            return Err(invalid_source("remote model URLs must not be empty"));
+        }
+        if self.pending.is_some() || self.pending_remote.is_some() {
+            return Err(invalid_source(BROWSER_MODEL_LOAD_ALREADY_PENDING));
+        }
+        let acquisition_id = self.acquisition_ids.issue()?;
+        let model_role = if model_urls.len() == 1 {
+            RemoteAssetRole::Model
+        } else {
+            RemoteAssetRole::Shard
+        };
+        let mut sources: Vec<_> = model_urls
+            .into_iter()
+            .map(|url| (model_role, url))
+            .collect();
+        if let Some(projector_url) = projector_url {
+            sources.push((RemoteAssetRole::Projector, projector_url));
+        }
+        let requests = browser_remote_requests(&self.manifest, sources)?;
+        let acquisition = RemoteAcquisition::new(acquisition_id, requests)?;
+        self.pending_remote = Some(PendingRemoteAcquisition {
+            acquisition,
+            assets: BTreeMap::new(),
+            classified: BTreeMap::new(),
+        });
+        self.remote_progress()
+    }
+
+    fn advance_remote(
+        &mut self,
+        event: Value,
+        assets: Vec<BrowserAssetRecord>,
+        classified: Vec<ClassifiedAsset>,
+    ) -> Result<BrowserRemoteCommandResponse, ModelError> {
+        let event = serde_json::from_value::<RemoteAcquisitionEvent>(event)?;
+        let progress = {
+            let pending = self
+                .pending_remote
+                .as_mut()
+                .ok_or_else(|| invalid_source("no remote acquisition is pending"))?;
+            let action = match pending.acquisition.progress() {
+                RemoteAcquisitionProgress::Action(action) => action,
+                _ => {
+                    return Err(invalid_source(
+                        "remote acquisition is not waiting for a host event",
+                    ));
+                }
+            };
+            pending.acquisition.validate_event(&event)?;
+            let progress = pending.acquisition.advance(event.clone())?;
+            match accept_remote_payload(
+                pending,
+                &self.manifest,
+                &action,
+                &event,
+                assets,
+                classified,
+            ) {
+                Ok(()) => progress,
+                Err(error) => pending.acquisition.fail_finalization(error),
+            }
+        };
+        self.resolve_remote_progress(progress)
+    }
+
+    fn cancel_remote(
+        &mut self,
+        acquisition_id: String,
+    ) -> Result<BrowserRemoteCommandResponse, ModelError> {
+        let progress = {
+            let pending = self
+                .pending_remote
+                .as_mut()
+                .ok_or_else(|| invalid_source("no remote acquisition is pending"))?;
+            pending
+                .acquisition
+                .advance(RemoteAcquisitionEvent::Cancelled { acquisition_id })?
+        };
+        self.resolve_remote_progress(progress)
+    }
+
+    fn remote_progress(&mut self) -> Result<BrowserRemoteCommandResponse, ModelError> {
+        let progress = self
+            .pending_remote
+            .as_mut()
+            .ok_or_else(|| invalid_source("no remote acquisition is pending"))?
+            .acquisition
+            .progress();
+        self.resolve_remote_progress(progress)
+    }
+
+    fn resolve_remote_progress(
+        &mut self,
+        progress: RemoteAcquisitionProgress,
+    ) -> Result<BrowserRemoteCommandResponse, ModelError> {
+        match progress {
+            RemoteAcquisitionProgress::Action(action) => Ok(BrowserRemoteCommandResponse::Action {
+                action: serde_json::to_value(action)?,
+            }),
+            RemoteAcquisitionProgress::Ready(resolved) => self.finalize_remote(resolved),
+            RemoteAcquisitionProgress::Failed(error) => {
+                self.pending_remote = None;
+                Ok(BrowserRemoteCommandResponse::Failed {
+                    error: lifecycle_error(error),
+                })
+            }
+            RemoteAcquisitionProgress::Cancelled => {
+                self.pending_remote = None;
+                Ok(BrowserRemoteCommandResponse::Cancelled {
+                    snapshot: self.snapshot.clone(),
+                })
+            }
+        }
+    }
+
+    fn finalize_remote(
+        &mut self,
+        resolved: Vec<crate::lifecycle::acquisition::RemoteResolvedMember>,
+    ) -> Result<BrowserRemoteCommandResponse, ModelError> {
+        let mut pending = self
+            .pending_remote
+            .take()
+            .ok_or_else(|| invalid_source("no remote acquisition is pending"))?;
+        let asset_ids: Vec<_> = resolved
+            .iter()
+            .flat_map(|member| member.asset_ids.iter().cloned())
+            .collect();
+        let assets = asset_ids
+            .iter()
+            .map(|asset_id| {
+                pending
+                    .assets
+                    .get(asset_id)
+                    .cloned()
+                    .ok_or_else(|| missing_model_asset(asset_id))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let classified = asset_ids
+            .iter()
+            .map(|asset_id| {
+                pending
+                    .classified
+                    .get(asset_id)
+                    .cloned()
+                    .ok_or_else(|| invalid_source("remote asset classification is missing"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let explicit_projector_asset_id = resolved
+            .iter()
+            .find(|member| member.role == RemoteAssetRole::Projector)
+            .and_then(|member| member.asset_ids.first())
+            .cloned();
+        match self.install(BrowserInstallSource {
+            assets,
+            classified,
+            explicit_projector_asset_id,
+        }) {
+            Ok(installed) => Ok(BrowserRemoteCommandResponse::Installed { installed }),
+            Err(error) => {
+                let progress = pending.acquisition.fail_finalization(error);
+                self.pending_remote = Some(pending);
+                self.resolve_remote_progress(progress)
+            }
+        }
     }
 
     pub fn commit_load(
@@ -618,6 +877,7 @@ impl BrowserLifecycleService {
 
     pub fn abort_load(&mut self, message: Option<String>) -> BrowserObservabilitySnapshot {
         self.pending = None;
+        self.pending_remote = None;
         self.emit(
             BrowserObservabilityEventType::Error,
             SnapshotPatch {
@@ -633,6 +893,13 @@ impl BrowserLifecycleService {
     }
 
     pub fn remove(&mut self, model_id: &str) -> Result<BrowserRemoveResponse, ModelError> {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|current| current.id == model_id)
+        {
+            return Err(ModelError::ModelInUse(model_id.to_string()));
+        }
         let removed = self
             .manifest
             .models
@@ -640,13 +907,6 @@ impl BrowserLifecycleService {
             .ok_or_else(|| model_not_found(model_id))?;
         self.decrement_existing_refs(&removed);
         let orphaned_assets = self.remove_orphaned_assets();
-        if self
-            .current
-            .as_ref()
-            .is_some_and(|current| current.id == model_id)
-        {
-            self.current = None;
-        }
         if contains_projector_asset(&orphaned_assets) {
             self.bump_projector_index_revision()?;
         }
@@ -680,6 +940,7 @@ impl BrowserLifecycleService {
     pub fn unload(&mut self) -> BrowserObservabilitySnapshot {
         self.current = None;
         self.pending = None;
+        self.pending_remote = None;
         self.emit(
             BrowserObservabilityEventType::LoadComplete,
             SnapshotPatch {
@@ -697,6 +958,7 @@ impl BrowserLifecycleService {
     pub fn close(&mut self) -> BrowserObservabilitySnapshot {
         self.current = None;
         self.pending = None;
+        self.pending_remote = None;
         self.emit(
             BrowserObservabilityEventType::Close,
             SnapshotPatch {
@@ -835,7 +1097,6 @@ impl BrowserLifecycleService {
         &mut self,
         mut entry: BrowserModelEntry,
         base_plan: &PairingPlan,
-        classified_projectors: &[ClassifiedAsset],
     ) -> Result<BrowserModelEntry, ModelError> {
         let normalized_base_projector_types =
             normalize_projector_types(&base_plan.compatible_vision_projector_types);
@@ -846,12 +1107,7 @@ impl BrowserLifecycleService {
                 if base_plan.compatible_vision_projector_types.is_empty() {
                     return Ok(entry);
                 }
-                let inspection = projector.inspection.clone().or_else(|| {
-                    classified_projectors
-                        .iter()
-                        .find(|asset| asset.asset_id == projector_id)
-                        .map(|asset| asset.inspection.clone())
-                });
+                let inspection = projector.inspection.clone();
                 if !projector_type_matches(inspection.as_ref(), &compatible_projector_types) {
                     entry = self.detach_projector(&entry.id, base_plan)?;
                 } else if match entry.pairing.as_ref() {
@@ -898,10 +1154,8 @@ impl BrowserLifecycleService {
             return Ok(entry);
         }
 
-        let matches = self.find_compatible_installed_projector_ids(
-            &base_plan.compatible_vision_projector_types,
-            classified_projectors,
-        );
+        let matches = self
+            .find_compatible_installed_projector_ids(&base_plan.compatible_vision_projector_types);
         if matches.len() == 1 {
             self.set_resolved_projector(
                 &entry.id,
@@ -924,22 +1178,14 @@ impl BrowserLifecycleService {
     fn find_compatible_installed_projector_ids(
         &self,
         compatible_vision_projector_types: &[String],
-        classified_projectors: &[ClassifiedAsset],
     ) -> Vec<String> {
         let compatible = compatible_projector_type_set(compatible_vision_projector_types);
-        let supplied: BTreeMap<_, _> = classified_projectors
-            .iter()
-            .map(|asset| (asset.asset_id.as_str(), &asset.inspection))
-            .collect();
         let mut matches = Vec::new();
         for asset in self.manifest.assets.values() {
             if asset.kind != ModelAssetKind::Projector || asset.ref_count == 0 {
                 continue;
             }
-            let inspection = asset
-                .inspection
-                .as_ref()
-                .or_else(|| supplied.get(asset.id.as_str()).copied());
+            let inspection = asset.inspection.as_ref();
             if projector_type_matches(inspection, &compatible) {
                 matches.push(asset.id.clone());
             }
@@ -1026,20 +1272,6 @@ impl BrowserLifecycleService {
         self.manifest.models.insert(id.to_string(), entry.clone());
         validate_manifest(&self.manifest)?;
         Ok(entry)
-    }
-
-    fn restore_entry(&mut self, snapshot: BrowserModelEntry) -> Result<(), ModelError> {
-        let existing = self
-            .manifest
-            .models
-            .get(&snapshot.id)
-            .cloned()
-            .ok_or_else(|| model_not_found(&snapshot.id))?;
-        let previous_refs = entry_asset_ids(&existing);
-        let next_refs = entry_asset_ids(&snapshot);
-        self.rebalance_refs(&previous_refs, &next_refs)?;
-        self.manifest.models.insert(snapshot.id.clone(), snapshot);
-        validate_manifest(&self.manifest)
     }
 
     fn planned_assets_for_entry(
@@ -1166,6 +1398,314 @@ impl BrowserLifecycleService {
     }
 }
 
+fn accept_remote_payload(
+    pending: &mut PendingRemoteAcquisition,
+    manifest: &BrowserRegistryManifest,
+    action: &RemoteAction,
+    event: &RemoteAcquisitionEvent,
+    assets: Vec<BrowserAssetRecord>,
+    classified: Vec<ClassifiedAsset>,
+) -> Result<(), ModelError> {
+    match (action, event) {
+        (
+            RemoteAction::Download { role, metadata, .. },
+            RemoteAcquisitionEvent::DownloadSucceeded {
+                asset_ids,
+                created_asset_ids,
+                ..
+            },
+        ) => {
+            validate_remote_download_assets(
+                *role,
+                metadata,
+                asset_ids,
+                created_asset_ids,
+                &assets,
+            )?;
+            insert_remote_assets(pending, assets, classified)
+        }
+        (
+            RemoteAction::ValidateCache { candidate, .. },
+            RemoteAcquisitionEvent::CacheValidated { asset_ids, .. },
+        ) => {
+            if asset_ids != &candidate.asset_ids {
+                return Err(ModelError::RemoteIntegrityFailed {
+                    url: candidate.metadata.url.clone(),
+                    reason: "cache validation returned different asset identifiers".to_string(),
+                });
+            }
+            let cached = asset_ids
+                .iter()
+                .map(|asset_id| {
+                    manifest
+                        .assets
+                        .get(asset_id)
+                        .cloned()
+                        .ok_or_else(|| missing_model_asset(asset_id))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            insert_remote_assets(pending, cached, classified)
+        }
+        (
+            RemoteAction::Cleanup { asset_ids, .. },
+            RemoteAcquisitionEvent::CleanupSucceeded { .. },
+        ) => {
+            for asset_id in asset_ids {
+                pending.assets.remove(asset_id);
+                pending.classified.remove(asset_id);
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn insert_remote_assets(
+    pending: &mut PendingRemoteAcquisition,
+    assets: Vec<BrowserAssetRecord>,
+    classified: Vec<ClassifiedAsset>,
+) -> Result<(), ModelError> {
+    let mut classified_by_id = BTreeMap::new();
+    for asset in classified {
+        if classified_by_id
+            .insert(asset.asset_id.clone(), asset)
+            .is_some()
+        {
+            return Err(invalid_source(
+                "remote asset classification contains duplicate identifiers",
+            ));
+        }
+    }
+    let mut prepared = Vec::with_capacity(assets.len());
+    for record in assets {
+        validate_asset_record(&record)?;
+        let classified = classified_by_id
+            .remove(&record.id)
+            .or_else(|| {
+                record.inspection.clone().map(|inspection| ClassifiedAsset {
+                    asset_id: record.id.clone(),
+                    name: record.name.clone(),
+                    inspection,
+                })
+            })
+            .ok_or_else(|| invalid_source("remote asset classification is missing"))?;
+        if classified.name != record.name {
+            return Err(invalid_source(
+                "remote asset classification name does not match its record",
+            ));
+        }
+        if prepared.iter().any(
+            |(prepared_record, _): &(BrowserAssetRecord, ClassifiedAsset)| {
+                prepared_record.id == record.id
+            },
+        ) {
+            return Err(invalid_source(
+                "remote asset receipt contains duplicate identifiers",
+            ));
+        }
+        prepared.push((record, classified));
+    }
+    if !classified_by_id.is_empty() {
+        return Err(invalid_source(
+            "remote classification references an unreported asset",
+        ));
+    }
+    for (record, classified) in prepared {
+        pending.classified.insert(record.id.clone(), classified);
+        pending.assets.insert(record.id.clone(), record);
+    }
+    Ok(())
+}
+
+fn validate_remote_download_assets(
+    role: RemoteAssetRole,
+    metadata: &RemoteMetadata,
+    asset_ids: &[String],
+    created_asset_ids: &[String],
+    assets: &[BrowserAssetRecord],
+) -> Result<(), ModelError> {
+    let reported_ids: Vec<_> = assets.iter().map(|asset| asset.id.clone()).collect();
+    if reported_ids != asset_ids {
+        return Err(remote_record_error(
+            metadata,
+            "download receipts do not match the reported asset identifiers",
+        ));
+    }
+    if created_asset_ids
+        .iter()
+        .any(|asset_id| !asset_ids.contains(asset_id))
+    {
+        return Err(remote_record_error(
+            metadata,
+            "created asset identifiers are not part of the download receipt",
+        ));
+    }
+    for asset in assets {
+        if asset.source_url.as_deref() != Some(metadata.url.as_str())
+            || asset.source_etag != metadata.etag
+            || asset.source_last_modified != metadata.last_modified
+            || asset.source_bytes != Some(metadata.bytes)
+        {
+            return Err(remote_record_error(
+                metadata,
+                "download receipt does not match remote metadata",
+            ));
+        }
+    }
+    validate_remote_asset_layout(role, metadata, assets)
+}
+
+fn validate_remote_asset_layout(
+    role: RemoteAssetRole,
+    metadata: &RemoteMetadata,
+    assets: &[BrowserAssetRecord],
+) -> Result<(), ModelError> {
+    match role {
+        RemoteAssetRole::Projector
+            if assets.len() == 1 && assets[0].kind == ModelAssetKind::Projector =>
+        {
+            Ok(())
+        }
+        RemoteAssetRole::Shard if assets.len() == 1 && assets[0].kind == ModelAssetKind::Shard => {
+            Ok(())
+        }
+        RemoteAssetRole::Model if assets.len() == 1 && assets[0].kind == ModelAssetKind::Model => {
+            Ok(())
+        }
+        RemoteAssetRole::Model
+            if assets
+                .iter()
+                .all(|asset| asset.kind == ModelAssetKind::Shard) =>
+        {
+            validate_complete_browser_split(assets)
+                .map_err(|reason| remote_record_error(metadata, reason))
+        }
+        _ => Err(remote_record_error(
+            metadata,
+            "download receipt has an invalid asset layout",
+        )),
+    }
+}
+
+fn validate_complete_browser_split(assets: &[BrowserAssetRecord]) -> Result<(), &'static str> {
+    let count = u32::try_from(assets.len()).map_err(|_| "split contains too many assets")?;
+    let mut indices: Vec<_> = assets
+        .iter()
+        .map(|asset| {
+            if asset.source_part_count != Some(count) {
+                return Err("split asset count is inconsistent");
+            }
+            asset
+                .source_part_index
+                .ok_or("split asset index is missing")
+        })
+        .collect::<Result<_, _>>()?;
+    indices.sort_unstable();
+    if indices.iter().copied().eq(0..count) {
+        Ok(())
+    } else {
+        Err("split asset indices are incomplete")
+    }
+}
+
+fn remote_record_error(metadata: &RemoteMetadata, reason: &str) -> ModelError {
+    ModelError::RemoteIntegrityFailed {
+        url: metadata.url.clone(),
+        reason: reason.to_string(),
+    }
+}
+
+fn browser_remote_requests(
+    manifest: &BrowserRegistryManifest,
+    sources: impl IntoIterator<Item = (RemoteAssetRole, String)>,
+) -> Result<Vec<RemoteAcquisitionRequest>, ModelError> {
+    sources
+        .into_iter()
+        .enumerate()
+        .map(|(index, (role, url))| {
+            let url = canonical_remote_url(&url)?;
+            Ok(RemoteAcquisitionRequest {
+                member_id: u32::try_from(index)
+                    .map_err(|_| invalid_source("remote model contains too many source members"))?,
+                role,
+                candidates: browser_remote_candidates(manifest, role, &url)?,
+                url,
+            })
+        })
+        .collect()
+}
+
+fn browser_remote_candidates(
+    manifest: &BrowserRegistryManifest,
+    role: RemoteAssetRole,
+    url: &str,
+) -> Result<Vec<RemoteCacheCandidate>, ModelError> {
+    type CandidateKey = (u8, u64, Option<String>, Option<String>);
+    let mut groups: BTreeMap<CandidateKey, Vec<&BrowserAssetRecord>> = BTreeMap::new();
+    for asset in manifest.assets.values() {
+        let Some(source_url) = asset.source_url.as_deref() else {
+            continue;
+        };
+        let source_url = canonical_remote_url(source_url)?;
+        if source_url != url || !browser_role_accepts_kind(role, asset.kind) {
+            continue;
+        }
+        let layout = u8::from(asset.source_part_count.is_some());
+        groups
+            .entry((
+                layout,
+                asset.source_bytes.unwrap_or(asset.bytes),
+                asset.source_etag.clone(),
+                asset.source_last_modified.clone(),
+            ))
+            .or_default()
+            .push(asset);
+    }
+    groups
+        .into_iter()
+        .map(|((layout, bytes, etag, last_modified), mut records)| {
+            records.sort_by_key(|record| record.source_part_index.unwrap_or(0));
+            if layout == 1 {
+                validate_complete_browser_split(
+                    &records
+                        .iter()
+                        .map(|record| (*record).clone())
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|reason| ModelError::StorageCorrupt(reason.to_string()))?;
+            } else if records.len() != 1 {
+                return Err(ModelError::StorageCorrupt(
+                    "remote cache identity maps to multiple unsplit assets".to_string(),
+                ));
+            }
+            let asset_ids: Vec<_> = records.iter().map(|record| record.id.clone()).collect();
+            let name = records
+                .first()
+                .map(|record| record.name.clone())
+                .ok_or_else(|| ModelError::StorageCorrupt("empty cache candidate".to_string()))?;
+            Ok(RemoteCacheCandidate {
+                candidate_id: sha256_hex(asset_ids.join("\n").as_bytes()),
+                asset_ids,
+                metadata: RemoteMetadata {
+                    url: url.to_string(),
+                    name,
+                    bytes,
+                    etag,
+                    last_modified,
+                },
+            })
+        })
+        .collect()
+}
+
+fn browser_role_accepts_kind(role: RemoteAssetRole, kind: ModelAssetKind) -> bool {
+    match role {
+        RemoteAssetRole::Model => matches!(kind, ModelAssetKind::Model | ModelAssetKind::Shard),
+        RemoteAssetRole::Shard => kind == ModelAssetKind::Shard,
+        RemoteAssetRole::Projector => kind == ModelAssetKind::Projector,
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SnapshotPatch {
@@ -1198,29 +1738,10 @@ pub fn error_response<T>(error: ModelError) -> BrowserLifecycleEnvelope<T>
 where
     T: Serialize,
 {
-    let code = match error {
-        ModelError::InvalidModelSource(_) => CODE_INVALID_MODEL_SOURCE,
-        ModelError::InvalidModelPairing(_) => CODE_INVALID_MODEL_PAIRING,
-        ModelError::StorageUnavailable(_) => CODE_STORAGE_UNAVAILABLE,
-        ModelError::StorageCorrupt(_) => CODE_STORAGE_CORRUPT,
-        ModelError::AssetMissing(_) => CODE_MODEL_BROKEN,
-        ModelError::ModelNotFound(_) => CODE_MODEL_NOT_FOUND,
-        ModelError::RemoteUnavailable(_) => CODE_REMOTE_LOAD_FAILED,
-        ModelError::UnsupportedOperation { .. } => CODE_UNSUPPORTED_OPERATION,
-        ModelError::Runtime(_) => CODE_QUERY_FAILED,
-        ModelError::RegistryJson(_) => CODE_STORAGE_CORRUPT,
-        ModelError::Io(_) => CODE_STORAGE_UNAVAILABLE,
-        ModelError::UnsupportedGgufVersion(_)
-        | ModelError::InvalidGgufMetadata(_)
-        | ModelError::GgufMetadataTooLarge { .. } => CODE_INVALID_MODEL_SOURCE,
-    };
     BrowserLifecycleEnvelope {
         ok: false,
         value: None,
-        error: Some(BrowserLifecycleError {
-            code,
-            message: error.to_string(),
-        }),
+        error: Some(lifecycle_error(error)),
     }
 }
 
@@ -1230,6 +1751,15 @@ where
 {
     serde_json::to_string(&response)
         .unwrap_or_else(|_| LIFECYCLE_SERIALIZATION_FALLBACK.to_string())
+}
+
+fn lifecycle_error(error: ModelError) -> BrowserLifecycleError {
+    BrowserLifecycleError {
+        code: error.code(),
+        status: error.status(),
+        retry_after_ms: error.retry_after_ms(),
+        message: error.to_string(),
+    }
 }
 
 fn migrate_manifest(

@@ -1,5 +1,6 @@
 import { ModelService } from '../models/model-service.js';
 import { AssetStore, type BrowserCachePolicyOptions } from '../models/asset-store.js';
+import { ModelRegistryStore } from '../models/model-registry-store.js';
 import { createBrowserEmbeddingRun, createBrowserTextRun } from '../models/token-queue.js';
 import {
   QueryError,
@@ -14,14 +15,18 @@ import {
   type EngineEvent,
   type EngineObservability,
   type EngineState,
+  type FileInstallOptions,
+  type ManagedModel,
+  ENDPOINT_DESCRIPTOR_PAYLOAD,
   type ModelLifecycleService,
-  type ModelInfo,
+  type ModelStore,
   type QueryInput,
   type QueryOptions,
-  type ProviderEndpointDescriptor,
+  type UrlInstallOptions,
 } from '../models/types.js';
 import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
+import { FileSystemStorage } from './file-system-storage.js';
 import {
   GatewayEndpointRegistry,
   runGatewayChat,
@@ -48,11 +53,52 @@ export interface SippClientOptions {
   wasmThreading?: 'single-thread' | 'pthread';
   moduleOptions?: EngineModuleOptions;
   maxModelBytes?: number;
+  /** Browser OPFS directory used for the managed model registry and cached assets. */
+  storageRoot?: string;
   /** Override browser OPFS split thresholds for large GGUF model files. */
   browserCache?: BrowserCachePolicyOptions;
   trustedOrigins?: string[];
   executionMode?: 'auto' | 'worker' | 'main-thread';
   workerUrl?: string;
+}
+
+class BrowserModelStore implements ModelStore {
+  public constructor(
+    private readonly service: ModelLifecycleService,
+    private readonly assertOpen: () => void
+  ) {}
+
+  public async installFiles(
+    modelFiles: readonly File[],
+    { projectorFile, ...options }: FileInstallOptions = {}
+  ): Promise<ManagedModel> {
+    this.assertOpen();
+    return managedModel(await this.service.install(
+      { kind: 'local', modelFiles, projectorFile },
+      options
+    ));
+  }
+
+  public async installUrls(
+    modelUrls: readonly string[],
+    { projectorUrl, ...options }: UrlInstallOptions = {}
+  ): Promise<ManagedModel> {
+    this.assertOpen();
+    return managedModel(await this.service.install(
+      { kind: 'remote', modelUrls, projectorUrl },
+      options
+    ));
+  }
+
+  public async list(): Promise<ManagedModel[]> {
+    this.assertOpen();
+    return (await this.service.list()).map(managedModel);
+  }
+
+  public async remove(modelId: string): Promise<void> {
+    this.assertOpen();
+    await this.service.remove(modelId);
+  }
 }
 
 function shouldUseWorker(config: SippClientOptions): boolean {
@@ -75,6 +121,7 @@ function shouldUseWorker(config: SippClientOptions): boolean {
  */
 export class SippClient implements SippClientShape {
   public readonly observability: EngineObservability;
+  public readonly models: ModelStore;
   #service: ModelLifecycleService;
   #gatewayEndpoints = new GatewayEndpointRegistry();
   #providers = new ProviderEndpointRegistry();
@@ -82,13 +129,17 @@ export class SippClient implements SippClientShape {
   #closed = false;
 
   public constructor(options: SippClientOptions = {}) {
-    this.#service = shouldUseWorker(options)
-      ? new WorkerModelServiceClient(options)
-      : new ModelService(
+    if (shouldUseWorker(options)) {
+      this.#service = new WorkerModelServiceClient(options);
+    } else {
+      const storage = new FileSystemStorage(options.storageRoot);
+      this.#service = new ModelService(
         new MainThreadEngineRuntime(options),
-        undefined,
-        new AssetStore(undefined, options.browserCache)
+        new ModelRegistryStore(storage),
+        new AssetStore(storage, options.browserCache)
       );
+    }
+    this.models = new BrowserModelStore(this.#service, () => this.assertOpen());
     this.observability = {
       current: () => {
         this.assertOpen();
@@ -111,51 +162,39 @@ export class SippClient implements SippClientShape {
     this.assertOpen();
     const normalizedId = normalizeEndpointId(id, 'endpoint id');
     assertEndpointDescriptor(descriptor);
-    if (descriptor.kind === 'local') {
-      await this.#service.load(descriptor.source, descriptor.options);
+    const payload = descriptor[ENDPOINT_DESCRIPTOR_PAYLOAD];
+    if (payload.kind === 'local') {
+      await this.#service.load(payload.modelId, payload.options);
       this.#gatewayEndpoints.remove(normalizedId);
       this.#providers.remove(normalizedId);
       const endpoint = { kind: 'local', id: normalizedId } as const;
       this.#localEndpoint = endpoint;
       return endpoint;
     }
-    if (descriptor.kind === 'gateway') {
-      const endpoint = this.#gatewayEndpoints.prepare(normalizedId, descriptor);
+    if (payload.kind === 'gateway') {
+      const endpoint = this.#gatewayEndpoints.prepare(normalizedId, payload.options);
       await this.removeLocalEndpoint(normalizedId);
       this.#providers.remove(normalizedId);
       return this.#gatewayEndpoints.commit(endpoint);
     }
-    const provider = this.#providers.prepare(
-      normalizedId,
-      descriptor as ProviderEndpointDescriptor
-    );
+    const provider = this.#providers.prepare(normalizedId, payload.options);
     await this.removeLocalEndpoint(normalizedId);
     this.#gatewayEndpoints.remove(normalizedId);
     return this.#providers.commit(provider);
   }
 
-  /**
-   * Return the currently loaded local model, if one is active.
-   */
-  public currentLocal(): ModelInfo | null {
+  public async remove(id: string): Promise<void> {
     this.assertOpen();
-    return this.#service.current();
-  }
-
-  /**
-   * List installed local models.
-   */
-  public listLocal(): Promise<ModelInfo[]> {
-    this.assertOpen();
-    return this.#service.list();
-  }
-
-  /**
-   * Remove an installed local model by id.
-   */
-  public async removeLocal(id: string): Promise<void> {
-    this.assertOpen();
-    await this.#service.remove(id);
+    const normalizedId = normalizeEndpointId(id, 'endpoint id');
+    if (this.#localEndpoint?.id === normalizedId) {
+      await this.removeLocalEndpoint(normalizedId);
+      return;
+    }
+    const removed = this.#gatewayEndpoints.remove(normalizedId)
+      || this.#providers.remove(normalizedId);
+    if (!removed) {
+      throw new QueryError('MODEL_NOT_FOUND', `endpoint not found: ${normalizedId}`);
+    }
   }
 
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
@@ -263,6 +302,22 @@ export class SippClient implements SippClientShape {
   }
 }
 
+function managedModel(model: {
+  id: string;
+  name: string;
+  bytes: number;
+  modality: ManagedModel['modality'];
+  status: ManagedModel['status'];
+}): ManagedModel {
+  return {
+    id: model.id,
+    name: model.name,
+    bytes: model.bytes,
+    modality: model.modality,
+    status: model.status,
+  };
+}
+
 function localQueryOptions(options: QueryOptions): QueryOptions {
   rejectLocalEndpointProviderOptions(options.endpointOptions, options.providerOptions);
   const {
@@ -309,14 +364,15 @@ function normalizeEndpointId(value: unknown, name: string): string {
 }
 
 function assertEndpointDescriptor(value: unknown): asserts value is EndpointDescriptor {
-  if (typeof value !== 'object' || value == null || Array.isArray(value)) {
-    throw new QueryError('QUERY_FAILED', 'endpoint descriptor must be an object');
-  }
-  const kind = (value as { readonly kind?: unknown }).kind;
-  if (kind !== 'local' && kind !== 'gateway' && kind !== 'provider') {
+  if (
+    typeof value !== 'object' ||
+    value == null ||
+    Array.isArray(value) ||
+    !(ENDPOINT_DESCRIPTOR_PAYLOAD in value)
+  ) {
     throw new QueryError(
       'QUERY_FAILED',
-      'endpoint descriptor kind must be local, gateway, or provider'
+      'endpoint descriptors must be created by EndpointDescriptor'
     );
   }
 }

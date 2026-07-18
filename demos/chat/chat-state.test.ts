@@ -6,40 +6,36 @@ import {
   toChatMessages,
   type ConversationMessage,
 } from './src/chat-state.ts';
-import {
+
+const {
   getCuratedModel,
   projectorRequirementMessage,
   resolveModelSelection,
-} from './src/model-registry.ts';
+} = await import('./src/model-registry.ts');
 
-test('text model selection never includes a projector', () => {
+test('text model selection preserves its curated install location', () => {
   const resolved = resolveModelSelection({
     kind: 'curated',
     modelId: 'qwen2.5-0.5b-instruct',
   });
 
   assert.equal(resolved.capability, 'text');
-  assert.equal(typeof resolved.source, 'string');
+  assert.equal(resolved.location, getCuratedModel('qwen2.5-0.5b-instruct').location);
 });
 
-test('curated vision selection owns its hidden projector source', () => {
+test('vision model selection preserves its curated install location', () => {
   const resolved = resolveModelSelection({
     kind: 'curated',
     modelId: 'lfm2.5-vl-450m',
   });
 
   assert.equal(resolved.capability, 'vision');
-  assert.equal(typeof resolved.source, 'object');
-  assert.ok(resolved.source != null && 'model' in resolved.source);
-  assert.match(
-    String(resolved.source.projector),
-    /mmproj-LFM2\.5-VL-450m-F16\.gguf$/
-  );
+  assert.equal(resolved.location, getCuratedModel('lfm2.5-vl-450m').location);
 });
 
 test('custom URL selection remains model-only after curated vision selection', () => {
   const vision = getCuratedModel('lfm2.5-vl-450m');
-  assert.equal(typeof vision.source, 'object');
+  assert.equal(vision.location.kind, 'urls');
 
   const custom = resolveModelSelection({
     kind: 'custom-url',
@@ -47,7 +43,10 @@ test('custom URL selection remains model-only after curated vision selection', (
   });
 
   assert.equal(custom.capability, 'text');
-  assert.equal(custom.source, 'https://models.example.test/custom.gguf');
+  assert.deepEqual(custom.location, {
+    kind: 'urls',
+    modelUrls: ['https://models.example.test/custom.gguf'],
+  });
   assert.equal(custom.custom, true);
 });
 
@@ -55,7 +54,7 @@ test('custom file selection remains model-only', () => {
   const file = new File(['gguf'], 'local-model.gguf');
   const resolved = resolveModelSelection({ kind: 'custom-file', file });
 
-  assert.equal(resolved.source, file);
+  assert.deepEqual(resolved.location, { kind: 'files', modelFiles: [file] });
   assert.equal(resolved.capability, 'text');
 });
 

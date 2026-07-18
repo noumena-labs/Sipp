@@ -11,27 +11,28 @@ import {
   requiredEnv,
 } from './_support.mjs';
 
-const { SippClient, setLlamaLogQuiet } = native;
-const { model, target, input } = readGatewayArgs(
+const { EndpointDescriptor, SippClient, setLlamaLogQuiet } = native;
+const { model: modelPath, target, input } = readGatewayArgs(
   'gateway_embed',
   'SippClient gateway embedding example input.',
 );
 setLlamaLogQuiet(true);
 const client = new SippClient();
-const localEndpoint = await client.add('local', {
-  kind: 'local',
-  modelPath: model,
-  config: runtimeConfig({ embeddings: true }),
-});
-const gatewayEndpoint = await client.add('gateway', {
-  kind: 'gateway',
+const model = await client.models.installFiles([modelPath]);
+const localEndpoint = await client.add(
+  'local',
+  EndpointDescriptor.local(model.id, {
+    config: runtimeConfig({ embeddings: true }),
+  })
+);
+const gatewayEndpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target,
   baseUrl: requiredEnv('SIPP_GATEWAY_URL'),
   authentication: {
     kind: 'bearer',
     value: requiredEnv('SIPP_GATEWAY_TOKEN'),
   },
-});
+}));
 
 const local = await client.embed({
   endpoint: localEndpoint,
@@ -52,8 +53,7 @@ printEmbedding(local);
 console.log('gateway:');
 printEmbedding(gateway);
 
-function runtimeConfig({ embeddings, projectorPath = undefined }) {
-  const multimodal = projectorPath == null ? {} : { projector_path: projectorPath };
+function runtimeConfig({ embeddings }) {
   return {
     placement: { gpu_layers: gpuLayers() },
     context: {
@@ -69,7 +69,6 @@ function runtimeConfig({ embeddings, projectorPath = undefined }) {
     },
     scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
     cache: { mode: 'live_slot_prefix' },
-    multimodal,
     residency: { max_gpu_models_per_device: 1 },
     observability: { runtime_metrics: true },
   };

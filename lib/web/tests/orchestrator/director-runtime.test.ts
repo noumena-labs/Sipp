@@ -6,7 +6,7 @@ import type {
   ChatInput,
   ChatOptions,
   GenerationResult,
-  ModelInfo,
+  ObservabilitySnapshot,
   TokenBatch,
 } from '../../src/models/types.js';
 import { parseDirectorConfig } from '../../src/orchestrator/director-config.js';
@@ -22,9 +22,29 @@ class FakeClient implements DirectorRuntimeClient {
   public mediaMarker: string | null = '<image>';
   public queryCalls = 0;
 
-  public currentLocal(): Pick<ModelInfo, 'mediaMarker'> | null {
-    return { mediaMarker: this.mediaMarker };
-  }
+  public readonly observability = {
+    current: (): ObservabilitySnapshot => ({
+      mode: 'off',
+      state: 'ready',
+      updatedAt: new Date(0).toISOString(),
+      model: {
+        id: 'model-1',
+        name: 'test.gguf',
+        modality: this.mediaMarker == null ? 'text' : 'vision',
+        status: 'ready',
+        source: 'local',
+        bytes: 1,
+        loaded: true,
+        chatTemplate: null,
+        bosText: '',
+        eosText: '',
+        mediaMarker: this.mediaMarker,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+      },
+      query: null,
+    }),
+  };
 
   public chat(
     input: ChatInput,

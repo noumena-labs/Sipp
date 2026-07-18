@@ -13,8 +13,9 @@ use sipp::lifecycle::{
     BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
 };
 use sipp::{
-    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, OpenAiCompatibleProviderConfig,
-    OpenAiProviderConfig, ProviderAuthConfig, ProviderEndpointConfig, ProviderSecret, SippClient,
+    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, LocalDescriptor,
+    OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig, ProviderDescriptor,
+    ProviderSecret, SippClient,
 };
 use sipp_gateway::GatewayRoutes;
 
@@ -22,6 +23,9 @@ use sipp_gateway::GatewayRoutes;
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GatewayServerConfig {
+    /// Filesystem root for managed local models.
+    #[serde(default = "default_storage_root")]
+    pub storage_root: PathBuf,
     /// Public inference listener.
     #[serde(default = "default_public_bind")]
     pub public_bind: SocketAddr,
@@ -57,6 +61,10 @@ fn default_public_bind() -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], 8080))
 }
 
+fn default_storage_root() -> PathBuf {
+    PathBuf::from(sipp::DEFAULT_STORAGE_ROOT)
+}
+
 fn default_management_bind() -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], 9090))
 }
@@ -82,6 +90,9 @@ impl GatewayServerConfig {
 
     /// Validate configuration without loading secrets or endpoints.
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.storage_root.as_os_str().is_empty() {
+            bail!("model storage root must not be empty");
+        }
         if self.public_bind == self.management_bind {
             bail!("public_bind and management_bind must be different");
         }
@@ -130,11 +141,14 @@ impl GatewayServerConfig {
 
     /// Load endpoints and return the application-owned client runtime.
     pub async fn build_runtime(&self) -> anyhow::Result<GatewayServerRuntime> {
-        let mut client = SippClient::new();
+        let mut client = SippClient::with_storage_root(&self.storage_root)?;
         let mut targets = BTreeMap::new();
         let mut summaries = Vec::new();
         for target in &self.targets {
-            let (descriptor, summary) = target.endpoint.descriptor_and_summary(&target.name)?;
+            let (descriptor, summary) = target
+                .endpoint
+                .descriptor_and_summary(&target.name, &client)
+                .await?;
             let endpoint = client
                 .add(target.name.clone(), descriptor)
                 .await
@@ -524,9 +538,10 @@ impl EndpointConfig {
         Ok(())
     }
 
-    fn descriptor_and_summary(
+    async fn descriptor_and_summary(
         &self,
         target_name: &str,
+        client: &SippClient,
     ) -> anyhow::Result<(EndpointDescriptor, TargetSummary)> {
         match self {
             Self::Local {
@@ -536,8 +551,15 @@ impl EndpointConfig {
                 runtime,
             } => {
                 let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
+                let installed = client
+                    .models()
+                    .install_files([model.clone()])
+                    .await
+                    .with_context(|| format!("failed to install {}", model.display()))?;
+                let mut descriptor = LocalDescriptor::new(installed.id);
+                descriptor.config = plan.config;
                 Ok((
-                    EndpointDescriptor::local(model.clone(), plan.config),
+                    EndpointDescriptor::Local(descriptor),
                     TargetSummary {
                         name: target_name.to_string(),
                         kind: TargetKind::Local,
@@ -553,14 +575,12 @@ impl EndpointConfig {
                 base_url,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::provider(ProviderEndpointConfig::OpenAi(
-                    OpenAiProviderConfig {
-                        model: model.clone(),
-                        api_key: ProviderSecret::new(required_env(api_key_env)?),
-                        base_url: base_url.clone(),
-                        timeout: timeout(*timeout_seconds),
-                    },
-                )),
+                EndpointDescriptor::Provider(ProviderDescriptor::OpenAi(OpenAiProviderConfig {
+                    model: model.clone(),
+                    api_key: ProviderSecret::new(required_env(api_key_env)?),
+                    base_url: base_url.clone(),
+                    timeout: timeout(*timeout_seconds),
+                })),
                 TargetSummary {
                     name: target_name.to_string(),
                     kind: TargetKind::OpenAi,
@@ -576,7 +596,7 @@ impl EndpointConfig {
                 correlation_header,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::provider(ProviderEndpointConfig::OpenAiCompatible(
+                EndpointDescriptor::Provider(ProviderDescriptor::OpenAiCompatible(
                     OpenAiCompatibleProviderConfig {
                         model: model.clone(),
                         base_url: base_url.clone(),
@@ -603,7 +623,7 @@ impl EndpointConfig {
                 version,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::provider(ProviderEndpointConfig::Anthropic(
+                EndpointDescriptor::Provider(ProviderDescriptor::Anthropic(
                     AnthropicProviderConfig {
                         model: model.clone(),
                         api_key: ProviderSecret::new(required_env(api_key_env)?),

@@ -12,11 +12,11 @@ npm install @sipphq/sipp
 
 ## 浏览器本地推理
 
-仅在浏览器端代码中使用 `@sipphq/sipp`。本地端点的 `source` 可以是应用服务器提供的模型 URL、用户上传的 `File` 对象、已缓存的模型 ID，或者是分块下载的数据源。
+仅在浏览器端代码中使用 `@sipphq/sipp`。通过 `client.models` 安装一个或多个模型 URL 或用户上传的 `File`；多个输入表示模型分片。安装会返回模型 ID，也可以把已有的已安装模型 ID 直接传给 `EndpointDescriptor.local(...)`。
 
 ```ts
 import { useState } from 'react';
-import { SippClient } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 export function LocalQuery(): JSX.Element {
   const [text, setText] = useState('');
@@ -24,16 +24,18 @@ export function LocalQuery(): JSX.Element {
   async function run(): Promise<void> {
     const client = new SippClient();
     try {
-      const endpoint = await client.add('default', {
-        kind: 'local',
-        source: '/models/model.gguf',
-        options: {
+      const model = await client.models.installUrls([
+        new URL('/models/model.gguf', window.location.href).href,
+      ]);
+      const endpoint = await client.add(
+        'default',
+        EndpointDescriptor.local(model.id, {
           backend: 'webgpu',
           runtime: {
             context: { n_ctx: 2048 },
           },
-        },
-      });
+        })
+      );
       const response = await client.query('Explain Sipp.', {
         endpoint,
         maxTokens: 64,

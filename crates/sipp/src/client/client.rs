@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::CapabilitySupport;
 use crate::engine::SippEngine;
+use crate::lifecycle::{ModelLoadOptions, ModelStore};
 
 use crate::client::dispatch::InferenceEndpoint;
 #[cfg(not(target_family = "wasm"))]
@@ -13,10 +15,11 @@ use crate::client::local_endpoint::LocalEndpoint;
 #[cfg(all(feature = "providers", not(target_family = "wasm")))]
 use crate::client::provider_endpoint::ProviderEndpoint;
 #[cfg(feature = "providers")]
-use crate::client::ProviderEndpointConfig;
+use crate::client::ProviderDescriptor;
 use crate::client::{
     EndpointCapabilities, EndpointDescriptor, EndpointRef, SippChatRequest, SippEmbedRequest,
     SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext, SippResult, SippTextRun,
+    DEFAULT_STORAGE_ROOT,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -33,19 +36,41 @@ mod client_tests;
 
 /// Public inference facade over registered local, gateway, and provider endpoints.
 pub struct SippClient {
+    models: ModelStore,
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
+    local_models: HashMap<String, String>,
     #[cfg(not(target_family = "wasm"))]
     io_executor: Option<IoExecutor>,
 }
 
 impl SippClient {
     /// Create an empty client with no registered endpoints.
-    pub fn new() -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the default model store cannot be opened.
+    pub fn new() -> SippResult<Self> {
+        Self::with_storage_root(DEFAULT_STORAGE_ROOT)
+    }
+
+    /// Create an empty client with a model store rooted at `storage_root`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the model store cannot be opened.
+    pub fn with_storage_root(storage_root: impl Into<PathBuf>) -> SippResult<Self> {
+        Ok(Self {
+            models: ModelStore::local(storage_root)?,
             endpoints: HashMap::new(),
+            local_models: HashMap::new(),
             #[cfg(not(target_family = "wasm"))]
             io_executor: None,
-        }
+        })
+    }
+
+    /// Access the client model store.
+    pub fn models(&self) -> &ModelStore {
+        &self.models
     }
 
     /// Register or replace a local, gateway, or direct provider endpoint.
@@ -61,22 +86,42 @@ impl SippClient {
     pub async fn add(
         &mut self,
         id: impl Into<String>,
-        descriptor: EndpointDescriptor,
+        descriptor: impl Into<EndpointDescriptor>,
     ) -> SippResult<EndpointRef> {
-        match descriptor {
-            EndpointDescriptor::LocalModel(descriptor) => {
-                let engine = SippEngine::load(descriptor.model_path, descriptor.config).await?;
-                self.register_local(id, engine).await
+        match descriptor.into() {
+            EndpointDescriptor::Local(descriptor) => {
+                let model_id = descriptor.model_id.clone();
+                let engine = self.acquire_local_engine(descriptor).await?;
+                self.register_local(id, model_id, engine).await
             }
-            EndpointDescriptor::Gateway(config) => self.register_gateway(id, config),
+            EndpointDescriptor::Gateway(descriptor) => self.register_gateway(id, descriptor).await,
             #[cfg(feature = "providers")]
-            EndpointDescriptor::Provider(config) => self.register_provider(id, config),
+            EndpointDescriptor::Provider(descriptor) => {
+                self.register_provider(id, descriptor).await
+            }
         }
+    }
+
+    async fn acquire_local_engine(
+        &mut self,
+        descriptor: crate::client::LocalDescriptor,
+    ) -> SippResult<SippEngine> {
+        self.models
+            .load_engine(
+                &descriptor.model_id,
+                ModelLoadOptions {
+                    runtime: descriptor.config,
+                    ..ModelLoadOptions::default()
+                },
+            )
+            .await
+            .map_err(SippError::from)
     }
 
     async fn register_local(
         &mut self,
         id: impl Into<String>,
+        model_id: String,
         engine: SippEngine,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "local id")?;
@@ -90,31 +135,39 @@ impl SippClient {
         self.replace_endpoint(
             endpoint.clone(),
             Arc::new(LocalEndpoint::new(endpoint.clone(), capabilities, engine)),
-        );
+            Some(model_id),
+        )
+        .await;
         Ok(endpoint)
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn register_gateway(
+    async fn register_gateway(
         &mut self,
         id: impl Into<String>,
-        config: crate::client::GatewayEndpointConfig,
+        descriptor: crate::client::GatewayDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "gateway id")?;
         let endpoint = EndpointRef::Gateway { id };
         let executor = self.io_executor()?;
         self.replace_endpoint(
             endpoint.clone(),
-            Arc::new(GatewayEndpoint::new(endpoint.clone(), config, executor)?),
-        );
+            Arc::new(GatewayEndpoint::new(
+                endpoint.clone(),
+                descriptor,
+                executor,
+            )?),
+            None,
+        )
+        .await;
         Ok(endpoint)
     }
 
     #[cfg(target_family = "wasm")]
-    fn register_gateway(
+    async fn register_gateway(
         &mut self,
         id: impl Into<String>,
-        _config: crate::client::GatewayEndpointConfig,
+        _descriptor: crate::client::GatewayDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "gateway id")?;
         Err(SippError::UnsupportedOperation {
@@ -124,14 +177,14 @@ impl SippClient {
     }
 
     #[cfg(all(feature = "providers", not(target_family = "wasm")))]
-    fn register_provider(
+    async fn register_provider(
         &mut self,
         id: impl Into<String>,
-        config: ProviderEndpointConfig,
+        descriptor: ProviderDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "provider id")?;
         let endpoint = EndpointRef::Provider { id };
-        let (model, transport, secrets) = config.build()?;
+        let (model, transport, secrets) = descriptor.build()?;
         let executor = self.io_executor()?;
         self.replace_endpoint(
             endpoint.clone(),
@@ -143,15 +196,17 @@ impl SippClient {
                 executor,
                 secrets,
             )),
-        );
+            None,
+        )
+        .await;
         Ok(endpoint)
     }
 
     #[cfg(all(feature = "providers", target_family = "wasm"))]
-    fn register_provider(
+    async fn register_provider(
         &mut self,
         id: impl Into<String>,
-        _config: ProviderEndpointConfig,
+        _descriptor: ProviderDescriptor,
     ) -> SippResult<EndpointRef> {
         let id = normalize_id(id, "provider id")?;
         Err(SippError::UnsupportedOperation {
@@ -160,14 +215,41 @@ impl SippClient {
         })
     }
 
-    fn replace_endpoint(
+    async fn replace_endpoint(
         &mut self,
         endpoint: EndpointRef,
         implementation: Arc<dyn InferenceEndpoint>,
+        model_id: Option<String>,
     ) {
-        let id = endpoint.id();
+        let id = endpoint.id().to_string();
+        let previous = self.local_models.remove(&id);
+        self.models
+            .replace_usage(previous.as_deref(), model_id.as_deref())
+            .await;
         self.endpoints.retain(|registered, _| registered.id() != id);
+        if let Some(model_id) = model_id {
+            self.local_models.insert(id, model_id);
+        }
         self.endpoints.insert(endpoint, implementation);
+    }
+
+    /// Remove a registered endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the id is invalid or no endpoint uses it.
+    pub async fn remove(&mut self, id: &str) -> SippResult<()> {
+        let id = normalize_id(id, "endpoint id")?;
+        let endpoint = self
+            .endpoints
+            .keys()
+            .find(|endpoint| endpoint.id() == id)
+            .cloned()
+            .ok_or_else(|| SippError::InvalidRequest(format!("endpoint not found: {id}")))?;
+        self.endpoints.remove(&endpoint);
+        let model_id = self.local_models.remove(&id);
+        self.models.replace_usage(model_id.as_deref(), None).await;
+        Ok(())
     }
 
     /// Submit a raw-prompt text generation request.
@@ -270,12 +352,6 @@ impl SippClient {
         let executor = IoExecutor::new()?;
         self.io_executor = Some(executor.clone());
         Ok(executor)
-    }
-}
-
-impl Default for SippClient {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

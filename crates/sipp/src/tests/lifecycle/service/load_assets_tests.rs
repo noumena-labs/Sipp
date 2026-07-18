@@ -7,7 +7,9 @@ use crate::lifecycle::storage::now_unix_ms;
 use crate::lifecycle::test_support::{gguf_name, gguf_path, strings, TempDir};
 use crate::lifecycle::{
     AssetRecord, AssetRole, AssetSource, ModelAssetKind, ModelEntry, ModelModality, ModelStatus,
+    ModelStore,
 };
+use futures::executor::block_on;
 use std::fs;
 
 fn asset_record(id: &str, storage_path: impl Into<PathBuf>) -> AssetRecord {
@@ -54,10 +56,10 @@ fn model_entry(asset_ids: Vec<String>) -> ModelEntry {
 #[test]
 fn resolve_load_asset_paths_rejects_missing_model_asset() {
     let root = TempDir::new("load-assets", "missing-load-asset");
-    let service = ModelService::local(root.path.join("store")).expect("service");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
     let entry = model_entry(strings(&["missing"]));
 
-    let error = service
+    let error = block_on(store.state.lock())
         .resolve_load_asset_paths(&entry)
         .expect_err("missing asset");
 
@@ -69,15 +71,15 @@ fn resolve_load_asset_paths_rejects_missing_model_asset() {
 #[test]
 fn resolve_load_asset_paths_returns_storage_path() {
     let root = TempDir::new("load-assets", "load-asset-path");
-    let mut service = ModelService::local(root.path.join("store")).expect("service");
+    let store = ModelStore::local(root.path.join("store")).expect("store");
     let record = asset_record("asset-a", PathBuf::from("assets/asset-a.gguf"));
     let stored_path = root.path.join("store").join(&record.storage_path);
     fs::create_dir_all(stored_path.parent().expect("asset parent")).expect("asset dir");
     fs::write(&stored_path, [0_u8]).expect("asset bytes");
-    service.registry.upsert_asset(record).expect("asset");
     let entry = model_entry(strings(&["asset-a"]));
-
-    let paths = service
+    let mut state = block_on(store.state.lock());
+    state.registry.upsert_asset(record).expect("asset");
+    let paths = state
         .resolve_load_asset_paths(&entry)
         .expect("load asset paths");
 

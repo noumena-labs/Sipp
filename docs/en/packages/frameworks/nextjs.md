@@ -12,7 +12,7 @@ or browser-local Sipp runtime access.
 Route handlers are a good place to keep provider credentials off the client.
 Set `runtime = 'nodejs'` for routes that import `@sipphq/sipp-server`.
 
-Routes that are registered from a browser `kind: 'gateway'` endpoint must speak
+Routes that are registered as a browser gateway endpoint must speak
 the first-party gateway profile. Use the gateway profile helpers from
 `@sipphq/sipp-server` to decode the incoming body and format JSON or SSE
 responses. The route can still execute the request against a direct provider
@@ -24,6 +24,7 @@ real deployment, keep the key in your server environment or secret manager.
 ```ts
 // app/api/sipp/query/route.ts
 import {
+  EndpointDescriptor,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -45,12 +46,11 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('provider', {
-      kind: 'provider',
+    const endpoint = await client.add('provider', EndpointDescriptor.provider({
       provider: 'openai',
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),
-    });
+    }));
     const run = client.query({
       ...decoded.request,
       endpoint,
@@ -68,11 +68,11 @@ export async function POST(request: Request): Promise<Response> {
 }
 ```
 
-Do not return an app-specific shape such as `{ text }` from a route that the
-browser package calls through `client.add({ kind: 'gateway' })`. That route is
-an HTTP gateway endpoint from the browser client's perspective, even when it is
-implemented inside the Next application. The server-side implementation can
-resolve the request to a provider, a local endpoint, or a separate gateway.
+Do not return an app-specific shape such as `{ text }` from a route registered
+with `EndpointDescriptor.gateway(...)`. That route is an HTTP gateway endpoint
+from the browser client's perspective, even when it is implemented inside the
+Next application. The server-side implementation can resolve the request to a
+provider, a local endpoint, or a separate gateway.
 
 For high-throughput services, keep endpoint setup in a server-only module and
 reuse the client lifecycle according to your deployment model. Do not import
@@ -85,7 +85,7 @@ server should keep the provider credential.
 
 ```ts
 // app/api/sipp/stream/route.ts
-import { SippClient } from '@sipphq/sipp-server';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -106,12 +106,11 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const client = new SippClient();
-  const endpoint = await client.add('provider', {
-    kind: 'provider',
+  const endpoint = await client.add('provider', EndpointDescriptor.provider({
     provider: 'openai',
     model: requiredEnv('OPENAI_MODEL'),
     apiKey: requiredEnv('OPENAI_API_KEY'),
-  });
+  }));
   const run = client.query({
     endpoint,
     prompt,
@@ -152,7 +151,7 @@ Component boundary.
 'use client';
 
 import { useState } from 'react';
-import { SippClient } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 export function LocalChat(): JSX.Element {
   const [text, setText] = useState('');
@@ -160,10 +159,13 @@ export function LocalChat(): JSX.Element {
   async function run(prompt: string): Promise<void> {
     const client = new SippClient();
     try {
-      const endpoint = await client.add('default', {
-        kind: 'local',
-        source: '/models/model.gguf',
-      });
+      const model = await client.models.installUrls([
+        new URL('/models/model.gguf', window.location.href).href,
+      ]);
+      const endpoint = await client.add(
+        'default',
+        EndpointDescriptor.local(model.id)
+      );
       const response = await client.query(prompt, {
         endpoint,
         maxTokens: 64,
@@ -200,7 +202,7 @@ reference at request time; the `query` call stays the same.
 'use client';
 
 import { useState } from 'react';
-import { SippClient, type EndpointRef } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient, type EndpointRef } from '@sipphq/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
@@ -211,17 +213,22 @@ export function HybridChat(): JSX.Element {
   async function run(prompt: string): Promise<void> {
     const client = new SippClient();
     try {
-      const localEndpoint = await client.add('browser-local', {
-        kind: 'local',
-        source: '/models/model.gguf',
-      });
-      const providerRouteEndpoint = await client.add('app-route', {
-        kind: 'gateway',
-        target: 'gpt-5-mini',
-        baseUrl: window.location.origin,
-        routes: { query: '/api/sipp/query' },
-        authentication: { kind: 'none' },
-      });
+      const model = await client.models.installUrls([
+        new URL('/models/model.gguf', window.location.href).href,
+      ]);
+      const localEndpoint = await client.add(
+        'browser-local',
+        EndpointDescriptor.local(model.id)
+      );
+      const providerRouteEndpoint = await client.add(
+        'app-route',
+        EndpointDescriptor.gateway({
+          target: 'gpt-5-mini',
+          baseUrl: window.location.origin,
+          routes: { query: '/api/sipp/query' },
+          authentication: { kind: 'none' },
+        })
+      );
       const endpoint: EndpointRef =
         mode === 'local' ? localEndpoint : providerRouteEndpoint;
       const response = await client.query(prompt, {
@@ -265,8 +272,9 @@ long-lived gateway token in the client bundle. Have a Next route issue a
 short-lived app token, then use a browser `valueProvider`:
 
 ```ts
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
+import { EndpointDescriptor } from '@sipphq/sipp';
+
+const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
   target: 'local',
   baseUrl: 'https://gateway.example.com',
   authentication: {
@@ -276,7 +284,7 @@ const endpoint = await client.add('gateway', {
       return await response.text();
     },
   },
-});
+}));
 ```
 
 ## References
