@@ -9,24 +9,27 @@ larger browser experience.
 
 ## Learning Order
 
-1. Run `rust`, `node`, or `python` for local GGUF `query`, `chat`, and `embed`.
-2. Run `web` for browser-local GGUF loading in Vite.
-3. Run `gateway` workflows to compare local endpoints with a gateway target.
-4. Run `provider_chat` for direct provider calls from a trusted server-side
+1. Run `rust`, `node`, `python`, or `swift` for local GGUF inference.
+2. Run the sandboxed SwiftUI app for macOS file-picker integration.
+3. Run `web` for browser-local GGUF loading in Vite.
+4. Run `gateway` workflows to compare local endpoints with a gateway target.
+5. Run `provider_chat` for direct provider calls from a trusted server-side
    process.
 
-All client examples register endpoints through `add(key, descriptor)`. The
-returned endpoint reference is passed to `query`, `chat`, or `embed` when a
-request uses a specific destination.
+All client examples register endpoints through `add(key, descriptor)`. Rust,
+Node, and Python pass the returned endpoint reference to requests; Swift uses
+the caller-defined endpoint `String` directly.
 
 ## Direct Local Examples
 
-Local examples take a GGUF model path followed by optional input:
+Rust, Node, and Python accept an optional input after the GGUF model path. The
+Swift executable requires the input explicitly:
 
 ```bash
 cargo run -p sipp-rust-examples --bin query -- <model.gguf> [input]
 node examples/node/query.mjs <model.gguf> [input]
 python examples/python/query.py <model.gguf> [input]
+.build/artifacts/swift/examples/SippCLI query <model.gguf> <input>
 ```
 
 Swap `query` for `chat` or `embed`. `vision_chat` also takes a projector GGUF

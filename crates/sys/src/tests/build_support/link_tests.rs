@@ -86,7 +86,7 @@ fn dynamic_library_exists_recognizes_unix_and_macos_shared_libraries() {
             "{lib}"
         );
         assert!(
-            dynamic_library_exists(TargetKind::Macos, &dirs, lib),
+            dynamic_library_exists(TargetKind::Apple, &dirs, lib),
             "{lib}"
         );
     }

@@ -7,7 +7,6 @@ use std::path::PathBuf;
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "tests/cli_tests.rs"]
 mod cli_tests;
@@ -15,7 +14,6 @@ mod cli_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const TOP_LEVEL_HELP: &str = "\
 Sipp's developer automation lives under focused command groups.
 
@@ -340,6 +338,7 @@ Examples:
   cargo xtask toolchain install bun
   cargo xtask toolchain install cmake
   cargo xtask toolchain install uv
+  cargo xtask toolchain install rust-apple
   cargo xtask toolchain install all
   cargo xtask toolchain setup cuda
 
@@ -361,7 +360,7 @@ Examples:
   cargo xtask doctor --target wasm
   cargo xtask doctor --target node --backend vulkan
 
-Doctor fails for missing core prerequisites and warns for optional GPU/backend
+Doctor fails for missing required prerequisites and warns for optional GPU/backend
 readiness so developers can decide what they need for their target.")]
     #[command(after_long_help = BACKEND_HELP)]
     Doctor(DoctorArgs),
@@ -475,6 +474,16 @@ The default backend is CPU. `--backend all` expands to the backend set
 supported by the host operating system.")]
     #[command(after_long_help = BACKEND_HELP)]
     Node(BackendArgs),
+
+    /// Build the Apple Swift package.
+    #[command(long_about = "\
+Build the macOS arm64 and x86_64 UniFFI static libraries, merge them into a
+universal archive, create SippCore.xcframework, and test the staged SwiftPM
+package.
+
+This target requires macOS, Xcode, the managed Rust Apple targets, and
+initialized git submodules.")]
+    Swift,
 
     /// Build the Rust CLI distribution directory.
     #[command(long_about = "\
@@ -689,6 +698,9 @@ pub enum TestUnitSuiteTarget {
     #[command(name = "python-package")]
     #[command(after_long_help = BACKEND_HELP)]
     PythonPackage(TestUnitBackendArgs),
+    /// Build and validate the Apple Swift package artifact.
+    #[command(name = "swift-package")]
+    SwiftPackage,
 }
 
 /// Options for one deterministic unit group.
@@ -1134,6 +1146,8 @@ pub enum TestSuiteId {
     NodePackage,
     /// Python package interface tests.
     PythonPackage,
+    /// Apple Swift package interface and artifact tests.
+    SwiftPackage,
     /// CLI local generation smoke tests.
     CliSmoke,
     /// Rust local generation smoke tests.
@@ -1165,6 +1179,7 @@ impl TestSuiteId {
             TestSuiteId::Cli => "cli",
             TestSuiteId::NodePackage => "node-package",
             TestSuiteId::PythonPackage => "python-package",
+            TestSuiteId::SwiftPackage => "swift-package",
             TestSuiteId::CliSmoke => "cli-smoke",
             TestSuiteId::RustSmoke => "rust-smoke",
             TestSuiteId::NodeSmoke => "node-smoke",
@@ -1247,12 +1262,31 @@ impl DemoName {
 /// Example run workflows.
 #[derive(Subcommand)]
 pub enum RunExamplesCommands {
+    /// Build and launch the SwiftUI example on an iOS Simulator.
+    Ios(RunIosExampleArgs),
+
     /// Start one long-running example server.
     Serve(RunExampleServeArgs),
 
     /// Start a local gateway and run one gateway client workflow.
     #[command(after_long_help = BACKEND_HELP)]
     Gateway(RunGatewayExampleArgs),
+}
+
+/// Options for the SwiftUI iOS Simulator example.
+#[derive(Args)]
+pub struct RunIosExampleArgs {
+    /// Simulator device identifier reported by `xcrun simctl list devices available`.
+    #[arg(long)]
+    pub simulator: String,
+
+    /// GGUF model copied into the example application's Documents directory.
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+
+    /// Launch the existing app artifact without rebuilding the Swift package.
+    #[arg(long)]
+    pub no_build: bool,
 }
 
 /// Options for serving an example.
@@ -1681,6 +1715,8 @@ pub enum ToolchainComponent {
     Emsdk,
     /// Install the hermetic Vulkan SDK.
     Vulkan,
+    /// Install Rust targets required by macOS and iOS packages.
+    RustApple,
 }
 
 /// Toolchain components that xtask can configure interactively.
@@ -1812,6 +1848,8 @@ pub enum DoctorTarget {
     Node,
     /// Check Python binding prerequisites.
     Python,
+    /// Check Swift/Xcode binding prerequisites.
+    Swift,
 }
 
 /// Shared backend selection flags for native target builds.

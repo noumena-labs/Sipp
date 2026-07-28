@@ -7,5 +7,6 @@ pub(crate) mod emsdk;
 pub(crate) mod env;
 pub(crate) mod ninja;
 pub(crate) mod python;
+pub(crate) mod rustup;
 pub(crate) mod source;
 pub(crate) mod vulkan;

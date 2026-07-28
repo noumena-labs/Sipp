@@ -35,6 +35,7 @@ Always use the **`build-orchestrator`** skill when compiling. The repository use
 - **Build Core (Rust only):** `cargo xtask build core`
 - **Build Node Bindings:** `cargo xtask build node` (use `--backend vulkan` for GPU accelerated builds)
 - **Build Python Bindings:** `cargo xtask build python` (optionally `--backend vulkan`)
+- **Build Swift Package:** `cargo xtask build swift` (macOS with Xcode only)
 - **Build WebAssembly/WebGPU:** `cargo xtask build wasm`
 - **Build All Targets:** `cargo xtask build all`
 - **Serve A Demo:** `cargo xtask run demos serve chat`
@@ -50,6 +51,7 @@ Always use the **`test-runner`** skill when verifying changes.
 - **xtask Tests:** `cargo xtask test unit suite xtask`
 - **White-box Tests:** `cargo xtask test unit suite rust-crates --package <crate_name>`
 - **Interface Tests:** `cargo xtask test unit suite node-package --backend cpu`
+- **Swift Package Tests:** `cargo xtask test unit suite swift-package` (macOS with Xcode only)
 - **Verify Coverage/Structure:** `cargo xtask test verify --target whitebox`
 - **Rust Tests:** `cargo test` (or `cargo test -p <crate_name>` for narrow Rust-only checks)
 - **Rust Linting/Formatting:** `cargo clippy` and `cargo fmt`

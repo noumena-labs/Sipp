@@ -28,6 +28,7 @@ package staging.
 sipp build core
 sipp build node --backend cpu
 sipp build python --backend cpu
+sipp build swift
 sipp build gateway-server --backend cpu
 sipp build wasm
 sipp build all
@@ -35,6 +36,32 @@ sipp build all
 
 Use `--backend vulkan`, `--backend cuda`, `--backend metal`, or
 `--backend all` where a native package target supports those backends.
+
+The Swift target requires macOS and Xcode. It produces one XCFramework for
+macOS and iOS. macOS arm64 and iOS device arm64 use Metal; macOS x86_64 and
+iOS Simulator arm64/x86_64 use CPU. The backend is fixed per slice, with no
+build selector or runtime fallback. The build also creates the macOS
+command-line example and the ad-hoc-signed sandboxed SwiftUI app under
+`.build/artifacts/swift`.
+
+## Swift Distribution Boundary
+
+The local staged package contains generated UniFFI Swift source and a local
+binary-target path. Those generated sources are intentionally absent from this
+repository, so a Sipp monorepo tag is not itself a consumable SwiftPM package.
+
+Publish the staged package through a dedicated Swift distribution repository.
+That repository owns one explicit `Package.swift` whose binary target uses the
+versioned GitHub release URL and checksum produced by `sipp build swift`. Copy
+the staged public and generated sources into the distribution repository,
+replace the local binary target with that remote declaration, test a clean
+consumer, and tag the distribution commit with the same version.
+
+Do not commit a placeholder checksum, read release metadata from environment
+variables in `Package.swift`, or add an alternate local/remote target branch.
+The manifest must contain the exact URL and checksum for one published archive.
+Creating and publishing the external distribution repository is a release
+operation and is not performed by xtask.
 
 CUDA builds compile a portable cloud GPU architecture list by default. Set
 `SIPP_CUDA_ARCHITECTURES` (semicolon-separated CMake entries, for example

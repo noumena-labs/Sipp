@@ -9,9 +9,11 @@ members = [
     "xtask",
     "bindings/python",
     "bindings/node",
+    "bindings/swift",
     "bindings/wasm",
     "examples/gateway",
     "examples/rust",
+    "tools/uniffi-bindgen-swift",
 ]
 resolver = "2"
 
@@ -44,6 +46,7 @@ serde_json = "1.0"
 sha2 = "0.10"
 thiserror = "2.0"
 tokio = "1"
+uniffi = { version = "0.32.0", default-features = false }
 
 # Cargo's default release profile leaves the Rust staticlib opaque to
 # Emscripten's whole-program LTO (-flto=full on the C++ side) and splits the

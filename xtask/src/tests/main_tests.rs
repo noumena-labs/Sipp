@@ -89,6 +89,10 @@ fn build_summary_labels_backend_defaults_and_explicit_backends() {
         "Build Node.js bindings (cpu)"
     );
     assert_eq!(
+        build_summary(&BuildCommands::Swift),
+        "Build Apple Swift package"
+    );
+    assert_eq!(
         build_summary(&BuildCommands::Wasm(WasmBuildArgs {
             threading: WasmThreading::SingleThread,
             runtime: WasmRuntime::CpuNoJspi,

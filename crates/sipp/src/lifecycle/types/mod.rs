@@ -6,12 +6,14 @@ mod model;
 mod runtime;
 
 pub use crate::shard::{GgufMetadataInspection, ModelDetection, ModelDetectionMethod};
-pub use assets::{AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind};
+pub use assets::{
+    AssetInspection, AssetRecord, AssetRole, AssetSource, LocalPathAnchor, ModelAssetKind,
+};
 pub use error::ModelError;
 pub use model::{
     ClassifiedAsset, ManagedModel, ModelEntry, ModelInfo, ModelModality, ModelPairing,
-    ModelPairingReason, ModelPairingState, ModelSourceKind, ModelStatus, PairingPlan,
-    RegistryManifest, REGISTRY_MANIFEST_VERSION,
+    ModelPairingReason, ModelPairingState, ModelRegistration, ModelSourceKind, ModelStatus,
+    PairingPlan, RegistryManifest, REGISTRY_MANIFEST_VERSION,
 };
 pub use runtime::{
     BackendPreference, BackendSelection, ModelLoadOptions, ModelServiceState, StatsMode,

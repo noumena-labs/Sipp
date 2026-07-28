@@ -15,6 +15,7 @@ Most developers should start here instead of building from source.
 | [Browser](browser.md) | `npm install @sipphq/sipp` | Browser-local GGUF inference, WebGPU/WASM runtime, and browser gateway clients. |
 | [Node.js](node.md) | `npm install @sipphq/sipp-server` | Node server processes, route handlers, and backend services. |
 | [Python](python.md) | `pip install sipppy` | Python services, scripts, and gateway clients. |
+| [Swift](swift.md) | In development | Native macOS and iOS applications using a Swift API over `SippCore.xcframework`. |
 | [Rust](rust.md) | `cargo add sipp-rs` | Rust applications and services. |
 | [Gateway Server](../gateway/server.md) | Source-built today | First-party HTTP gateway for local and provider targets. |
 | [Gateway Docker](../gateway/docker.md) | Docker from source | Local and production container workflows for the gateway server. |

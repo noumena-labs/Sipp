@@ -1,18 +1,14 @@
 //! Shared sample GGUF model cache used by setup and smoke tests.
 
 use crate::output;
-use crate::utils::BuildContext;
+use crate::utils::{sha256_file, BuildContext};
 use anyhow::{bail, Context, Result};
-use sha2::{Digest, Sha256};
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use xshell::{cmd, Shell};
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "tests/sample_model_tests.rs"]
 mod sample_model_tests;
@@ -20,7 +16,6 @@ mod sample_model_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const SAMPLE_MODEL_URL: &str =
     "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_0.gguf";
 const SAMPLE_MODEL_FILE: &str = "qwen2.5-0.5b-instruct-q4_0.gguf";
@@ -119,21 +114,4 @@ fn validate_sample_model(path: &Path) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn sha256_file(path: &Path) -> Result<String> {
-    let mut file =
-        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 1024 * 1024];
-    loop {
-        let bytes = file
-            .read(&mut buffer)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        if bytes == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
 }

@@ -1,0 +1,21 @@
+[package]
+name = "sipp-swift"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "sipp_swift"
+crate-type = ["staticlib", "rlib"]
+
+[features]
+metal = ["sipp/metal"]
+
+[dependencies]
+futures.workspace = true
+sipp.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+uniffi.workspace = true

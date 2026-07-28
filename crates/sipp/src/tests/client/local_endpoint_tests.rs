@@ -43,6 +43,13 @@ impl FakeLocalRuntime {
 }
 
 impl LocalRuntime for FakeLocalRuntime {
+    fn close(&self) -> EndpointCloseFuture<'_> {
+        Box::pin(async move {
+            self.calls.lock().expect("calls").push("close");
+            Ok(())
+        })
+    }
+
     fn query(&self, request: QueryRequest) -> LocalTextRun {
         self.calls.lock().expect("calls").push("query");
         let result = self.text_error.map_or_else(
@@ -126,6 +133,16 @@ fn endpoint(runtime: Arc<dyn LocalRuntime>) -> LocalEndpoint {
         },
         runtime,
     )
+}
+
+#[test]
+fn close_waits_for_local_runtime_shutdown() {
+    let runtime = Arc::new(FakeLocalRuntime::default());
+    let endpoint = endpoint(runtime.clone());
+
+    block_on(endpoint.close()).expect("close local endpoint");
+
+    assert_eq!(runtime.calls(), vec!["close"]);
 }
 
 #[test]

@@ -36,7 +36,16 @@ Compiles the engine using Emscripten to target WebAssembly. The `cogentlm-wasm` 
 cargo xtask build wasm
 ```
 
-### 5. Build Everything
+### 5. Swift Package
+Builds the macOS and iOS XCFramework, tests the staged Swift package, builds the
+Swift examples, and assembles the signed sandbox app. This target requires
+macOS, Xcode, the Apple Rust targets, and initialized submodules.
+```bash
+cargo xtask build swift
+```
+The backend is fixed per platform slice; the command has no backend selector.
+
+### 6. Build Everything
 Builds the default target set: core, WASM, Python CPU, Node CPU, and CLI CPU.
 ```bash
 cargo xtask build all
@@ -58,6 +67,7 @@ cargo xtask test list
 cargo xtask test unit suite xtask
 cargo xtask test unit suite rust-crates --package cogentlm
 cargo xtask test unit suite node-package --backend cpu
+cargo xtask test unit suite swift-package # macOS with Xcode only
 cargo xtask test smoke group local-model --backend cpu --model <model.gguf>
 cargo xtask test smoke suite example-browser
 cargo xtask test verify --target whitebox

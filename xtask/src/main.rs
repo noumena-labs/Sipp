@@ -12,7 +12,6 @@ use xtask::{clean, configure_output, docs, doctor, finish_output, run, setup, te
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "tests/main_tests.rs"]
 mod main_tests;
@@ -20,7 +19,6 @@ mod main_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let sh = Shell::new()?;
@@ -122,6 +120,7 @@ fn build_summary(target: &BuildCommands) -> String {
         BuildCommands::Node(args) => {
             format!("Build Node.js bindings ({})", backend_summary(args.backend))
         }
+        BuildCommands::Swift => "Build Apple Swift package".to_owned(),
         BuildCommands::Cli(args) => {
             format!(
                 "Build Rust CLI distribution ({})",
@@ -163,6 +162,7 @@ fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()
         BuildCommands::Wasm(args) => targets::wasm::build(sh, ctx, args.threading, args.runtime)?,
         BuildCommands::Python(args) => targets::python::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Node(args) => targets::node::build(sh, ctx, args.backend.as_ref())?,
+        BuildCommands::Swift => targets::swift::build(sh, ctx)?,
         BuildCommands::Cli(args) => targets::cli::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::GatewayServer(args) => {
             targets::gateway_server::build(sh, ctx, args.backend.as_ref())?

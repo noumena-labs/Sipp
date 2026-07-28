@@ -11,3 +11,19 @@ fn local_asset_source_requires_source_path() {
 
     assert!(error.to_string().contains("missing field `path`"));
 }
+
+#[test]
+fn legacy_local_asset_source_defaults_to_absolute_path() {
+    let source = serde_json::from_str::<AssetSource>(
+        r#"{"kind":"local","path":"model.gguf","modified_unix_ms":null}"#,
+    )
+    .expect("legacy local source");
+
+    assert!(matches!(
+        source,
+        AssetSource::Local {
+            anchor: LocalPathAnchor::Absolute,
+            ..
+        }
+    ));
+}

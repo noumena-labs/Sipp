@@ -28,7 +28,6 @@ use xshell::{cmd, Shell};
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "tests/test_tests.rs"]
 mod test_tests;
@@ -36,7 +35,6 @@ mod test_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const DEFAULT_SMOKE_PROMPT: &str = "Describe browser LLM inference.";
 const DEFAULT_SMOKE_MAX_TOKENS: u32 = 64;
 const DEFAULT_SMOKE_TEMPERATURE: f32 = 0.0;
@@ -68,8 +66,12 @@ const XTASK_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::package("xtask")
 // host-registration constructors abort a standalone test binary at startup
 // (no Node/Python runtime). Their conversion logic lives in sipp-binding-dto
 // (tested above); the node-package/python-package suites exercise them through
-// their real hosts. sipp-wasm is a plain staticlib and runs natively.
-const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[RustTestTarget::lib("sipp-wasm")];
+// their real hosts. The Swift and WASM crates are plain static libraries with
+// native Rust test targets.
+const RUST_BINDING_TEST_TARGETS: &[RustTestTarget] = &[
+    RustTestTarget::lib("sipp-swift"),
+    RustTestTarget::lib("sipp-wasm"),
+];
 const RUST_PUBLIC_API_TEST_TARGETS: &[RustTestTarget] =
     &[RustTestTarget::test("sipp-rs", "public_api")];
 const CLI_BLACK_BOX_TEST_TARGETS: &[RustTestTarget] =
@@ -84,7 +86,11 @@ const RUST_CRATE_SOURCE_ROOTS: &[&str] = &[
     "apps/gateway-server/src",
     "apps/cli/src",
 ];
-const RUST_BINDING_SOURCE_ROOTS: &[&str] = &["bindings/wasm/src", "bindings/wasm/native"];
+const RUST_BINDING_SOURCE_ROOTS: &[&str] = &[
+    "bindings/swift/src",
+    "bindings/wasm/src",
+    "bindings/wasm/native",
+];
 const PACKAGE_TS_SOURCE_ROOTS: &[&str] = &["lib/web/src"];
 const DEMO_TS_SOURCE_ROOTS: &[&str] = &["demos"];
 const RUST_PUBLIC_API_SOURCE_ROOTS: &[&str] = &["crates/sipp/src"];
@@ -96,6 +102,12 @@ const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
     "lib/node/router.d.ts",
 ];
 const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["lib/python/python/sipp", "lib/python/backends"];
+const SWIFT_PACKAGE_SOURCE_ROOTS: &[&str] = &[
+    "bindings/swift",
+    "examples/swift",
+    "lib/swift",
+    "tools/uniffi-bindgen-swift",
+];
 const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/rust/src"];
 const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "lib/node"];
@@ -155,7 +167,7 @@ const TEST_SUITES: &[TestSuite] = &[
         id: TestSuiteId::RustBindings,
         group: TestGroup::Unit,
         layer: Some(TestUnitLayer::Whitebox),
-        description: "Rust unit tests for Node, Python, and WASM binding crates",
+        description: "Rust unit tests for native and WASM binding crates",
         requirements: "cargo, native toolchain",
         source_roots: RUST_BINDING_SOURCE_ROOTS,
         coverage: true,
@@ -234,6 +246,18 @@ const TEST_SUITES: &[TestSuite] = &[
         backend_policy: BackendPolicy::ConcreteOnly,
         runner: SuiteRunner::PythonPackage,
         discoverer: CaseDiscoverer::PythonPackage,
+    },
+    TestSuite {
+        id: TestSuiteId::SwiftPackage,
+        group: TestGroup::Unit,
+        layer: Some(TestUnitLayer::Interface),
+        description: "Apple Swift package, macOS examples, and artifact tests",
+        requirements: "macOS, Xcode, cargo, Rust Apple targets",
+        source_roots: SWIFT_PACKAGE_SOURCE_ROOTS,
+        coverage: false,
+        backend_policy: BackendPolicy::None,
+        runner: SuiteRunner::SwiftPackage,
+        discoverer: CaseDiscoverer::SwiftPackage,
     },
     TestSuite {
         id: TestSuiteId::CliSmoke,
@@ -543,6 +567,7 @@ fn run_suite(
         SuiteRunner::PythonPackage => {
             run_python_package_tests(sh, ctx, &options.backend, options.coverage)
         }
+        SuiteRunner::SwiftPackage => targets::swift::build(sh, ctx),
         SuiteRunner::CliSmoke => run_cli_model_smoke(sh, ctx, options),
         SuiteRunner::RustSmoke => run_rust_model_smoke(sh, ctx, options),
         SuiteRunner::NodeSmoke => run_node_model_smoke(sh, ctx, options),
@@ -717,7 +742,8 @@ fn known_success_counts(
         SuiteRunner::PackageTs
         | SuiteRunner::DemoTs
         | SuiteRunner::NodePackage
-        | SuiteRunner::PythonPackage => discovered_suite_case_count(ctx, suite, None)?,
+        | SuiteRunner::PythonPackage
+        | SuiteRunner::SwiftPackage => discovered_suite_case_count(ctx, suite, None)?,
         SuiteRunner::CliSmoke
         | SuiteRunner::PlaygroundBrowserSmoke
         | SuiteRunner::LlamaBackendOps => 1,
@@ -1026,7 +1052,7 @@ fn run_node_package_tests(
     sh.create_dir(&coverage_dir)?;
 
     let node_dir = ctx.node_package_dir();
-    ensure_javascript_workspace_dependencies(sh, ctx, &[node_dir.clone()])?;
+    ensure_javascript_workspace_dependencies(sh, ctx, std::slice::from_ref(&node_dir))?;
     let bun_exe = setup_bun(sh, ctx)?;
     let _node = sh.push_dir(&node_dir);
     for backend in node_test_backends(ctx, backend)? {
@@ -1171,7 +1197,7 @@ fn run_browser_example_smoke(
     let model = resolve_smoke_model(sh, ctx, options.model, options.offline)?;
     output::path("Model", &model);
     let example_dir = ctx.browser_example_dir();
-    ensure_javascript_workspace_dependencies(sh, ctx, &[example_dir.clone()])?;
+    ensure_javascript_workspace_dependencies(sh, ctx, std::slice::from_ref(&example_dir))?;
     targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
     ensure_playwright_chromium(sh, ctx)?;
 
@@ -1209,7 +1235,7 @@ fn run_playground_browser_runtime_smoke(
 ) -> Result<()> {
     output::phase("Playground browser runtime smoke");
     let playground_dir = ctx.playground_dir();
-    ensure_javascript_workspace_dependencies(sh, ctx, &[playground_dir.clone()])?;
+    ensure_javascript_workspace_dependencies(sh, ctx, std::slice::from_ref(&playground_dir))?;
     targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
     ensure_playwright_chromium(sh, ctx)?;
 
@@ -2218,6 +2244,7 @@ fn coverage_report_areas(suites: &[&TestSuite]) -> CoverageReportAreas {
             SuiteRunner::PythonPackage => areas.python = true,
             SuiteRunner::PackageTs
             | SuiteRunner::DemoTs
+            | SuiteRunner::SwiftPackage
             | SuiteRunner::CliSmoke
             | SuiteRunner::RustSmoke
             | SuiteRunner::NodeSmoke
@@ -2359,12 +2386,13 @@ fn is_first_party_source_path(path: &str) -> bool {
     };
     matches!(
         extension,
-        "rs" | "ts" | "tsx" | "js" | "mjs" | "py" | "c" | "cc" | "cpp" | "h" | "hpp"
+        "rs" | "swift" | "ts" | "tsx" | "js" | "mjs" | "py" | "c" | "cc" | "cpp" | "h" | "hpp"
     ) && !is_probable_test_path(path)
 }
 
 fn is_probable_test_path(path: &str) -> bool {
     path.contains("/tests/")
+        || path.contains("/Tests/")
         || path.contains("/src/tests/")
         || path.ends_with(".test.ts")
         || path.ends_with(".test.tsx")
@@ -2406,7 +2434,7 @@ fn suite_matches_search(suite: &TestSuite, search: &str) -> bool {
         || contains_search(suite.group.as_str(), search)
         || suite
             .layer
-            .map_or(false, |layer| contains_search(layer.as_str(), search))
+            .is_some_and(|layer| contains_search(layer.as_str(), search))
         || contains_search(suite.description, search)
         || contains_search(suite.requirements, search)
         || contains_search(suite.backend_policy.as_str(), search)
@@ -2528,6 +2556,7 @@ fn discover_suite_cases(
         CaseDiscoverer::DemoTs => discover_demo_ts_cases(ctx, suite.id, cases)?,
         CaseDiscoverer::NodePackage => discover_node_cases(ctx, suite.id, cases)?,
         CaseDiscoverer::PythonPackage => discover_python_cases(ctx, suite.id, cases)?,
+        CaseDiscoverer::SwiftPackage => discover_swift_cases(ctx, suite.id, cases)?,
     }
     Ok(())
 }
@@ -2598,6 +2627,32 @@ fn discover_python_cases(
     Ok(())
 }
 
+fn discover_swift_cases(
+    ctx: &BuildContext,
+    suite_id: TestSuiteId,
+    cases: &mut Vec<TestCase>,
+) -> Result<()> {
+    for path in swift_test_files(ctx)? {
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        for line in contents.lines() {
+            let trimmed = line.trim_start();
+            let Some(name) = trimmed.strip_prefix("func test") else {
+                continue;
+            };
+            let Some((name, _)) = name.split_once('(') else {
+                continue;
+            };
+            cases.push(TestCase {
+                suite_id,
+                name: format!("test{name}"),
+                path: display_relative(ctx, &path),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn discover_package_ts_cases(
     ctx: &BuildContext,
     suite_id: TestSuiteId,
@@ -2662,7 +2717,7 @@ fn selected_list_suites(args: &TestListArgs) -> Result<Vec<&'static TestSuite>> 
     Ok(TEST_SUITES
         .iter()
         .filter(|suite| group_filter_matches(args.group, suite.group))
-        .filter(|suite| args.layer.map_or(true, |layer| suite.layer == Some(layer)))
+        .filter(|suite| args.layer.is_none_or(|layer| suite.layer == Some(layer)))
         .collect())
 }
 
@@ -2745,6 +2800,10 @@ fn apply_unit_suite_selection(
                 "target": "python-package",
                 "backend": args.backend.as_str(),
             });
+        }
+        TestUnitSuiteTarget::SwiftPackage => {
+            selection.suites = vec![suite_by_id(TestSuiteId::SwiftPackage)?];
+            selection.filters = unit_filters("suite", "swift-package");
         }
     }
     Ok(())
@@ -3198,6 +3257,7 @@ fn discoverer_test_files(ctx: &BuildContext, discoverer: CaseDiscoverer) -> Resu
         CaseDiscoverer::DemoTs => demo_test_files(ctx),
         CaseDiscoverer::NodePackage => node_test_files(ctx),
         CaseDiscoverer::PythonPackage => python_test_files(ctx),
+        CaseDiscoverer::SwiftPackage => swift_test_files(ctx),
     }
 }
 
@@ -3211,6 +3271,7 @@ fn first_party_test_files(ctx: &BuildContext) -> Result<Vec<PathBuf>> {
     files.extend(demo_test_files(ctx)?);
     files.extend(node_test_files(ctx)?);
     files.extend(python_test_files(ctx)?);
+    files.extend(swift_test_files(ctx)?);
     files.extend(first_party_cpp_test_files(ctx)?);
     files.sort();
     files.dedup();
@@ -3618,6 +3679,10 @@ fn python_test_files(ctx: &BuildContext) -> Result<Vec<PathBuf>> {
     collect_files_with_extension(&ctx.python_package_project_dir().join("tests"), "py")
 }
 
+fn swift_test_files(ctx: &BuildContext) -> Result<Vec<PathBuf>> {
+    collect_files_with_extension(&ctx.swift_package_dir().join("Tests"), "swift")
+}
+
 fn rust_target_case_files(ctx: &BuildContext, targets: &[RustTestTarget]) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for target in targets {
@@ -3663,6 +3728,7 @@ fn rust_package_root(ctx: &BuildContext, package: &str) -> Result<PathBuf> {
         "xtask" => &["xtask"],
         "sipp-napi" => &["bindings", "node"],
         "sipppy" => &["bindings", "python"],
+        "sipp-swift" => &["bindings", "swift"],
         "sipp-wasm" => &["bindings", "wasm"],
         _ => anyhow::bail!("unknown Rust test package: {package}"),
     };
@@ -4020,6 +4086,7 @@ fn coverage_artifacts_for_suite(
         ],
         SuiteRunner::PackageTs
         | SuiteRunner::DemoTs
+        | SuiteRunner::SwiftPackage
         | SuiteRunner::CliSmoke
         | SuiteRunner::RustSmoke
         | SuiteRunner::NodeSmoke
@@ -4047,10 +4114,7 @@ fn duration_millis(duration: u128) -> u64 {
 }
 
 fn markdown_cell(value: &str) -> String {
-    value
-        .replace('\r', " ")
-        .replace('\n', " ")
-        .replace('|', "\\|")
+    value.replace(['\r', '\n'], " ").replace('|', "\\|")
 }
 
 fn parse_lcov_summary(path: &Path) -> Result<LcovSummary> {
@@ -4134,6 +4198,7 @@ enum SuiteRunner {
     DemoTs,
     NodePackage,
     PythonPackage,
+    SwiftPackage,
     CliSmoke,
     RustSmoke,
     NodeSmoke,
@@ -4152,6 +4217,7 @@ enum CaseDiscoverer {
     DemoTs,
     NodePackage,
     PythonPackage,
+    SwiftPackage,
 }
 
 impl CaseDiscoverer {
@@ -4163,6 +4229,7 @@ impl CaseDiscoverer {
             CaseDiscoverer::DemoTs => "demo-ts",
             CaseDiscoverer::NodePackage => "node-package",
             CaseDiscoverer::PythonPackage => "python-package",
+            CaseDiscoverer::SwiftPackage => "swift-package",
         }
     }
 }

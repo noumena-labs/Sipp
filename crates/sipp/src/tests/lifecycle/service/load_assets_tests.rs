@@ -6,8 +6,8 @@ use super::*;
 use crate::lifecycle::storage::now_unix_ms;
 use crate::lifecycle::test_support::{gguf_name, strings, TempDir};
 use crate::lifecycle::{
-    AssetRecord, AssetRole, AssetSource, ModelAssetKind, ModelEntry, ModelModality, ModelStatus,
-    ModelStore,
+    AssetRecord, AssetRole, AssetSource, LocalPathAnchor, ModelAssetKind, ModelEntry,
+    ModelModality, ModelStatus, ModelStore,
 };
 use futures::executor::block_on;
 use std::fs;
@@ -22,6 +22,7 @@ fn asset_record(id: &str, path: PathBuf) -> AssetRecord {
         storage_path: path.clone(),
         source: AssetSource::Local {
             path,
+            anchor: LocalPathAnchor::Absolute,
             modified_unix_ms: None,
         },
         ref_count: 1,

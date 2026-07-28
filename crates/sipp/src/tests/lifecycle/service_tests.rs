@@ -7,8 +7,8 @@ use super::helpers::model_id_from_plan;
 use super::*;
 use crate::lifecycle::test_support::{some_string, strings, TempDir};
 use crate::lifecycle::{
-    model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, AssetSource, ModelAssetKind,
-    ModelModality, PairingPlan,
+    model_entry_from_assets, AssetInspection, AssetRecord, AssetRole, AssetSource, LocalPathAnchor,
+    ModelAssetKind, ModelModality, PairingPlan,
 };
 use futures::executor::block_on;
 use std::{fs, path::PathBuf};
@@ -84,6 +84,72 @@ fn service_adds_and_lists_local_model_without_copying_it() {
             .count(),
         0
     );
+}
+
+#[test]
+fn service_reopens_source_root_model_after_container_relocation() {
+    let root = TempDir::new("service", "source-root-relocation");
+    let first_container = root.path.join("container-a");
+    let first_source_root = first_container.join("home");
+    let first_store_root = first_source_root.join("Library").join("Sipp");
+    let first_model_path = first_source_root.join("Documents").join("model.gguf");
+    fs::create_dir_all(first_model_path.parent().expect("model parent")).expect("model directory");
+    fs::write(&first_model_path, b"relocatable model bytes").expect("model");
+
+    let first_store = ModelStore::local_with_source_root(&first_store_root, &first_source_root)
+        .expect("first store");
+    let added = block_on(first_store.add([&first_model_path])).expect("add");
+    drop(first_store);
+
+    let second_container = root.path.join("container-b");
+    fs::rename(&first_container, &second_container).expect("relocate container");
+    let second_source_root = second_container.join("home");
+    let second_store_root = second_source_root.join("Library").join("Sipp");
+    let second_store = ModelStore::local_with_source_root(second_store_root, second_source_root)
+        .expect("reopened store");
+
+    assert_eq!(block_on(second_store.list()).expect("list"), vec![added]);
+}
+
+#[test]
+fn service_defers_external_model_probe_until_load() {
+    let root = TempDir::new("service", "external-access");
+    let source_root = root.path.join("container");
+    let store_root = source_root.join("Library").join("Sipp");
+    let external_model = root.path.join("external-model.gguf");
+    fs::write(&external_model, b"external model bytes").expect("model");
+
+    let store = ModelStore::local_with_source_root(&store_root, &source_root).expect("store");
+    let added = block_on(store.add([&external_model])).expect("add");
+    drop(store);
+    fs::remove_file(external_model).expect("remove external model");
+
+    let reopened = ModelStore::local_with_source_root(store_root, source_root).expect("reopen");
+
+    assert_eq!(
+        block_on(reopened.list()).expect("list"),
+        vec![added.clone()]
+    );
+    let error = match block_on(reopened.load_engine(&added.id, ModelLoadOptions::default())) {
+        Ok(_) => panic!("missing external model loaded"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, ModelError::AssetMissing(_)));
+}
+
+#[test]
+fn model_registration_reports_only_new_model_ids_as_created() {
+    let root = TempDir::new("service", "registration-outcome");
+    let model_path = root.path.join("model.gguf");
+    fs::write(&model_path, b"not a gguf").expect("model");
+
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    let first = block_on(store.add_with_outcome([&model_path])).expect("first registration");
+    let second = block_on(store.add_with_outcome([&model_path])).expect("second registration");
+
+    assert!(first.created);
+    assert!(!second.created);
+    assert_eq!(first.model, second.model);
 }
 
 #[test]
@@ -170,6 +236,7 @@ fn service_rejects_unresolved_vision_model_on_load() {
         storage_path: model_path.clone(),
         source: AssetSource::Local {
             path: model_path,
+            anchor: LocalPathAnchor::Absolute,
             modified_unix_ms: None,
         },
         ref_count: 0,

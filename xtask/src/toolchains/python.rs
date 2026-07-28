@@ -1,9 +1,19 @@
 use crate::output;
 use crate::utils::BuildContext;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use xshell::{cmd, Cmd, Shell};
 
+/////////////////////////////////////////////////////////////////////////////////
+/// TESTS
+/////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+#[path = "../tests/toolchains/python_tests.rs"]
+mod python_tests;
+
+/////////////////////////////////////////////////////////////////////////////////
+/// SRC
+/////////////////////////////////////////////////////////////////////////////////
 /// Python version used by uv to build and smoke-test abi3 wheels.
 pub(crate) const PYTHON_BUILD_VERSION: &str = "3.10";
 
@@ -82,14 +92,33 @@ pub(crate) fn setup_uv(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
 }
 
 /// Ensures the Python interpreter used for package builds is available.
-pub(crate) fn ensure_python(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<()> {
+pub(crate) fn ensure_python(sh: &Shell, ctx: &BuildContext, uv_exe: &Path) -> Result<PathBuf> {
     output::run_build_command(
         format!("Ensuring Python {PYTHON_BUILD_VERSION} is available through uv"),
         apply_uv_env(
             ctx,
             cmd!(sh, "{uv_exe} python install {PYTHON_BUILD_VERSION}"),
         ),
+    )?;
+
+    let python_exe = apply_uv_env(
+        ctx,
+        cmd!(
+            sh,
+            "{uv_exe} python find --managed-python --no-project {PYTHON_BUILD_VERSION}"
+        ),
     )
+    .read()
+    .context("failed to locate the managed Python interpreter")?;
+    let python_exe = PathBuf::from(python_exe.trim());
+    if !python_exe.is_file() {
+        bail!(
+            "managed Python {PYTHON_BUILD_VERSION} interpreter is missing at {}",
+            python_exe.display()
+        );
+    }
+
+    Ok(python_exe)
 }
 
 /// Applies workspace-local uv cache paths so commands do not depend on user cache state.

@@ -30,7 +30,7 @@ yarn-error.log*
 # JS/TS Apps & Packages
 # =========================
 dist/
-build/
+/build/
 /apps/*/dist/
 /apps/*/build/
 /apps/*/.next/
@@ -83,6 +83,15 @@ compile_flags.txt
 .clangd/
 .cache/clangd/
 
+# =========================
+# Apple / Swift Examples
+# =========================
+/examples/swift/**/.build/
+/examples/swift/**/.swiftpm/
+/examples/swift/**/DerivedData/
+/examples/swift/**/xcuserdata/
+/examples/swift/**/*.xcuserstate
+/examples/swift/**/Package.resolved
 
 # =========================
 # Machine Learning Models

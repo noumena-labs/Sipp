@@ -1,0 +1,12 @@
+module SippCoreFFI {
+    header "SippCoreFFI.h"
+    export *
+
+    link "c++"
+    link framework "Accelerate"
+    link framework "CoreGraphics"
+    link framework "Foundation"
+    link framework "Metal"
+    link framework "MetalKit"
+    link framework "QuartzCore"
+}

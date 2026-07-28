@@ -8,7 +8,7 @@ use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::terminal::splash;
 use crate::toolchain;
-use crate::toolchains::{bun, cmake, emsdk, ninja, python, source, vulkan};
+use crate::toolchains::{bun, cmake, emsdk, ninja, python, rustup, source, vulkan};
 use crate::utils::BuildContext;
 use anyhow::{Context, Result};
 use console::Term;
@@ -21,7 +21,6 @@ use xshell::Shell;
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "../tests/setup_tests.rs"]
 mod setup_tests;
@@ -29,7 +28,6 @@ mod setup_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 /// Runs the guided local setup flow.
 pub fn run(sh: &Shell, ctx: &BuildContext, args: &SetupArgs) -> Result<()> {
     let splash_played = splash::play(args.no_splash)?;
@@ -239,6 +237,7 @@ fn install_managed_toolchains(sh: &Shell, ctx: &BuildContext, profile: SetupProf
             cmake::setup_cmake(sh, ctx)?;
             python::setup_uv(sh, ctx)?;
             vulkan::setup_vulkan(sh, ctx)?;
+            rustup::setup_apple_targets(sh)?;
         }
         SetupProfile::Full => {
             bun::setup_bun(sh, ctx)?;
@@ -247,6 +246,7 @@ fn install_managed_toolchains(sh: &Shell, ctx: &BuildContext, profile: SetupProf
             ninja::setup_ninja(sh, ctx)?;
             emsdk::setup_emsdk(sh, ctx)?;
             vulkan::setup_vulkan(sh, ctx)?;
+            rustup::setup_apple_targets(sh)?;
         }
     }
     Ok(())
@@ -290,7 +290,7 @@ fn root_javascript_package_dirs(ctx: &BuildContext, profile: SetupProfile) -> Re
 fn browser_javascript_package_dirs(ctx: &BuildContext) -> Result<Vec<PathBuf>> {
     let mut dirs = vec![ctx.browser_package_dir(), ctx.browser_example_dir()];
     dirs.extend(ctx.demo_dirs()?);
-    dirs.extend(ctx.tool_dirs()?);
+    dirs.push(ctx.playground_dir());
     Ok(dirs)
 }
 

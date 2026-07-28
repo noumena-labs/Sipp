@@ -17,6 +17,13 @@ use super::{
 
 #[test]
 fn build_commands_parse_backend_defaults_and_overrides() {
+    let cli = Cli::parse_from(["xtask", "build", "swift"]);
+    let Commands::Build { target } = cli.command else {
+        panic!("expected build command");
+    };
+    assert!(matches!(target, super::BuildCommands::Swift));
+    assert!(Cli::try_parse_from(["xtask", "build", "swift", "--backend", "metal"]).is_err());
+
     let cli = Cli::parse_from(["xtask", "build", "node"]);
     let Commands::Build { target } = cli.command else {
         panic!("expected build command");
@@ -236,6 +243,36 @@ fn run_examples_and_tools_parse_browser_workflows() {
         panic!("expected tool build command");
     };
     assert_eq!(args.tool, ToolName::Playground);
+}
+
+#[test]
+fn run_ios_example_parses_simulator_model_and_build_policy() {
+    let cli = Cli::parse_from([
+        "xtask",
+        "run",
+        "examples",
+        "ios",
+        "--simulator",
+        "SIMULATOR-ID",
+        "--model",
+        "model.gguf",
+        "--no-build",
+    ]);
+    let Commands::Run { command } = cli.command else {
+        panic!("expected run command");
+    };
+    let RunCommands::Examples { command } = command else {
+        panic!("expected examples command");
+    };
+    let RunExamplesCommands::Ios(args) = command else {
+        panic!("expected iOS example command");
+    };
+    assert_eq!(args.simulator, "SIMULATOR-ID");
+    assert_eq!(
+        args.model.as_deref(),
+        Some(std::path::Path::new("model.gguf"))
+    );
+    assert!(args.no_build);
 }
 
 #[test]
@@ -520,6 +557,18 @@ fn test_unit_and_smoke_targets_parse() {
     };
     assert_eq!(args.wasm_threading, WasmThreading::SingleThread);
 
+    let cli = Cli::parse_from(["xtask", "test", "unit", "suite", "swift-package"]);
+    let Commands::Test { command } = cli.command else {
+        panic!("expected test command");
+    };
+    let TestCommands::Unit(args) = command else {
+        panic!("expected unit command");
+    };
+    let TestUnitCommands::Suite(args) = args.command else {
+        panic!("expected unit suite command");
+    };
+    assert!(matches!(args.target, TestUnitSuiteTarget::SwiftPackage));
+
     let cli = Cli::parse_from([
         "xtask",
         "test",
@@ -607,12 +656,27 @@ fn toolchain_doctor_and_setup_commands_parse() {
     };
     assert_eq!(component, ToolchainComponent::Cmake);
 
+    let cli = Cli::parse_from(["xtask", "toolchain", "install", "rust-apple"]);
+    let Commands::Toolchain { command } = cli.command else {
+        panic!("expected toolchain command");
+    };
+    let ToolchainCommands::Install { component } = command else {
+        panic!("expected toolchain install command");
+    };
+    assert_eq!(component, ToolchainComponent::RustApple);
+
     let cli = Cli::parse_from(["xtask", "doctor", "--target", "python", "--backend", "all"]);
     let Commands::Doctor(args) = cli.command else {
         panic!("expected doctor command");
     };
     assert_eq!(args.target, DoctorTarget::Python);
     assert_eq!(args.backend, Backend::All);
+
+    let cli = Cli::parse_from(["xtask", "doctor", "--target", "swift"]);
+    let Commands::Doctor(args) = cli.command else {
+        panic!("expected doctor command");
+    };
+    assert_eq!(args.target, DoctorTarget::Swift);
 
     let cli = Cli::parse_from([
         "xtask",
@@ -643,6 +707,7 @@ fn labels_match_cli_wire_values() {
     assert_eq!(DocsLanguage::En.as_str(), "en");
     assert_eq!(DocsLanguage::Zh.as_str(), "zh");
     assert_eq!(TestSuiteId::RustCrates.as_str(), "rust-crates");
+    assert_eq!(TestSuiteId::SwiftPackage.as_str(), "swift-package");
     assert_eq!(
         TestSuiteId::ExampleBrowserSmoke.as_str(),
         "example-browser-smoke"

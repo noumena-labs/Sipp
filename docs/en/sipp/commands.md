@@ -9,10 +9,13 @@
 sipp doctor
 sipp doctor --target wasm
 sipp doctor --target node --backend vulkan
+sipp doctor --target swift
 sipp toolchain status
 ```
 
 `doctor` checks local readiness without installing or deleting anything.
+`doctor --target all` includes Swift readiness, so the full check requires
+macOS and Xcode. Use a focused target on hosts that do not build Apple outputs.
 `toolchain status` reports xtask-managed tools such as Bun, Python, uv,
 Emscripten, and Ninja. CUDA is externally installed; xtask reports it but does
 not install or delete it.
@@ -24,6 +27,7 @@ sipp build core
 sipp build wasm
 sipp build node --backend cpu
 sipp build python --backend vulkan
+sipp build swift
 sipp build cli --backend all
 sipp build gateway-server --backend cpu
 sipp build all
@@ -31,6 +35,13 @@ sipp build all
 
 `build all` builds the main target families with default CPU native outputs. It
 does not build every backend variant for every package.
+
+`build swift` runs on macOS and creates one `SippCore.xcframework` for macOS
+and iOS. Its macOS arm64 and iOS device arm64 slices use Metal; its macOS
+x86_64 and iOS Simulator arm64/x86_64 slices use CPU. There is no Swift backend
+option or runtime fallback. The command stages the local package, runs its
+tests, builds the macOS examples, and assembles an ad-hoc-signed SwiftUI app
+under `.build/artifacts/swift`.
 
 Backend values:
 
@@ -75,6 +86,7 @@ sipp test list --group unit --layer interface --cases --search router --format j
 sipp test unit group full
 sipp test unit suite rust-crates --package sipp-rs
 sipp test unit suite node-package --backend cpu
+sipp test unit suite swift-package
 sipp test unit suite browser --wasm-threading pthread
 sipp test smoke suite example-node --backend cpu
 sipp test smoke group local-model --backend cpu

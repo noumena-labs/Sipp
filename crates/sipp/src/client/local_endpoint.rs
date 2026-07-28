@@ -5,7 +5,7 @@ use crate::engine::{
     EngineTokenBatches, QueryRequest, SippEngine,
 };
 
-use crate::client::dispatch::InferenceEndpoint;
+use crate::client::dispatch::{EndpointCloseFuture, InferenceEndpoint};
 use crate::client::{
     map, validate, EndpointCapabilities, EndpointRef, SippChatRequest, SippEmbedRequest,
     SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext, SippTextRun,
@@ -36,12 +36,17 @@ struct LocalTextRun {
 }
 
 trait LocalRuntime: Send + Sync {
+    fn close(&self) -> EndpointCloseFuture<'_>;
     fn query(&self, request: QueryRequest) -> LocalTextRun;
     fn chat(&self, request: ChatRequest) -> LocalTextRun;
     fn embed(&self, request: EmbedRequest) -> EngineEmbeddingResponseFuture;
 }
 
 impl LocalRuntime for SippEngine {
+    fn close(&self) -> EndpointCloseFuture<'_> {
+        Box::pin(async move { SippEngine::close(self).await.map_err(SippError::Local) })
+    }
+
     fn query(&self, request: QueryRequest) -> LocalTextRun {
         let (tokens, response) = SippEngine::query(self, request).into_parts();
         LocalTextRun { tokens, response }
@@ -86,6 +91,10 @@ impl InferenceEndpoint for LocalEndpoint {
 
     fn capabilities(&self) -> &EndpointCapabilities {
         &self.capabilities
+    }
+
+    fn close(&self) -> EndpointCloseFuture<'_> {
+        self.runtime.close()
     }
 
     fn query_with_context(

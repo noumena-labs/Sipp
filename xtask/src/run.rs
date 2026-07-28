@@ -6,13 +6,14 @@ use crate::cli::{
     RunExamplesCommands, RunGatewayExampleArgs, RunGatewayExampleCase, RunGatewayExampleClientArgs,
     RunGatewayExampleCommonArgs, RunGatewayExampleTarget, RunGatewayExampleWebArgs,
     RunGatewayLocalServeArgs, RunGatewayOpenAiServeArgs, RunGatewayServerArgs,
-    RunGatewayServerCommand, RunGatewayServerSourceArgs, RunLlamaBackendOpsArgs, RunLlamaCommands,
-    RunToolServeArgs, RunToolsCommands, ToolName, WasmRuntime, WasmThreading,
+    RunGatewayServerCommand, RunGatewayServerSourceArgs, RunIosExampleArgs, RunLlamaBackendOpsArgs,
+    RunLlamaCommands, RunToolServeArgs, RunToolsCommands, ToolName, WasmRuntime, WasmThreading,
 };
 use crate::javascript;
 use crate::output;
 use crate::sample_model::{self, SampleModelOptions};
 use crate::targets;
+use crate::targets::swift::{SWIFT_IOS_APP_BUNDLE_ID, XCRUN_PATH};
 use crate::toolchains::bun::setup_bun;
 use crate::toolchains::env::apply_toolchains;
 use crate::toolchains::python::{apply_uv_env, ensure_python, setup_uv, PYTHON_BUILD_VERSION};
@@ -29,7 +30,6 @@ use xshell::{cmd, Cmd, Shell};
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "tests/run_tests.rs"]
 mod run_tests;
@@ -37,7 +37,6 @@ mod run_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const LLAMA_BACKEND_OPS_TARGET: &str = "test-backend-ops";
 const GATEWAY_RUN_TOKEN_ENV: &str = "SIPP_GATEWAY_TOKEN";
 const GATEWAY_RUN_START_TIMEOUT: Duration = Duration::from_secs(300);
@@ -62,9 +61,66 @@ fn run_demos(sh: &Shell, ctx: &BuildContext, command: RunDemosCommands) -> Resul
 
 fn run_examples(sh: &Shell, ctx: &BuildContext, command: RunExamplesCommands) -> Result<()> {
     match command {
+        RunExamplesCommands::Ios(args) => run_ios_example(sh, ctx, &args),
         RunExamplesCommands::Serve(args) => serve_example(sh, ctx, &args),
         RunExamplesCommands::Gateway(args) => run_gateway_example(sh, ctx, &args),
     }
+}
+
+fn run_ios_example(sh: &Shell, ctx: &BuildContext, args: &RunIosExampleArgs) -> Result<()> {
+    if !args.no_build {
+        targets::swift::build(sh, ctx)?;
+    }
+
+    let app = targets::swift::ios_example_app(ctx);
+    if !app.is_dir() {
+        anyhow::bail!(
+            "iOS example app is missing at {}; run without --no-build",
+            app.display()
+        );
+    }
+
+    let simulator = &args.simulator;
+    output::run_build_command(
+        "Booting iOS Simulator",
+        cmd!(sh, "{XCRUN_PATH} simctl bootstatus {simulator} -b"),
+    )?;
+    output::run_build_command(
+        "Installing Sipp iOS example",
+        cmd!(sh, "{XCRUN_PATH} simctl install {simulator} {app}"),
+    )?;
+
+    if let Some(model) = &args.model {
+        let model = model
+            .canonicalize()
+            .with_context(|| format!("failed to resolve model {}", model.display()))?;
+        let container = cmd!(
+            sh,
+            "{XCRUN_PATH} simctl get_app_container {simulator} {SWIFT_IOS_APP_BUNDLE_ID} data"
+        )
+        .read()
+        .context("failed to resolve the iOS example data container")?;
+        let documents = PathBuf::from(container.trim()).join("Documents");
+        sh.create_dir(&documents)?;
+        let staged_model = documents.join(
+            model
+                .file_name()
+                .context("the model path must have a file name")?,
+        );
+        sh.copy_file(&model, &staged_model)?;
+        output::artifact(&staged_model);
+        output::detail("Select model", "On My iPhone → Sipp iOS");
+    }
+
+    output::run_build_command("Opening Simulator", cmd!(sh, "/usr/bin/open -a Simulator"))?;
+    output::run_build_command(
+        "Launching Sipp iOS example",
+        cmd!(
+            sh,
+            "{XCRUN_PATH} simctl launch {simulator} {SWIFT_IOS_APP_BUNDLE_ID}"
+        ),
+    )?;
+    Ok(())
 }
 
 fn run_tools(sh: &Shell, ctx: &BuildContext, command: RunToolsCommands) -> Result<()> {
@@ -272,16 +328,18 @@ fn serve_tool(sh: &Shell, ctx: &BuildContext, args: &RunToolServeArgs) -> Result
     serve_vite_workspace(
         sh,
         ctx,
-        &tool_dir(ctx, args.tool),
-        args.mode,
-        args.host.as_deref(),
-        args.port,
-        format!(
-            "Starting {} Vite server for {} tool",
-            args.mode.as_str(),
-            args.tool.slug()
-        ),
-        format!("{} tool server failed", args.tool.slug()),
+        ViteServeOptions {
+            workspace: &tool_dir(ctx, args.tool),
+            mode: args.mode,
+            host: args.host.as_deref(),
+            port: args.port,
+            label: format!(
+                "Starting {} Vite server for {} tool",
+                args.mode.as_str(),
+                args.tool.slug()
+            ),
+            error_context: format!("{} tool server failed", args.tool.slug()),
+        },
     )
 }
 
@@ -316,16 +374,18 @@ fn serve_browser_example(
     serve_vite_workspace(
         sh,
         ctx,
-        &example_dir(ctx, example),
-        args.mode,
-        args.host.as_deref(),
-        args.port,
-        format!(
-            "Starting {} Vite server for {} example",
-            args.mode.as_str(),
-            example.label()
-        ),
-        format!("{} example server failed", example.label()),
+        ViteServeOptions {
+            workspace: &example_dir(ctx, example),
+            mode: args.mode,
+            host: args.host.as_deref(),
+            port: args.port,
+            label: format!(
+                "Starting {} Vite server for {} example",
+                args.mode.as_str(),
+                example.label()
+            ),
+            error_context: format!("{} example server failed", example.label()),
+        },
     )
 }
 
@@ -542,15 +602,17 @@ fn run_web_gateway_example(
     serve_vite_workspace(
         sh,
         ctx,
-        &example_dir(ctx, example),
-        args.mode,
-        Some(&args.host),
-        Some(args.port),
-        format!(
-            "Starting {} Vite server for gateway web example",
-            args.mode.as_str()
-        ),
-        "gateway web example server failed".to_owned(),
+        ViteServeOptions {
+            workspace: &example_dir(ctx, example),
+            mode: args.mode,
+            host: Some(&args.host),
+            port: Some(args.port),
+            label: format!(
+                "Starting {} Vite server for gateway web example",
+                args.mode.as_str()
+            ),
+            error_context: "gateway web example server failed".to_owned(),
+        },
     )
 }
 
@@ -1017,31 +1079,35 @@ fn format_temperature(temperature: f32) -> String {
     }
 }
 
-fn serve_vite_workspace(
-    sh: &Shell,
-    ctx: &BuildContext,
-    workspace: &Path,
+struct ViteServeOptions<'a> {
+    workspace: &'a Path,
     mode: DemoServeMode,
-    host: Option<&str>,
+    host: Option<&'a str>,
     port: Option<u16>,
     label: String,
     error_context: String,
+}
+
+fn serve_vite_workspace(
+    sh: &Shell,
+    ctx: &BuildContext,
+    options: ViteServeOptions<'_>,
 ) -> Result<()> {
-    let _dir = sh.push_dir(workspace);
+    let _dir = sh.push_dir(options.workspace);
     let bun_exe = setup_bun(sh, ctx)?;
-    let mut serve_cmd = match mode {
+    let mut serve_cmd = match options.mode {
         DemoServeMode::Dev => cmd!(sh, "{bun_exe} x --bun vite"),
         DemoServeMode::Preview => cmd!(sh, "{bun_exe} x --bun vite preview"),
     };
 
-    if let Some(host) = host {
+    if let Some(host) = options.host {
         serve_cmd = serve_cmd.arg("--host").arg(host);
     }
-    if let Some(port) = port {
+    if let Some(port) = options.port {
         serve_cmd = serve_cmd.arg("--port").arg(port.to_string());
     }
 
-    output::run_long_command(label, serve_cmd).with_context(|| error_context)
+    output::run_long_command(options.label, serve_cmd).with_context(|| options.error_context)
 }
 
 pub(crate) fn run_llama_backend_ops(

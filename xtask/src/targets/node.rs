@@ -15,7 +15,6 @@ use xshell::{cmd, Shell};
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "../tests/targets/node_tests.rs"]
 mod node_tests;
@@ -23,7 +22,6 @@ mod node_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const NODE_BINARY_NAME: &str = "sipp_node";
 
 /// Builds Node.js bindings for the selected backend or backend set.
@@ -88,7 +86,7 @@ fn backends_to_build(backend: Option<&Backend>) -> Vec<Backend> {
                 vec![Backend::Cpu, Backend::Vulkan, Backend::Cuda]
             }
         }
-        Some(backend) => vec![backend.clone()],
+        Some(backend) => vec![*backend],
         None => vec![Backend::Cpu],
     }
 }

@@ -2,14 +2,17 @@
 
 use crate::cli::{Backend, DoctorArgs, DoctorTarget};
 use crate::output;
+use crate::targets::swift::{CODESIGN_PATH, DITTO_PATH, PLUTIL_PATH, XCRUN_PATH};
 use crate::toolchain::{self, ToolStatus};
+use crate::toolchains::rustup::APPLE_TARGETS;
 use crate::utils::BuildContext;
 use anyhow::Result;
+use std::path::Path;
+use std::process::Command;
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "tests/doctor_tests.rs"]
 mod doctor_tests;
@@ -17,7 +20,6 @@ mod doctor_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 /// Runs read-only developer environment checks.
 pub fn run(ctx: &BuildContext, args: &DoctorArgs) -> Result<()> {
     output::phase("Developer environment doctor");
@@ -46,13 +48,18 @@ pub fn run(ctx: &BuildContext, args: &DoctorArgs) -> Result<()> {
         print_wasm_statuses(ctx, !node_included);
     }
 
+    if includes_swift(&args.target) {
+        hard_failures += print_swift_statuses(ctx);
+    }
+
     if includes_native_backend(&args.target) {
         print_backend_statuses(ctx, &args.backend);
     }
 
     if hard_failures > 0 {
+        let target = doctor_target_label(&args.target);
         anyhow::bail!(
-            "doctor found {hard_failures} missing core prerequisite(s); fix them and run `cargo xtask doctor` again"
+            "doctor found {hard_failures} missing prerequisite(s); fix them and run `cargo xtask doctor --target {target}` again"
         );
     }
 
@@ -113,6 +120,59 @@ fn print_wasm_statuses(ctx: &BuildContext, include_js_workspace: bool) {
     );
 }
 
+fn print_swift_statuses(ctx: &BuildContext) -> usize {
+    output::phase("Swift binding readiness");
+    let statuses = vec![
+        swift_host_status(),
+        xcode_tool_status(
+            "Xcode",
+            "xcodebuild",
+            "Install Xcode and select it with xcode-select",
+        ),
+        xcode_tool_status("Swift", "swift", "Install Swift through Xcode"),
+        xcode_tool_status("Lipo", "lipo", "Install Xcode command-line tools"),
+        xcode_tool_status("Nm", "nm", "Install Xcode command-line tools"),
+        xcode_tool_status("Otool", "otool", "Install Xcode command-line tools"),
+        system_tool_status(
+            "Ditto",
+            Path::new(DITTO_PATH),
+            "Install macOS command-line tools",
+        ),
+        system_tool_status(
+            "Codesign",
+            Path::new(CODESIGN_PATH),
+            "Install Xcode command-line tools",
+        ),
+        system_tool_status(
+            "Plutil",
+            Path::new(PLUTIL_PATH),
+            "Install macOS command-line tools",
+        ),
+        swift_rust_targets_status(),
+        toolchain::cmake_status(ctx),
+        toolchain::ninja_status(ctx),
+    ];
+
+    let mut failures = 0;
+    for status in statuses {
+        if status.is_missing() {
+            failures += 1;
+        }
+        status.print();
+    }
+
+    if ctx.llama_cpp_dir().join("include/llama.h").is_file() {
+        output::success("llama.cpp submodule is initialized");
+    } else {
+        output::warning(
+            "llama.cpp submodule is missing; run `git submodule update --init --recursive`",
+        );
+        failures += 1;
+    }
+
+    failures
+}
+
 fn print_backend_statuses(ctx: &BuildContext, backend: &Backend) {
     output::phase("Backend readiness");
     match backend {
@@ -152,6 +212,46 @@ fn required_command_status(
     }
 }
 
+fn xcode_tool_status(name: &'static str, command: &'static str, fix: &'static str) -> ToolStatus {
+    let output = Command::new(XCRUN_PATH).args(["--find", command]).output();
+    match output {
+        Ok(output) if output.status.success() => ToolStatus::Ready {
+            name,
+            detail: format!("{command} is available through the selected Xcode"),
+            path: Some(String::from_utf8_lossy(&output.stdout).trim().into()),
+        },
+        Ok(output) => ToolStatus::Missing {
+            name,
+            detail: format!(
+                "xcrun could not find {command}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            fix,
+        },
+        Err(error) => ToolStatus::Missing {
+            name,
+            detail: format!("xcrun is not available: {error}"),
+            fix,
+        },
+    }
+}
+
+fn system_tool_status(name: &'static str, path: &Path, fix: &'static str) -> ToolStatus {
+    if path.is_file() {
+        ToolStatus::Ready {
+            name,
+            detail: format!("{} is available", path.display()),
+            path: Some(path.to_path_buf()),
+        }
+    } else {
+        ToolStatus::Missing {
+            name,
+            detail: format!("{} is missing", path.display()),
+            fix,
+        }
+    }
+}
+
 fn metal_status() -> ToolStatus {
     if cfg!(target_os = "macos") {
         ToolStatus::Ready {
@@ -168,8 +268,77 @@ fn metal_status() -> ToolStatus {
     }
 }
 
+fn swift_host_status() -> ToolStatus {
+    if cfg!(target_os = "macos") {
+        ToolStatus::Ready {
+            name: "macOS",
+            detail: "host OS supports Apple package builds".to_owned(),
+            path: None,
+        }
+    } else {
+        ToolStatus::Missing {
+            name: "macOS",
+            detail: "Swift XCFramework builds require macOS".to_owned(),
+            fix: "Run the Swift build on a macOS host",
+        }
+    }
+}
+
+fn swift_rust_targets_status() -> ToolStatus {
+    let output = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output();
+    let output = match output {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            return ToolStatus::Missing {
+                name: "Rust Apple targets",
+                detail: format!(
+                    "rustup target discovery failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+                fix: "Install rustup and the Rust Apple targets",
+            };
+        }
+        Err(error) => {
+            return ToolStatus::Missing {
+                name: "Rust Apple targets",
+                detail: format!("rustup is not available: {error}"),
+                fix: "Install rustup and the Rust Apple targets",
+            };
+        }
+    };
+
+    let installed = String::from_utf8_lossy(&output.stdout);
+    let missing = missing_swift_rust_targets(&installed);
+    if missing.is_empty() {
+        ToolStatus::Ready {
+            name: "Rust Apple targets",
+            detail: APPLE_TARGETS.join(", "),
+            path: None,
+        }
+    } else {
+        ToolStatus::Missing {
+            name: "Rust Apple targets",
+            detail: format!("missing {}", missing.join(", ")),
+            fix: "Run `cargo xtask toolchain install rust-apple`",
+        }
+    }
+}
+
+fn missing_swift_rust_targets(installed: &str) -> Vec<&'static str> {
+    APPLE_TARGETS
+        .iter()
+        .copied()
+        .filter(|target| !installed.lines().any(|line| line.trim() == *target))
+        .collect()
+}
+
 fn includes_core(target: &DoctorTarget) -> bool {
-    matches!(target, DoctorTarget::All | DoctorTarget::Core)
+    matches!(
+        target,
+        DoctorTarget::All | DoctorTarget::Core | DoctorTarget::Swift
+    )
 }
 
 fn includes_node(target: &DoctorTarget) -> bool {
@@ -182,6 +351,10 @@ fn includes_python(target: &DoctorTarget) -> bool {
 
 fn includes_wasm(target: &DoctorTarget) -> bool {
     matches!(target, DoctorTarget::All | DoctorTarget::Wasm)
+}
+
+fn includes_swift(target: &DoctorTarget) -> bool {
+    matches!(target, DoctorTarget::All | DoctorTarget::Swift)
 }
 
 fn includes_native_backend(target: &DoctorTarget) -> bool {
@@ -198,5 +371,6 @@ fn doctor_target_label(target: &DoctorTarget) -> &'static str {
         DoctorTarget::Wasm => "wasm",
         DoctorTarget::Node => "node",
         DoctorTarget::Python => "python",
+        DoctorTarget::Swift => "swift",
     }
 }

@@ -3,7 +3,7 @@
 use crate::cli::Backend;
 use crate::output;
 use crate::toolchains::cuda::{cuda_architectures, setup_cuda};
-use crate::toolchains::vulkan::{setup_vulkan, VULKAN_VERSION};
+use crate::toolchains::vulkan::setup_vulkan;
 use crate::utils::BuildContext;
 use anyhow::Result;
 use std::env as std_env;
@@ -12,7 +12,6 @@ use xshell::{Cmd, Shell};
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "../tests/toolchains/env_tests.rs"]
 mod env_tests;
@@ -20,7 +19,6 @@ mod env_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 /// Applies required toolchain environment variables to a command.
 pub(crate) fn apply_toolchains<'a>(
     sh: &Shell,
@@ -56,40 +54,24 @@ pub(crate) fn apply_toolchains<'a>(
     }
 
     if let Some(deployment_target) = macos_deployment_target() {
-        output::detail("macOS deployment target", deployment_target);
         command = command.env("MACOSX_DEPLOYMENT_TARGET", deployment_target);
     }
 
     match backend {
         Some(Backend::Vulkan) => {
             output::detail("Toolchain", "Vulkan");
-            let vulkan_dir = setup_vulkan(sh, ctx)?;
-            let bin_path = if cfg!(windows) {
-                vulkan_dir.join("Bin")
-            } else if cfg!(target_os = "macos") {
-                vulkan_dir.join("macOS").join("bin")
-            } else {
-                vulkan_dir.join(VULKAN_VERSION).join("x86_64").join("bin")
-            };
-            path_additions.push(bin_path.display().to_string());
-
-            let vulkan_sdk_path = if cfg!(windows) {
-                vulkan_dir.to_path_buf()
-            } else if cfg!(target_os = "macos") {
-                vulkan_dir.join("macOS")
-            } else {
-                vulkan_dir.join(VULKAN_VERSION).join("x86_64")
-            };
-            command = command.env("VULKAN_SDK", &vulkan_sdk_path);
+            let vulkan = setup_vulkan(sh, ctx)?;
+            path_additions.push(vulkan.bin_dir.display().to_string());
+            command = command.env("VULKAN_SDK", &vulkan.sdk_dir);
 
             let current_cmake_prefix = std_env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
             let separator = path_separator();
             let new_cmake_prefix = if current_cmake_prefix.is_empty() {
-                vulkan_sdk_path.display().to_string()
+                vulkan.sdk_dir.display().to_string()
             } else {
                 format!(
                     "{}{separator}{}",
-                    vulkan_sdk_path.display(),
+                    vulkan.sdk_dir.display(),
                     current_cmake_prefix
                 )
             };

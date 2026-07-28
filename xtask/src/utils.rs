@@ -3,7 +3,10 @@
 use crate::cli::Backend;
 use crate::output;
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::env;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use xshell::{cmd, Shell};
@@ -11,7 +14,6 @@ use xshell::{cmd, Shell};
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "tests/utils_tests.rs"]
 mod utils_tests;
@@ -19,7 +21,6 @@ mod utils_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const BROWSER_PACKAGE_ARTIFACT_DIR: &str = "sipp";
 
 /// Shared immutable context for xtask build paths.
@@ -94,6 +95,14 @@ impl BuildContext {
         self.cargo_binding_target_dir(&backend)
     }
 
+    pub(crate) fn cargo_swift_target_dir(&self) -> PathBuf {
+        self.cargo_build_root().join("swift")
+    }
+
+    pub(crate) fn cmake_swift_sys_dir(&self, target: &str) -> PathBuf {
+        self.cmake_build_root().join("swift-sys").join(target)
+    }
+
     fn cargo_binding_target_dir(&self, backend: &Backend) -> PathBuf {
         self.cargo_build_root()
             .join("bindings")
@@ -149,6 +158,14 @@ impl BuildContext {
 
     pub(crate) fn python_artifacts_dir(&self) -> PathBuf {
         self.artifacts_root().join("python")
+    }
+
+    pub(crate) fn swift_artifacts_dir(&self) -> PathBuf {
+        self.artifacts_root().join("swift")
+    }
+
+    pub(crate) fn swift_package_artifacts_dir(&self) -> PathBuf {
+        self.swift_artifacts_dir().join("package")
     }
 
     pub(crate) fn cli_artifacts_dir(&self) -> PathBuf {
@@ -227,6 +244,14 @@ impl BuildContext {
 
     pub(crate) fn bindings_python_dir(&self) -> PathBuf {
         self.workspace_root.join("bindings").join("python")
+    }
+
+    pub(crate) fn bindings_swift_dir(&self) -> PathBuf {
+        self.workspace_root.join("bindings").join("swift")
+    }
+
+    pub(crate) fn swift_package_dir(&self) -> PathBuf {
+        self.lib_root().join("swift")
     }
 
     pub(crate) fn browser_package_dir(&self) -> PathBuf {
@@ -462,4 +487,21 @@ fn read_child_dirs(root: &Path) -> Result<Vec<PathBuf>> {
     }
     dirs.sort();
     Ok(dirs)
+}
+
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .with_context(|| format!("failed to open {} for SHA-256", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let bytes = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read {} for SHA-256", path.display()))?;
+        if bytes == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }

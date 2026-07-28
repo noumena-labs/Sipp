@@ -13,7 +13,6 @@ use std::time::Duration;
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "../tests/terminal/splash_tests.rs"]
 mod splash_tests;
@@ -21,7 +20,6 @@ mod splash_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const LOGO: &[&str] = &[
     r#"  ____ ___   ____ _____ _   _ _____ _     __  __ "#,
     r#" / ___/ _ \ / ___| ____| \ | |_   _| |   |  \/  |"#,
@@ -488,7 +486,7 @@ fn front_scan_style(frame: u16, row: usize, distance: usize) -> Style {
 }
 
 fn is_extrusion_glint(frame: u16, row: usize, col: usize, layer: usize) -> bool {
-    (frame as usize + row * 3 + col + layer * 5) % 67 == 0
+    (frame as usize + row * 3 + col + layer * 5).is_multiple_of(67)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
