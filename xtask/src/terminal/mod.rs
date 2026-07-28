@@ -30,7 +30,6 @@ use xshell::Cmd;
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "../tests/terminal_tests.rs"]
 mod terminal_tests;
@@ -38,7 +37,6 @@ mod terminal_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const INLINE_DEFAULT_LINES: u16 = 18;
 const INLINE_MIN_LINES: u16 = 12;
 const INLINE_MIN_COLUMNS: u16 = 60;
@@ -1123,7 +1121,7 @@ fn emit_subprocess_line(bytes: &[u8], stream: OutputStream, display: CommandDisp
     let line = String::from_utf8_lossy(bytes);
     let line = line.trim_end();
     if !plain_stream_text(line).trim().is_empty() {
-        subprocess_event(&line, stream, display);
+        subprocess_event(line, stream, display);
     }
 }
 
@@ -1131,7 +1129,7 @@ fn emit_subprocess_progress(bytes: &[u8], stream: OutputStream, display: Command
     let line = String::from_utf8_lossy(bytes);
     let line = line.trim_end();
     if !plain_stream_text(line).trim().is_empty() {
-        subprocess_progress_event(&line, stream, display);
+        subprocess_progress_event(line, stream, display);
     }
 }
 
@@ -1775,7 +1773,7 @@ impl InlineRenderer {
 
         for index in start..end {
             let marker = if index == prompt.selected { ">" } else { " " };
-            let option = format!("{marker} {}", &prompt.options[index]);
+            let option = format!("{marker} {}", prompt.options[index]);
             let kind = if index == prompt.selected {
                 LineKind::Ok
             } else {

@@ -307,7 +307,8 @@ fn unit_group_selection_expands_expected_suites() {
             TestSuiteId::RustPublicApi,
             TestSuiteId::Cli,
             TestSuiteId::NodePackage,
-            TestSuiteId::PythonPackage
+            TestSuiteId::PythonPackage,
+            TestSuiteId::SwiftPackage
         ]
     );
 }
@@ -352,6 +353,20 @@ fn unit_suite_selection_selects_one_suite() {
         vec![TestSuiteId::RustCrates]
     );
     assert_eq!(selection.package.as_deref(), Some("sipp-sys"));
+}
+
+#[test]
+fn swift_package_selection_uses_the_cataloged_interface_suite() {
+    let selection = selected_unit_suites(&TestUnitArgs {
+        no_coverage: true,
+        command: TestUnitCommands::Suite(TestUnitSuiteArgs {
+            target: TestUnitSuiteTarget::SwiftPackage,
+        }),
+    })
+    .unwrap();
+
+    assert_eq!(selection.suites.len(), 1);
+    assert_eq!(selection.suites[0].id, TestSuiteId::SwiftPackage);
 }
 
 #[test]
@@ -718,6 +733,7 @@ fn case_discovery_includes_each_discoverable_language_surface() {
         suite_by_id(TestSuiteId::DemoTs).unwrap(),
         suite_by_id(TestSuiteId::NodePackage).unwrap(),
         suite_by_id(TestSuiteId::PythonPackage).unwrap(),
+        suite_by_id(TestSuiteId::SwiftPackage).unwrap(),
     ];
     let cases = discover_cases(&ctx, &suites).unwrap();
 
@@ -733,6 +749,9 @@ fn case_discovery_includes_each_discoverable_language_surface() {
     assert!(cases
         .iter()
         .any(|case| case.suite_id == TestSuiteId::PythonPackage));
+    assert!(cases
+        .iter()
+        .any(|case| case.suite_id == TestSuiteId::SwiftPackage));
 }
 
 #[test]
@@ -877,10 +896,13 @@ fn filtered_rust_targets_reject_unknown_packages() {
 }
 
 #[test]
-fn rust_binding_targets_cover_only_host_free_wasm() {
+fn rust_binding_targets_cover_swift_and_host_free_wasm() {
     assert_eq!(
         RUST_BINDING_TEST_TARGETS,
-        &[RustTestTarget::lib("sipp-wasm")]
+        &[
+            RustTestTarget::lib("sipp-swift"),
+            RustTestTarget::lib("sipp-wasm")
+        ]
     );
 }
 
@@ -916,6 +938,7 @@ fn source_path_helpers_classify_roots_and_tests() {
     let suites = [
         suite_by_id(TestSuiteId::Xtask).unwrap(),
         suite_by_id(TestSuiteId::RustCrates).unwrap(),
+        suite_by_id(TestSuiteId::SwiftPackage).unwrap(),
     ];
 
     assert!(path_matches_root("xtask/src/test.rs", "xtask/src"));
@@ -927,9 +950,22 @@ fn source_path_helpers_classify_roots_and_tests() {
             .collect::<Vec<_>>(),
         vec![TestSuiteId::Xtask]
     );
+    assert_eq!(
+        source_owner_suites("examples/swift/cli/Sources/SippCLI/SippCLI.swift", &suites)
+            .iter()
+            .map(|suite| suite.id)
+            .collect::<Vec<_>>(),
+        vec![TestSuiteId::SwiftPackage]
+    );
     assert!(is_first_party_source_path("xtask/src/test.rs"));
+    assert!(is_first_party_source_path(
+        "lib/swift/Sources/Sipp/SippClient.swift"
+    ));
     assert!(!is_first_party_source_path("xtask/src/tests/test_tests.rs"));
     assert!(is_probable_test_path("lib/web/tests/router.test.ts"));
+    assert!(is_probable_test_path(
+        "lib/swift/Tests/SippTests/PublicAPITests.swift"
+    ));
     assert!(is_probable_test_path("xtask/src/tests/test_tests.rs"));
 }
 

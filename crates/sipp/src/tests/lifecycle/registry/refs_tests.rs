@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 
 use crate::lifecycle::{
-    AssetRecord, AssetSource, ModelAssetKind, ModelModality, ModelStatus, REGISTRY_MANIFEST_VERSION,
+    AssetRecord, AssetSource, LocalPathAnchor, ModelAssetKind, ModelModality, ModelStatus,
+    REGISTRY_MANIFEST_VERSION,
 };
 
 use super::*;
@@ -21,6 +22,7 @@ fn asset(id: &str, ref_count: u32) -> AssetRecord {
         storage_path: PathBuf::from("assets").join(id),
         source: AssetSource::Local {
             path: PathBuf::from(format!("{id}.gguf")),
+            anchor: LocalPathAnchor::Absolute,
             modified_unix_ms: None,
         },
         ref_count,

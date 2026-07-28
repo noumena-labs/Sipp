@@ -1,0 +1,9 @@
+# UniFFI 0.32 global configuration used when generating from a static archive.
+[crates.sipp_swift.bindings.swift]
+module_name = "SippCoreBindings"
+ffi_module_name = "SippCoreFFI"
+ffi_module_filename = "SippCoreFFI"
+generate_module_map = false
+generate_immutable_records = true
+generate_codable_conformance = false
+omit_checksums = false

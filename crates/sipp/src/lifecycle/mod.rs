@@ -35,9 +35,9 @@ pub use service::ModelStore;
 pub use storage::{AssetInstallResult, AssetStore, LocalStorageBackend, StorageBackend};
 pub use types::{
     AssetInspection, AssetRecord, AssetRole, AssetSource, BackendPreference, BackendSelection,
-    ClassifiedAsset, GgufMetadataInspection, ManagedModel, ModelAssetKind, ModelDetection,
-    ModelDetectionMethod, ModelEntry, ModelError, ModelInfo, ModelLoadOptions, ModelModality,
-    ModelPairing, ModelPairingReason, ModelPairingState, ModelServiceState, ModelSourceKind,
-    ModelStatus, PairingPlan, RegistryManifest, StatsMode, DEFAULT_MODEL_BACKEND,
-    DEFAULT_MODEL_STATS, REGISTRY_MANIFEST_VERSION,
+    ClassifiedAsset, GgufMetadataInspection, LocalPathAnchor, ManagedModel, ModelAssetKind,
+    ModelDetection, ModelDetectionMethod, ModelEntry, ModelError, ModelInfo, ModelLoadOptions,
+    ModelModality, ModelPairing, ModelPairingReason, ModelPairingState, ModelRegistration,
+    ModelServiceState, ModelSourceKind, ModelStatus, PairingPlan, RegistryManifest, StatsMode,
+    DEFAULT_MODEL_BACKEND, DEFAULT_MODEL_STATS, REGISTRY_MANIFEST_VERSION,
 };

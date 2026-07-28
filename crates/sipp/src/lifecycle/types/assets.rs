@@ -11,11 +11,24 @@ pub enum ModelAssetKind {
     Shard,
 }
 
+/// Base used to resolve a persisted local model path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalPathAnchor {
+    /// The persisted path is resolved directly by the operating system.
+    #[default]
+    Absolute,
+    /// The persisted path is relative to the configured local source root.
+    SourceRoot,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AssetSource {
     Local {
         path: PathBuf,
+        #[serde(default)]
+        anchor: LocalPathAnchor,
         modified_unix_ms: Option<u64>,
     },
     Remote {

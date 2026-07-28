@@ -1,20 +1,71 @@
 //! Tests the `client::client` module in `sipp`.
 //!
-//! Covers endpoint replacement, implicit selection, and client-owned I/O
-//! execution with deterministic local HTTP fixtures and no model loading.
+//! Covers endpoint replacement and shutdown, implicit selection, and
+//! client-owned I/O execution with deterministic fakes and no model loading.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 use futures::executor::block_on;
 
+use crate::client::dispatch::{EndpointCloseFuture, InferenceEndpoint};
 use crate::client::{
-    EndpointRef, GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewayTimeoutPolicy,
-    SippClient, SippError,
+    EndpointCapabilities, EndpointRef, GatewayAuthentication, GatewayDescriptor, GatewayRoutes,
+    GatewayTimeoutPolicy, SippChatRequest, SippClient, SippEmbedRequest, SippEmbeddingRun,
+    SippError, SippQueryRequest, SippRequestContext, SippTextRun,
 };
 use crate::lifecycle::test_support::TempDir;
 use crate::lifecycle::ModelError;
+
+struct CloseTrackingEndpoint {
+    endpoint: EndpointRef,
+    capabilities: EndpointCapabilities,
+    close_count: Arc<AtomicUsize>,
+}
+
+impl InferenceEndpoint for CloseTrackingEndpoint {
+    fn endpoint(&self) -> &EndpointRef {
+        &self.endpoint
+    }
+
+    fn capabilities(&self) -> &EndpointCapabilities {
+        &self.capabilities
+    }
+
+    fn close(&self) -> EndpointCloseFuture<'_> {
+        Box::pin(async {
+            self.close_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn query_with_context(
+        &self,
+        _context: SippRequestContext,
+        _request: SippQueryRequest,
+    ) -> SippTextRun {
+        unreachable!("close tracking endpoint does not run queries")
+    }
+
+    fn chat_with_context(
+        &self,
+        _context: SippRequestContext,
+        _request: SippChatRequest,
+    ) -> SippTextRun {
+        unreachable!("close tracking endpoint does not run chat")
+    }
+
+    fn embed_with_context(
+        &self,
+        _context: SippRequestContext,
+        _request: SippEmbedRequest,
+    ) -> SippEmbeddingRun {
+        unreachable!("close tracking endpoint does not run embeddings")
+    }
+}
 
 #[test]
 fn registers_gateway_endpoint_through_add() {
@@ -35,6 +86,26 @@ fn replacing_an_id_keeps_single_registered_endpoint() {
     assert_eq!(first, EndpointRef::from_id("service"));
     assert_eq!(second, EndpointRef::from_id("service"));
     assert!(client.resolve(Some(&second), "query").is_ok());
+}
+
+#[test]
+fn removing_an_endpoint_awaits_shutdown() {
+    let root = TempDir::new("client", "remove-awaits-shutdown");
+    let mut client = SippClient::with_storage_root(root.path.clone()).expect("client");
+    let endpoint = EndpointRef::from_id("local");
+    let close_count = Arc::new(AtomicUsize::new(0));
+    client.endpoints.insert(
+        endpoint.clone(),
+        Arc::new(CloseTrackingEndpoint {
+            endpoint,
+            capabilities: EndpointCapabilities::unknown(),
+            close_count: close_count.clone(),
+        }),
+    );
+
+    block_on(client.remove("local")).expect("remove endpoint");
+
+    assert_eq!(close_count.load(Ordering::SeqCst), 1);
 }
 
 #[test]

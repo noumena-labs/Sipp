@@ -47,3 +47,18 @@ fn placement_arg_len_matches_emitted_args() {
     assert!(args.iter().any(|arg| arg == "--no-mmap"));
     assert!(args.iter().any(|arg| arg == "--no-host"));
 }
+
+#[test]
+fn cpu_placement_omits_gpu_arguments() {
+    let placement = ModelPlacementConfig {
+        gpu_layers: GpuLayerConfig::Count(0),
+        ..ModelPlacementConfig::default()
+    };
+    let mut args = Vec::with_capacity(placement.arg_len());
+
+    placement.push_args(&mut args);
+
+    assert_eq!(args.capacity(), args.len());
+    assert_eq!(arg_value(&args, "--gpu-layers"), None);
+    assert_eq!(arg_value(&args, "--split-mode"), None);
+}

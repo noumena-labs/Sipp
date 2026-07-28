@@ -6,7 +6,6 @@ use std::path::PathBuf;
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "../src/tests/build_support/context_tests.rs"]
 mod context_tests;
@@ -14,7 +13,6 @@ mod context_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 pub(crate) struct BuildContext {
     pub(crate) manifest_dir: PathBuf,
     pub(crate) llama_dir: PathBuf,
@@ -69,6 +67,8 @@ impl BuildContext {
         println!("cargo:rerun-if-env-changed=SIPP_SYS_CMAKE_OUT_DIR");
         println!("cargo:rerun-if-env-changed=SIPP_CUDA_ARCHITECTURES");
         println!("cargo:rerun-if-env-changed=SIPP_STATIC_CXX_RUNTIME_LIB_DIR");
+        println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+        println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
     }
 
     pub(crate) fn workspace_build_dir(&self) -> PathBuf {

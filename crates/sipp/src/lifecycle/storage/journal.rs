@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::lifecycle::util::storage_corrupt;
-use crate::lifecycle::{ModelError, RegistryManifest};
+use crate::lifecycle::{AssetSource, ModelError, RegistryManifest};
 
 use super::StorageBackend;
 
@@ -132,6 +132,7 @@ fn cleanup_entries<B: StorageBackend>(
     let protected: BTreeSet<_> = manifest
         .assets
         .values()
+        .filter(|asset| matches!(&asset.source, AssetSource::Remote { .. }))
         .map(|asset| asset.storage_path.clone())
         .collect();
     for storage_path in &journal.storage_paths {

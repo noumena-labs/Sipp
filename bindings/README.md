@@ -8,6 +8,7 @@ documentation entry points.
 
 - `bindings/node`: N-API host binding used by the Node.js package.
 - `bindings/python`: PyO3 host binding used by the Python package.
+- `bindings/swift`: UniFFI bridge used by the Swift package and XCFramework.
 - `bindings/wasm`: browser WebAssembly/WebGPU ABI and native link target.
 
 ## Boundaries

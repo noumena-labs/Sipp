@@ -1,6 +1,7 @@
 //! Emscripten SDK bootstrapping and command wrapping.
 
 use crate::output;
+use crate::toolchains::python;
 use crate::utils::BuildContext;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -12,7 +13,6 @@ use xshell::{cmd, Cmd, Shell};
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "../tests/toolchains/emsdk_tests.rs"]
 mod emsdk_tests;
@@ -20,7 +20,6 @@ mod emsdk_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 const EMSDK_VERSION: &str = "5.0.6";
 const EMDAWNWEBGPU_VERSION: &str = "v20260317.182325";
 const RUST_EMSCRIPTEN_TARGET: &str = "wasm32-unknown-emscripten";
@@ -60,13 +59,19 @@ pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<EmscriptenTo
         install_emsdk_windows(sh, &emsdk_dir)?;
         activate_emsdk_windows(sh, &emsdk_dir)?;
     } else {
+        let uv_exe = python::setup_uv(sh, ctx)?;
+        let python_exe = python::ensure_python(sh, ctx, &uv_exe)?;
         output::run_command(
             format!("Installing emsdk {EMSDK_VERSION}"),
-            cmd!(sh, "bash -c").arg(format!("./emsdk install {EMSDK_VERSION}")),
+            cmd!(sh, "bash -c")
+                .arg(format!("./emsdk install {EMSDK_VERSION}"))
+                .env("EMSDK_PYTHON", &python_exe),
         )?;
         output::run_command(
             format!("Activating emsdk {EMSDK_VERSION}"),
-            cmd!(sh, "bash -c").arg(format!("./emsdk activate {EMSDK_VERSION}")),
+            cmd!(sh, "bash -c")
+                .arg(format!("./emsdk activate {EMSDK_VERSION}"))
+                .env("EMSDK_PYTHON", &python_exe),
         )?;
     }
 

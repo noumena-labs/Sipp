@@ -12,8 +12,8 @@ use crate::lifecycle::registry::model_entry_from_assets;
 use crate::lifecycle::storage::{now_unix_ms, StorageBackend};
 use crate::lifecycle::util::classified_asset;
 use crate::lifecycle::{
-    AssetRecord, AssetSource, ModelError, ModelPairing, ModelPairingReason, ModelPairingState,
-    ModelStatus, PairingResolver,
+    AssetRecord, AssetSource, LocalPathAnchor, ModelError, ModelPairing, ModelPairingReason,
+    ModelPairingState, ModelStatus, PairingResolver,
 };
 
 use super::helpers::model_id_from_plan;
@@ -42,6 +42,11 @@ enum ResolvedSources {
 struct AcquiredAsset {
     record: AssetRecord,
     created: bool,
+}
+
+pub(super) struct ModelAddOutcome {
+    pub(super) model_id: String,
+    pub(super) created: bool,
 }
 
 fn resolve_sources(sources: Vec<PathBuf>) -> Result<ResolvedSources, ModelError> {
@@ -87,14 +92,17 @@ fn has_http_scheme(value: &str) -> bool {
 }
 
 impl<B: StorageBackend> ModelStoreState<B> {
-    pub(super) async fn add(&mut self, sources: Vec<PathBuf>) -> Result<String, ModelError> {
+    pub(super) async fn add(
+        &mut self,
+        sources: Vec<PathBuf>,
+    ) -> Result<ModelAddOutcome, ModelError> {
         match resolve_sources(sources)? {
             ResolvedSources::Local(paths) => self.add_local(paths),
             ResolvedSources::Remote(urls) => self.add_remote(urls).await,
         }
     }
 
-    fn add_local(&mut self, paths: Vec<PathBuf>) -> Result<String, ModelError> {
+    fn add_local(&mut self, paths: Vec<PathBuf>) -> Result<ModelAddOutcome, ModelError> {
         let records = paths
             .into_iter()
             .map(|path| self.assets.register_local_path(path))
@@ -103,7 +111,7 @@ impl<B: StorageBackend> ModelStoreState<B> {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    async fn add_remote(&mut self, urls: Vec<String>) -> Result<String, ModelError> {
+    async fn add_remote(&mut self, urls: Vec<String>) -> Result<ModelAddOutcome, ModelError> {
         let acquisition_id = self.acquisition_ids.issue()?;
         let journal = self.assets.acquisition_journal(acquisition_id.clone());
         let requests = remote_requests(&self.registry.manifest.assets, urls)?;
@@ -168,14 +176,17 @@ impl<B: StorageBackend> ModelStoreState<B> {
     }
 
     #[cfg(target_family = "wasm")]
-    async fn add_remote(&mut self, _urls: Vec<String>) -> Result<String, ModelError> {
+    async fn add_remote(&mut self, _urls: Vec<String>) -> Result<ModelAddOutcome, ModelError> {
         Err(ModelError::UnsupportedOperation {
             operation: "native model service remote acquisition",
             reason: "browser acquisition is driven through BrowserLifecycleService".to_string(),
         })
     }
 
-    fn commit_acquired(&mut self, acquired: Vec<AcquiredAsset>) -> Result<String, ModelError> {
+    fn commit_acquired(
+        &mut self,
+        acquired: Vec<AcquiredAsset>,
+    ) -> Result<ModelAddOutcome, ModelError> {
         let previous = self.registry.manifest.clone();
         let result = self.register_assets(
             &acquired
@@ -192,7 +203,14 @@ impl<B: StorageBackend> ModelStoreState<B> {
         result
     }
 
-    fn register_assets(&mut self, records: &[AssetRecord]) -> Result<String, ModelError> {
+    fn register_assets(&mut self, records: &[AssetRecord]) -> Result<ModelAddOutcome, ModelError> {
+        let displaced_managed_assets: Vec<_> = records
+            .iter()
+            .filter(|record| matches!(&record.source, AssetSource::Local { .. }))
+            .filter_map(|record| self.registry.manifest.assets.get(&record.id))
+            .filter(|record| matches!(&record.source, AssetSource::Remote { .. }))
+            .cloned()
+            .collect();
         let classified: Vec<_> = records
             .iter()
             .map(|record| {
@@ -205,6 +223,7 @@ impl<B: StorageBackend> ModelStoreState<B> {
             .collect();
         let plan = PairingResolver::resolve(&classified)?;
         let entry_id = model_id_from_plan(&plan);
+        let created = !self.registry.manifest.models.contains_key(&entry_id);
         let source_key = source_key(records);
         let replaced: Vec<_> = self
             .registry
@@ -250,7 +269,13 @@ impl<B: StorageBackend> ModelStoreState<B> {
         for asset in orphaned {
             self.assets.delete_managed_asset(&asset)?;
         }
-        Ok(entry_id)
+        for asset in displaced_managed_assets {
+            self.assets.delete_managed_asset(&asset)?;
+        }
+        Ok(ModelAddOutcome {
+            model_id: entry_id,
+            created,
+        })
     }
 }
 
@@ -281,19 +306,26 @@ fn entry_source_key(
 
 fn asset_source_key(record: &AssetRecord) -> String {
     match &record.source {
-        AssetSource::Local { path, .. } => local_source_key(path),
+        AssetSource::Local { path, anchor, .. } => local_source_key(path, *anchor),
         AssetSource::Remote { url, .. } => format!("remote:{url}"),
     }
 }
 
-fn local_source_key(path: &std::path::Path) -> String {
+fn local_source_key(path: &std::path::Path, anchor: LocalPathAnchor) -> String {
+    let anchor = match anchor {
+        LocalPathAnchor::Absolute => "absolute",
+        LocalPathAnchor::SourceRoot => "source-root",
+    };
     #[cfg(windows)]
     {
-        format!("local:{}", path.to_string_lossy().to_ascii_lowercase())
+        format!(
+            "local:{anchor}:{}",
+            path.to_string_lossy().to_ascii_lowercase()
+        )
     }
     #[cfg(not(windows))]
     {
-        format!("local:{}", path.display())
+        format!("local:{anchor}:{}", path.display())
     }
 }
 

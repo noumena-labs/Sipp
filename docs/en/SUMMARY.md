@@ -15,6 +15,7 @@
   - [Browser](packages/browser.md)
   - [Node.js](packages/node.md)
   - [Python](packages/python.md)
+  - [Swift](packages/swift.md)
   - [Rust](packages/rust.md)
   - [Frameworks](packages/frameworks/README.md)
     - [React And Vite](packages/frameworks/vite-react.md)

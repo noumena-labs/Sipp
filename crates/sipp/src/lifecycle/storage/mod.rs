@@ -2,14 +2,14 @@
 
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use super::util::{invalid_source, storage_corrupt};
 use super::{
-    detect_model_from_gguf_bytes, AssetRecord, AssetRole, AssetSource, ModelAssetKind, ModelError,
+    detect_model_from_gguf_bytes, AssetRecord, AssetRole, AssetSource, LocalPathAnchor,
+    ModelAssetKind, ModelError,
 };
 use crate::defaults::BYTES_PER_MIB;
-use crate::lifecycle::util::sha256_hex;
 
 mod content;
 mod journal;
@@ -42,6 +42,11 @@ fn incoming_asset_file_name() -> String {
 
 pub trait StorageBackend: Clone + Send + Sync + 'static {
     fn root(&self) -> &Path;
+
+    /// Return the relocatable root used by sandbox-owned local model files.
+    fn local_source_root(&self) -> Option<&Path> {
+        None
+    }
 
     fn manifest_path(&self) -> PathBuf {
         self.root().join(REGISTRY_FILE_NAME)
@@ -121,17 +126,35 @@ pub trait StorageBackend: Clone + Send + Sync + 'static {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalStorageBackend {
     root: PathBuf,
+    local_source_root: Option<PathBuf>,
 }
 
 impl LocalStorageBackend {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            local_source_root: None,
+        }
+    }
+
+    pub(crate) fn with_local_source_root(
+        root: impl Into<PathBuf>,
+        local_source_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            root: root.into(),
+            local_source_root: Some(local_source_root.into()),
+        }
     }
 }
 
 impl StorageBackend for LocalStorageBackend {
     fn root(&self) -> &Path {
         &self.root
+    }
+
+    fn local_source_root(&self) -> Option<&Path> {
+        self.local_source_root.as_deref()
     }
 }
 
@@ -176,17 +199,18 @@ impl<B: StorageBackend> AssetStore<B> {
             AssetRole::Projector => ModelAssetKind::Projector,
             AssetRole::Model | AssetRole::Unknown => ModelAssetKind::Model,
         };
-        let identity = format!("{}\n{hash}", source_path.display());
+        let (stored_path, anchor) = self.local_source_locator(&source_path)?;
 
         Ok(AssetRecord {
-            id: format!("{ASSET_ID_PREFIX}{}", sha256_hex(identity.as_bytes())),
+            id: format!("{ASSET_ID_PREFIX}{hash}"),
             kind,
             name,
             hash,
             bytes: metadata.len(),
-            storage_path: source_path.clone(),
+            storage_path: stored_path.clone(),
             source: AssetSource::Local {
-                path: source_path,
+                path: stored_path,
+                anchor,
                 modified_unix_ms: source_modified_unix_ms,
             },
             ref_count: 0,
@@ -225,7 +249,9 @@ impl<B: StorageBackend> AssetStore<B> {
 
     pub fn resolve_asset_path(&self, record: &AssetRecord) -> Result<PathBuf, ModelError> {
         let path = match &record.source {
-            AssetSource::Local { path, .. } => path.clone(),
+            AssetSource::Local { path, anchor, .. } => {
+                self.resolve_local_source_path(path, *anchor)?
+            }
             AssetSource::Remote { .. } => self.backend.resolve_storage_path(&record.storage_path),
         };
         let metadata = fs::metadata(&path).map_err(|error| {
@@ -239,6 +265,17 @@ impl<B: StorageBackend> AssetStore<B> {
             return Err(asset_missing(&record.id));
         }
         Ok(path)
+    }
+
+    pub(crate) fn requires_external_access(&self, record: &AssetRecord) -> bool {
+        self.backend.local_source_root().is_some()
+            && matches!(
+                &record.source,
+                AssetSource::Local {
+                    anchor: LocalPathAnchor::Absolute,
+                    ..
+                }
+            )
     }
 
     pub(crate) fn validate_asset(&self, record: &AssetRecord) -> Result<(), ModelError> {
@@ -281,6 +318,57 @@ impl<B: StorageBackend> AssetStore<B> {
         manifest: &super::RegistryManifest,
     ) -> Result<(), ModelError> {
         journal::recover_acquisition_journals(&self.backend, manifest)
+    }
+
+    fn local_source_locator(
+        &self,
+        source_path: &Path,
+    ) -> Result<(PathBuf, LocalPathAnchor), ModelError> {
+        let Some(source_root) = self.backend.local_source_root() else {
+            return Ok((source_path.to_path_buf(), LocalPathAnchor::Absolute));
+        };
+        let source_root = canonicalize_existing_path(source_root)?;
+        let Ok(relative_path) = source_path.strip_prefix(source_root) else {
+            return Ok((source_path.to_path_buf(), LocalPathAnchor::Absolute));
+        };
+        if relative_path.as_os_str().is_empty() {
+            return Err(invalid_source(
+                "model asset path resolves to the local source root",
+            ));
+        }
+        Ok((relative_path.to_path_buf(), LocalPathAnchor::SourceRoot))
+    }
+
+    fn resolve_local_source_path(
+        &self,
+        path: &Path,
+        anchor: LocalPathAnchor,
+    ) -> Result<PathBuf, ModelError> {
+        match anchor {
+            LocalPathAnchor::Absolute => Ok(path.to_path_buf()),
+            LocalPathAnchor::SourceRoot => {
+                if path.is_absolute()
+                    || path.components().any(|component| {
+                        matches!(
+                            component,
+                            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                        )
+                    })
+                {
+                    return Err(storage_corrupt(format!(
+                        "local source-root path is invalid: {}",
+                        path.display()
+                    )));
+                }
+                let source_root = self.backend.local_source_root().ok_or_else(|| {
+                    ModelError::StorageUnavailable(
+                        "registry contains a source-root-relative model but no local source root was configured"
+                            .to_string(),
+                    )
+                })?;
+                Ok(source_root.join(path))
+            }
+        }
     }
 
     fn install_managed_path(

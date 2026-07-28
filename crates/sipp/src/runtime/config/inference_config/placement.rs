@@ -6,7 +6,7 @@ use crate::defaults::BYTES_PER_MIB_U64;
 
 use super::{args_len, positive_or_none, push_arg, push_csv_arg, push_flag, push_optional_arg};
 
-const ALWAYS_EMITTED_KEY_VALUE_ARGS: usize = 3;
+const ALWAYS_EMITTED_KEY_VALUE_ARGS: usize = 1;
 const BASE_ARG_LEN: usize = ALWAYS_EMITTED_KEY_VALUE_ARGS * super::KEY_VALUE_ARG_LEN;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -57,9 +57,12 @@ impl ModelPlacementConfig {
     }
 
     pub(super) fn arg_len(&self) -> usize {
+        let gpu_enabled = self.gpu_layers != GpuLayerConfig::Count(0);
         args_len(
             BASE_ARG_LEN,
             [
+                gpu_enabled,
+                gpu_enabled,
                 !self.devices.is_empty(),
                 self.main_gpu.is_some(),
                 !self.tensor_split.is_empty(),
@@ -80,8 +83,10 @@ impl ModelPlacementConfig {
         if !self.devices.is_empty() {
             push_csv_arg(args, "--device", self.devices.iter());
         }
-        push_arg(args, "--gpu-layers", self.gpu_layers.to_llama_arg());
-        push_arg(args, "--split-mode", self.split_mode.as_llama_arg());
+        if self.gpu_layers != GpuLayerConfig::Count(0) {
+            push_arg(args, "--gpu-layers", self.gpu_layers.to_llama_arg());
+            push_arg(args, "--split-mode", self.split_mode.as_llama_arg());
+        }
         push_optional_arg(args, "--main-gpu", self.main_gpu);
         if !self.tensor_split.is_empty() {
             push_csv_arg(args, "--tensor-split", self.tensor_split.iter());

@@ -7,7 +7,7 @@
 use crate::cli::Backend;
 use crate::test_support::TempDir;
 
-use super::{read_child_dirs, BuildContext};
+use super::{read_child_dirs, sha256_file, BuildContext};
 
 #[test]
 fn build_context_paths_are_rooted_under_fake_workspace() {
@@ -32,6 +32,14 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
         temp.join(".build/cargo/bindings/cpu")
     );
     assert_eq!(
+        ctx.cargo_swift_target_dir(),
+        temp.join(".build/cargo/swift")
+    );
+    assert_eq!(
+        ctx.cmake_swift_sys_dir("x86_64-apple-darwin"),
+        temp.join(".build/cmake/swift-sys/x86_64-apple-darwin")
+    );
+    assert_eq!(
         ctx.cargo_wasm_target_dir(true),
         temp.join(".build/cargo/wasm/pthread")
     );
@@ -52,6 +60,10 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
     assert_eq!(
         ctx.python_artifacts_dir(),
         temp.join(".build/artifacts/python")
+    );
+    assert_eq!(
+        ctx.swift_package_artifacts_dir(),
+        temp.join(".build/artifacts/swift/package")
     );
     assert_eq!(ctx.cli_artifacts_dir(), temp.join(".build/artifacts/cli"));
     assert_eq!(
@@ -74,9 +86,11 @@ fn build_context_paths_are_rooted_under_fake_workspace() {
     assert_eq!(ctx.sample_models_dir(), temp.join(".build/models"));
     assert_eq!(ctx.bindings_node_dir(), temp.join("bindings/node"));
     assert_eq!(ctx.bindings_python_dir(), temp.join("bindings/python"));
+    assert_eq!(ctx.bindings_swift_dir(), temp.join("bindings/swift"));
     assert_eq!(ctx.browser_package_dir(), temp.join("lib/web"));
     assert_eq!(ctx.node_package_dir(), temp.join("lib/node"));
     assert_eq!(ctx.python_package_project_dir(), temp.join("lib/python"));
+    assert_eq!(ctx.swift_package_dir(), temp.join("lib/swift"));
 }
 
 #[test]
@@ -109,4 +123,15 @@ fn child_dirs_are_sorted_and_missing_roots_are_empty() {
     let dirs = read_child_dirs(&root).unwrap();
     assert_eq!(dirs, vec![root.join("alpha"), root.join("zeta")]);
     assert!(read_child_dirs(&temp.join("missing")).unwrap().is_empty());
+}
+
+#[test]
+fn sha256_file_matches_known_digest() {
+    let temp = TempDir::new("utils-sha256");
+    let path = temp.write("value.bin", "sipp");
+
+    assert_eq!(
+        sha256_file(&path).unwrap(),
+        "f0b85266f3befbb4ccede533b2f71da911bfb5db01b52646a83ec16d5db4dd21"
+    );
 }

@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::lifecycle::test_support::{gguf_name, gguf_path, TempDir};
-use crate::lifecycle::{AssetSource, ModelAssetKind, ModelModality, ModelStatus, PairingPlan};
+use crate::lifecycle::{
+    AssetSource, LocalPathAnchor, ModelAssetKind, ModelModality, ModelStatus, PairingPlan,
+};
 use std::fs;
 
 fn asset(id: &str) -> AssetRecord {
@@ -17,6 +19,7 @@ fn asset(id: &str) -> AssetRecord {
         storage_path: PathBuf::from("assets").join(id),
         source: AssetSource::Local {
             path: gguf_path(id),
+            anchor: LocalPathAnchor::Absolute,
             modified_unix_ms: None,
         },
         ref_count: 0,

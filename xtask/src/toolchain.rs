@@ -2,7 +2,7 @@
 
 use crate::cli::{ToolchainCommands, ToolchainComponent, ToolchainSetupComponent};
 use crate::output;
-use crate::toolchains::{bun, cmake, cuda, emsdk, ninja, python, vulkan};
+use crate::toolchains::{bun, cmake, cuda, emsdk, ninja, python, rustup, vulkan};
 use crate::utils::BuildContext;
 use anyhow::Result;
 use std::env;
@@ -14,7 +14,6 @@ use xshell::Shell;
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
-
 #[cfg(test)]
 #[path = "tests/toolchain_tests.rs"]
 mod toolchain_tests;
@@ -22,7 +21,6 @@ mod toolchain_tests;
 /////////////////////////////////////////////////////////////////////////////////
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
-
 /// Readiness state for a developer toolchain.
 #[derive(Clone, Debug)]
 pub(crate) enum ToolStatus {
@@ -103,6 +101,7 @@ fn install(sh: &Shell, ctx: &BuildContext, component: ToolchainComponent) -> Res
             ninja::setup_ninja(sh, ctx)?;
             emsdk::setup_emsdk(sh, ctx)?;
             vulkan::setup_vulkan(sh, ctx)?;
+            rustup::setup_apple_targets(sh)?;
         }
         ToolchainComponent::Bun => {
             bun::setup_bun(sh, ctx)?;
@@ -121,6 +120,9 @@ fn install(sh: &Shell, ctx: &BuildContext, component: ToolchainComponent) -> Res
         }
         ToolchainComponent::Vulkan => {
             vulkan::setup_vulkan(sh, ctx)?;
+        }
+        ToolchainComponent::RustApple => {
+            rustup::setup_apple_targets(sh)?;
         }
     }
 
@@ -280,14 +282,13 @@ pub(crate) fn emsdk_status(ctx: &BuildContext) -> ToolStatus {
 }
 
 pub(crate) fn vulkan_status(ctx: &BuildContext) -> ToolStatus {
-    let vulkan_dir = ctx.vulkan_dir();
-    let glslc = vulkan_glslc_path(ctx);
+    let vulkan = vulkan::VulkanLayout::current(ctx);
 
-    if glslc.exists() {
+    if vulkan.is_installed() {
         ToolStatus::Ready {
             name: "Vulkan SDK",
             detail: "managed Vulkan SDK is present".to_owned(),
-            path: Some(vulkan_dir),
+            path: Some(vulkan.sdk_dir),
         }
     } else {
         ToolStatus::Warn {
@@ -472,9 +473,7 @@ fn node_modules_roots(ctx: &BuildContext) -> Vec<PathBuf> {
     if let Ok(dirs) = ctx.demo_dirs() {
         roots.extend(dirs.into_iter().map(|dir| dir.join("node_modules")));
     }
-    if let Ok(dirs) = ctx.tool_dirs() {
-        roots.extend(dirs.into_iter().map(|dir| dir.join("node_modules")));
-    }
+    roots.push(ctx.playground_dir().join("node_modules"));
     roots.extend(
         ctx.js_package_dirs()
             .into_iter()
@@ -482,21 +481,6 @@ fn node_modules_roots(ctx: &BuildContext) -> Vec<PathBuf> {
     );
 
     roots
-}
-
-fn vulkan_glslc_path(ctx: &BuildContext) -> PathBuf {
-    let vulkan_dir = ctx.vulkan_dir();
-    if cfg!(windows) {
-        vulkan_dir.join("Bin").join("glslc.exe")
-    } else if cfg!(target_os = "macos") {
-        vulkan_dir.join("macOS").join("bin").join("glslc")
-    } else {
-        vulkan_dir
-            .join(vulkan::VULKAN_VERSION)
-            .join("x86_64")
-            .join("bin")
-            .join("glslc")
-    }
 }
 
 fn setup_component(ctx: &BuildContext, component: ToolchainSetupComponent) -> Result<()> {
@@ -514,5 +498,6 @@ fn component_label(component: &ToolchainComponent) -> &'static str {
         ToolchainComponent::Ninja => "ninja",
         ToolchainComponent::Emsdk => "emsdk",
         ToolchainComponent::Vulkan => "vulkan",
+        ToolchainComponent::RustApple => "rust-apple",
     }
 }

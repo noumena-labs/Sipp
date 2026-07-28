@@ -257,7 +257,7 @@ Most shipping Safari versions do not expose JSPI. The client detects this and se
 * **Gateway server** does not have a published binary or public container image yet. It must be built from source.
 * **Windows Docker Vulkan** is not supported. Use the CUDA or CPU profiles on Windows with WSL2.
 * **macOS Docker** is CPU-only. Metal cannot run inside a Linux Docker container.
-* **Android and iOS** are not first-class package targets. The browser WASM package works on mobile web browsers, but no native Android or iOS packages are published.
+* **Android** is not a first-class package target. The native iOS Swift package can be built from source, but is not published yet. The browser WASM package works on mobile web browsers.
 * **Chrome (desktop)** is the primary tested browser target. Other desktop browsers (Edge, Firefox, Safari, Opera, Chromium derivatives) are untested.
 * **Mobile browser support** has not been validated yet. Chrome (Android) is the next target for testing.
 * **Firefox WebGPU on Linux and Android** is in active development (Nightly / Beta). Firefox WebGPU on macOS Intel is also in progress.

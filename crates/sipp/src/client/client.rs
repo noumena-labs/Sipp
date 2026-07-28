@@ -68,6 +68,29 @@ impl SippClient {
         })
     }
 
+    /// Create a client whose sandbox-owned local files are stored relative to
+    /// `local_source_root` in the model registry.
+    ///
+    /// This constructor is reserved for platform bindings whose application
+    /// container can move between launches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the model store cannot be opened.
+    #[doc(hidden)]
+    pub fn with_storage_root_and_local_source_root(
+        storage_root: impl Into<PathBuf>,
+        local_source_root: impl Into<PathBuf>,
+    ) -> SippResult<Self> {
+        Ok(Self {
+            models: ModelStore::local_with_source_root(storage_root, local_source_root)?,
+            endpoints: HashMap::new(),
+            local_models: HashMap::new(),
+            #[cfg(not(target_family = "wasm"))]
+            io_executor: None,
+        })
+    }
+
     /// Access the client model store.
     pub fn models(&self) -> &ModelStore {
         &self.models
@@ -239,14 +262,14 @@ impl SippClient {
     pub async fn remove(&mut self, id: &str) -> SippResult<()> {
         let id = normalize_id(id, "endpoint id")?;
         let endpoint = EndpointRef::from_id(id.clone());
-        if self.endpoints.remove(&endpoint).is_none() {
-            return Err(SippError::InvalidRequest(format!(
-                "endpoint not found: {id}"
-            )));
-        }
+        let implementation = self
+            .endpoints
+            .remove(&endpoint)
+            .ok_or_else(|| SippError::InvalidRequest(format!("endpoint not found: {id}")))?;
+        let close_result = implementation.close().await;
         let model_id = self.local_models.remove(&id);
         self.models.replace_usage(model_id.as_deref(), None).await;
-        Ok(())
+        close_result
     }
 
     /// Submit a raw-prompt text generation request.

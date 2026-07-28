@@ -9,6 +9,8 @@ experiences for inspecting runtime behavior and user-facing workflows.
   examples.
 - `examples/node`: Node.js query, chat, embed, vision, and gateway examples.
 - `examples/python`: Python query, chat, embed, vision, and gateway examples.
+- `examples/swift`: macOS command-line, macOS SwiftUI, and iOS SwiftUI clients
+  for query, chat, embedding, streaming, cancellation, and typed errors.
 - `examples/web`: Vite browser pages for local and gateway workflows.
 - `examples/gateway`: minimal Axum gateway route composition.
 
@@ -17,6 +19,8 @@ Start with:
 ```bash
 cargo xtask run examples gateway rust --case query
 cargo xtask run examples serve browser
+cargo xtask build swift
+cargo xtask run examples ios --simulator SIMULATOR-UDID
 ```
 
 ## Demos

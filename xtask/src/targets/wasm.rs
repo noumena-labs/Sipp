@@ -47,13 +47,15 @@ pub fn build(
             build_target(
                 sh,
                 ctx,
-                root,
-                &emscripten,
-                &cmake_bin_dir,
-                ninja_dir.as_deref(),
-                false,
-                runtime_flavor,
-                &npm_dist_wasm,
+                WasmBuildTarget {
+                    root,
+                    emscripten: &emscripten,
+                    cmake_bin_dir: &cmake_bin_dir,
+                    ninja_dir: ninja_dir.as_deref(),
+                    use_pthreads: false,
+                    runtime_flavor,
+                    npm_dist_wasm: &npm_dist_wasm,
+                },
             )?;
         }
 
@@ -63,13 +65,15 @@ pub fn build(
             build_target(
                 sh,
                 ctx,
-                root,
-                &emscripten,
-                &cmake_bin_dir,
-                ninja_dir.as_deref(),
-                true,
-                runtime_flavor,
-                &npm_dist_wasm,
+                WasmBuildTarget {
+                    root,
+                    emscripten: &emscripten,
+                    cmake_bin_dir: &cmake_bin_dir,
+                    ninja_dir: ninja_dir.as_deref(),
+                    use_pthreads: true,
+                    runtime_flavor,
+                    npm_dist_wasm: &npm_dist_wasm,
+                },
             )?;
         }
     }
@@ -83,7 +87,7 @@ pub fn build(
         sh,
         ctx,
         "Installing browser package dependencies",
-        &[npm_workspace.clone()],
+        std::slice::from_ref(&npm_workspace),
     )?;
 
     let _npm_dir = sh.push_dir(&npm_workspace);
@@ -140,33 +144,33 @@ fn runtime_flavors(runtime: WasmRuntime) -> Vec<WasmRuntimeFlavor> {
     flavors
 }
 
-fn build_target(
-    sh: &Shell,
-    ctx: &BuildContext,
-    root: &Path,
-    emscripten: &EmscriptenToolchain,
-    cmake_bin_dir: &Path,
-    ninja_dir: Option<&Path>,
+struct WasmBuildTarget<'a> {
+    root: &'a Path,
+    emscripten: &'a EmscriptenToolchain,
+    cmake_bin_dir: &'a Path,
+    ninja_dir: Option<&'a Path>,
     use_pthreads: bool,
     runtime_flavor: WasmRuntimeFlavor,
-    npm_dist_wasm: &Path,
-) -> Result<()> {
-    let _root_dir = sh.push_dir(root);
+    npm_dist_wasm: &'a Path,
+}
 
-    let threading_suffix = if use_pthreads { "-pthread" } else { "" };
+fn build_target(sh: &Shell, ctx: &BuildContext, target: WasmBuildTarget<'_>) -> Result<()> {
+    let _root_dir = sh.push_dir(target.root);
+
+    let threading_suffix = if target.use_pthreads { "-pthread" } else { "" };
     let artifact_name = format!(
         "sipp-wasm{}{}",
-        threading_suffix, runtime_flavor.artifact_suffix
+        threading_suffix, target.runtime_flavor.artifact_suffix
     );
     let js_file = format!("{}.js", artifact_name);
     let wasm_file = format!("{}.wasm", artifact_name);
-    let cargo_target_dir = ctx.cargo_wasm_target_dir(use_pthreads);
+    let cargo_target_dir = ctx.cargo_wasm_target_dir(target.use_pthreads);
     let rust_staticlib = cargo_target_dir
         .join("wasm32-unknown-emscripten")
         .join("release")
         .join("libsipp_wasm.a");
 
-    let rustflags = if use_pthreads {
+    let rustflags = if target.use_pthreads {
         "-C target-feature=+atomics,+bulk-memory,+mutable-globals"
     } else {
         ""
@@ -190,35 +194,35 @@ fn build_target(
 
     run_with_emsdk(
         sh,
-        &emscripten.emsdk_dir,
-        Some(cmake_bin_dir),
-        ninja_dir,
+        &target.emscripten.emsdk_dir,
+        Some(target.cmake_bin_dir),
+        target.ninja_dir,
         &format!("Compiling Rust staticlib for {js_file}"),
         &cargo_cmd,
     )?;
 
     output::step("Linking browser runtime via Emscripten");
-    let wasm_dir = root.join("bindings").join("wasm");
+    let wasm_dir = target.root.join("bindings").join("wasm");
     let wasm_source_dir = ctx.cmake_file_path(&wasm_dir);
     let rust_staticlib_cmake = ctx.cmake_file_path(&rust_staticlib);
-    let emdawnwebgpu_cmake = ctx.cmake_file_path(&emscripten.emdawnwebgpu_dir);
-    let build_dir = cmake_build_dir(ctx, use_pthreads, runtime_flavor);
+    let emdawnwebgpu_cmake = ctx.cmake_file_path(&target.emscripten.emdawnwebgpu_dir);
+    let build_dir = cmake_build_dir(ctx, target.use_pthreads, target.runtime_flavor);
     sh.create_dir(&build_dir)?;
     output::path("CMake build directory", &build_dir);
 
     let _dir = sh.push_dir(&build_dir);
 
-    let cmake_thread_flag = if use_pthreads {
+    let cmake_thread_flag = if target.use_pthreads {
         "-DCE_USE_PTHREADS=ON"
     } else {
         "-DCE_USE_PTHREADS=OFF"
     };
-    let cmake_webgpu_flag = if runtime_flavor.enable_webgpu {
+    let cmake_webgpu_flag = if target.runtime_flavor.enable_webgpu {
         "-DCE_WASM_ENABLE_WEBGPU=ON"
     } else {
         "-DCE_WASM_ENABLE_WEBGPU=OFF"
     };
-    let cmake_jspi_flag = if runtime_flavor.use_jspi {
+    let cmake_jspi_flag = if target.runtime_flavor.use_jspi {
         "-DCE_WASM_USE_JSPI=ON"
     } else {
         "-DCE_WASM_USE_JSPI=OFF"
@@ -234,9 +238,9 @@ fn build_target(
     );
     run_with_emsdk(
         sh,
-        &emscripten.emsdk_dir,
-        Some(cmake_bin_dir),
-        ninja_dir,
+        &target.emscripten.emsdk_dir,
+        Some(target.cmake_bin_dir),
+        target.ninja_dir,
         &format!("Configuring CMake for {artifact_name}"),
         &emcmake_cmd,
     )?;
@@ -244,9 +248,9 @@ fn build_target(
     let build_cmd = "cmake --build . --parallel";
     run_with_emsdk(
         sh,
-        &emscripten.emsdk_dir,
-        Some(cmake_bin_dir),
-        ninja_dir,
+        &target.emscripten.emsdk_dir,
+        Some(target.cmake_bin_dir),
+        target.ninja_dir,
         &format!("Building browser runtime for {artifact_name}"),
         build_cmd,
     )?;
@@ -255,8 +259,8 @@ fn build_target(
     let compiled_js = build_dir.join("dist").join("Sipp.js");
     let compiled_wasm = build_dir.join("dist").join("Sipp.wasm");
 
-    let staged_js = npm_dist_wasm.join(&js_file);
-    let staged_wasm = npm_dist_wasm.join(&wasm_file);
+    let staged_js = target.npm_dist_wasm.join(&js_file);
+    let staged_wasm = target.npm_dist_wasm.join(&wasm_file);
     sh.copy_file(&compiled_js, &staged_js)?;
     sh.copy_file(&compiled_wasm, &staged_wasm)?;
     output::artifact(&staged_js);

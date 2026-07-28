@@ -43,6 +43,70 @@ fn asset_store_references_local_files() {
 }
 
 #[test]
+fn local_asset_identity_depends_only_on_content() {
+    let root = TempDir::new("storage", "content-identity");
+    let first_path = root.path.join("first.gguf");
+    let second_path = root.path.join("second.gguf");
+    fs::write(&first_path, b"identical model bytes").expect("first source");
+    fs::write(&second_path, b"identical model bytes").expect("second source");
+
+    let store = AssetStore::local(root.path.join("store"));
+    let first = store.register_local_path(first_path).expect("first add");
+    let second = store.register_local_path(second_path).expect("second add");
+
+    assert_eq!(first.id, second.id);
+    assert_eq!(first.hash, second.hash);
+}
+
+#[test]
+fn source_root_relative_asset_survives_container_relocation() {
+    let root = TempDir::new("storage", "source-root-relocation");
+    let first_container = root.path.join("container-a");
+    let first_source_root = first_container.join("home");
+    let first_store_root = first_source_root.join("Library").join("Sipp");
+    let first_source = first_source_root.join("Documents").join("model.gguf");
+    fs::create_dir_all(first_source.parent().expect("source parent")).expect("source directory");
+    fs::write(&first_source, b"relocatable model bytes").expect("source");
+
+    let first_store = AssetStore::new(LocalStorageBackend::with_local_source_root(
+        &first_store_root,
+        &first_source_root,
+    ));
+    let record = first_store
+        .register_local_path(&first_source)
+        .expect("register source-root asset");
+
+    assert_eq!(
+        record.storage_path,
+        PathBuf::from("Documents").join("model.gguf")
+    );
+    assert!(matches!(
+        &record.source,
+        AssetSource::Local {
+            path,
+            anchor: LocalPathAnchor::SourceRoot,
+            ..
+        } if path == &PathBuf::from("Documents").join("model.gguf")
+    ));
+
+    let second_container = root.path.join("container-b");
+    fs::rename(&first_container, &second_container).expect("relocate container");
+    let second_source_root = second_container.join("home");
+    let second_store_root = second_source_root.join("Library").join("Sipp");
+    let second_store = AssetStore::new(LocalStorageBackend::with_local_source_root(
+        second_store_root,
+        &second_source_root,
+    ));
+
+    assert_eq!(
+        second_store
+            .resolve_asset_path(&record)
+            .expect("relocated asset"),
+        second_source_root.join("Documents").join("model.gguf")
+    );
+}
+
+#[test]
 fn deleting_a_local_registration_does_not_delete_its_source() {
     let root = TempDir::new("storage", "delete-local-registration");
     let source = root.path.join("source.gguf");
@@ -158,4 +222,47 @@ fn acquisition_journal_recovery_removes_only_unregistered_paths() {
             .count(),
         0
     );
+}
+
+#[test]
+fn acquisition_recovery_does_not_treat_local_locators_as_managed_assets() {
+    let root = TempDir::new("storage", "journal-local-locator");
+    let store_root = root.path.join("store");
+    let store = AssetStore::local(&store_root);
+    let staged_storage_path = PathBuf::from("Documents").join("model.gguf");
+    let staged_path = store_root.join(&staged_storage_path);
+    fs::create_dir_all(staged_path.parent().expect("staged parent")).expect("staged directory");
+    fs::write(&staged_path, b"uncommitted").expect("staged asset");
+
+    let journal = store.acquisition_journal("lease-local-locator");
+    journal
+        .record_path(&staged_storage_path)
+        .expect("record staged path");
+
+    let mut manifest = RegistryManifest::default();
+    manifest.assets.insert(
+        "asset-local".to_string(),
+        AssetRecord {
+            id: "asset-local".to_string(),
+            kind: ModelAssetKind::Model,
+            name: "model.gguf".to_string(),
+            hash: "hash".to_string(),
+            bytes: 1,
+            storage_path: staged_storage_path.clone(),
+            source: AssetSource::Local {
+                path: staged_storage_path,
+                anchor: LocalPathAnchor::SourceRoot,
+                modified_unix_ms: None,
+            },
+            ref_count: 0,
+            created_at_unix_ms: 0,
+            inspection: None,
+        },
+    );
+
+    store
+        .recover_acquisition_journals(&manifest)
+        .expect("recover journal");
+
+    assert!(!staged_path.exists());
 }

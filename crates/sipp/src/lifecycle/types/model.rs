@@ -102,6 +102,15 @@ pub struct ManagedModel {
     pub status: ModelStatus,
 }
 
+/// Result of a model-store add transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelRegistration {
+    /// Registered model value.
+    pub model: ManagedModel,
+    /// Whether the transaction created a new model id.
+    pub created: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelPairingState {

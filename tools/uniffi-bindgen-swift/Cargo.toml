@@ -1,0 +1,14 @@
+[package]
+name = "sipp-uniffi-bindgen-swift"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "sipp-uniffi-bindgen-swift"
+path = "src/main.rs"
+
+[dependencies]
+uniffi = { workspace = true, features = ["cli"] }

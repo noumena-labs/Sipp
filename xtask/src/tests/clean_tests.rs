@@ -71,6 +71,7 @@ fn clean_targets_include_generated_dirs_and_optional_purge_roots() {
     )
     .unwrap();
     assert!(base.contains(&ctx.cargo_build_root()));
+    assert!(base.contains(&ctx.artifacts_root()));
     assert!(base.contains(&ctx.demo_dir("chat").join("dist")));
     assert!(base.contains(&ctx.playground_dir().join(".vite")));
     assert!(base.contains(&ctx.browser_package_dir().join("dist")));

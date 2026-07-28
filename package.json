@@ -6,7 +6,7 @@
     "lib/node",
     "lib/web",
     "demos/*",
-    "tools/*",
+    "tools/playground",
     "examples/web"
   ]
 }

@@ -15,8 +15,8 @@ use super::backend_policy::BackendPolicy;
 use super::storage::{modified_unix_ms, now_unix_ms, LocalStorageBackend, StorageBackend};
 use super::util::{invalid_pairing, invalid_source, model_not_found};
 use super::{
-    AssetSource, AssetStore, ManagedModel, ModelEntry, ModelError, ModelLoadOptions, ModelRegistry,
-    ModelStatus,
+    AssetSource, AssetStore, ManagedModel, ModelEntry, ModelError, ModelLoadOptions,
+    ModelRegistration, ModelRegistry, ModelStatus,
 };
 
 mod helpers;
@@ -39,7 +39,20 @@ struct ModelStoreState<B: StorageBackend> {
 
 impl ModelStore {
     pub(crate) fn local(root: impl Into<PathBuf>) -> Result<Self, ModelError> {
-        let backend = LocalStorageBackend::new(root);
+        Self::local_with_backend(LocalStorageBackend::new(root))
+    }
+
+    pub(crate) fn local_with_source_root(
+        root: impl Into<PathBuf>,
+        local_source_root: impl Into<PathBuf>,
+    ) -> Result<Self, ModelError> {
+        Self::local_with_backend(LocalStorageBackend::with_local_source_root(
+            root,
+            local_source_root,
+        ))
+    }
+
+    fn local_with_backend(backend: LocalStorageBackend) -> Result<Self, ModelError> {
         let registry = ModelRegistry::open(backend.clone())?;
         let assets = AssetStore::new(backend);
         assets.recover_acquisition_journals(&registry.manifest)?;
@@ -66,14 +79,31 @@ impl ModelStore {
         S: AsRef<OsStr>,
         I: IntoIterator<Item = S>,
     {
+        Ok(self.add_with_outcome(sources).await?.model)
+    }
+
+    /// Add a model and report whether the transaction created its model id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when sources are invalid, mix local and remote assets,
+    /// or cannot be registered.
+    pub async fn add_with_outcome<S, I>(&self, sources: I) -> Result<ModelRegistration, ModelError>
+    where
+        S: AsRef<OsStr>,
+        I: IntoIterator<Item = S>,
+    {
         let sources = sources
             .into_iter()
             .map(|source| PathBuf::from(source.as_ref()))
             .collect();
         let mut state = self.state.lock().await;
         state.prune_stale_local_models()?;
-        let model_id = state.add(sources).await?;
-        state.model(&model_id)
+        let outcome = state.add(sources).await?;
+        Ok(ModelRegistration {
+            model: state.model(&outcome.model_id)?,
+            created: outcome.created,
+        })
     }
 
     /// List models in the store.
@@ -230,11 +260,19 @@ impl<B: StorageBackend> ModelStoreState<B> {
                 .get(asset_id)
                 .ok_or_else(|| ModelError::AssetMissing(asset_id.clone()))?;
             let AssetSource::Local {
-                path,
                 modified_unix_ms: expected_modified,
+                ..
             } = &record.source
             else {
                 continue;
+            };
+            if self.assets.requires_external_access(record) {
+                continue;
+            }
+            let path = match self.assets.resolve_asset_path(record) {
+                Ok(path) => path,
+                Err(ModelError::AssetMissing(_)) => return Ok(true),
+                Err(error) => return Err(error),
             };
             let metadata = match fs::metadata(path) {
                 Ok(metadata) => metadata,
