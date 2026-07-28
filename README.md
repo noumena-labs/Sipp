@@ -54,30 +54,51 @@ Sipp is an all-in-one, high-performance AI framework for building web, desktop, 
 At its core is **Sipp Engine**, a blazing-fast runtime built to run anywhere: in the browser, on the desktop, or on bare-metal cloud infrastructure, that delivers low startup times and a minimal memory footprint.
 
 ```javascript
-import { SippClient } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+
 const blender = new SippClient();
 
-// 1. Initialize high-speed, local WebGPU or CUDA inference
-const juice = await blender.add('edge', { kind: 'local', source: '/models/llama3.gguf' });
+// 1. Register a model and load it into a local WebGPU endpoint.
+const edgeModel = await blender.models.add(['/models/llama3.gguf']);
+const juice = await blender.add(
+  'edge',
+  EndpointDescriptor.local(edgeModel.id, { backend: 'webgpu' })
+);
 
-// 2. Or connect to a secure cloud proxy using the exact same interface
-const ice = await blender.add('cloud', { kind: 'gateway', baseUrl: 'https://gateway.example.com/v1/' });
+// 2. Or connect to a secure cloud gateway through the same client.
+const ice = await blender.add(
+  'cloud',
+  EndpointDescriptor.gateway({
+    target: 'production',
+    baseUrl: 'https://gateway.example.com',
+    authentication: { kind: 'bearer', value: '<short-lived-token>' },
+  })
+);
 
-// Run inference on either endpoint seamlessly with a symmetric API
+// Route the same operation to either endpoint.
 const [smoothie, snowcone] = await Promise.all([
-  blender.chat([{ role: 'user', content: 'Explain Sipp.' }], { endpoint: juice }),
-  blender.chat([{ role: 'user', content: 'Create a Sipp app.' }], { endpoint: ice })
+  blender.chat([{ role: 'user', content: 'Explain Sipp.' }], { endpoint: juice }).response,
+  blender.chat([{ role: 'user', content: 'Create a Sipp app.' }], { endpoint: ice }).response,
 ]);
+
+console.log(smoothie.text, snowcone.text);
+await blender.close();
 ```
 
 The unified SDK lets you dynamically partition and optimize complex application logic between local and cloud compute. Instead of wrestling with fragmented web runtimes, disconnected native wrappers for desktop, or custom middleware to protect API keys, you only need Sipp.
 
 It packages a **high-performance WebGPU engine**, with a secure container gateway proxy into a single, neat toolkit. Future releases will focus on embedded vector memory, on-device PII masking, and automated smart routing. See [Roadmap](docs/en/roadmap.md).
 
-```bash
-sipp build wasm                # Compile high-performance WebGPU assets
-sipp run demos serve chat      # Launch a local, hardware-accelerated test canvas
+From a source checkout, use the repo launcher installed by the setup scripts,
+or call the underlying xtask directly:
 
+```bash
+sipp build wasm                  # Compile high-performance WebGPU assets
+sipp run demos serve chat        # Launch a hardware-accelerated demo
+
+# Equivalent commands without the repo launcher:
+cargo xtask build wasm
+cargo xtask run demos serve chat
 ```
 
 
@@ -115,6 +136,9 @@ npm install @sipphq/sipp-server
 # For native systems development and application embedding
 cargo add sipp-rs
 
+# For native macOS and iOS apps (source checkout on macOS)
+sipp build swift
+
 # For Python automation and data engineering pipelines
 # (sippy wheels ship from GitHub Releases today; full PyPI build matrix in progress)
 # pip install sipppy
@@ -122,14 +146,14 @@ cargo add sipp-rs
 # Deploy the secure cloud gateway server instance via Docker
 # (cloud gateway will be available in the future, currently building from source)
 # docker pull noumena/sipp-gateway
-
 ```
 
 ---
 
 ## Runtimes & Flavors
 
-Most developers should start with our pre-built, published packages rather than compiling directly from the monorepo source.
+Most developers should start with our pre-built packages when available. Swift
+support currently builds from a source checkout on macOS.
 
 | Surface | Module | Install | Docs |
 | --- | --- | --- | --- |
@@ -137,6 +161,7 @@ Most developers should start with our pre-built, published packages rather than 
 | **Node.js** | Sipp Core | `npm install @sipphq/sipp-server` | [Node.js package](docs/en/packages/node.md) |
 | **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust package](docs/en/packages/rust.md) |
 | **Python** | Sipp Core | Wheels available on release page | [Python package](docs/en/packages/python.md) |
+| **Swift** | Sipp Core | Source-built on macOS | [Swift package](docs/en/packages/swift.md) |
 | **Gateway Server** | Sipp Cloud | Source-built | [Gateway Server](docs/en/gateway/server.md) |
 | **Gateway Toolkit** | Sipp Cloud | Source-built | [Gateway toolkit](docs/en/gateway/toolkit.md) |
 
@@ -150,11 +175,10 @@ Initialize the local engine client to execute model weights directly on the clie
 
 ```bash
 npm install @sipphq/sipp
-
 ```
 
 ```javascript
-import { SippClient } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
@@ -162,10 +186,14 @@ const messages = [
 ];
 
 const client = new SippClient();
-const endpoint = await client.add('default', {
-  kind: 'local',
-  source: '/models/model.gguf',
-});
+const model = await client.models.add(['/models/model.gguf']);
+const endpoint = await client.add(
+  'default',
+  EndpointDescriptor.local(model.id, {
+    backend: 'webgpu',
+    runtime: { context: { n_ctx: 2048 } },
+  })
+);
 
 const run = client.chat(messages, {
   endpoint,
@@ -174,23 +202,26 @@ const run = client.chat(messages, {
 
 console.log((await run.response).text);
 await client.close();
-
 ```
 
 ### 2. Cloud Gateway Quick Start (Preemptive Cloud Proxying)
 
-Cloud gateway clients use the exact same `SippClient` API layout. The gateway owns model paths, provider credentials, access policies, and centralized metrics tracking; your client application code only needs the gateway routing target URL.
+Cloud gateway clients use the same `SippClient` API layout. The gateway owns
+model paths, provider credentials, access policies, and centralized metrics;
+your client only needs its public target, URL, and authentication.
 
 ```javascript
-import { SippClient } from '@sipphq/sipp';
+import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
 
 const client = new SippClient();
-const endpoint = await client.add('gateway', {
-  kind: 'gateway',
-  target: 'upstream-cluster',
-  baseUrl: 'https://gateway.example.com/v1/',
-  authentication: { kind: 'bearer', value: await getGatewayToken() },
-});
+const endpoint = await client.add(
+  'gateway',
+  EndpointDescriptor.gateway({
+    target: 'upstream-cluster',
+    baseUrl: 'https://gateway.example.com',
+    authentication: { kind: 'bearer', value: await getGatewayToken() },
+  })
+);
 
 const run = client.query('Explain gateway inference.', {
   endpoint,
@@ -199,8 +230,62 @@ const run = client.query('Explain gateway inference.', {
 
 console.log((await run.response).text);
 await client.close();
-
 ```
+
+### 3. Swift Quick Start (Native macOS and iOS)
+
+Swift support requires macOS and Xcode. The build stages a local Swift package
+at `.build/artifacts/swift/package` and builds the macOS and iOS examples.
+
+```bash
+sipp toolchain install rust-apple
+sipp doctor --target swift
+sipp build swift
+```
+
+```swift
+import Foundation
+import Sipp
+
+let modelURL = URL(fileURLWithPath: "/path/to/model.gguf")
+let client = try SippClient()
+let model = try await client.models.add([modelURL])
+try await client.add("local", model: model)
+
+let run = client.chat(
+    messages: [
+        ChatMessage(role: .system, content: "Answer concisely."),
+        ChatMessage(role: .user, content: "Explain Sipp in one sentence."),
+    ],
+    endpoint: "local",
+    options: TextOptions(maxTokens: 64)
+)
+
+for await batch in run.tokens {
+    print(batch.text, terminator: "")
+}
+
+let response = try await run.response
+print(response.text)
+```
+
+Run the staged command-line example, open the sandboxed macOS app, or launch
+the iOS example in a simulator:
+
+```bash
+.build/artifacts/swift/examples/SippCLI chat \
+  /path/to/model.gguf "Explain on-device inference"
+
+open .build/artifacts/swift/examples/SippSandbox.app
+
+xcrun simctl list devices available
+sipp run examples ios --simulator <simulator-udid> \
+  --model /path/to/model.gguf
+```
+
+See the [Swift package guide](docs/en/packages/swift.md) and
+[Swift examples](examples/swift/README.md) for sandbox entitlements, supported
+operations, and device builds.
 
 ---
 
@@ -218,15 +303,17 @@ Sipp includes native integration blueprints to handle Server-Sent Events (SSE) s
   
 ## Documentation
 
-The full documentation lives in [docs/en](docs/en/README.md). From a source checkout, use the `sipp docs` CLI tool utility to build or serve the book resource:
+The full documentation lives in [docs/en](docs/en/README.md). From a source
+checkout, use the repo launcher to build or serve the book:
 
 ```bash
 sipp docs build
 sipp docs serve
-
 ```
 
-`sipp docs` automatically evaluates and installs required mdBook tooling when missing and configures the Mermaid compilation assets used by the technical book layout.
+`sipp docs` installs required mdBook tooling when missing and configures the
+Mermaid assets used by the technical book. Without the launcher, use
+`cargo xtask docs build` or `cargo xtask docs serve`.
 
 ---
 
@@ -240,28 +327,41 @@ For a detailed structural breakdown of milestones, memory architectures, and lon
 
 ## Maintainers & Contributors
 
-To bootstrap the workspace workspace environment, initialize cross-platform profiles, and run structural unit assertions, utilize the integrated CLI environment scripts:
+To bootstrap the workspace, initialize a cross-platform profile, and inspect
+the available test suites:
 
 ```bash
 source ./setup.sh
 sipp doctor
 sipp test list
-
 ```
 
 *(On Windows platforms, execute `.\setup.ps1` inside PowerShell or `setup.cmd` via classic CMD if not using Git Bash or WSL).*
 
-### Common Architecture Compilation Tasks:
+The setup scripts install `sipp` as a repo-local alias for `cargo xtask`. If
+the launcher is not active, replace `sipp` with `cargo xtask` in any command
+below.
+
+### Common Build and Run Tasks
 
 ```bash
-sipp build wasm && sipp run examples serve browser
-sipp build node --backend cpu && node examples/node/query.mjs <model.gguf> "Explain Sipp."
-sipp build python --backend cpu && python examples/python/query.py <model.gguf> "Explain Sipp."
-sipp run demos serve chat
+sipp build wasm
+sipp run examples serve browser
 
+sipp build node --backend cpu
+node examples/node/query.mjs <model.gguf> "Explain Sipp."
+
+sipp build python --backend cpu
+python examples/python/query.py <model.gguf> "Explain Sipp."
+
+sipp build swift   # macOS with Xcode only
+
+sipp run demos serve chat
 ```
 
-For thorough verification steps, consult the [Source Builds Documentation](docs%2Fmaintainers%2Fsource-builds.md) and our full [Testing Framework Suite](docs%2Ftesting.md).
+For thorough verification steps, consult the
+[Source Builds Documentation](docs/en/maintainers/source-builds.md) and the
+[Testing Framework Suite](docs/en/testing.md).
 
 ---
 
@@ -269,7 +369,8 @@ For thorough verification steps, consult the [Source Builds Documentation](docs%
 
 * [crates](crates%2FREADME.md): The published core `sipp-rs` and low-level backend `sipp-sys` Rust crates.
 * [lib](lib%2Fgateway%2FREADME.md): High-level language package surfaces and gateway proxy toolkit.
-* [bindings](bindings%2FREADME.md): Native Node.js bindings, Python extensions, and browser-compiled WASM targets.
+* [bindings](bindings%2FREADME.md): Native Node.js bindings, Python
+  extensions, Swift UniFFI bindings, and browser-compiled WASM targets.
 * [apps](apps%2FREADME.md): First-party user interfaces and monitoring implementations.
 * [examples](examples%2FREADME.md): Small, runable framework integration blueprints.
 * [demos](demos%2FREADME.md): Advanced browser sandboxes running on public package surfaces.
