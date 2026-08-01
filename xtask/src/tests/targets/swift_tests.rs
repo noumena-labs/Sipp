@@ -1,7 +1,7 @@
 //! Tests the `targets::swift` module in `xtask`.
 //!
-//! Covers deterministic generation, source staging, architecture, ABI,
-//! linkage, path construction, and platform gates without Apple toolchains.
+//! Covers source staging, architecture, ABI, linkage, path construction, and
+//! platform gates without Apple toolchains.
 
 use std::collections::BTreeSet;
 
@@ -9,11 +9,12 @@ use crate::test_support::TempDir;
 use crate::utils::BuildContext;
 
 use super::{
-    copy_dir_recursive, declared_ffi_symbols, ensure_macos_host, ensure_swift_sources,
-    exported_ffi_symbols, validate_architecture_list, validate_dynamic_linkage_output,
-    validate_ffi_symbol_sets, validate_identical_directories, validate_nm_diagnostics,
-    validate_sandbox_entitlements, AppleSlice, SliceBackend, IOS_ARM64, IOS_SIMULATOR_ARM64,
-    IOS_SIMULATOR_X86_64, MACOS_ARM64, MACOS_X86_64,
+    copy_dir_recursive, declared_ffi_symbols, ensure_macos_host, ensure_swift_example_sources,
+    ensure_swift_sources, exported_ffi_symbols, macos_slice_for_architecture,
+    validate_architecture_list, validate_dynamic_linkage_output, validate_ffi_symbol_sets,
+    validate_nm_diagnostics, validate_sandbox_entitlements, AppleSlice, SliceBackend, IOS_ARM64,
+    IOS_SIMULATOR_ARM64, IOS_SIMULATOR_X86_64, MACOS_ARM64, MACOS_X86_64,
+    SWIFT_PACKAGE_DESTINATIONS,
 };
 
 #[test]
@@ -79,7 +80,7 @@ fn recursive_copy_preserves_package_tree() {
 }
 
 #[test]
-fn source_validation_requires_binding_package_examples_and_submodule() {
+fn source_validation_requires_binding_package_and_submodule() {
     let temp = TempDir::new("target-swift-inputs");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
 
@@ -91,8 +92,19 @@ fn source_validation_requires_binding_package_examples_and_submodule() {
     temp.write("bindings/swift/uniffi-bindgen.toml", "");
     temp.write("lib/swift/Package.swift", "");
     temp.write("lib/swift/Support/module.modulemap", "");
-    temp.write("lib/swift/Consumer/Package.swift", "");
-    temp.write("lib/swift/Consumer/Sources/SippConsumer/Consumer.swift", "");
+    temp.write("crates/sys/llama.cpp/include/llama.h", "");
+
+    ensure_swift_sources(&ctx).unwrap();
+}
+
+#[test]
+fn example_source_validation_is_separate_from_distribution_inputs() {
+    let temp = TempDir::new("target-swift-example-inputs");
+    let ctx = BuildContext::from_workspace_root_for_test(temp.path());
+
+    let error = ensure_swift_example_sources(&ctx).unwrap_err();
+    assert!(error.to_string().contains("example"));
+
     temp.write("examples/swift/README.md", "");
     temp.write("examples/swift/cli/Package.swift", "");
     temp.write("examples/swift/cli/Sources/SippCLI/SippCLI.swift", "");
@@ -114,9 +126,8 @@ fn source_validation_requires_binding_package_examples_and_submodule() {
     temp.write("examples/swift/ios/SippIOS.xcodeproj/project.pbxproj", "");
     temp.write("examples/swift/ios/SippIOSApp.swift", "");
     temp.write("examples/swift/ios/Info.plist", "");
-    temp.write("crates/sys/llama.cpp/include/llama.h", "");
 
-    ensure_swift_sources(&ctx).unwrap();
+    ensure_swift_example_sources(&ctx).unwrap();
 }
 
 #[test]
@@ -130,24 +141,35 @@ fn host_gate_matches_the_current_operating_system() {
 }
 
 #[test]
-fn deterministic_generation_requires_identical_paths_and_bytes() {
-    let temp = TempDir::new("target-swift-determinism");
-    let first = temp.create_dir("first");
-    let second = temp.create_dir("second");
-    temp.write("first/SippCoreBindings.swift", "generated\n");
-    temp.write("second/SippCoreBindings.swift", "generated\n");
-
-    validate_identical_directories(&first, &second).unwrap();
-
-    temp.write("second/SippCoreBindings.swift", "changed\n");
-    assert!(validate_identical_directories(&first, &second).is_err());
-}
-
-#[test]
 fn architecture_validation_requires_the_exact_slice_set() {
     validate_architecture_list("x86_64 arm64\n", &["arm64", "x86_64"]).unwrap();
     assert!(validate_architecture_list("arm64\n", &["arm64", "x86_64"]).is_err());
     assert!(validate_architecture_list("arm64 x86_64 i386\n", &["arm64", "x86_64"]).is_err());
+}
+
+#[test]
+fn host_architecture_selects_one_macos_slice() {
+    assert_eq!(
+        macos_slice_for_architecture("aarch64").unwrap(),
+        MACOS_ARM64
+    );
+    assert_eq!(
+        macos_slice_for_architecture("x86_64").unwrap(),
+        MACOS_X86_64
+    );
+    assert!(macos_slice_for_architecture("powerpc").is_err());
+}
+
+#[test]
+fn distribution_validates_each_supported_platform_family() {
+    assert_eq!(
+        SWIFT_PACKAGE_DESTINATIONS,
+        [
+            ("macos", "generic/platform=macOS"),
+            ("ios", "generic/platform=iOS"),
+            ("ios-simulator", "generic/platform=iOS Simulator"),
+        ]
+    );
 }
 
 #[test]

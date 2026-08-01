@@ -37,11 +37,14 @@ cargo xtask build wasm
 ```
 
 ### 5. Swift Package
-Builds the macOS and iOS XCFramework, tests the staged Swift package, builds the
-Swift examples, and assembles the signed sandbox app. This target requires
-macOS, Xcode, the Apple Rust targets, and initialized submodules.
+Builds the macOS and iOS XCFramework, validates the staged package for macOS,
+iOS, and iOS Simulator, and creates the distribution archive and checksum. Use
+`--examples` only when local CLI, SwiftUI, and iOS example artifacts are also
+needed. This target requires macOS, Xcode, the Apple Rust targets, and
+initialized submodules.
 ```bash
 cargo xtask build swift
+cargo xtask build swift --examples
 ```
 The backend is fixed per platform slice; the command has no backend selector.
 

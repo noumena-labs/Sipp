@@ -40,28 +40,36 @@ Use `--backend vulkan`, `--backend cuda`, `--backend metal`, or
 The Swift target requires macOS and Xcode. It produces one XCFramework for
 macOS and iOS. macOS arm64 and iOS device arm64 use Metal; macOS x86_64 and
 iOS Simulator arm64/x86_64 use CPU. The backend is fixed per slice, with no
-build selector or runtime fallback. The build also creates the macOS
-command-line example and the ad-hoc-signed sandboxed SwiftUI app under
-`.build/artifacts/swift`.
+build selector or runtime fallback. The build validates the staged package for
+macOS, iOS, and iOS Simulator, then creates the distribution archive and
+checksum. Add `--examples` only when local CLI, SwiftUI, and iOS example
+artifacts are needed.
 
-## Swift Distribution Boundary
+## Swift Distribution
 
-The local staged package contains generated UniFFI Swift source and a local
-binary-target path. Those generated sources are intentionally absent from this
-repository, so a Sipp monorepo tag is not itself a consumable SwiftPM package.
+[`noumena-labs/Sipp-Swift`](https://github.com/noumena-labs/Sipp-Swift) is the
+CI-generated Swift Package Manager distribution for Sipp. It is a delivery
+repository, not a second development repository, and its generated package
+files must not be edited manually.
 
-Publish the staged package through a dedicated Swift distribution repository.
-That repository owns one explicit `Package.swift` whose binary target uses the
-versioned GitHub release URL and checksum produced by `sipp build swift`. Copy
-the staged public and generated sources into the distribution repository,
-replace the local binary target with that remote declaration, test a clean
-consumer, and tag the distribution commit with the same version.
+Sipp is the only source of truth. Swift sources and tests live under
+`lib/swift`, Rust and UniFFI binding sources live under `bindings/swift`, and
+`xtask` owns XCFramework assembly and package validation. The main CI workflow
+builds only the current macOS host slice needed to run the Swift unit tests.
+Dev and stable release workflows build every macOS, iOS device, and iOS
+Simulator slice required by consumers; validate the staged package on all three
+platform families; record the exact source revision; and push the generated
+snapshot to `Sipp-Swift`.
 
-Do not commit a placeholder checksum, read release metadata from environment
-variables in `Package.swift`, or add an alternate local/remote target branch.
-The manifest must contain the exact URL and checksum for one published archive.
-Creating and publishing the external distribution repository is a release
-operation and is not performed by xtask.
+Sipp tags are the sole version authority. A dev version such as `0.1.4-dev1`
+produces the Swift tag `0.1.4-dev1`, while a stable version such as `0.1.4`
+produces `0.1.4`. Existing Swift tags are checked only to make retries
+idempotent and prevent replacement of an immutable release.
+
+The XCFramework archive is stored as a GitHub release asset rather than
+committed to Git. The generated `Package.swift` points its binary target to the
+versioned archive and checksum, allowing consumers to use Sipp as a normal
+SwiftPM dependency.
 
 CUDA builds compile a portable cloud GPU architecture list by default. Set
 `SIPP_CUDA_ARCHITECTURES` (semicolon-separated CMake entries, for example

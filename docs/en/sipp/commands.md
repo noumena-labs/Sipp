@@ -39,9 +39,10 @@ does not build every backend variant for every package.
 `build swift` runs on macOS and creates one `SippCore.xcframework` for macOS
 and iOS. Its macOS arm64 and iOS device arm64 slices use Metal; its macOS
 x86_64 and iOS Simulator arm64/x86_64 slices use CPU. There is no Swift backend
-option or runtime fallback. The command stages the local package, runs its
-tests, builds the macOS examples, and assembles an ad-hoc-signed SwiftUI app
-under `.build/artifacts/swift`.
+option or runtime fallback. The command stages the local package, validates it
+for macOS, iOS, and iOS Simulator, and creates the distribution archive and
+checksum under `.build/artifacts/swift`. Add `--examples` to build the local
+CLI, SwiftUI, and iOS examples as well.
 
 Backend values:
 

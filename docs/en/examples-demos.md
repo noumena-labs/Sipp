@@ -19,7 +19,7 @@ Start with:
 ```bash
 cargo xtask run examples gateway rust --case query
 cargo xtask run examples serve browser
-cargo xtask build swift
+cargo xtask build swift --examples
 cargo xtask run examples ios --simulator SIMULATOR-UDID
 ```
 

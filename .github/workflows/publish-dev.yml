@@ -14,8 +14,9 @@ on:
           - node-npm
           - python
           - rust
+          - swift
       dry_run:
-        description: Build and dry-run publish without publishing npm packages
+        description: Build and dry-run publish without publishing packages
         required: false
         default: true
         type: boolean
@@ -80,7 +81,8 @@ jobs:
               true
           )"
           dev_versions="$(
-            REMOTE_RELEASE_TAGS="$remote_release_tags" REMOTE_DEV_TAGS="$remote_dev_tags" \
+            REMOTE_RELEASE_TAGS="$remote_release_tags" \
+              REMOTE_DEV_TAGS="$remote_dev_tags" \
               node .github/scripts/release-versions.mjs select-dev
           )"
           IFS='|' read -r NPM_VERSION PYTHON_VERSION DEV_TAG LATEST_RELEASE_TAG LATEST_DEV_TAG <<< "$dev_versions"
@@ -521,6 +523,28 @@ jobs:
           path: .build/artifacts/rust/*.tar.gz
           retention-days: 7
 
+  swift:
+    name: Build and publish Swift package
+    needs:
+      - gate
+      - prepare-dev
+    if: ${{ inputs.package == 'all' || inputs.package == 'swift' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/swift-distribution.yml
+    with:
+      artifact_name: sipp-swift-dev
+      build: true
+      publish: ${{ inputs.dry_run == false }}
+      prerelease: true
+      python_version: ${{ needs.prepare-dev.outputs.python_version }}
+      source_revision: ${{ github.sha }}
+      swift_distribution_app_client_id: ${{ vars.SWIFT_DISTRIBUTION_APP_CLIENT_ID }}
+      version: ${{ needs.prepare-dev.outputs.version }}
+    secrets:
+      swift_distribution_app_private_key: ${{ secrets.SWIFT_DISTRIBUTION_APP_PRIVATE_KEY }}
+
   tag-dev:
     name: Tag dev build
     runs-on: ubuntu-24.04
@@ -531,6 +555,7 @@ jobs:
       - native
       - node-npm
       - rust-source
+      - swift
     if: >-
       ${{
         always() &&
@@ -542,7 +567,8 @@ jobs:
             needs.web-npm.result == 'success' &&
             needs.native.result == 'success' &&
             needs.node-npm.result == 'success' &&
-            needs.rust-source.result == 'success'
+            needs.rust-source.result == 'success' &&
+            needs.swift.result == 'success'
           ) ||
           (
             inputs.package == 'web-npm' &&
@@ -561,6 +587,10 @@ jobs:
             inputs.package == 'rust' &&
             needs.native.result == 'success' &&
             needs.rust-source.result == 'success'
+          ) ||
+          (
+            inputs.package == 'swift' &&
+            needs.swift.result == 'success'
           )
         )
       }}

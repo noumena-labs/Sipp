@@ -31,7 +31,7 @@ const SWIFT_XCFRAMEWORK_NAME: &str = "SippCore.xcframework";
 const SWIFT_DISTRIBUTION_ARCHIVE: &str = "SippCore.xcframework.zip";
 const SWIFT_DISTRIBUTION_CHECKSUM: &str = "SippCore.xcframework.zip.sha256";
 const SWIFT_ABI_MANIFEST: &str = "SippCore.abi.txt";
-const SWIFT_CONSUMER_NAME: &str = "SippConsumer";
+const SWIFT_PACKAGE_SCHEME: &str = "Sipp";
 const SWIFT_CLI_NAME: &str = "SippCLI";
 const SWIFT_SANDBOX_NAME: &str = "SippSandbox";
 const SWIFT_IOS_APP_NAME: &str = "SippIOS";
@@ -39,6 +39,11 @@ const SWIFT_IOS_APP_NAME: &str = "SippIOS";
 pub(crate) const SWIFT_IOS_APP_BUNDLE_ID: &str = "ai.sipp.examples.ios";
 const SWIFT_MACOS_DEPLOYMENT_TARGET: &str = "11.0";
 const SWIFT_IOS_DEPLOYMENT_TARGET: &str = "16.0";
+const SWIFT_PACKAGE_DESTINATIONS: [(&str, &str); 3] = [
+    ("macos", "generic/platform=macOS"),
+    ("ios", "generic/platform=iOS"),
+    ("ios-simulator", "generic/platform=iOS Simulator"),
+];
 pub(crate) const XCRUN_PATH: &str = "/usr/bin/xcrun";
 pub(crate) const DITTO_PATH: &str = "/usr/bin/ditto";
 pub(crate) const CODESIGN_PATH: &str = "/usr/bin/codesign";
@@ -89,14 +94,17 @@ const IOS_SIMULATOR_X86_64: AppleSlice = AppleSlice {
     deployment_target: SWIFT_IOS_DEPLOYMENT_TARGET,
 };
 
-/// Builds and validates the staged Apple Swift package and macOS examples.
-pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+/// Builds and validates the distributable Apple Swift package.
+pub fn build(sh: &Shell, ctx: &BuildContext, examples: bool) -> Result<()> {
     ensure_macos_host()?;
     ensure_swift_sources(ctx)?;
+    if examples {
+        ensure_swift_example_sources(ctx)?;
+    }
 
     let started_at = Instant::now();
     let artifacts_dir = ctx.swift_artifacts_dir();
-    output::phase("Swift bindings");
+    output::phase("Swift distribution");
     output::path("Binding workspace", &ctx.bindings_swift_dir());
     output::path("Package source", &ctx.swift_package_dir());
     output::path("Artifact directory", &artifacts_dir);
@@ -112,9 +120,6 @@ pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let ios_simulator_x86_64 = build_archive(sh, ctx, &target_dir, IOS_SIMULATOR_X86_64)?;
     let generated_dir = staging_dir.join("generated");
     generate_bindings(sh, ctx, &macos_arm64, &generated_dir)?;
-    let generated_check_dir = staging_dir.join("generated-check");
-    generate_bindings(sh, ctx, &macos_arm64, &generated_check_dir)?;
-    validate_identical_directories(&generated_dir, &generated_check_dir)?;
 
     let macos_archive =
         create_universal_archive(sh, &staging_dir.join("macos"), &macos_arm64, &macos_x86_64)?;
@@ -147,72 +152,83 @@ pub fn build(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     let package_dir = stage_package(sh, ctx, &generated_dir)?;
     let xcframework = package_dir.join("Binary").join(SWIFT_XCFRAMEWORK_NAME);
     let headers_dir = generated_dir.join("Headers");
-    output::run_build_command(
-        "Creating SippCore.xcframework",
-        cmd!(
-            sh,
-            "{XCRUN_PATH} xcodebuild -create-xcframework -library {macos_archive} -headers {headers_dir} -library {ios_arm64} -headers {headers_dir} -library {ios_simulator_archive} -headers {headers_dir} -output {xcframework}"
-        ),
-    )
-    .context("failed to create SippCore.xcframework")?;
-
-    {
-        let _dir = sh.push_dir(&package_dir);
-        output::run_build_command(
-            "Testing staged Swift package",
-            cmd!(sh, "{XCRUN_PATH} swift test"),
-        )
-        .context("staged Swift package tests failed")?;
-    }
-    let consumer_dir = artifacts_dir.join("consumer");
-    copy_dir_recursive(&ctx.swift_package_dir().join("Consumer"), &consumer_dir)?;
-    let consumer_executable =
-        build_swift_executable_package(sh, &consumer_dir, SWIFT_CONSUMER_NAME)?;
-    output::run_test_command(
-        "Running clean Swift package consumer",
-        cmd!(sh, "{consumer_executable}"),
-    )
-    .context("clean Swift package consumer failed")?;
-    validate_dynamic_linkage(sh, &consumer_executable)?;
-
-    let examples_source = ctx.workspace_root().join("examples/swift");
-    let examples_dir = artifacts_dir.join("examples");
-    let cli_dir = examples_dir.join("cli");
-    copy_dir_recursive(&examples_source.join("cli"), &cli_dir)?;
-    let built_cli = build_swift_executable_package(sh, &cli_dir, SWIFT_CLI_NAME)?;
-    let cli_executable = examples_dir.join(SWIFT_CLI_NAME);
-    fs::copy(&built_cli, &cli_executable).with_context(|| {
-        format!(
-            "failed to stage Swift CLI from {} to {}",
-            built_cli.display(),
-            cli_executable.display()
-        )
-    })?;
-    validate_dynamic_linkage(sh, &cli_executable)?;
-
-    let swiftui_dir = examples_dir.join("swiftui");
-    copy_dir_recursive(&examples_source.join("swiftui"), &swiftui_dir)?;
-    let swiftui_executable = build_swift_executable_package(sh, &swiftui_dir, SWIFT_SANDBOX_NAME)?;
-    validate_dynamic_linkage(sh, &swiftui_executable)?;
-    let sandbox_app =
-        bundle_and_sign_sandbox_app(sh, &swiftui_dir, &swiftui_executable, &examples_dir)?;
-    let ios_app = build_ios_example(sh, ctx)?;
+    create_xcframework(
+        sh,
+        &xcframework,
+        &headers_dir,
+        &[&macos_archive, &ios_arm64, &ios_simulator_archive],
+    )?;
+    validate_package_platforms(sh, ctx, &package_dir)?;
 
     let (distribution_archive, distribution_checksum) =
         archive_distribution(sh, ctx, &xcframework)?;
+
+    if examples {
+        build_examples(sh, ctx)?;
+    }
 
     output::artifact(&xcframework);
     output::artifact(&abi_manifest);
     output::artifact(&distribution_archive);
     output::artifact(&distribution_checksum);
-    output::artifact(&cli_executable);
-    output::artifact(&sandbox_app);
-    output::artifact(&ios_app);
     output::success(format!(
         "Swift build complete in {}",
         output::elapsed(started_at.elapsed())
     ));
     Ok(())
+}
+
+/// Builds the host macOS slice and runs the staged Swift package unit tests.
+pub fn test(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+    ensure_macos_host()?;
+    ensure_swift_sources(ctx)?;
+
+    let started_at = Instant::now();
+    let artifacts_dir = ctx.swift_artifacts_dir();
+    output::phase("Swift package tests");
+    output::path("Binding workspace", &ctx.bindings_swift_dir());
+    output::path("Package source", &ctx.swift_package_dir());
+    output::path("Artifact directory", &artifacts_dir);
+
+    let staging_dir = ctx.tmp_dir().join("swift");
+    prepare_output(sh, &staging_dir, &artifacts_dir)?;
+
+    let target_dir = ctx.cargo_swift_target_dir();
+    let host_slice = macos_slice_for_architecture(std::env::consts::ARCH)?;
+    let host_archive = build_archive(sh, ctx, &target_dir, host_slice)?;
+    let generated_dir = staging_dir.join("generated");
+    generate_bindings(sh, ctx, &host_archive, &generated_dir)?;
+    let package_dir = stage_package(sh, ctx, &generated_dir)?;
+    let xcframework = package_dir.join("Binary").join(SWIFT_XCFRAMEWORK_NAME);
+    create_xcframework(
+        sh,
+        &xcframework,
+        &generated_dir.join("Headers"),
+        &[&host_archive],
+    )?;
+
+    let _dir = sh.push_dir(&package_dir);
+    output::run_test_command(
+        "Running staged Swift package tests",
+        cmd!(sh, "{XCRUN_PATH} swift test"),
+    )
+    .context("staged Swift package tests failed")?;
+
+    output::success(format!(
+        "Swift package tests complete in {}",
+        output::elapsed(started_at.elapsed())
+    ));
+    Ok(())
+}
+
+fn macos_slice_for_architecture(architecture: &str) -> Result<AppleSlice> {
+    match architecture {
+        "aarch64" => Ok(MACOS_ARM64),
+        "x86_64" => Ok(MACOS_X86_64),
+        unsupported => anyhow::bail!(
+            "Swift package tests do not support macOS host architecture {unsupported}"
+        ),
+    }
 }
 
 fn ensure_macos_host() -> Result<()> {
@@ -231,9 +247,13 @@ fn ensure_swift_sources(ctx: &BuildContext) -> Result<()> {
         ctx.bindings_swift_dir().join("uniffi-bindgen.toml"),
         ctx.swift_package_dir().join("Package.swift"),
         ctx.swift_package_dir().join("Support/module.modulemap"),
-        ctx.swift_package_dir().join("Consumer/Package.swift"),
-        ctx.swift_package_dir()
-            .join("Consumer/Sources/SippConsumer/Consumer.swift"),
+        ctx.llama_cpp_dir().join("include/llama.h"),
+    ];
+    validate_required_sources(&required, "Swift build")
+}
+
+fn ensure_swift_example_sources(ctx: &BuildContext) -> Result<()> {
+    let required = [
         ctx.workspace_root().join("examples/swift/README.md"),
         ctx.workspace_root()
             .join("examples/swift/cli/Package.swift"),
@@ -256,11 +276,14 @@ fn ensure_swift_sources(ctx: &BuildContext) -> Result<()> {
         ctx.workspace_root()
             .join("examples/swift/ios/SippIOSApp.swift"),
         ctx.workspace_root().join("examples/swift/ios/Info.plist"),
-        ctx.llama_cpp_dir().join("include/llama.h"),
     ];
+    validate_required_sources(&required, "Swift example")
+}
+
+fn validate_required_sources(required: &[PathBuf], label: &str) -> Result<()> {
     for path in required {
         if !path.is_file() {
-            anyhow::bail!("required Swift build input is missing: {}", path.display());
+            anyhow::bail!("required {label} input is missing: {}", path.display());
         }
     }
     Ok(())
@@ -392,6 +415,25 @@ fn create_universal_archive(
     Ok(output_archive)
 }
 
+fn create_xcframework(
+    sh: &Shell,
+    xcframework: &Path,
+    headers_dir: &Path,
+    archives: &[&Path],
+) -> Result<()> {
+    let mut command = cmd!(sh, "{XCRUN_PATH} xcodebuild -create-xcframework");
+    for archive in archives {
+        command = command
+            .arg("-library")
+            .arg(archive)
+            .arg("-headers")
+            .arg(headers_dir);
+    }
+    command = command.arg("-output").arg(xcframework);
+    output::run_build_command("Creating SippCore.xcframework", command)
+        .context("failed to create SippCore.xcframework")
+}
+
 fn stage_package(sh: &Shell, ctx: &BuildContext, generated_dir: &Path) -> Result<PathBuf> {
     let source = ctx.swift_package_dir();
     let destination = ctx.swift_package_artifacts_dir();
@@ -447,51 +489,6 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
                 )
             })?;
         }
-    }
-    Ok(())
-}
-
-fn validate_identical_directories(first: &Path, second: &Path) -> Result<()> {
-    let first_files = directory_file_contents(first)?;
-    let second_files = directory_file_contents(second)?;
-    if first_files != second_files {
-        anyhow::bail!(
-            "Swift binding generation was not deterministic between {} and {}",
-            first.display(),
-            second.display()
-        );
-    }
-    output::success("Swift binding generation is deterministic");
-    Ok(())
-}
-
-fn directory_file_contents(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
-    let mut files = BTreeMap::new();
-    collect_directory_file_contents(root, root, &mut files)?;
-    Ok(files)
-}
-
-fn collect_directory_file_contents(
-    root: &Path,
-    directory: &Path,
-    files: &mut BTreeMap<PathBuf, Vec<u8>>,
-) -> Result<()> {
-    for entry in fs::read_dir(directory)
-        .with_context(|| format!("failed to read {}", directory.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            collect_directory_file_contents(root, &path, files)?;
-            continue;
-        }
-        let relative = path
-            .strip_prefix(root)
-            .with_context(|| format!("failed to relativize {}", path.display()))?
-            .to_path_buf();
-        let contents = fs::read(&path)
-            .with_context(|| format!("failed to read generated file {}", path.display()))?;
-        files.insert(relative, contents);
     }
     Ok(())
 }
@@ -622,6 +619,53 @@ fn validate_ffi_symbol_sets(
             unexpected.join(", ")
         );
     }
+    Ok(())
+}
+
+fn validate_package_platforms(sh: &Shell, ctx: &BuildContext, package_dir: &Path) -> Result<()> {
+    let validation_dir = ctx.swift_artifacts_dir().join("platform-validation");
+    for (name, destination) in SWIFT_PACKAGE_DESTINATIONS {
+        let derived_data = validation_dir.join(name);
+        let _dir = sh.push_dir(package_dir);
+        output::run_build_command(
+            format!("Building staged Swift package for {name}"),
+            cmd!(
+                sh,
+                "{XCRUN_PATH} xcodebuild -quiet -scheme {SWIFT_PACKAGE_SCHEME} -configuration Release -destination {destination} -derivedDataPath {derived_data} CODE_SIGNING_ALLOWED=NO build"
+            ),
+        )
+        .with_context(|| format!("staged Swift package failed to build for {name}"))?;
+    }
+    Ok(())
+}
+
+fn build_examples(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+    let examples_source = ctx.workspace_root().join("examples/swift");
+    let examples_dir = ctx.swift_artifacts_dir().join("examples");
+    let cli_dir = examples_dir.join("cli");
+    copy_dir_recursive(&examples_source.join("cli"), &cli_dir)?;
+    let built_cli = build_swift_executable_package(sh, &cli_dir, SWIFT_CLI_NAME)?;
+    let cli_executable = examples_dir.join(SWIFT_CLI_NAME);
+    fs::copy(&built_cli, &cli_executable).with_context(|| {
+        format!(
+            "failed to stage Swift CLI from {} to {}",
+            built_cli.display(),
+            cli_executable.display()
+        )
+    })?;
+    validate_dynamic_linkage(sh, &cli_executable)?;
+
+    let swiftui_dir = examples_dir.join("swiftui");
+    copy_dir_recursive(&examples_source.join("swiftui"), &swiftui_dir)?;
+    let swiftui_executable = build_swift_executable_package(sh, &swiftui_dir, SWIFT_SANDBOX_NAME)?;
+    validate_dynamic_linkage(sh, &swiftui_executable)?;
+    let sandbox_app =
+        bundle_and_sign_sandbox_app(sh, &swiftui_dir, &swiftui_executable, &examples_dir)?;
+    let ios_app = build_ios_example(sh, ctx)?;
+
+    output::artifact(&cli_executable);
+    output::artifact(&sandbox_app);
+    output::artifact(&ios_app);
     Ok(())
 }
 

@@ -5,11 +5,11 @@
 
 use xtask::cli::{
     Backend, BackendArgs, BuildCommands, CleanArgs, Commands, RunCommands, RunGatewayServerArgs,
-    RunGatewayServerCommand, RunGatewayServerSourceArgs, TestCommands, TestGroupFilter,
-    TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeCaseArgs, TestSmokeCommands,
-    TestSmokeModelArgs, TestSmokePlaygroundBrowserArgs, TestSmokeSuiteArgs, TestSmokeSuiteTarget,
-    TestUnitArgs, TestUnitCommands, TestUnitGroupArgs, TestUnitGroupTarget, TestVerifyArgs,
-    TestVerifyTarget, WasmBuildArgs, WasmRuntime, WasmThreading,
+    RunGatewayServerCommand, RunGatewayServerSourceArgs, SwiftBuildArgs, TestCommands,
+    TestGroupFilter, TestListArgs, TestListFormat, TestSmokeArgs, TestSmokeCaseArgs,
+    TestSmokeCommands, TestSmokeModelArgs, TestSmokePlaygroundBrowserArgs, TestSmokeSuiteArgs,
+    TestSmokeSuiteTarget, TestUnitArgs, TestUnitCommands, TestUnitGroupArgs, TestUnitGroupTarget,
+    TestVerifyArgs, TestVerifyTarget, WasmBuildArgs, WasmRuntime, WasmThreading,
 };
 
 use super::{
@@ -89,8 +89,12 @@ fn build_summary_labels_backend_defaults_and_explicit_backends() {
         "Build Node.js bindings (cpu)"
     );
     assert_eq!(
-        build_summary(&BuildCommands::Swift),
+        build_summary(&BuildCommands::Swift(Default::default())),
         "Build Apple Swift package"
+    );
+    assert_eq!(
+        build_summary(&BuildCommands::Swift(SwiftBuildArgs { examples: true })),
+        "Build Apple Swift package and examples"
     );
     assert_eq!(
         build_summary(&BuildCommands::Wasm(WasmBuildArgs {

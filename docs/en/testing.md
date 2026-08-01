@@ -59,7 +59,7 @@ Unit suite names expose suite-specific options, such as
 | `cargo xtask test unit suite cli` | CLI black-box integration tests | `apps/cli/tests` |
 | `cargo xtask test unit suite node-package` | Deterministic Node package API tests | `lib/node`, `bindings/node` |
 | `cargo xtask test unit suite python-package` | Deterministic Python package API tests | `lib/python`, `bindings/python` |
-| `cargo xtask test unit suite swift-package` | Swift package, examples, XCFramework, ABI, linkage, signing, and distribution checks | `lib/swift`, `bindings/swift`, `examples/swift` |
+| `cargo xtask test unit suite swift-package` | Host macOS slice and staged Swift package unit tests | `lib/swift`, `bindings/swift` |
 
 ## Unit Groups
 
@@ -75,8 +75,9 @@ bundled browser package. Release package builds use `cargo xtask build wasm`,
 which stages the pthread WebGPU+JSPI and pthread CPU non-JSPI artifacts.
 
 The `swift-package` suite is macOS-only and deliberately fails its host gate on
-other platforms. It runs the complete staged-package and artifact-validation
-pipeline rather than substituting host-free checks for Apple toolchain work.
+other platforms. It builds only the current macOS host slice needed to stage
+the package and run `swift test`. Multi-platform XCFramework and distribution
+validation belongs to `cargo xtask build swift` in dev and release workflows.
 
 `test smoke` owns holistic integration checks. It is split into explicit
 namespaces:

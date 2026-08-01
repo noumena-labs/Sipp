@@ -102,12 +102,8 @@ const NODE_PACKAGE_SOURCE_ROOTS: &[&str] = &[
     "lib/node/router.d.ts",
 ];
 const PYTHON_PACKAGE_SOURCE_ROOTS: &[&str] = &["lib/python/python/sipp", "lib/python/backends"];
-const SWIFT_PACKAGE_SOURCE_ROOTS: &[&str] = &[
-    "bindings/swift",
-    "examples/swift",
-    "lib/swift",
-    "tools/uniffi-bindgen-swift",
-];
+const SWIFT_PACKAGE_SOURCE_ROOTS: &[&str] =
+    &["bindings/swift", "lib/swift", "tools/uniffi-bindgen-swift"];
 const CLI_SMOKE_SOURCE_ROOTS: &[&str] = &["apps/cli/src"];
 const RUST_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/rust/src"];
 const NODE_SMOKE_SOURCE_ROOTS: &[&str] = &["examples/node", "lib/node"];
@@ -251,8 +247,8 @@ const TEST_SUITES: &[TestSuite] = &[
         id: TestSuiteId::SwiftPackage,
         group: TestGroup::Unit,
         layer: Some(TestUnitLayer::Interface),
-        description: "Apple Swift package, macOS examples, and artifact tests",
-        requirements: "macOS, Xcode, cargo, Rust Apple targets",
+        description: "Apple Swift package unit tests",
+        requirements: "macOS, Xcode, cargo, Rust host target",
         source_roots: SWIFT_PACKAGE_SOURCE_ROOTS,
         coverage: false,
         backend_policy: BackendPolicy::None,
@@ -567,7 +563,7 @@ fn run_suite(
         SuiteRunner::PythonPackage => {
             run_python_package_tests(sh, ctx, &options.backend, options.coverage)
         }
-        SuiteRunner::SwiftPackage => targets::swift::build(sh, ctx),
+        SuiteRunner::SwiftPackage => targets::swift::test(sh, ctx),
         SuiteRunner::CliSmoke => run_cli_model_smoke(sh, ctx, options),
         SuiteRunner::RustSmoke => run_rust_model_smoke(sh, ctx, options),
         SuiteRunner::NodeSmoke => run_node_model_smoke(sh, ctx, options),

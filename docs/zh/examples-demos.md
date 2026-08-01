@@ -7,6 +7,7 @@
 - `examples/rust`：Rust 的 query、chat、embed、视觉、网关及服务商示例。
 - `examples/node`：Node.js 的 query、chat、embed、视觉及网关示例。
 - `examples/python`：Python 的 query、chat、embed、视觉及网关示例。
+- `examples/swift`：macOS 命令行、macOS SwiftUI 和 iOS SwiftUI 客户端。
 - `examples/web`：用于验证本地和网关工作流的 Vite 浏览器页面。
 - `examples/gateway`：极简的 Axum 网关路由配置。
 
@@ -15,6 +16,8 @@
 ```bash
 cargo xtask run examples gateway rust --case query
 cargo xtask run examples serve browser
+cargo xtask build swift --examples
+cargo xtask run examples ios --simulator SIMULATOR-UDID
 ```
 
 ## 演示

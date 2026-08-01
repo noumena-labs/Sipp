@@ -67,7 +67,7 @@ function selectDevVersion({
   const baseVersion =
     latestRelease == null
       ? sourceBaseVersion
-      : `${latestRelease.major}.${latestRelease.minor}.${latestRelease.patch}`;
+      : `${latestRelease.major}.${latestRelease.minor}.${latestRelease.patch + 1}`;
   requireStableVersion(baseVersion, 'Dev base version');
 
   const tagScope = packageName === 'all' ? '' : `-${packageName}`;
@@ -77,10 +77,11 @@ function selectDevVersion({
     .map((tag) => ({
       number: Number(tag.slice(devPrefix.length)),
       tag,
-    }))
+    }));
+  const validDevTags = existingDevTags
     .filter(({ number }) => Number.isInteger(number) && number > 0)
     .sort((left, right) => left.number - right.number);
-  const latestDev = existingDevTags.at(-1);
+  const latestDev = validDevTags.at(-1);
   const dev = latestDev == null ? 1 : latestDev.number + 1;
   const npmVersion = `${baseVersion}-dev${dev}`;
   const pythonVersion = `${baseVersion}.dev${dev}`;

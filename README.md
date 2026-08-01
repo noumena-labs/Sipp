@@ -235,7 +235,7 @@ await client.close();
 ### 3. Swift Quick Start (Native macOS and iOS)
 
 Swift support requires macOS and Xcode. The build stages a local Swift package
-at `.build/artifacts/swift/package` and builds the macOS and iOS examples.
+at `.build/artifacts/swift/package` for macOS and iOS.
 
 ```bash
 sipp toolchain install rust-apple
@@ -270,9 +270,11 @@ print(response.text)
 ```
 
 Run the staged command-line example, open the sandboxed macOS app, or launch
-the iOS example in a simulator:
+the iOS example in a simulator. Build the optional example artifacts first:
 
 ```bash
+sipp build swift --examples
+
 .build/artifacts/swift/examples/SippCLI chat \
   /path/to/model.gguf "Explain on-device inference"
 

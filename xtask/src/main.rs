@@ -120,7 +120,10 @@ fn build_summary(target: &BuildCommands) -> String {
         BuildCommands::Node(args) => {
             format!("Build Node.js bindings ({})", backend_summary(args.backend))
         }
-        BuildCommands::Swift => "Build Apple Swift package".to_owned(),
+        BuildCommands::Swift(args) if args.examples => {
+            "Build Apple Swift package and examples".to_owned()
+        }
+        BuildCommands::Swift(_) => "Build Apple Swift package".to_owned(),
         BuildCommands::Cli(args) => {
             format!(
                 "Build Rust CLI distribution ({})",
@@ -162,7 +165,7 @@ fn run_build(target: BuildCommands, sh: &Shell, ctx: &BuildContext) -> Result<()
         BuildCommands::Wasm(args) => targets::wasm::build(sh, ctx, args.threading, args.runtime)?,
         BuildCommands::Python(args) => targets::python::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::Node(args) => targets::node::build(sh, ctx, args.backend.as_ref())?,
-        BuildCommands::Swift => targets::swift::build(sh, ctx)?,
+        BuildCommands::Swift(args) => targets::swift::build(sh, ctx, args.examples)?,
         BuildCommands::Cli(args) => targets::cli::build(sh, ctx, args.backend.as_ref())?,
         BuildCommands::GatewayServer(args) => {
             targets::gateway_server::build(sh, ctx, args.backend.as_ref())?

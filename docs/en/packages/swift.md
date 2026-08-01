@@ -181,10 +181,12 @@ sources.
 
 ## Examples
 
-`cargo xtask build swift` builds a command-line example and a sandboxed SwiftUI
-example for macOS, plus a SwiftUI iOS example:
+Build the optional command-line, sandboxed macOS SwiftUI, and iOS SwiftUI
+examples explicitly:
 
 ```bash
+cargo xtask build swift --examples
+
 .build/artifacts/swift/examples/SippCLI chat /path/to/model.gguf \
   "Explain on-device inference"
 open .build/artifacts/swift/examples/SippSandbox.app

@@ -10,7 +10,7 @@ Application developers who only need the published packages should start with
 ## Start Here
 
 - [Source Builds](source-builds.md) covers checkout setup, `sipp`, source
-  examples, demos, and package build targets.
+  examples, demos, package build targets, and Swift distribution.
 - [Architecture](../architecture.md) explains crate and package boundaries.
 - [Gateway Architecture](../gateway/architecture.md) explains gateway
   layering.
