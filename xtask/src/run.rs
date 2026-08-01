@@ -69,7 +69,7 @@ fn run_examples(sh: &Shell, ctx: &BuildContext, command: RunExamplesCommands) ->
 
 fn run_ios_example(sh: &Shell, ctx: &BuildContext, args: &RunIosExampleArgs) -> Result<()> {
     if !args.no_build {
-        targets::swift::build(sh, ctx)?;
+        targets::swift::build(sh, ctx, true)?;
     }
 
     let app = targets::swift::ios_example_app(ctx);

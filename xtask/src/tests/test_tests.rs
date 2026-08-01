@@ -955,7 +955,7 @@ fn source_path_helpers_classify_roots_and_tests() {
             .iter()
             .map(|suite| suite.id)
             .collect::<Vec<_>>(),
-        vec![TestSuiteId::SwiftPackage]
+        Vec::<TestSuiteId>::new()
     );
     assert!(is_first_party_source_path("xtask/src/test.rs"));
     assert!(is_first_party_source_path(

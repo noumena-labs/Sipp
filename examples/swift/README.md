@@ -1,11 +1,11 @@
 # Swift Examples
 
 The Swift examples consume only the public `Sipp` product from the staged
-Swift package. Build the XCFramework, package, examples, and signed sandbox app
-on macOS:
+Swift package. Build the XCFramework, package, optional examples, and signed
+sandbox app on macOS:
 
 ```bash
-cargo xtask build swift
+cargo xtask build swift --examples
 ```
 
 The package contains a Metal arm64 macOS slice and a CPU x86_64 macOS slice.

@@ -322,10 +322,8 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Rust with Apple targets
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
 
       - name: Set up CMake and Ninja
         uses: lukka/get-cmake@v4.3.1

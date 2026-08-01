@@ -25,6 +25,7 @@ cargo xtask test unit suite browser-package
 cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
 cargo xtask test unit suite python-package --backend cpu
+cargo xtask test unit suite swift-package
 cargo xtask test smoke suite example-node --backend cpu
 cargo xtask test smoke suite example-gateway --backend cpu --case query
 cargo xtask test smoke suite playground-browser
@@ -48,21 +49,24 @@ cargo xtask test verify --changed
 | --- | --- | --- |
 | `cargo xtask test unit suite xtask` | xtask 工具及编排逻辑测试 | `xtask/src/tests` |
 | `cargo xtask test unit suite rust-crates` | 工作区 Crate 的单元测试 | `crates`, `lib/gateway`, `apps` |
-| `cargo xtask test unit suite rust-bindings` | Rust 绑定 Crate 的单元测试 | `bindings/node`, `bindings/python`, `bindings/wasm` |
+| `cargo xtask test unit suite rust-bindings` | Rust 绑定 Crate 的单元测试 | `bindings/swift`, `bindings/wasm` |
 | `cargo xtask test unit suite browser-package` | 浏览器包 TypeScript 测试 | `lib/web/tests` |
 | `cargo xtask test unit suite demos` | 浏览器端演示项目的 TypeScript 测试 | `demos` |
 | `cargo xtask test unit suite api` | 库级别公共 API 集成测试 | `crates/sipp/tests` |
 | `cargo xtask test unit suite cli` | CLI 的黑盒集成测试 | `apps/cli/tests` |
 | `cargo xtask test unit suite node-package` | Node 库的确定性 API 测试 | `lib/node`, `bindings/node` |
 | `cargo xtask test unit suite python-package` | Python 库的确定性 API 测试 | `lib/python`, `bindings/python` |
+| `cargo xtask test unit suite swift-package` | macOS 主机切片与暂存 Swift 包单元测试 | `lib/swift`, `bindings/swift` |
 
 ## 单元测试组
 
 | 命令 | 包含的套件 |
 | --- | --- |
 | `cargo xtask test unit group whitebox` | `xtask`、`rust-crates`、`rust-bindings`、`browser-package`、`demos` |
-| `cargo xtask test unit group interface` | `api`、`cli`、`node-package`、`python-package` |
+| `cargo xtask test unit group interface` | `api`、`cli`、`node-package`、`python-package`、`swift-package` |
 | `cargo xtask test unit group full` | 所有确定性单元测试套件 |
+
+`swift-package` 套件只能在 macOS 上运行。它只构建暂存包和执行 `swift test` 所需的当前 macOS 主机切片。开发版与稳定版工作流通过 `cargo xtask build swift` 负责多平台 XCFramework 和分发验证。
 
 `test smoke` 用于端到端集成验证，同样有明确的命名空间分类：
 

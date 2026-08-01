@@ -478,12 +478,13 @@ supported by the host operating system.")]
     /// Build the Apple Swift package.
     #[command(long_about = "\
 Build the macOS arm64 and x86_64 UniFFI static libraries, merge them into a
-universal archive, create SippCore.xcframework, and test the staged SwiftPM
-package.
+universal archive, build the iOS device and Simulator slices, validate the
+staged SwiftPM package on each supported platform, and create the distribution
+archive.
 
 This target requires macOS, Xcode, the managed Rust Apple targets, and
 initialized git submodules.")]
-    Swift,
+    Swift(SwiftBuildArgs),
 
     /// Build the Rust CLI distribution directory.
     #[command(long_about = "\
@@ -517,6 +518,14 @@ artifact contains sipp-gateway, base runtime libraries, and selected ggml
 backend plugins in .build/artifacts/gateway-server.")]
     #[command(after_long_help = BACKEND_HELP)]
     GatewayServer(BackendArgs),
+}
+
+/// Options for building the Apple Swift package.
+#[derive(Args, Default)]
+pub struct SwiftBuildArgs {
+    /// Also build the local CLI, SwiftUI, and iOS examples.
+    #[arg(long)]
+    pub examples: bool,
 }
 
 /// Developer run workflows.
@@ -1146,7 +1155,7 @@ pub enum TestSuiteId {
     NodePackage,
     /// Python package interface tests.
     PythonPackage,
-    /// Apple Swift package interface and artifact tests.
+    /// Apple Swift package unit tests.
     SwiftPackage,
     /// CLI local generation smoke tests.
     CliSmoke,

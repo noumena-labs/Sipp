@@ -32,8 +32,9 @@ sipp build all
 
 Swift 目标要求使用 macOS 和 Xcode，并为 macOS 与 iOS 生成一个
 XCFramework。macOS arm64 和 iOS 设备 arm64 使用 Metal，macOS x86_64
-以及 iOS 模拟器 arm64/x86_64 使用 CPU。各切片的后端固定，不提供构建选择器或运行时回退。构建还会在
-`.build/artifacts/swift` 下生成 macOS 命令行示例和经过临时签名的沙盒 SwiftUI 应用。
+以及 iOS 模拟器 arm64/x86_64 使用 CPU。各切片的后端固定，不提供构建选择器或运行时回退。构建会验证暂存包能否用于
+macOS、iOS 和 iOS 模拟器，然后生成分发压缩包及其校验和。仅在需要本地 CLI、SwiftUI 和 iOS 示例产物时添加
+`--examples`。
 
 ## Swift 分发
 
@@ -42,9 +43,8 @@ Sipp 由 CI 生成的 Swift Package Manager 分发仓库。它只负责交付，
 
 Sipp 是唯一的源码和版本来源。Swift 源码与测试位于 `lib/swift`，Rust
 和 UniFFI 绑定源码位于 `bindings/swift`，XCFramework 组装与包验证由
-`xtask` 管理。主 CI 工作流只测试 Swift 包，不执行发布。开发版与稳定版发布工作流会构建并验证
-XCFramework、暂存 Swift 包、记录准确的源码修订版本，再将生成的快照推送到
-`Sipp-Swift`。
+`xtask` 管理。主 CI 工作流只构建运行 Swift 单元测试所需的当前 macOS 主机切片，不执行发布。开发版与稳定版发布工作流会构建使用者需要的所有
+macOS、iOS 设备和 iOS 模拟器切片，在三个平台系列上验证暂存包，记录准确的源码修订版本，再将生成的快照推送到 `Sipp-Swift`。
 
 版本完全由 Sipp 标签决定。例如，开发版 `0.1.4-dev1` 对应 Swift 标签
 `0.1.4-dev1`，稳定版 `0.1.4` 对应 Swift 标签 `0.1.4`。工作流仅在发布时检查已有 Swift 标签，以便安全重试并防止覆盖不可变的发布版本。

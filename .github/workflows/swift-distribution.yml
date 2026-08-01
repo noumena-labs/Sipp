@@ -81,7 +81,7 @@ jobs:
           npm-version: ${{ inputs.version }}
           python-version: ${{ inputs.python_version }}
 
-      - name: Build and test Swift package
+      - name: Build Swift distribution
         run: cargo xtask build swift
 
       - name: Read Swift archive metadata

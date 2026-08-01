@@ -21,8 +21,20 @@ fn build_commands_parse_backend_defaults_and_overrides() {
     let Commands::Build { target } = cli.command else {
         panic!("expected build command");
     };
-    assert!(matches!(target, super::BuildCommands::Swift));
+    let super::BuildCommands::Swift(args) = target else {
+        panic!("expected Swift build");
+    };
+    assert!(!args.examples);
     assert!(Cli::try_parse_from(["xtask", "build", "swift", "--backend", "metal"]).is_err());
+
+    let cli = Cli::parse_from(["xtask", "build", "swift", "--examples"]);
+    let Commands::Build { target } = cli.command else {
+        panic!("expected build command");
+    };
+    let super::BuildCommands::Swift(args) = target else {
+        panic!("expected Swift build");
+    };
+    assert!(args.examples);
 
     let cli = Cli::parse_from(["xtask", "build", "node"]);
     let Commands::Build { target } = cli.command else {

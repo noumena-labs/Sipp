@@ -40,9 +40,10 @@ Use `--backend vulkan`, `--backend cuda`, `--backend metal`, or
 The Swift target requires macOS and Xcode. It produces one XCFramework for
 macOS and iOS. macOS arm64 and iOS device arm64 use Metal; macOS x86_64 and
 iOS Simulator arm64/x86_64 use CPU. The backend is fixed per slice, with no
-build selector or runtime fallback. The build also creates the macOS
-command-line example and the ad-hoc-signed sandboxed SwiftUI app under
-`.build/artifacts/swift`.
+build selector or runtime fallback. The build validates the staged package for
+macOS, iOS, and iOS Simulator, then creates the distribution archive and
+checksum. Add `--examples` only when local CLI, SwiftUI, and iOS example
+artifacts are needed.
 
 ## Swift Distribution
 
@@ -54,9 +55,11 @@ files must not be edited manually.
 Sipp is the only source of truth. Swift sources and tests live under
 `lib/swift`, Rust and UniFFI binding sources live under `bindings/swift`, and
 `xtask` owns XCFramework assembly and package validation. The main CI workflow
-tests the Swift package without publishing. Dev and stable release workflows
-build and validate the XCFramework, stage the package, record the exact source
-revision, and push the generated snapshot to `Sipp-Swift`.
+builds only the current macOS host slice needed to run the Swift unit tests.
+Dev and stable release workflows build every macOS, iOS device, and iOS
+Simulator slice required by consumers; validate the staged package on all three
+platform families; record the exact source revision; and push the generated
+snapshot to `Sipp-Swift`.
 
 Sipp tags are the sole version authority. A dev version such as `0.1.4-dev1`
 produces the Swift tag `0.1.4-dev1`, while a stable version such as `0.1.4`

@@ -21,12 +21,15 @@ sipp build core
 sipp build wasm
 sipp build node --backend cpu
 sipp build python --backend vulkan
+sipp build swift
 sipp build cli --backend all
 sipp build gateway-server --backend cpu
 sipp build all
 ```
 
 `build all` 构建所有主要目标，默认生成 CPU 原生输出，不为每个包构建所有后端变体。
+
+`build swift` 只能在 macOS 上运行。它会生成 macOS、iOS 设备和 iOS 模拟器所需的 XCFramework 切片，验证暂存包，并在 `.build/artifacts/swift` 下创建分发压缩包与校验和。仅在需要本地 CLI、SwiftUI 和 iOS 示例产物时添加 `--examples`。
 
 支持的后端：
 
