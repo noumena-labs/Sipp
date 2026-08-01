@@ -311,6 +311,47 @@ jobs:
       - name: Run Python package unit suite
         run: cargo xtask --plain test unit --no-coverage suite python-package --backend cpu
 
+  internal-swift:
+    name: Internal Swift tests
+    if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: macos-14
+    timeout-minutes: 240
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Set up Rust with Apple targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4.3.1
+
+      - name: Set up compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: ci-swift
+          max-size: 3G
+
+      - name: Cache Cargo and Swift native build outputs
+        uses: actions/cache@v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo
+            .build/cmake
+            .build/c
+          key: cargo-ci-swift-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
+          restore-keys: |
+            cargo-ci-swift-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Run Swift package unit suite
+        run: cargo xtask --plain test unit --no-coverage suite swift-package
+
   internal-validate:
     name: Internal CI gate
     if: ${{ always() && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) }}
@@ -320,6 +361,7 @@ jobs:
       - internal-browser
       - internal-node
       - internal-python
+      - internal-swift
     steps:
       - name: Check internal job results
         env:
@@ -327,10 +369,11 @@ jobs:
           BROWSER_RESULT: ${{ needs.internal-browser.result }}
           NODE_RESULT: ${{ needs.internal-node.result }}
           PYTHON_RESULT: ${{ needs.internal-python.result }}
+          SWIFT_RESULT: ${{ needs.internal-swift.result }}
         run: |
           set -euo pipefail
-          if [ "$RUST_RESULT" != "success" ] || [ "$BROWSER_RESULT" != "success" ] || [ "$NODE_RESULT" != "success" ] || [ "$PYTHON_RESULT" != "success" ]; then
-            echo "::error::Internal CI failed: rust=$RUST_RESULT browser=$BROWSER_RESULT node=$NODE_RESULT python=$PYTHON_RESULT"
+          if [ "$RUST_RESULT" != "success" ] || [ "$BROWSER_RESULT" != "success" ] || [ "$NODE_RESULT" != "success" ] || [ "$PYTHON_RESULT" != "success" ] || [ "$SWIFT_RESULT" != "success" ]; then
+            echo "::error::Internal CI failed: rust=$RUST_RESULT browser=$BROWSER_RESULT node=$NODE_RESULT python=$PYTHON_RESULT swift=$SWIFT_RESULT"
             exit 1
           fi
           echo "Internal CI passed."

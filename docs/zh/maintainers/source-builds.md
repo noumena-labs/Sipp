@@ -22,12 +22,35 @@ Windows 上在 PowerShell 中执行 `.\setup.ps1`，或在 CMD 中执行 `setup.
 sipp build core
 sipp build node --backend cpu
 sipp build python --backend cpu
+sipp build swift
 sipp build gateway-server --backend cpu
 sipp build wasm
 sipp build all
 ```
 
 支持硬件加速的原生目标可使用 `--backend vulkan`、`--backend cuda`、`--backend metal` 或 `--backend all` 等参数。
+
+Swift 目标要求使用 macOS 和 Xcode，并为 macOS 与 iOS 生成一个
+XCFramework。macOS arm64 和 iOS 设备 arm64 使用 Metal，macOS x86_64
+以及 iOS 模拟器 arm64/x86_64 使用 CPU。各切片的后端固定，不提供构建选择器或运行时回退。构建还会在
+`.build/artifacts/swift` 下生成 macOS 命令行示例和经过临时签名的沙盒 SwiftUI 应用。
+
+## Swift 分发
+
+[`noumena-labs/Sipp-Swift`](https://github.com/noumena-labs/Sipp-Swift) 是
+Sipp 由 CI 生成的 Swift Package Manager 分发仓库。它只负责交付，并非第二个开发仓库；请勿手动修改其中由 CI 生成的包文件。
+
+Sipp 是唯一的源码和版本来源。Swift 源码与测试位于 `lib/swift`，Rust
+和 UniFFI 绑定源码位于 `bindings/swift`，XCFramework 组装与包验证由
+`xtask` 管理。主 CI 工作流只测试 Swift 包，不执行发布。开发版与稳定版发布工作流会构建并验证
+XCFramework、暂存 Swift 包、记录准确的源码修订版本，再将生成的快照推送到
+`Sipp-Swift`。
+
+版本完全由 Sipp 标签决定。例如，开发版 `0.1.4-dev1` 对应 Swift 标签
+`0.1.4-dev1`，稳定版 `0.1.4` 对应 Swift 标签 `0.1.4`。工作流仅在发布时检查已有 Swift 标签，以便安全重试并防止覆盖不可变的发布版本。
+
+XCFramework 压缩包作为 GitHub Release 资产存储，不提交到 Git。生成的
+`Package.swift` 会让二进制目标指向带版本的压缩包及其校验和，因此使用者可以将 Sipp 作为普通 SwiftPM 依赖引入。
 
 默认情况下，CUDA 会编译一系列相关 GPU 架构的产物。为加快本地编译速度，可在构建前设置 `SIPP_CUDA_ARCHITECTURES` 环境变量（使用分号分隔的 CMake 架构字符串，例如仅针对 A100 设置 `80`）。完整架构列表见[网关 Docker](../gateway/docker.md)。
 

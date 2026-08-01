@@ -6,7 +6,7 @@
 
 ## 目录与指引
 
-- [源码构建](source-builds.md)：环境引导、`sipp` 命令使用、运行源码示例和演示程序、编译各包目标产物。
+- [源码构建](source-builds.md)：环境引导、`sipp` 命令使用、运行源码示例和演示程序、编译各包目标产物及 Swift 分发。
 - [架构](../architecture.md)：Crate 边界划分与包组织结构。
 - [网关架构](../gateway/architecture.md)：网关系统分层设计。
 - [测试](../testing.md)：内建的所有测试套件。

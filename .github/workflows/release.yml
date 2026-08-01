@@ -14,6 +14,7 @@ on:
           - node-npm
           - python
           - rust
+          - swift
       release_version:
         description: Release version to publish; use auto for the next patch after the latest sipp-v* tag
         required: true
@@ -111,6 +112,8 @@ jobs:
           CARGO_REGISTRY_TOKEN_PRESENT: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
           NPM_TOKEN_PRESENT: ${{ secrets.NPM_TOKEN != '' }}
           PYPI_API_TOKEN_PRESENT: ${{ secrets.PYPI_API_TOKEN != '' }}
+          SWIFT_APP_CLIENT_ID_PRESENT: ${{ vars.SWIFT_DISTRIBUTION_APP_CLIENT_ID != '' }}
+          SWIFT_APP_PRIVATE_KEY_PRESENT: ${{ secrets.SWIFT_DISTRIBUTION_APP_PRIVATE_KEY != '' }}
         run: |
           set -euo pipefail
           missing=0
@@ -124,6 +127,14 @@ jobs:
           fi
           if [ "$PYPI_API_TOKEN_PRESENT" != "true" ]; then
             echo "::error::PYPI_API_TOKEN is required for the first PyPI release."
+            missing=1
+          fi
+          if [ "$SWIFT_APP_CLIENT_ID_PRESENT" != "true" ]; then
+            echo "::error::SWIFT_DISTRIBUTION_APP_CLIENT_ID is required to publish Sipp-Swift."
+            missing=1
+          fi
+          if [ "$SWIFT_APP_PRIVATE_KEY_PRESENT" != "true" ]; then
+            echo "::error::SWIFT_DISTRIBUTION_APP_PRIVATE_KEY is required to publish Sipp-Swift."
             missing=1
           fi
           exit "$missing"
@@ -240,6 +251,25 @@ jobs:
             fi
           }
 
+          check_swift() {
+            local version="$1" tag_sha
+            tag_sha="$(
+              GIT_TERMINAL_PROMPT=0 git ls-remote \
+                --tags \
+                --refs \
+                https://github.com/noumena-labs/Sipp-Swift.git \
+                "refs/tags/$version" |
+                awk '{ print $1 }' ||
+                true
+            )"
+            if [ -n "$tag_sha" ]; then
+              echo "::${level}::Sipp-Swift $version is already published; bump the version before releasing."
+              conflicts=1
+            else
+              echo "Sipp-Swift $version is not yet published."
+            fi
+          }
+
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "web-npm" ]; then
             check_npm @sipphq/sipp "$VERSION"
           fi
@@ -270,6 +300,9 @@ jobs:
           if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "rust" ]; then
             check_crate sipp-sys "$VERSION"
             check_crate sipp-rs "$VERSION"
+          fi
+          if [ "$PACKAGE" = "all" ] || [ "$PACKAGE" = "swift" ]; then
+            check_swift "$VERSION"
           fi
 
           if [ "$conflicts" -eq 1 ] && [ "$DRY_RUN" != "true" ]; then
@@ -690,6 +723,50 @@ jobs:
           name: sipp-rust-crates
           path: .build/artifacts/rust/*.crate
 
+  swift:
+    name: Build Swift distribution
+    needs:
+      - gate
+      - preflight
+    if: ${{ inputs.package == 'all' || inputs.package == 'swift' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/swift-distribution.yml
+    with:
+      artifact_name: sipp-swift-release
+      build: true
+      publish: false
+      prerelease: false
+      python_version: ${{ needs.preflight.outputs.version }}
+      source_revision: ${{ github.sha }}
+      version: ${{ needs.preflight.outputs.version }}
+
+  swift-publish:
+    name: Publish Swift distribution
+    needs:
+      - preflight
+      - web-npm
+      - node-npm
+      - python
+      - rust-source
+      - swift
+    if: ${{ inputs.dry_run == false && inputs.package == 'all' }}
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/swift-distribution.yml
+    with:
+      artifact_name: sipp-swift-release
+      build: false
+      publish: true
+      prerelease: false
+      python_version: ${{ needs.preflight.outputs.version }}
+      source_revision: ${{ github.sha }}
+      swift_distribution_app_client_id: ${{ vars.SWIFT_DISTRIBUTION_APP_CLIENT_ID }}
+      version: ${{ needs.preflight.outputs.version }}
+    secrets:
+      swift_distribution_app_private_key: ${{ secrets.SWIFT_DISTRIBUTION_APP_PRIVATE_KEY }}
+
   publish-release:
     name: Publish public release
     runs-on: ubuntu-24.04
@@ -700,6 +777,8 @@ jobs:
       - node-npm
       - python
       - rust-source
+      - swift
+      - swift-publish
     if: ${{ inputs.dry_run == false && inputs.package == 'all' }}
     permissions:
       contents: write
