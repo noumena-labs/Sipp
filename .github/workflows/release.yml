@@ -730,6 +730,7 @@ jobs:
       - preflight
     if: ${{ inputs.package == 'all' || inputs.package == 'swift' }}
     permissions:
+      actions: read
       contents: read
     uses: ./.github/workflows/swift-distribution.yml
     with:
