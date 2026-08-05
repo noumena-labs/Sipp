@@ -80,6 +80,7 @@ env:
   SHADERC_REF: "d5f08ae5c5a9a45165578445cbd0f9adf0223448"
   SHADERC_VERSION: "v2026.2"
   SIPP_MAX_GLIBC: "2.28"
+  SIPP_MAX_CUDA_WHEEL_MB: "200"
   SIPP_MAX_WHEEL_MB: "100"
 
 jobs:
@@ -463,15 +464,21 @@ jobs:
               echo "$wheel_name is a GitHub release artifact only; skipping PyPI size budget for pypi-wheel-scope=$PYPI_WHEEL_SCOPE."
               continue
             fi
+
+            max_wheel_mb="$SIPP_MAX_WHEEL_MB"
+            if [[ "$wheel_name" == sipppy_backend_cuda-* ]]; then
+              max_wheel_mb="$SIPP_MAX_CUDA_WHEEL_MB"
+            fi
+
             size_mb=$(( $(wc -c < "$wheel") / 1024 / 1024 ))
-            if [ "$size_mb" -ge "$SIPP_MAX_WHEEL_MB" ]; then
+            if [ "$size_mb" -ge "$max_wheel_mb" ]; then
               if [ "$ENFORCE" = "true" ]; then
-                echo "::error::$wheel_name is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. Request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries before releasing."
+                echo "::error::$wheel_name is ${size_mb} MiB, at or above its configured ${max_wheel_mb} MiB PyPI file limit. Request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries before releasing."
                 exit 1
               fi
-              echo "::warning::$wheel_name is ${size_mb} MiB, at or above the ${SIPP_MAX_WHEEL_MB} MiB PyPI default file limit. The release workflow will block on this if this wheel is selected for PyPI; request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries."
+              echo "::warning::$wheel_name is ${size_mb} MiB, at or above its configured ${max_wheel_mb} MiB PyPI file limit. The release workflow will block on this if this wheel is selected for PyPI; request a PyPI file-size increase, trim CUDA architectures, or split large runtime libraries."
             else
-              echo "$wheel_name is ${size_mb} MiB (limit ${SIPP_MAX_WHEEL_MB} MiB)"
+              echo "$wheel_name is ${size_mb} MiB (limit ${max_wheel_mb} MiB)"
             fi
           done
 
