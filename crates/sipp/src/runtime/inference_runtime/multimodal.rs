@@ -1,9 +1,10 @@
-//! Multimodal prefill: tokenizes prompt + image buffers via mtmd, evaluates
+//! Multimodal prefill: tokenizes prompt + media buffers via mtmd, evaluates
 //! the resulting chunks into the KV cache, and seeds the first sampled token.
 //!
 //! Only invoked for requests that carry a `MultimodalPayload`. The text-only
 //! prefill path lives in `mod.rs` (`prepare_sequence_for_prompt`).
 
+use std::borrow::Cow;
 use std::time::Instant;
 
 use crate::native_bridge::{self, NativeRuntimeHandle};
@@ -28,13 +29,7 @@ mod multimodal_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-/// Runs the multimodal prefill end-to-end for `slot`:
-/// 1. Ensure the prompt has enough media markers; if not, prepend them.
-/// 2. Evaluate prompt + image buffers through the CXX mtmd bridge.
-/// 3. Sample the first decode token and emit it.
-///
-/// Returns `false` on any failure and clears the multimodal payload so the
-/// slot can be reused without dangling payload state.
+/// Run multimodal prefill and seed the first decoded token.
 pub(super) fn run_multimodal_prefill(
     native_runtime: &mut NativeRuntimeHandle,
     batch_token_budget: i32,
@@ -42,71 +37,56 @@ pub(super) fn run_multimodal_prefill(
     slot: &mut SlotState,
     piece_scratch: &mut Vec<u8>,
 ) -> bool {
-    if slot.seq_id < 0 || slot.sampler.is_none() || slot.request().is_none() {
+    if slot.seq_id < 0 || slot.sampler.is_none() {
         return false;
     }
 
-    let (multimodal_exists, mut prompt_text, prompt_tokens_len) =
-        if let Some(request) = slot.request() {
-            (
-                request.multimodal.is_some(),
-                request.original_prompt.clone(),
-                request.prompt_tokens.len(),
-            )
-        } else {
-            (false, String::new(), 0)
-        };
-    if !multimodal_exists {
+    let Some(request) = slot.request_mut() else {
         return false;
-    }
+    };
+    let Some(multimodal) = request.multimodal.take() else {
+        return false;
+    };
+    let mut prompt_text = std::mem::take(&mut request.original_prompt);
+    let prompt_tokens_len = request.prompt_tokens.len();
+    let media_buffers = multimodal.media_buffers;
 
     let seq_id = slot.seq_id;
     let prefill_cursor = slot.prefill_cursor;
     let add_special = slot.mirror.n_past == 0;
     if !native_runtime.mtmd_ready() {
-        clear_multimodal_payload(slot);
         return false;
     }
 
     let marker = native_bridge::mtmd_default_marker();
-    let image_count = slot
-        .request()
-        .and_then(|request| request.multimodal.as_ref())
-        .map_or(0, |multimodal| multimodal.image_buffers.len());
+    let media_count = media_buffers.len();
     if !marker.is_empty() {
         let mut marker_count = prompt_text.matches(marker.as_str()).count();
-        if marker_count > image_count {
-            clear_multimodal_payload(slot);
+        if marker_count > media_count {
             return false;
         }
-        while marker_count < image_count {
+        while marker_count < media_count {
             prompt_text.insert_str(0, marker.as_str());
             marker_count += 1;
         }
     }
-
-    let (image_bytes, image_sizes) = match flatten_image_buffers(slot) {
-        Some(images) => images,
-        None => {
-            clear_multimodal_payload(slot);
-            return false;
-        }
+    let (media_bytes, media_sizes) = match media_parts(&media_buffers) {
+        Some(media) => media,
+        None => return false,
     };
 
     if !native_runtime.clear_sequence(seq_id, 0, -1) {
-        clear_multimodal_payload(slot);
         return false;
     }
 
     let prefill_start = Instant::now();
     let Some(prefill_cursor_i32) = usize_to_i32(prefill_cursor) else {
-        clear_multimodal_payload(slot);
         return false;
     };
-    let new_n_past = match native_runtime.mtmd_eval_images(
+    let new_n_past = match native_runtime.mtmd_eval_media(
         &prompt_text,
-        &image_bytes,
-        &image_sizes,
+        media_bytes.as_ref(),
+        &media_sizes,
         add_special,
         true,
         prefill_cursor_i32,
@@ -115,13 +95,9 @@ pub(super) fn run_multimodal_prefill(
         true,
     ) {
         Ok(new_n_past) => new_n_past,
-        Err(_) => {
-            clear_multimodal_payload(slot);
-            return false;
-        }
+        Err(_) => return false,
     };
     let prefill_end = Instant::now();
-    clear_multimodal_payload(slot);
 
     slot.mirror.n_past = new_n_past;
     let Some(new_n_past_len) = nonnegative_i32_to_usize_opt(new_n_past) else {
@@ -198,24 +174,20 @@ pub(super) fn run_multimodal_prefill(
     true
 }
 
-fn flatten_image_buffers(slot: &SlotState) -> Option<(Vec<u8>, Vec<i32>)> {
-    let multimodal = slot.request()?.multimodal.as_ref()?;
-    let byte_capacity = multimodal
-        .image_buffers
+fn media_parts(media_buffers: &[Vec<u8>]) -> Option<(Cow<'_, [u8]>, Vec<i32>)> {
+    let mut media_sizes = Vec::with_capacity(media_buffers.len());
+    for media in media_buffers {
+        media_sizes.push(i32::try_from(media.len()).ok()?);
+    }
+    if let [media] = media_buffers {
+        return Some((Cow::Borrowed(media), media_sizes));
+    }
+    let capacity = media_buffers
         .iter()
-        .try_fold(0_usize, |total, image| total.checked_add(image.len()))?;
-    let mut image_bytes = Vec::with_capacity(byte_capacity);
-    let mut image_sizes = Vec::with_capacity(multimodal.image_buffers.len());
-    for image in &multimodal.image_buffers {
-        image_sizes.push(i32::try_from(image.len()).ok()?);
-        image_bytes.extend_from_slice(image);
+        .try_fold(0_usize, |total, media| total.checked_add(media.len()))?;
+    let mut flattened = Vec::with_capacity(capacity);
+    for media in media_buffers {
+        flattened.extend_from_slice(media);
     }
-    Some((image_bytes, image_sizes))
-}
-
-/// Drops the request's multimodal payload so the slot can be reused.
-pub(super) fn clear_multimodal_payload(slot: &mut SlotState) {
-    if let Some(request) = slot.request_mut() {
-        request.multimodal = None;
-    }
+    Some((Cow::Owned(flattened), media_sizes))
 }

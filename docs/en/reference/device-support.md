@@ -114,13 +114,18 @@ Sipp ships pthread WASM runtime artifacts by default:
 
 > ⁷ Defaults to `min(4, navigator.hardwareConcurrency)`. Override with `runtime.context.n_threads` in model load options.
 
-The client auto-selects the CPU non-JSPI artifact for Firefox-like runtimes and
-for any runtime that does not expose JSPI (`WebAssembly.Suspending`), and the
-WebGPU+JSPI artifact elsewhere. Current Safari lacks JSPI, so it loads the CPU
-non-JSPI artifact; a Safari build that ships JSPI (Safari Technology Preview /
-27 beta, or 26.4+ with the experimental flag enabled) is detected at runtime and
-upgraded to the WebGPU+JSPI artifact. The bundled runtime requires pthread
-availability:
+The Worker selects the bundled artifact after a functional JSPI probe that
+instantiates a small module and verifies an actual suspend/resume cycle. A
+successful probe selects WebGPU+JSPI; a missing, incomplete, or failing JSPI
+implementation selects the CPU non-JSPI artifact. Selection does not depend on
+the browser user agent or the presence of one WebAssembly property. Explicit
+runtime URLs are forwarded to the Worker unchanged and bypass bundled artifact
+selection. Selecting the bundled CPU artifact is a hard backend constraint:
+`backend: 'webgpu'` is rejected before model activation. The bundled runtime
+requires pthread availability. When `runtime.context.n_ctx` is omitted, browser
+CPU activation uses the smaller of 4096 and the model's trained context capacity
+when that metadata is available, or 4096 when it is not. This keeps large
+contexts from exhausting Wasm memory without inflating known smaller models:
 
 ```ts
 function supportsWasmPthreads(): boolean {
@@ -223,18 +228,19 @@ Any GPU that the host browser exposes as a WebGPU adapter may work, but Sipp req
 
 #### Firefox Runtime Findings
 
-Firefox 152.0.2 exposes the required WASM pthread, worker, WebGPU, and
-`shader-f16` capabilities on tested Windows configurations. With Firefox's
-experimental JSPI support enabled, the JSPI runtime path was functional: models
-loaded and generated tokens. It was not performant enough to ship. The Firefox
-browser runtime uses the pthread CPU no-JSPI artifact.
-
-The Firefox browser path is pthread CPU no-JSPI. It still requires
+Firefox 150.0.2 exposes the required WASM pthread, worker, WebGPU, and
+`shader-f16` capabilities on tested Windows configurations. Default builds that
+do not complete the JSPI suspend/resume probe use the pthread CPU no-JSPI
+artifact. Experimental builds that pass the probe can select WebGPU+JSPI
+without a Firefox-specific branch. Both paths still require
 `SharedArrayBuffer`, workers, and COOP/COEP headers.
 
 #### Safari Runtime Findings
 
-Most shipping Safari versions do not expose JSPI. The client detects this and selects the pthread CPU no-JSPI artifact instead, so Safari runs on the CPU backend rather than failing to boot. JSPI is being introduced experimentally (Safari 26.4 behind a flag, Safari Technology Preview / 27 beta) Safari still requires `SharedArrayBuffer`, workers, and COOP/COEP headers.
+Safari builds that cannot complete the JSPI suspend/resume probe select the
+pthread CPU no-JSPI artifact instead of failing to boot. Builds with a complete
+JSPI implementation can select WebGPU+JSPI without a Safari-specific branch.
+Safari still requires `SharedArrayBuffer`, workers, and COOP/COEP headers.
 
 ---
 

@@ -23,7 +23,7 @@
   "scripts": {
     "build": "cargo xtask build node --backend all",
     "build:stage": "node scripts/stage-package.mjs",
-    "test": "node --test tests/router.test.mjs"
+    "test": "node --test tests/router.test.mjs tests/gateway-profile.test.mjs"
   },
   "repository": {
     "type": "git",

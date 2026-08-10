@@ -11,11 +11,21 @@ use super::*;
 fn model_enum_as_str_values_match_wire_names() {
     assert_eq!(ModelModality::Text.as_str(), "text");
     assert_eq!(ModelModality::Vision.as_str(), "vision");
+    assert_eq!(ModelModality::Audio.as_str(), "audio");
+    assert_eq!(ModelModality::Multimodal.as_str(), "multimodal");
     assert_eq!(ModelStatus::Ready.as_str(), "ready");
     assert_eq!(ModelStatus::NeedsProjector.as_str(), "needs_projector");
     assert_eq!(ModelStatus::Broken.as_str(), "broken");
     assert_eq!(ModelSourceKind::Local.as_str(), "local");
     assert_eq!(ModelSourceKind::Remote.as_str(), "remote");
+    assert_eq!(
+        serde_json::to_value(ModelModality::Audio).expect("audio modality"),
+        "audio"
+    );
+    assert_eq!(
+        serde_json::from_value::<ModelModality>(json!("multimodal")).expect("multimodal modality"),
+        ModelModality::Multimodal
+    );
 }
 
 #[test]
@@ -50,6 +60,8 @@ fn model_info_entry_pairing_and_plan_use_camel_case_contracts() {
         state: ModelPairingState::Unresolved,
         checked_projector_index_revision: 3,
         compatible_vision_projector_types: vec!["clip".to_string()],
+        compatible_audio_projector_types: Vec::new(),
+        compatible_audio_generation_projector_types: Vec::new(),
         reason: Some(ModelPairingReason::MultipleMatches),
         updated_at_unix_ms: 4,
     };
@@ -83,10 +95,13 @@ fn model_info_entry_pairing_and_plan_use_camel_case_contracts() {
         modality: ModelModality::Text,
         status: ModelStatus::Broken,
         compatible_vision_projector_types: Vec::new(),
+        compatible_audio_projector_types: Vec::new(),
+        compatible_audio_generation_projector_types: Vec::new(),
     };
     let plan_value = serde_json::to_value(&plan).expect("plan");
     assert_eq!(plan_value["projectorAssetId"], serde_json::Value::Null);
     assert_eq!(plan_value["compatibleVisionProjectorTypes"], json!([]));
+    assert_eq!(plan_value["compatibleAudioProjectorTypes"], json!([]));
     assert_eq!(
         serde_json::from_value::<PairingPlan>(plan_value).expect("plan"),
         plan
@@ -100,6 +115,7 @@ fn registry_manifest_default_uses_current_version_and_empty_maps() {
     let manifest = RegistryManifest::default();
 
     assert_eq!(manifest.version, REGISTRY_MANIFEST_VERSION);
+    assert_eq!(REGISTRY_MANIFEST_VERSION, 7);
     assert_eq!(manifest.projector_index_revision, 0);
     assert!(manifest.assets.is_empty());
     assert!(manifest.models.is_empty());
@@ -107,9 +123,9 @@ fn registry_manifest_default_uses_current_version_and_empty_maps() {
 
 #[test]
 fn pairing_reason_uses_screaming_snake_case_wire_names() {
-    let value = serde_json::to_value(ModelPairingReason::BaseNotVision).expect("reason");
+    let value = serde_json::to_value(ModelPairingReason::BaseNotMedia).expect("reason");
 
-    assert_eq!(value, "BASE_NOT_VISION");
+    assert_eq!(value, "BASE_NOT_MEDIA");
     assert_eq!(
         serde_json::from_value::<ModelPairingReason>(json!("MISSING_METADATA")).expect("reason"),
         ModelPairingReason::MissingMetadata

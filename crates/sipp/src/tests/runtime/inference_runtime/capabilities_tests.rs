@@ -14,12 +14,17 @@ fn public_capabilities_hide_decoder_start_token() {
         decoder_start_token: Some(0),
         has_chat_template: false,
         embedding_context: false,
+        supports_vision: true,
+        audio_sample_rate_hz: Some(16_000),
+        generated_audio_sample_rate_hz: None,
     }
     .to_public();
 
     assert_eq!(capabilities.model_class, ModelClass::EncoderDecoder);
     assert!(capabilities.supports_text_generation);
     assert!(!capabilities.supports_embeddings);
+    assert!(capabilities.supports_vision);
+    assert_eq!(capabilities.audio_sample_rate_hz, Some(16_000));
     assert!(capabilities.embedding.is_none());
 }
 
@@ -32,6 +37,9 @@ fn public_capabilities_include_embedding_metadata_only_when_supported() {
         decoder_start_token: None,
         has_chat_template: false,
         embedding_context: true,
+        supports_vision: false,
+        audio_sample_rate_hz: None,
+        generated_audio_sample_rate_hz: None,
     }
     .to_public();
 
@@ -55,6 +63,9 @@ fn public_capabilities_hide_unpooled_embedding_context() {
         decoder_start_token: None,
         has_chat_template: false,
         embedding_context: true,
+        supports_vision: false,
+        audio_sample_rate_hz: None,
+        generated_audio_sample_rate_hz: None,
     }
     .to_public();
 

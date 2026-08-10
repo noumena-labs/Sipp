@@ -28,4 +28,20 @@ fn empty_runtime_template_methods_report_not_ready() {
         runtime.apply_chat_template_json("[]", true),
         Err(Error::RuntimeNotReady)
     ));
+    assert!(matches!(
+        runtime.parse_asr_output("en", "transcript"),
+        Err(Error::RuntimeNotReady)
+    ));
+}
+
+#[test]
+fn empty_runtime_rejects_speech_enqueue_before_allocating_a_request() {
+    let mut runtime = test_runtime(NativeRuntimeConfig::default());
+
+    assert!(matches!(
+        runtime.enqueue_speech_request("hello", Some("en"), None, None),
+        Err(Error::RuntimeNotReady)
+    ));
+    assert!(runtime.active_speech.is_none());
+    assert!(!runtime.request_queue.has_uncompleted_requests());
 }

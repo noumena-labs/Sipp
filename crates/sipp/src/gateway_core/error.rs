@@ -57,7 +57,6 @@ impl From<crate::client::SippError> for GatewayError {
             SippError::Local(_) | SippError::ModelLifecycle(_) | SippError::Endpoint(_) => {
                 GatewayErrorKind::Execution
             }
-            #[cfg(feature = "providers")]
             SippError::Provider(_) => GatewayErrorKind::Execution,
         };
         Self::new(kind, error.to_string())

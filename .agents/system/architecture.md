@@ -12,10 +12,10 @@ Sipp separates inference primitives from protocol and deployment policy.
   - **`backend/`, `engine/`, `lifecycle/`, `runtime/`**: Local inference,
     scheduling, model acquisition and persistence, model loading, and memory
     management (former engine crate, public paths unchanged).
-  - **`client/`**: Typed query, chat, and embed dispatch re-exported at the
+  - **`client/`**: Typed query, chat, embed, listen, and speak dispatch re-exported at the
     crate root. `SippClient` owns a client-scoped model store and endpoint
     registry. `client.models` adds, lists, and removes models; local endpoint
-    descriptors select a model by ID and contain its load-time runtime
+    inputs accept a managed model and retain its ID with the load-time runtime
     configuration. Native filesystem sources are referenced in place, while
     HTTP(S) sources are downloaded under the client storage root. Missing or
     changed native files are pruned from the registry. The module also owns
@@ -32,7 +32,7 @@ Nothing under `crates/` owns HTTP routes, JSON/SSE contracts, authentication sch
 - **`lib/gateway::GatewayCodec`**: Optional first-party query/chat/embed JSON and SSE profile.
 - **`sipp::GatewayDescriptor`**: Rust descriptor for calling an HTTP gateway
   endpoint. Other language packages expose the equivalent through
-  `EndpointDescriptor.gateway(...)`.
+  `Endpoint.gateway(...)`.
 - **`lib/node`**, **`lib/python`**, and **`lib/web`**: Public language packages
   exposing client-owned model stores, local inference, provider adapters, and
   gateway endpoint descriptors through the unified add API. Browser `File`
@@ -43,7 +43,7 @@ Endpoint references are returned by `SippClient.add`; endpoint kind remains an
 internal routing detail. Request-specific gateway and provider extensions use
 the single `extra` map. Local endpoints reject `extra`.
 
-Arbitrary wire formats are implemented programmatically through `ProtocolCodec`. The core client remains limited to the query, chat, and embed inference capabilities.
+Arbitrary wire formats are implemented programmatically through `ProtocolCodec`.
 
 ## Applications
 

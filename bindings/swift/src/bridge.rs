@@ -9,15 +9,17 @@ use sipp::lifecycle::{
     ModelModality as CoreModelModality, ModelStatus as CoreModelStatus,
 };
 use sipp::{
-    LocalDescriptor as CoreLocalDescriptor, SippCancellationReason as CoreCancellationReason,
-    SippClient as CoreSippClient, SippError as CoreSippError,
+    endpoint::Local as CoreLocalEndpoint, Endpoint as CoreEndpoint,
+    SippCancellationReason as CoreCancellationReason, SippClient as CoreSippClient,
+    SippError as CoreSippError,
 };
 use tokio::runtime::Runtime;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 use crate::inference::{
-    FfiChatRequest, FfiEmbedRequest, FfiEmbeddingRun, FfiQueryRequest, FfiTextRun,
+    FfiAudioRun, FfiChatRequest, FfiEmbedRequest, FfiEmbeddingRun, FfiListenRequest,
+    FfiQueryRequest, FfiSpeakRequest, FfiTextRun,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -39,6 +41,10 @@ pub enum FfiModelModality {
     Text,
     /// Vision-language model.
     Vision,
+    /// Audio understanding or speech recognition model.
+    Audio,
+    /// Model supporting multiple media modalities.
+    Multimodal,
 }
 
 impl From<CoreModelModality> for FfiModelModality {
@@ -46,6 +52,8 @@ impl From<CoreModelModality> for FfiModelModality {
         match value {
             CoreModelModality::Text => Self::Text,
             CoreModelModality::Vision => Self::Vision,
+            CoreModelModality::Audio => Self::Audio,
+            CoreModelModality::Multimodal => Self::Multimodal,
         }
     }
 }
@@ -96,6 +104,48 @@ impl From<CoreManagedModel> for FfiManagedModel {
             status: value.status.into(),
         }
     }
+}
+
+impl From<FfiManagedModel> for CoreManagedModel {
+    fn from(value: FfiManagedModel) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            bytes: value.bytes,
+            modality: match value.modality {
+                FfiModelModality::Text => CoreModelModality::Text,
+                FfiModelModality::Vision => CoreModelModality::Vision,
+                FfiModelModality::Audio => CoreModelModality::Audio,
+                FfiModelModality::Multimodal => CoreModelModality::Multimodal,
+            },
+            status: match value.status {
+                FfiModelStatus::Ready => CoreModelStatus::Ready,
+                FfiModelStatus::NeedsProjector => CoreModelStatus::NeedsProjector,
+                FfiModelStatus::Broken => CoreModelStatus::Broken,
+            },
+        }
+    }
+}
+
+/// Unregistered local endpoint input carried across the Swift FFI boundary.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct FfiEndpoint {
+    /// Managed model selected for local inference.
+    pub model: FfiManagedModel,
+}
+
+impl From<FfiEndpoint> for CoreEndpoint {
+    fn from(value: FfiEndpoint) -> Self {
+        let model = CoreManagedModel::from(value.model);
+        CoreLocalEndpoint::new(&model).into()
+    }
+}
+
+/// Registered endpoint identity carried across the Swift FFI boundary.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct FfiEndpointRef {
+    /// Stable client-scoped endpoint identifier.
+    pub id: String,
 }
 
 /// Result of a model registration used by Swift's bookmark transaction.
@@ -243,6 +293,16 @@ impl From<CoreSippError> for FfiError {
                 let message = error.to_string();
                 Self::Endpoint {
                     kind: error.kind,
+                    status: error.status,
+                    code: error.code,
+                    message,
+                    request_id: error.request_id,
+                }
+            }
+            CoreSippError::Provider(error) => {
+                let message = error.to_string();
+                Self::Endpoint {
+                    kind: error.kind.as_str().to_owned(),
                     status: error.status,
                     code: error.code,
                     message,
@@ -418,18 +478,20 @@ impl FfiSippClient {
         Arc::clone(&self.models)
     }
 
-    /// Register or replace a local endpoint.
+    /// Register or replace an endpoint.
     ///
     /// # Errors
     ///
     /// Returns a typed request, lifecycle, unsupported-operation, or runtime error.
-    pub async fn add(&self, id: String, model_id: String) -> Result<(), FfiError> {
+    pub async fn add(&self, id: String, endpoint: FfiEndpoint) -> Result<FfiEndpointRef, FfiError> {
         self.client
             .write()
             .await
-            .add(id, CoreLocalDescriptor::new(model_id))
+            .add(id, CoreEndpoint::from(endpoint))
             .await
-            .map(|_| ())
+            .map(|endpoint| FfiEndpointRef {
+                id: endpoint.id().to_string(),
+            })
             .map_err(FfiError::from)
     }
 
@@ -474,5 +536,27 @@ impl FfiSippClient {
             .await
             .embed_with_context(context, request);
         Arc::new(FfiEmbeddingRun::from_core(run))
+    }
+
+    /// Start speech recognition on a registered endpoint.
+    pub async fn listen(&self, request: FfiListenRequest) -> Arc<FfiTextRun> {
+        let (context, request) = request.into_core();
+        let run = self
+            .client
+            .read()
+            .await
+            .listen_with_context(context, request);
+        Arc::new(FfiTextRun::from_core(run))
+    }
+
+    /// Start speech synthesis on a registered endpoint.
+    pub async fn speak(&self, request: FfiSpeakRequest) -> Arc<FfiAudioRun> {
+        let (context, request) = request.into_core();
+        let run = self
+            .client
+            .read()
+            .await
+            .speak_with_context(context, request);
+        Arc::new(FfiAudioRun::from_core(run))
     }
 }

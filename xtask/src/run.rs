@@ -1207,6 +1207,7 @@ fn run_llama_backend_ops_for_backend(
         format!("Running llama.cpp {} backend ops", backend.as_str()),
         test_cmd,
     )
+    .map(|_| ())
 }
 
 fn ensure_javascript_workspace_dependencies(

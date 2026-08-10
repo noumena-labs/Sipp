@@ -34,7 +34,8 @@ pub enum GenerateRequestLifecycle {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MultimodalPayload {
-    pub image_buffers: Vec<Vec<u8>>,
+    /// Encoded image or audio payloads in prompt marker order.
+    pub media_buffers: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

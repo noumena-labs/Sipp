@@ -13,7 +13,7 @@ import {
 } from './_support.mjs';
 
 const {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   backendObservabilityJson,
   setLlamaLogQuiet,
@@ -29,7 +29,7 @@ const client = new SippClient();
 const model = await client.models.add([modelPath]);
 await client.add(
   'default',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     runtime: runtimeConfig({ embeddings: false }),
   })
 );

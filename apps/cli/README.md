@@ -1,8 +1,8 @@
 # Sipp CLI
 
-`apps/cli` builds the `sipp` command-line application for local GGUF text
-generation. It is intended for runtime smoke checks, manual model validation,
-and quick local prompts.
+`apps/cli` builds the `sipp` command-line application for local GGUF text and
+speech inference. It is intended for manual model validation and quick local
+requests.
 
 ## Build
 
@@ -15,6 +15,8 @@ cargo xtask build cli --backend all
 
 ```bash
 cargo run -p sipp-cli -- <model.gguf> "Explain Sipp."
+cargo run -p sipp-cli -- <asr.gguf> --listen <audio.mp3> --projector <asr-mmproj.gguf> --language en
+cargo run -p sipp-cli -- <tts.gguf> "Hello from Sipp." --speak output.wav --projector <tts-mmproj.gguf> --language en
 ```
 
 Useful flags include:
@@ -25,6 +27,9 @@ Useful flags include:
 - `--temperature`
 - `--stats off|basic|profile`
 - `--chat`
+- `--listen <audio>` and `--speak <output.wav>`
+- `--projector <mmproj.gguf>`
+- `--language` and `--speaker <reference-audio>`
 
 Use `cargo run -p sipp-cli -- --help` for the full generated help.
 

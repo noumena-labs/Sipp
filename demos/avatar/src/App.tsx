@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   type ModelLoadProgress,
   type NativeRuntimeConfig,
@@ -183,7 +183,7 @@ export default function App() {
       const model = await client.models.add([args.modelUrl], { onProgress });
       await client.add(
         'local',
-        EndpointDescriptor.local(model.id, {
+        Endpoint.local(model, {
           onProgress,
           runtime: AVATAR_RUNTIME,
         })

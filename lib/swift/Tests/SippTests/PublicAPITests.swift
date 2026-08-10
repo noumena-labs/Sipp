@@ -13,11 +13,11 @@ final class PublicAPITests: XCTestCase {
     // native run. The macOS package gate executes the corresponding flows.
     private func compilePublicSurface(client: SippClient, modelURL: URL) async throws {
         let model = try await client.models.add([modelURL])
-        try await client.add("chat", model: model)
+        let endpoint = try await client.add("chat", .local(model))
 
         let run = client.chat(
             messages: [ChatMessage(role: .user, content: "Explain on-device inference")],
-            endpoint: "chat"
+            endpoint: endpoint
         )
         for await batch in run.tokens {
             _ = batch.text
@@ -25,8 +25,8 @@ final class PublicAPITests: XCTestCase {
         _ = try await run.response
         run.cancel()
 
-        _ = client.query("Hello", endpoint: "chat")
-        _ = client.embed("Hello", endpoint: "chat")
+        _ = client.query("Hello", endpoint: endpoint)
+        _ = client.embed("Hello", endpoint: endpoint)
         try await client.remove("chat")
         try await client.models.remove(model)
     }

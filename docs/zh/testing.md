@@ -21,7 +21,7 @@ cargo xtask test unit group whitebox
 cargo xtask test unit group interface
 cargo xtask test unit suite xtask
 cargo xtask test unit suite rust-crates --package sipp
-cargo xtask test unit suite browser-package
+cargo xtask test unit suite browser
 cargo xtask test unit suite demos
 cargo xtask test unit suite node-package --backend cpu
 cargo xtask test unit suite python-package --backend cpu
@@ -50,7 +50,7 @@ cargo xtask test verify --changed
 | `cargo xtask test unit suite xtask` | xtask 工具及编排逻辑测试 | `xtask/src/tests` |
 | `cargo xtask test unit suite rust-crates` | 工作区 Crate 的单元测试 | `crates`, `lib/gateway`, `apps` |
 | `cargo xtask test unit suite rust-bindings` | Rust 绑定 Crate 的单元测试 | `bindings/swift`, `bindings/wasm` |
-| `cargo xtask test unit suite browser-package` | 浏览器包 TypeScript 测试 | `lib/web/tests` |
+| `cargo xtask test unit suite browser` | 浏览器包 TypeScript 测试 | `lib/web/tests` |
 | `cargo xtask test unit suite demos` | 浏览器端演示项目的 TypeScript 测试 | `demos` |
 | `cargo xtask test unit suite api` | 库级别公共 API 集成测试 | `crates/sipp/tests` |
 | `cargo xtask test unit suite cli` | CLI 的黑盒集成测试 | `apps/cli/tests` |
@@ -62,7 +62,7 @@ cargo xtask test verify --changed
 
 | 命令 | 包含的套件 |
 | --- | --- |
-| `cargo xtask test unit group whitebox` | `xtask`、`rust-crates`、`rust-bindings`、`browser-package`、`demos` |
+| `cargo xtask test unit group whitebox` | `xtask`、`rust-crates`、`rust-bindings`、`browser`、`demos` |
 | `cargo xtask test unit group interface` | `api`、`cli`、`node-package`、`python-package`、`swift-package` |
 | `cargo xtask test unit group full` | 所有确定性单元测试套件 |
 

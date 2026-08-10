@@ -6,7 +6,9 @@
 #[cfg(unix)]
 use crate::test_support::TempDir;
 
-use super::{bun_version_matches, BUN_VERSION};
+use super::bun_version_matches;
+#[cfg(unix)]
+use super::BUN_VERSION;
 
 #[cfg(unix)]
 #[test]

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub use crate::core::FinishReason;
+use crate::core::Operation;
 
 use crate::runtime::config::{KvReuseMode, ResolvedRuntimeLimits};
 pub use crate::runtime::metrics::CacheSource;
@@ -267,8 +268,35 @@ pub struct ModelCapabilities {
     pub model_class: ModelClass,
     pub supports_text_generation: bool,
     pub supports_embeddings: bool,
+    /// Whether the loaded mtmd context accepts vision input.
+    pub supports_vision: bool,
+    /// Required input sample rate, or `None` when audio input is unsupported.
+    pub audio_sample_rate_hz: Option<u32>,
+    /// Generated sample rate, or `None` when audio generation is unsupported.
+    pub generated_audio_sample_rate_hz: Option<u32>,
     pub has_chat_template: bool,
     pub embedding: Option<EmbeddingCapabilities>,
+}
+
+impl ModelCapabilities {
+    /// Return whether the loaded local model supports one public operation.
+    pub const fn supports_operation(&self, operation: Operation) -> bool {
+        let is_speech_generator = self.generated_audio_sample_rate_hz.is_some();
+        match operation {
+            Operation::Query => !is_speech_generator && self.supports_text_generation,
+            Operation::Chat => {
+                !is_speech_generator && self.supports_text_generation && self.has_chat_template
+            }
+            Operation::Embed => !is_speech_generator && self.supports_embeddings,
+            Operation::Listen => {
+                !is_speech_generator
+                    && self.supports_text_generation
+                    && self.audio_sample_rate_hz.is_some()
+                    && self.has_chat_template
+            }
+            Operation::Speak => is_speech_generator,
+        }
+    }
 }
 
 /// Per-call knobs for `embed()`.

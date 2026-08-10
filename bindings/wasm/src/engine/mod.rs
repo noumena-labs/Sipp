@@ -14,9 +14,13 @@ use std::time::Duration;
 #[cfg(target_family = "wasm")]
 use sipp::backend::set_llama_log_quiet;
 #[cfg(target_family = "wasm")]
-use sipp::engine::protocol::{EmbedOptions, PoolingType};
+use sipp::core::Operation;
 #[cfg(target_family = "wasm")]
-use sipp::runtime::config::{NativeRuntimeConfig, SamplingRuntimeOverride};
+use sipp::engine::protocol::{EmbedOptions, ModelCapabilities, PoolingType};
+use sipp::lifecycle::BrowserModelInfo;
+use sipp::runtime::config::NativeRuntimeConfig;
+#[cfg(target_family = "wasm")]
+use sipp::runtime::config::SamplingRuntimeOverride;
 #[cfg(target_family = "wasm")]
 use sipp::runtime::request::{
     GenerateResponse, GenerateResponseStatus, ResponseOutput, TokenEmissionSink,
@@ -27,7 +31,7 @@ use sipp::runtime::{InferenceRuntime, SchedulerBurstResult};
 
 use crate::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};
 
-pub(crate) const ABI_VERSION: u32 = 6;
+pub(crate) const ABI_VERSION: u32 = 15;
 
 #[cfg(target_family = "wasm")]
 const STATUS_OK: i32 = 0;
@@ -51,6 +55,8 @@ const COMPLETED_REQUEST_STATUS_UNKNOWN: i32 = 4;
 const COMPLETED_REQUEST_OUTPUT_TEXT: i32 = 1;
 #[cfg(target_family = "wasm")]
 const COMPLETED_REQUEST_OUTPUT_EMBEDDING: i32 = 2;
+#[cfg(target_family = "wasm")]
+const COMPLETED_REQUEST_OUTPUT_AUDIO: i32 = 3;
 
 #[cfg(target_family = "wasm")]
 const SHARED_TOKEN_RING_CAPACITY: usize = 256 * 1024;
@@ -63,7 +69,56 @@ static NEXT_ENGINE_ID: AtomicU32 = AtomicU32::new(1);
 pub struct BrowserEngine {
     id: u32,
     last_error: String,
+    #[cfg(target_family = "wasm")]
+    session: Option<BrowserRuntimeSession>,
     inner: BrowserEngineInner,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserRuntimeSessionDescriptor {
+    model: BrowserModelInfo,
+    runtime_fingerprint: String,
+}
+
+pub(crate) struct BrowserRuntimeActivation {
+    model_path: String,
+    runtime_config: NativeRuntimeConfig,
+    session: BrowserRuntimeSessionDescriptor,
+}
+
+#[cfg(target_family = "wasm")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserRuntimeSession {
+    generation: u32,
+    model: BrowserModelInfo,
+    runtime_fingerprint: String,
+    capabilities: BrowserRuntimeCapabilities,
+    chat_template: Option<String>,
+    bos_text: String,
+    eos_text: String,
+    media_marker: Option<String>,
+}
+
+#[cfg(target_family = "wasm")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserRuntimeCapabilities {
+    #[serde(flatten)]
+    model: ModelCapabilities,
+    operations: BrowserOperationCapabilities,
+}
+
+#[cfg(target_family = "wasm")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserOperationCapabilities {
+    query: bool,
+    chat: bool,
+    embed: bool,
+    listen: bool,
+    speak: bool,
 }
 
 pub(crate) struct BrowserTextRequestArgs<'a> {
@@ -94,6 +149,7 @@ struct BrowserPromptRequest {
 struct BrowserEngineInner {
     runtime: Option<InferenceRuntime>,
     token_ring: SharedTokenRing,
+    asr_languages: HashMap<u32, String>,
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -109,6 +165,8 @@ impl BrowserEngine {
         Self {
             id,
             last_error: String::new(),
+            #[cfg(target_family = "wasm")]
+            session: None,
             inner: BrowserEngineInner::new(),
         }
     }
@@ -118,34 +176,57 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    pub(crate) fn load(&mut self, model_path: &str, runtime_config_json: &str) -> i32 {
+    pub(crate) fn load(&mut self, activation: BrowserRuntimeActivation) -> i32 {
+        let BrowserRuntimeActivation {
+            model_path,
+            runtime_config,
+            session,
+        } = activation;
         self.clear_last_error();
-
-        let runtime_config = match read_runtime_config(runtime_config_json) {
-            Ok(config) => config,
-            Err(error) => {
-                self.set_last_error(error);
-                return STATUS_INVALID_ARGUMENTS;
-            }
-        };
-
         set_llama_log_quiet(true);
-        self.close_runtime();
 
-        let runtime = match InferenceRuntime::load(model_path, runtime_config) {
+        let runtime = match InferenceRuntime::load(&model_path, runtime_config) {
             Ok(runtime) => runtime,
             Err(error) => {
                 self.set_last_error(format!("failed to load browser runtime: {error:#}"));
                 return STATUS_FAILURE;
             }
         };
+        let session = match BrowserRuntimeSession::from_runtime(self.id, session, &runtime) {
+            Ok(session) => session,
+            Err(error) => {
+                self.set_last_error(format!("failed to inspect browser runtime: {error}"));
+                return STATUS_FAILURE;
+            }
+        };
         self.inner.token_ring.reset();
+        self.inner.asr_languages.clear();
         self.inner.runtime = Some(runtime);
+        self.session = Some(session);
         STATUS_OK
     }
 
+    pub(crate) fn prepare_load(
+        model_path: &str,
+        runtime_config_json: &str,
+        session_descriptor_json: &str,
+    ) -> Result<BrowserRuntimeActivation, String> {
+        if model_path.trim().is_empty() {
+            return Err("browser runtime model path must not be empty".to_string());
+        }
+        let runtime_config = read_runtime_config(runtime_config_json)?;
+        let session =
+            serde_json::from_str::<BrowserRuntimeSessionDescriptor>(session_descriptor_json)
+                .map_err(|error| format!("invalid browser runtime session descriptor: {error}"))?;
+        Ok(BrowserRuntimeActivation {
+            model_path: model_path.to_string(),
+            runtime_config,
+            session,
+        })
+    }
+
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn load(&mut self, _model_path: &str, _runtime_config_json: &str) -> i32 {
+    pub(crate) fn load(&mut self, _activation: BrowserRuntimeActivation) -> i32 {
         self.set_last_error("browser runtime is unavailable for this target");
         STATUS_UNAVAILABLE
     }
@@ -164,9 +245,17 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
-    fn close_runtime(&mut self) {
-        self.inner.runtime = None;
-        self.inner.token_ring.reset();
+    pub(crate) fn runtime_session_json(&self) -> Result<String, String> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "browser runtime session is not loaded".to_string())?;
+        serde_json::to_string(session).map_err(|error| error.to_string())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn runtime_session_json(&self) -> Result<String, String> {
+        Err("browser runtime is unavailable for this target".to_string())
     }
 
     #[cfg(target_family = "wasm")]
@@ -333,6 +422,114 @@ impl BrowserEngine {
         }
     }
 
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn start_listen_request(
+        &mut self,
+        audio: &[u8],
+        language: &str,
+        max_tokens: i32,
+    ) -> u32 {
+        self.clear_last_error();
+        if audio.is_empty() || max_tokens <= 0 {
+            self.set_last_error("listen audio must not be empty and max tokens must be positive");
+            return 0;
+        }
+        let prompt = match self
+            .inner
+            .runtime
+            .as_ref()
+            .ok_or("runtime is not loaded")
+            .and_then(|runtime| {
+                runtime
+                    .prepare_asr_prompt(language)
+                    .map_err(|_| "failed to prepare ASR prompt")
+            }) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                self.set_last_error(error);
+                return 0;
+            }
+        };
+        let Some(runtime) = self.inner.runtime.as_mut() else {
+            self.set_last_error("runtime is not loaded");
+            return 0;
+        };
+        match runtime.enqueue_multimodal_request(
+            "browser-listen".to_string(),
+            prompt,
+            max_tokens,
+            vec![audio.to_vec()],
+            String::new(),
+            String::new(),
+            Vec::new(),
+            None,
+            false,
+        ) {
+            Ok(request_id) => {
+                self.inner
+                    .asr_languages
+                    .insert(request_id, language.to_string());
+                request_id
+            }
+            Err(error) => {
+                self.set_last_error(format!("failed to enqueue listen request: {error:#}"));
+                0
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn start_listen_request(
+        &mut self,
+        _audio: &[u8],
+        _language: &str,
+        _max_tokens: i32,
+    ) -> u32 {
+        0
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn start_speak_request(
+        &mut self,
+        text: &str,
+        language: &str,
+        speaker_audio: &[u8],
+        max_duration_ms: Option<u32>,
+    ) -> u32 {
+        self.clear_last_error();
+        if text.is_empty() {
+            self.set_last_error("speak text must not be empty");
+            return 0;
+        }
+        let Some(runtime) = self.inner.runtime.as_mut() else {
+            self.set_last_error("runtime is not loaded");
+            return 0;
+        };
+        match runtime.enqueue_speech_request(
+            text,
+            (!language.is_empty()).then_some(language),
+            (!speaker_audio.is_empty()).then_some(speaker_audio),
+            max_duration_ms,
+        ) {
+            Ok(request_id) => request_id,
+            Err(error) => {
+                self.set_last_error(format!("failed to enqueue speech request: {error:#}"));
+                0
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn start_speak_request(
+        &mut self,
+        _text: &str,
+        _language: &str,
+        _speaker_audio: &[u8],
+        _max_duration_ms: Option<u32>,
+    ) -> u32 {
+        0
+    }
+
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn start_embedding_request(
         &mut self,
@@ -444,27 +641,72 @@ impl BrowserEngine {
         max_ticks: i32,
         max_completed_responses: i32,
         max_generated_tokens: i32,
-        max_duration_us: i32,
         out: &mut BrowserSchedulerLoopResult,
     ) -> i32 {
-        if self.inner.runtime.is_none() {
-            return STATUS_NOT_INITIALIZED;
-        }
-        let duration = if max_duration_us > 0 {
-            Duration::from_micros(max_duration_us as u64)
-        } else {
-            Duration::ZERO
-        };
-
         let Some(runtime) = self.inner.runtime.as_mut() else {
             return STATUS_NOT_INITIALIZED;
         };
+        // The browser path bounds a burst by ticks, completions, and generated
+        // tokens. It has never bounded one by wall time.
         let burst = runtime.run_scheduler_loop(
             max_ticks,
             max_completed_responses,
             max_generated_tokens,
-            duration,
+            Duration::ZERO,
         );
+        let terminal_asr = self
+            .inner
+            .asr_languages
+            .keys()
+            .copied()
+            .filter(|request_id| {
+                runtime
+                    .request_queue
+                    .completed_responses
+                    .contains_key(request_id)
+            })
+            .collect::<Vec<_>>();
+        for request_id in terminal_asr {
+            let Some(language) = self.inner.asr_languages.remove(&request_id) else {
+                continue;
+            };
+            let raw_output = runtime
+                .request_queue
+                .completed_responses
+                .get(&request_id)
+                .and_then(|response| {
+                    (response.status == GenerateResponseStatus::Completed)
+                        .then(|| match &response.output {
+                            ResponseOutput::Text(text) => Some(text.clone()),
+                            ResponseOutput::Embedding { .. } | ResponseOutput::Audio(_) => None,
+                        })
+                        .flatten()
+                });
+            let Some(raw_output) = raw_output else {
+                continue;
+            };
+            match runtime.parse_asr_transcript(&language, &raw_output) {
+                Ok(transcript) => {
+                    if let Some(response) = runtime
+                        .request_queue
+                        .completed_responses
+                        .get_mut(&request_id)
+                    {
+                        response.output = ResponseOutput::Text(transcript);
+                    }
+                }
+                Err(error) => {
+                    if let Some(response) = runtime
+                        .request_queue
+                        .completed_responses
+                        .get_mut(&request_id)
+                    {
+                        response.status = GenerateResponseStatus::Failed;
+                        response.error_message = format!("failed to parse ASR output: {error:#}");
+                    }
+                }
+            }
+        }
         *out = scheduler_loop_result_from_runtime(burst);
         burst.status as i32
     }
@@ -475,7 +717,6 @@ impl BrowserEngine {
         _max_ticks: i32,
         _max_completed_responses: i32,
         _max_generated_tokens: i32,
-        _max_duration_us: i32,
         _out: &mut BrowserSchedulerLoopResult,
     ) -> i32 {
         STATUS_UNAVAILABLE
@@ -515,11 +756,21 @@ impl BrowserEngine {
     }
 
     #[cfg(target_family = "wasm")]
+    fn completed_audio_ref(&self, request_id: u32) -> Option<&sipp::runtime::SynthesizedAudio> {
+        self.completed_response_ref(request_id)
+            .and_then(|response| match &response.output {
+                ResponseOutput::Audio(audio) => Some(audio),
+                ResponseOutput::Text(_) | ResponseOutput::Embedding { .. } => None,
+            })
+    }
+
+    #[cfg(target_family = "wasm")]
     pub(crate) fn completed_output_kind(&self, request_id: u32) -> i32 {
         self.completed_response_ref(request_id)
             .map(|response| match &response.output {
                 ResponseOutput::Text(_) => COMPLETED_REQUEST_OUTPUT_TEXT,
                 ResponseOutput::Embedding { .. } => COMPLETED_REQUEST_OUTPUT_EMBEDDING,
+                ResponseOutput::Audio(_) => COMPLETED_REQUEST_OUTPUT_AUDIO,
             })
             .unwrap_or(STATUS_FAILURE)
     }
@@ -534,7 +785,7 @@ impl BrowserEngine {
         self.completed_response_ref(request_id)
             .and_then(|response| match &response.output {
                 ResponseOutput::Embedding { values, .. } => value_len_i32(values.len()),
-                ResponseOutput::Text(_) => None,
+                ResponseOutput::Text(_) | ResponseOutput::Audio(_) => None,
             })
             .unwrap_or(STATUS_FAILURE)
     }
@@ -569,7 +820,7 @@ impl BrowserEngine {
         self.completed_response_ref(request_id)
             .and_then(|response| match &response.output {
                 ResponseOutput::Embedding { pooling, .. } => Some(pooling_code(*pooling)),
-                ResponseOutput::Text(_) => None,
+                ResponseOutput::Text(_) | ResponseOutput::Audio(_) => None,
             })
             .unwrap_or(STATUS_FAILURE)
     }
@@ -584,9 +835,74 @@ impl BrowserEngine {
         self.completed_response_ref(request_id)
             .and_then(|response| match &response.output {
                 ResponseOutput::Embedding { normalized, .. } => Some(i32::from(*normalized)),
-                ResponseOutput::Text(_) => None,
+                ResponseOutput::Text(_) | ResponseOutput::Audio(_) => None,
             })
             .unwrap_or(STATUS_FAILURE)
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn completed_audio_len(&self, request_id: u32) -> i32 {
+        self.completed_audio_ref(request_id)
+            .map(|audio| byte_len_i32(audio.data()))
+            .unwrap_or(STATUS_FAILURE)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn completed_audio_len(&self, _request_id: u32) -> i32 {
+        STATUS_UNAVAILABLE
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn copy_completed_audio(&self, request_id: u32, buffer: &mut [u8]) -> i32 {
+        let Some(audio) = self.completed_audio_ref(request_id) else {
+            return STATUS_FAILURE;
+        };
+        if buffer.len() < audio.data().len() {
+            return STATUS_INVALID_ARGUMENTS;
+        }
+        buffer[..audio.data().len()].copy_from_slice(audio.data());
+        byte_len_i32(audio.data())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn copy_completed_audio(&self, _request_id: u32, _buffer: &mut [u8]) -> i32 {
+        STATUS_UNAVAILABLE
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn completed_audio_sample_rate(&self, request_id: u32) -> i32 {
+        self.completed_audio_ref(request_id)
+            .and_then(|audio| i32::try_from(audio.sample_rate_hz()).ok())
+            .unwrap_or(STATUS_FAILURE)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn completed_audio_sample_rate(&self, _request_id: u32) -> i32 {
+        STATUS_UNAVAILABLE
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn completed_audio_channels(&self, request_id: u32) -> i32 {
+        self.completed_audio_ref(request_id)
+            .map(|audio| i32::from(audio.channels()))
+            .unwrap_or(STATUS_FAILURE)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn completed_audio_channels(&self, _request_id: u32) -> i32 {
+        STATUS_UNAVAILABLE
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn completed_audio_duration_ms(&self, request_id: u32) -> f64 {
+        self.completed_audio_ref(request_id)
+            .map(|audio| audio.duration_ms() as f64)
+            .unwrap_or(f64::from(STATUS_FAILURE))
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn completed_audio_duration_ms(&self, _request_id: u32) -> f64 {
+        f64::from(STATUS_UNAVAILABLE)
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -692,37 +1008,33 @@ impl BrowserEngine {
 
     #[cfg(target_family = "wasm")]
     pub(crate) fn media_marker(&self) -> String {
-        self.inner
-            .runtime
+        self.session
             .as_ref()
-            .and_then(|runtime| runtime.media_marker().ok())
+            .and_then(|session| session.media_marker.clone())
             .unwrap_or_default()
     }
 
     #[cfg(target_family = "wasm")]
     pub(crate) fn chat_template_source(&self) -> String {
-        self.inner
-            .runtime
+        self.session
             .as_ref()
-            .and_then(|runtime| runtime.chat_template_source().ok().flatten())
+            .and_then(|session| session.chat_template.clone())
             .unwrap_or_default()
     }
 
     #[cfg(target_family = "wasm")]
     pub(crate) fn bos_text(&self) -> String {
-        self.inner
-            .runtime
+        self.session
             .as_ref()
-            .and_then(|runtime| runtime.get_bos_text().ok())
+            .map(|session| session.bos_text.clone())
             .unwrap_or_default()
     }
 
     #[cfg(target_family = "wasm")]
     pub(crate) fn eos_text(&self) -> String {
-        self.inner
-            .runtime
+        self.session
             .as_ref()
-            .and_then(|runtime| runtime.get_eos_text().ok())
+            .map(|session| session.eos_text.clone())
             .unwrap_or_default()
     }
 
@@ -797,11 +1109,49 @@ impl BrowserEngine {
 }
 
 #[cfg(target_family = "wasm")]
+impl BrowserRuntimeSession {
+    fn from_runtime(
+        generation: u32,
+        descriptor: BrowserRuntimeSessionDescriptor,
+        runtime: &InferenceRuntime,
+    ) -> Result<Self, String> {
+        let media_marker = runtime.media_marker().map_err(|error| error.to_string())?;
+        let capabilities = runtime.capabilities();
+        let operations = BrowserOperationCapabilities {
+            query: capabilities.supports_operation(Operation::Query),
+            chat: capabilities.supports_operation(Operation::Chat),
+            embed: capabilities.supports_operation(Operation::Embed),
+            listen: capabilities.supports_operation(Operation::Listen),
+            speak: capabilities.supports_operation(Operation::Speak),
+        };
+        let chat_template = runtime
+            .chat_template_source()
+            .map_err(|error| error.to_string())?;
+        let bos_text = runtime.get_bos_text().map_err(|error| error.to_string())?;
+        let eos_text = runtime.get_eos_text().map_err(|error| error.to_string())?;
+        Ok(Self {
+            generation,
+            model: descriptor.model,
+            runtime_fingerprint: descriptor.runtime_fingerprint,
+            capabilities: BrowserRuntimeCapabilities {
+                model: capabilities,
+                operations,
+            },
+            chat_template,
+            bos_text,
+            eos_text,
+            media_marker: (!media_marker.is_empty()).then_some(media_marker),
+        })
+    }
+}
+
+#[cfg(target_family = "wasm")]
 impl BrowserEngineInner {
     fn new() -> Self {
         Self {
             runtime: None,
             token_ring: SharedTokenRing::new(SHARED_TOKEN_RING_CAPACITY),
+            asr_languages: HashMap::new(),
         }
     }
 }
@@ -1043,7 +1393,6 @@ fn copy_bytes_with_nul(bytes: &[u8], buffer: &mut [u8]) -> i32 {
     byte_len_i32(bytes)
 }
 
-#[cfg(target_family = "wasm")]
 fn read_runtime_config(raw: &str) -> Result<NativeRuntimeConfig, String> {
     let json = if raw.trim().is_empty() {
         "{}"
@@ -1128,7 +1477,7 @@ fn completed_output(engine: &BrowserEngine, request_id: u32) -> Option<&str> {
         .completed_response_ref(request_id)
         .and_then(|response| match &response.output {
             ResponseOutput::Text(text) => Some(text.as_str()),
-            ResponseOutput::Embedding { .. } => None,
+            ResponseOutput::Embedding { .. } | ResponseOutput::Audio(_) => None,
         })
 }
 

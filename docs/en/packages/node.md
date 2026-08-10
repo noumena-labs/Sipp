@@ -32,14 +32,14 @@ the best packaged backend for that host.
 ## Local GGUF Query
 
 ```ts
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { Endpoint, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 const modelPath = process.argv[2] ?? 'model.gguf';
 const model = await client.models.add([modelPath]);
 const endpoint = await client.add(
   'default',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     runtime: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
@@ -87,7 +87,7 @@ only by an x64 Node process; native arm64 Node should use arm64 packages.
 ## Gateway Chat
 
 ```ts
-import { EndpointDescriptor } from '@sipphq/sipp-server';
+import { Endpoint } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -97,7 +97,7 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
+const endpoint = await client.add('gateway', Endpoint.gateway({
   target: requiredEnv('SIPP_GATEWAY_TARGET'),
   baseUrl: requiredEnv('SIPP_GATEWAY_URL'),
   authentication: {
@@ -127,7 +127,7 @@ key in the server environment; `OPENAI_API_KEY="<mock-openai-key>"` is only a
 placeholder value in examples.
 
 ```ts
-import { EndpointDescriptor } from '@sipphq/sipp-server';
+import { Endpoint } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -137,7 +137,7 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const endpoint = await client.add('provider', EndpointDescriptor.provider({
+const endpoint = await client.add('provider', Endpoint.provider({
   provider: 'openai',
   model: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
   apiKey: requiredEnv('OPENAI_API_KEY'),
@@ -167,7 +167,7 @@ request against a provider, a local endpoint, or a separate gateway.
 
 ```ts
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -187,7 +187,7 @@ export async function handleQuery(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('provider', EndpointDescriptor.provider({
+    const endpoint = await client.add('provider', Endpoint.provider({
       provider: 'openai',
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),

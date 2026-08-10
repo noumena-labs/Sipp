@@ -16,13 +16,15 @@ mod model_tests;
 /// SRC
 /////////////////////////////////////////////////////////////////////////////////
 
-pub const REGISTRY_MANIFEST_VERSION: u32 = 4;
+pub const REGISTRY_MANIFEST_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelModality {
     Text,
     Vision,
+    Audio,
+    Multimodal,
 }
 
 impl ModelModality {
@@ -30,6 +32,8 @@ impl ModelModality {
         match self {
             Self::Text => "text",
             Self::Vision => "vision",
+            Self::Audio => "audio",
+            Self::Multimodal => "multimodal",
         }
     }
 }
@@ -90,7 +94,7 @@ pub struct ModelInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedModel {
-    /// Stable id used to create local endpoint descriptors.
+    /// Stable id used to create local endpoint inputs.
     pub id: String,
     /// Display name read from model metadata or the source filename.
     pub name: String,
@@ -121,7 +125,7 @@ pub enum ModelPairingState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ModelPairingReason {
-    BaseNotVision,
+    BaseNotMedia,
     NoMatch,
     MultipleMatches,
     MissingMetadata,
@@ -133,6 +137,10 @@ pub struct ModelPairing {
     pub state: ModelPairingState,
     pub checked_projector_index_revision: u64,
     pub compatible_vision_projector_types: Vec<String>,
+    /// Audio-input projector types accepted by the model.
+    pub compatible_audio_projector_types: Vec<String>,
+    /// Audio-generation projector types accepted by the model.
+    pub compatible_audio_generation_projector_types: Vec<String>,
     pub reason: Option<ModelPairingReason>,
     pub updated_at_unix_ms: u64,
 }
@@ -190,4 +198,8 @@ pub struct PairingPlan {
     pub modality: ModelModality,
     pub status: ModelStatus,
     pub compatible_vision_projector_types: Vec<String>,
+    /// Audio-input projector types accepted by the selected model assets.
+    pub compatible_audio_projector_types: Vec<String>,
+    /// Audio-generation projector types accepted by the selected model assets.
+    pub compatible_audio_generation_projector_types: Vec<String>,
 }

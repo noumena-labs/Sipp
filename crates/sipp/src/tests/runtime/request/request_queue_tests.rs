@@ -63,6 +63,28 @@ fn cancelling_admitted_request_marks_it_for_runtime_cancellation() {
 }
 
 #[test]
+fn external_requests_share_admitted_cancellation_and_completion() {
+    let mut queue = RequestQueue::new();
+    queue.admit_external_request(9);
+
+    assert!(queue.contains_request(9));
+    assert!(queue.has_uncompleted_requests());
+    assert!(queue.cancel(9, "cancelled".to_string()));
+    assert!(queue.request_cancel_requested(9));
+
+    queue.mark_completed(GenerateResponse::cancelled(9, "cancelled"));
+    assert!(!queue.has_uncompleted_requests());
+    assert_eq!(
+        queue
+            .take_completed_response(9)
+            .expect("external response")
+            .status,
+        GenerateResponseStatus::Cancelled
+    );
+    assert!(!queue.contains_request(9));
+}
+
+#[test]
 fn append_token_piece_without_ring_is_a_noop() {
     let mut queue = RequestQueue::new();
     queue.append_token_piece(1, "a");

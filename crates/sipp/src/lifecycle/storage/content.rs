@@ -58,6 +58,7 @@ fn inspection_prefix_capacity(source_len: u64) -> usize {
         })
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn hash_file(source_path: &Path) -> Result<String, ModelError> {
     let mut source = File::open(source_path)?;
     hash_reader(&mut source, 0).map(|(hash, _)| hash)

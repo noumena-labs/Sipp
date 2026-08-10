@@ -10,7 +10,12 @@ cargo run -p sipp-rust-examples --bin query -- <model.gguf> [input]
 cargo run -p sipp-rust-examples --bin chat -- <model.gguf> [input]
 cargo run -p sipp-rust-examples --bin embed -- <model.gguf> [input]
 cargo run -p sipp-rust-examples --bin vision_chat -- <model.gguf> <projector.gguf> <image> [input]
+cargo run -p sipp-rust-examples --bin listen -- <asr.gguf> <projector.gguf> <audio>
+cargo run -p sipp-rust-examples --bin speak -- <tts.gguf> <projector.gguf> <output.wav> [text]
 ```
+
+Set `SIPP_LANGUAGE` for an ASR/TTS language hint and
+`SIPP_SPEAKER_AUDIO` for optional speaker-conditioned synthesis.
 
 ## Gateway Clients
 

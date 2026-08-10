@@ -8,12 +8,14 @@
 | --- | --- | --- | --- |
 | 客户端选项 | `new SippClient(options)` | `new SippClient(options)` | 模型存储，以及浏览器资源、Worker、缓存策略和原生后端初始化 |
 | 模型来源 | `client.models.add(sources)` | `client.models.add(sources)` | 浏览器文件或 HTTP(S) URL；原生路径或 HTTP(S) URL。模型分片和投影器使用同一列表 |
-| 本地端点加载选项 | `EndpointDescriptor.local(model.id, options)` | `EndpointDescriptor.local(model.id, { runtime })` | 后端偏好和原生运行时配置 |
+| 本地端点加载选项 | `Endpoint.local(model, options)` | `Endpoint.local(model, { runtime })` | 后端偏好和原生运行时配置 |
 | 文本请求选项 | `client.query(prompt, options)` | `client.query({ options })` | 输出长度、采样控制、流式、取消、停止词 |
 | 本地请求选项 | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | 仅限本地的 Prompt 状态、文法、图片、嵌入归一化 |
 | 请求扩展 | `extra` | `extra` | 由网关或服务商端点解释的额外字段。本地端点会拒绝 |
 
 Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相同的功能。
+
+浏览器的 `backend` 接受 `auto`、`cpu` 或 `webgpu`。如果浏览器未通过功能性 JSPI 挂起/恢复探测，Sipp 会选择内置的纯 CPU 运行时。此运行时接受 `auto` 和 `cpu`，但会以 `UNSUPPORTED_OPERATION` 拒绝 `webgpu`。显式提供的自定义 `moduleUrl` 和 `wasmUrl` 会绕过内置选择，因此 Sipp 不会推断这些自定义产物编译了哪些后端。浏览器 CPU 激活 `runtime.context.n_ctx` 时，若元数据中有模型训练上下文容量，则使用它与 4096 中的较小值；若无法确定，则使用 4096。这样既限制较大的 Wasm KV 缓存，也不会扩大已知的较小模型上下文；如需不同的 CPU 上下文容量，请直接设置 `n_ctx`。
 
 ## 浏览器客户端选项
 
@@ -22,7 +24,6 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 | 选项 | 说明 |
 | --- | --- |
 | `storageRoot` | 选择客户端模型存储使用的 OPFS 目录。 |
-| `executionMode` | `auto` 优先使用 Worker；`worker` 强制 Worker 传输；`main-thread` 用于调试或受限环境。 |
 | `wasmThreading` | `pthread` 加载内置多线程运行时。`single-thread` 仅在显式提供自定义 `moduleUrl` 和 `wasmUrl` 资源时有效。 |
 | `moduleUrl`, `wasmUrl` | 重写当前选择的运行时资源 URL。两个必须一起设。 |
 | `browserCache` | 控制浏览器 GGUF 缓存的 OPFS 分片阈值和加载行为。 |
@@ -50,13 +51,7 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 ## 浏览器子选项
 
-### `executionMode`
-
-| 模式 | 说明 |
-| --- | --- |
-| `auto`（默认） | 优先使用 Web Worker。Worker 加载失败或浏览器不支持时回退到主线程。 |
-| `worker` | 强制使用 Web Worker。 |
-| `main-thread` | 在主线程直接运行。适合调试或在受限环境（如某些浏览器扩展）中运行。 |
+浏览器本地推理始终在专用 Worker 中运行。激活模型时会替换 Worker 及其 Wasm 实例，防止已结束会话的运行时内存影响下一个模型会话。
 
 ### `wasmThreading`
 

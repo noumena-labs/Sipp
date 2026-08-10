@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -12,9 +12,12 @@ use crate::runtime::request::GenerateResponse;
 use crate::runtime::{InferenceRuntime, RequestStepResult};
 
 use super::events::{build_engine_state_with_status, emit_event, emit_state_event};
-use super::request::{start_chat, start_embed, start_query, ChatRequest, QueryRequest};
+use super::request::{
+    start_chat, start_embed, start_listen, start_query, start_speak, ChatRequest, ListenRequest,
+    QueryRequest, SpeakRequest,
+};
 use super::token_emission::{drain_ring_into_sender, ActiveTokenEmission};
-use super::{runtime_command, EngineEventSubscribers};
+use super::{runtime_command, EngineCancellation, EngineEventSubscribers};
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -45,6 +48,12 @@ pub(super) enum EngineThreadCommand {
         Option<futures_mpsc::UnboundedSender<TokenBatch>>,
     ),
     Embed(EmbedRequest, oneshot::Sender<Result<GenerateResponse>>),
+    Listen(ListenRequest, oneshot::Sender<Result<GenerateResponse>>),
+    Speak(
+        SpeakRequest,
+        EngineCancellation,
+        oneshot::Sender<Result<GenerateResponse>>,
+    ),
     GetState(oneshot::Sender<Result<EngineState>>),
     Close(Option<oneshot::Sender<Result<()>>>),
 }
@@ -62,7 +71,28 @@ pub(super) fn run_engine_thread(
         event_subscribers,
     };
 
+    let mut pending_commands = VecDeque::new();
     loop {
+        if state.has_active_speech() {
+            if !drain_commands(&mut state, &command_rx, &mut pending_commands) {
+                break;
+            }
+            state.step_active_requests();
+            continue;
+        }
+
+        let can_process_pending = pending_commands.front().is_some_and(|command| {
+            state.active_requests.is_empty() || !matches!(command, EngineThreadCommand::Speak(..))
+        });
+        if can_process_pending {
+            if let Some(command) = pending_commands.pop_front() {
+                if !state.process_command(command) {
+                    break;
+                }
+            }
+            continue;
+        }
+
         if state.active_requests.is_empty() {
             let Ok(command) = command_rx.recv() else {
                 break;
@@ -73,18 +103,35 @@ pub(super) fn run_engine_thread(
             continue;
         }
 
-        let mut stop = false;
-        while let Ok(command) = command_rx.try_recv() {
-            if !state.process_command(command) {
-                stop = true;
-                break;
-            }
-        }
-        if stop {
+        if !drain_commands(&mut state, &command_rx, &mut pending_commands) {
             break;
         }
         state.step_active_requests();
     }
+}
+
+fn drain_commands(
+    state: &mut EngineThreadState,
+    command_rx: &mpsc::Receiver<EngineThreadCommand>,
+    pending_commands: &mut VecDeque<EngineThreadCommand>,
+) -> bool {
+    while let Ok(command) = command_rx.try_recv() {
+        if is_control_command(&command) {
+            if !state.process_command(command) {
+                return false;
+            }
+        } else {
+            pending_commands.push_back(command);
+        }
+    }
+    true
+}
+
+fn is_control_command(command: &EngineThreadCommand) -> bool {
+    matches!(
+        command,
+        EngineThreadCommand::GetState(_) | EngineThreadCommand::Close(_)
+    )
 }
 
 pub(super) struct EngineThreadState {
@@ -98,12 +145,15 @@ pub(super) struct ActiveRequest {
     pub output: ActiveRequestOutput,
     pub response_tx: oneshot::Sender<Result<GenerateResponse>>,
     pub token: Option<ActiveTokenEmission>,
+    pub cancellation: Option<EngineCancellation>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum ActiveRequestOutput {
     Text,
+    Transcription { language: Option<String> },
     Embedding,
+    Speech,
 }
 
 impl EngineThreadState {
@@ -128,6 +178,25 @@ impl EngineThreadState {
                     response_tx,
                     ActiveRequestOutput::Embedding,
                     |runtime, subscribers| start_embed(runtime, request, subscribers),
+                );
+            }
+            EngineThreadCommand::Listen(request, response_tx) => {
+                let output = ActiveRequestOutput::Transcription {
+                    language: request.language.clone(),
+                };
+                self.start_request(response_tx, output, |runtime, subscribers| {
+                    start_listen(runtime, request, subscribers)
+                });
+            }
+            EngineThreadCommand::Speak(request, cancellation, response_tx) => {
+                if cancellation.is_cancelled() || response_tx.is_canceled() {
+                    return true;
+                }
+                self.start_request_with_cancellation(
+                    response_tx,
+                    ActiveRequestOutput::Speech,
+                    Some(cancellation),
+                    |runtime, subscribers| start_speak(runtime, request, subscribers),
                 );
             }
             EngineThreadCommand::GetState(response_tx) => {
@@ -155,6 +224,19 @@ impl EngineThreadState {
             &EngineEventSubscribers,
         ) -> Result<(u32, Option<ActiveTokenEmission>)>,
     ) {
+        self.start_request_with_cancellation(response_tx, output, None, start);
+    }
+
+    fn start_request_with_cancellation(
+        &mut self,
+        response_tx: oneshot::Sender<Result<GenerateResponse>>,
+        output: ActiveRequestOutput,
+        cancellation: Option<EngineCancellation>,
+        start: impl FnOnce(
+            &mut InferenceRuntime,
+            &EngineEventSubscribers,
+        ) -> Result<(u32, Option<ActiveTokenEmission>)>,
+    ) {
         let Some(runtime) = self.runtime.as_mut() else {
             let _ = response_tx.send(Err(runtime_command(RUNTIME_CLOSED)));
             return;
@@ -168,6 +250,7 @@ impl EngineThreadState {
                         output,
                         response_tx,
                         token: token_emission,
+                        cancellation,
                     },
                 );
                 emit_state_event(
@@ -194,6 +277,12 @@ impl EngineThreadState {
         ))
     }
 
+    fn has_active_speech(&self) -> bool {
+        self.active_requests
+            .values()
+            .any(|request| request.output == ActiveRequestOutput::Speech)
+    }
+
     fn step_active_requests(&mut self) {
         if self.active_requests.is_empty() {
             return;
@@ -202,7 +291,13 @@ impl EngineThreadState {
         let dropped: Vec<_> = self
             .active_requests
             .iter()
-            .filter(|(_, request)| request.response_tx.is_canceled())
+            .filter(|(_, request)| {
+                request.response_tx.is_canceled()
+                    || request
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(EngineCancellation::is_cancelled)
+            })
             .map(|(&request_id, _)| request_id)
             .collect();
         for request_id in dropped {

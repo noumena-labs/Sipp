@@ -5,6 +5,7 @@ import type {
   TransportObservability,
 } from '../engine/inference-types.js';
 import type {
+  AudioResult,
   BackendInfo,
   BackendProfileObservation,
   EngineBackendName,
@@ -143,6 +144,8 @@ export function toRuntimeObservation(
       workerBacked: transport.workerBacked,
       tokenPath,
     },
+    wasmRunLoopMs: transport.wasmRunLoopMs,
+    wasmRunLoopCalls: transport.wasmRunLoopCalls,
   };
 
   if (tokenPath === 'token-stream') {
@@ -235,6 +238,20 @@ export function embeddingResultFromGenerateResponse(response: GenerateResponse):
     values: response.embedding.values,
     pooling: response.embedding.pooling,
     normalized: response.embedding.normalized,
+    stats: requestStatsFromMetrics(response.observability ?? null),
+  };
+}
+
+export function audioResultFromGenerateResponse(response: GenerateResponse): AudioResult {
+  if (response.audio == null) {
+    throw new Error('Runtime completed speak() without audio output.');
+  }
+  return {
+    id: String(response.requestId),
+    audio: response.audio.data,
+    sampleRateHz: response.audio.sampleRateHz,
+    channels: response.audio.channels,
+    durationMs: response.audio.durationMs,
     stats: requestStatsFromMetrics(response.observability ?? null),
   };
 }

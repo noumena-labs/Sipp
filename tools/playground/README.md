@@ -3,6 +3,9 @@
 `tools/playground` is the browser runtime playground for the Sipp browser
 package. It exposes runtime diagnostics, browser environment details, backend
 observability, report export, and repeatable measurement runs.
+The Speech workspace loads the curated Qwen3-ASR and Qwen3-TTS pairs (or local
+GGUF/projector files), transcribes WAV/MP3/FLAC input, and plays generated WAV
+output through the public browser binding.
 
 ## Run
 

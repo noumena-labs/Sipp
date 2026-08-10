@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::task::{Context, Poll};
 use std::thread::{self, JoinHandle};
@@ -15,7 +16,7 @@ use crate::engine::{
     NativeRuntimeConfig,
 };
 use crate::error::{Error, Result};
-use crate::runtime::InferenceRuntime;
+use crate::runtime::{InferenceRuntime, SynthesizedAudio};
 use futures_channel::{mpsc as futures_mpsc, oneshot};
 use futures_core::Stream;
 
@@ -26,7 +27,10 @@ mod thread_loop;
 mod token_emission;
 
 pub use request::{ChatMessage, ChatRequest, ChatRole, QueryOptions, QueryRequest};
-use stats::{embedding_result_from_response, generation_result_from_response};
+pub(crate) use request::{ListenRequest, SpeakRequest};
+use stats::{
+    audio_result_from_response, embedding_result_from_response, generation_result_from_response,
+};
 use thread_loop::{run_engine_thread, EngineThreadCommand};
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -98,6 +102,8 @@ pub struct EngineTokenBatches {
 
 /// Boxed final-response future returned when a text run is split into parts.
 pub type EngineTextResponseFuture = Pin<Box<dyn Future<Output = Result<GenerationResult>> + Send>>;
+pub(crate) type EngineAudioResponseFuture =
+    Pin<Box<dyn Future<Output = Result<SynthesizedAudio>> + Send>>;
 /// Boxed final-response future returned when an embedding run is split.
 pub type EngineEmbeddingResponseFuture =
     Pin<Box<dyn Future<Output = Result<EmbeddingResult>> + Send>>;
@@ -105,6 +111,46 @@ pub type EngineEmbeddingResponseFuture =
 enum EngineResponse<T> {
     Pending(oneshot::Receiver<Result<T>>),
     Ready(Option<Result<T>>),
+}
+
+#[derive(Clone)]
+pub(crate) struct EngineCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl EngineCancellation {
+    pub(crate) fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+pub(crate) struct EngineAudioRun {
+    response: EngineAudioResponseFuture,
+    cancellation: EngineCancellation,
+}
+
+impl EngineAudioRun {
+    #[cfg(test)]
+    pub(crate) fn from_response(response: EngineAudioResponseFuture) -> Self {
+        Self {
+            response,
+            cancellation: EngineCancellation::new(),
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (EngineAudioResponseFuture, EngineCancellation) {
+        (self.response, self.cancellation)
+    }
 }
 
 impl<T> Unpin for EngineResponse<T> {}
@@ -118,8 +164,53 @@ impl SippEngine {
 
     /// Submit a raw prompt generation request and return its run handle.
     pub fn query(&self, request: QueryRequest) -> EngineTextRun {
+        let emit_tokens = request.emit_tokens;
+        self.generate(request, emit_tokens)
+    }
+
+    pub(crate) fn listen(&self, request: ListenRequest) -> EngineTextRun {
         let (response_tx, response_rx) = oneshot::channel();
-        let (token_tx, tokens) = token_channel(request.emit_tokens);
+        let response = match self
+            .inner
+            .command_tx
+            .send(EngineThreadCommand::Listen(request, response_tx))
+        {
+            Ok(()) => EngineResponse::Pending(response_rx),
+            Err(_) => EngineResponse::ready_err(runtime_command(ENGINE_THREAD_CLOSED)),
+        };
+        EngineTextRun {
+            response,
+            tokens: None,
+            _engine: Arc::clone(&self.inner),
+        }
+    }
+
+    pub(crate) fn speak(&self, request: SpeakRequest) -> EngineAudioRun {
+        let (response_tx, response_rx) = oneshot::channel();
+        let cancellation = EngineCancellation::new();
+        let send_result = self.inner.command_tx.send(EngineThreadCommand::Speak(
+            request,
+            cancellation.clone(),
+            response_tx,
+        ));
+        let engine = Arc::clone(&self.inner);
+        let response = Box::pin(async move {
+            let _engine = engine;
+            send_result.map_err(|_| runtime_command(ENGINE_THREAD_CLOSED))?;
+            let response = response_rx
+                .await
+                .map_err(|_| runtime_command(ENGINE_THREAD_STOPPED_BEFORE_RESPONSE))??;
+            audio_result_from_response(response)
+        });
+        EngineAudioRun {
+            response,
+            cancellation,
+        }
+    }
+
+    fn generate(&self, request: QueryRequest, emit_tokens: bool) -> EngineTextRun {
+        let (response_tx, response_rx) = oneshot::channel();
+        let (token_tx, tokens) = token_channel(emit_tokens);
         let response = match self.inner.command_tx.send(EngineThreadCommand::Generate(
             request,
             response_tx,

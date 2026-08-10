@@ -54,7 +54,7 @@ change.
 ### 4. Browser Package And Demos (`lib/web/`, `demos/`)
 - Run browser package TypeScript tests:
   ```bash
-  cargo xtask test unit suite browser-package
+  cargo xtask test unit suite browser
   ```
 - Demo tests are cataloged separately:
   ```bash

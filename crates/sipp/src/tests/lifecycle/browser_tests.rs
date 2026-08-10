@@ -13,16 +13,24 @@ fn inspection(
     compatible: &[&str],
     provided: Option<&str>,
 ) -> AssetInspection {
+    let trained_context_size = (role == AssetRole::Model).then_some(8192);
     AssetInspection {
-        version: 1,
+        version: AssetInspection::VERSION,
         role,
         architecture: Some("test".to_string()),
+        trained_context_size,
         vision_capable,
+        audio_capable: false,
+        audio_generation_capable: false,
         compatible_vision_projector_types: compatible
             .iter()
             .map(|value| value.to_string())
             .collect(),
+        compatible_audio_projector_types: Vec::new(),
+        compatible_audio_generation_projector_types: Vec::new(),
         provided_vision_projector_type: provided.map(str::to_string),
+        provided_audio_projector_type: None,
+        provided_audio_generation_projector_type: None,
     }
 }
 
@@ -79,6 +87,23 @@ fn backend_capabilities(compiled: &[&str], available: &[&str]) -> BackendCapabil
     }
 }
 
+fn service_with_installed_text_model(
+    trained_context_size: Option<u32>,
+) -> (BrowserLifecycleService, String) {
+    let mut model_inspection = inspection(AssetRole::Model, false, &[], None);
+    model_inspection.trained_context_size = trained_context_size;
+    let model = asset("asset-model", ModelAssetKind::Model, model_inspection);
+    let mut service =
+        BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
+    let installed = service
+        .install(BrowserInstallSource {
+            assets: vec![model.clone()],
+            classified: vec![classified(&model)],
+        })
+        .expect("install");
+    (service, installed.model.id)
+}
+
 #[test]
 fn prepares_and_commits_text_load() {
     let model = asset(
@@ -107,8 +132,8 @@ fn prepares_and_commits_text_load() {
         )
         .expect("prepare");
 
-    assert!(prepared.load_required);
     assert_eq!(prepared.assets.len(), 1);
+    assert!(!prepared.model.asset_fingerprint.is_empty());
     assert_eq!(prepared.model.status, ModelStatus::Ready);
     assert_eq!(prepared.manifest.assets["asset-model"].ref_count, 1);
     assert_eq!(
@@ -124,23 +149,188 @@ fn prepares_and_commits_text_load() {
         json!(true)
     );
     assert_eq!(prepared.runtime_config["context"]["warmup"], json!(true));
+    assert_eq!(prepared.runtime_config["context"]["n_ctx"], json!(1024));
 
     let committed = service
         .commit_load(BrowserCommitLoadRequest {
             load_id: prepared.load_id,
-            model_id: prepared.model.id,
+            model_id: prepared.model.id.clone(),
             runtime_fingerprint: prepared.runtime_fingerprint,
-            chat_template: Some("template".to_string()),
-            bos_text: "<s>".to_string(),
-            eos_text: "</s>".to_string(),
-            media_marker: None,
             runtime: None,
             profile: None,
         })
         .expect("commit");
 
-    assert!(committed.model.loaded);
-    assert_eq!(committed.model.chat_template.as_deref(), Some("template"));
+    assert_eq!(committed.model.id, prepared.model.id);
+    assert!(committed.manifest.models[&committed.model.id]
+        .last_loaded_at
+        .is_some());
+}
+
+#[test]
+fn browser_cpu_context_uses_the_smaller_trained_capacity() {
+    let (mut service, model_id) = service_with_installed_text_model(Some(2048));
+
+    let prepared = service
+        .prepare_load(
+            BrowserLoadSource { model_id },
+            load_options(json!({}), BrowserObservabilityMode::Off),
+        )
+        .expect("prepare");
+
+    assert_eq!(prepared.runtime_config["context"]["n_ctx"], json!(2048));
+}
+
+#[test]
+fn browser_cpu_context_caps_large_trained_capacity() {
+    let (mut service, model_id) = service_with_installed_text_model(Some(131_072));
+
+    let prepared = service
+        .prepare_load(
+            BrowserLoadSource { model_id },
+            load_options(json!({}), BrowserObservabilityMode::Off),
+        )
+        .expect("prepare");
+
+    assert_eq!(prepared.runtime_config["context"]["n_ctx"], json!(4096));
+}
+
+#[test]
+fn browser_explicit_cpu_context_does_not_require_trained_metadata() {
+    let (mut service, model_id) = service_with_installed_text_model(None);
+
+    let prepared = service
+        .prepare_load(
+            BrowserLoadSource { model_id },
+            load_options(
+                json!({ "context": { "n_ctx": 1024 } }),
+                BrowserObservabilityMode::Off,
+            ),
+        )
+        .expect("prepare");
+
+    assert_eq!(prepared.runtime_config["context"]["n_ctx"], json!(1024));
+}
+
+#[test]
+fn browser_webgpu_context_does_not_require_trained_metadata() {
+    let (mut service, model_id) = service_with_installed_text_model(None);
+
+    let prepared = service
+        .prepare_load(
+            BrowserLoadSource { model_id },
+            load_options_with_backend(
+                BrowserBackendPreference::WebGpu,
+                json!({}),
+                BrowserObservabilityMode::Off,
+            ),
+        )
+        .expect("prepare");
+
+    assert!(prepared.runtime_config["context"]["n_ctx"].is_null());
+}
+
+#[test]
+fn browser_omitted_cpu_context_uses_the_ceiling_without_trained_metadata() {
+    let (mut service, model_id) = service_with_installed_text_model(None);
+
+    let prepared = service
+        .prepare_load(
+            BrowserLoadSource { model_id },
+            load_options(json!({}), BrowserObservabilityMode::Off),
+        )
+        .expect("prepare");
+
+    assert_eq!(prepared.runtime_config["context"]["n_ctx"], json!(4096));
+}
+
+#[test]
+fn trained_context_resolution_returns_none_when_metadata_is_unavailable() {
+    let (service, model_id) = service_with_installed_text_model(None);
+    let entry = service.manifest.models[&model_id].clone();
+
+    assert_eq!(
+        service
+            .trained_context_size_for_entry(&entry)
+            .expect("trained context resolution"),
+        None
+    );
+}
+
+#[test]
+fn trained_context_resolution_allows_metadata_less_continuation_shards() {
+    let (mut service, model_id) = service_with_installed_text_model(Some(2048));
+    let continuation = asset(
+        "asset-continuation",
+        ModelAssetKind::Model,
+        AssetInspection::unknown(),
+    );
+    service
+        .manifest
+        .assets
+        .insert(continuation.id.clone(), continuation);
+    let mut entry = service.manifest.models[&model_id].clone();
+    entry.model_asset_ids.push("asset-continuation".to_string());
+
+    assert_eq!(
+        service
+            .trained_context_size_for_entry(&entry)
+            .expect("trained context"),
+        Some(2048)
+    );
+}
+
+#[test]
+fn trained_context_resolution_rejects_conflicting_asset_metadata() {
+    let (mut service, model_id) = service_with_installed_text_model(Some(2048));
+    let mut conflicting_inspection = inspection(AssetRole::Model, false, &[], None);
+    conflicting_inspection.trained_context_size = Some(4096);
+    let conflicting = asset(
+        "asset-conflicting",
+        ModelAssetKind::Model,
+        conflicting_inspection,
+    );
+    service
+        .manifest
+        .assets
+        .insert(conflicting.id.clone(), conflicting);
+    let mut entry = service.manifest.models[&model_id].clone();
+    entry.model_asset_ids.push("asset-conflicting".to_string());
+
+    let error = service
+        .trained_context_size_for_entry(&entry)
+        .expect_err("conflicting trained context");
+    assert!(matches!(error, ModelError::InvalidModelSource(message)
+    if message == format!(
+        "model '{model_id}' has inconsistent trained context metadata across its assets"
+    )));
+}
+
+#[test]
+fn remove_enforces_the_in_use_rule_from_the_caller_supplied_active_model() {
+    let model = asset(
+        "asset-model",
+        ModelAssetKind::Model,
+        inspection(AssetRole::Model, false, &[], None),
+    );
+    let mut service =
+        BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
+    let installed = service
+        .install(BrowserInstallSource {
+            assets: vec![model.clone()],
+            classified: vec![classified(&model)],
+        })
+        .expect("install");
+
+    let error = service
+        .remove(BrowserRemoveRequest {
+            model_id: installed.model.id.clone(),
+            active_model_id: Some(installed.model.id.clone()),
+        })
+        .expect_err("active model removal");
+
+    assert!(matches!(error, ModelError::ModelInUse(id) if id == installed.model.id));
+    assert_eq!(service.list().len(), 1);
 }
 
 #[test]
@@ -271,20 +461,6 @@ fn incompatible_projector_failure_restores_previous_entry() {
     assert!(matches!(error, ModelError::InvalidModelPairing(_)));
     let entry = service.manifest.models.get(&first.model.id).expect("entry");
     assert_eq!(entry.projector_asset_id.as_deref(), Some("asset-mmproj"));
-}
-
-#[test]
-fn abort_load_records_failed_query_observation() {
-    let mut service =
-        BrowserLifecycleService::create(BrowserCreateConfig { manifest: None }).expect("service");
-
-    let snapshot = service.abort_load(Some("load failed".to_string()));
-
-    assert_eq!(snapshot.state, BrowserLifecycleState::Error);
-    let query = snapshot.query.expect("query observation");
-    assert_eq!(query.status, QUERY_STATUS_FAILED);
-    assert_eq!(query.error_code.as_deref(), Some(CODE_QUERY_FAILED));
-    assert_eq!(query.error_message.as_deref(), Some("load failed"));
 }
 
 #[test]
@@ -544,8 +720,9 @@ fn snapshot_patch_updates_supplied_fields_and_preserves_others() {
 
 #[test]
 fn rejects_previous_registry_manifest_versions() {
+    let previous_version = REGISTRY_MANIFEST_VERSION - 1;
     let manifest = BrowserRegistryManifest {
-        version: 3,
+        version: previous_version,
         ..BrowserRegistryManifest::default()
     };
     let error = BrowserLifecycleService::create(BrowserCreateConfig {
@@ -555,7 +732,34 @@ fn rejects_previous_registry_manifest_versions() {
 
     assert!(matches!(
         error,
-        ModelError::StorageCorrupt(message) if message.contains("expected browser registry manifest version 4, got 3")
+        ModelError::StorageCorrupt(message)
+            if message == format!(
+                "expected browser registry manifest version {REGISTRY_MANIFEST_VERSION}, got {previous_version}"
+            )
+    ));
+}
+
+#[test]
+fn rejects_previous_asset_inspection_versions() {
+    let mut old_inspection = inspection(AssetRole::Model, false, &[], None);
+    let previous_version = AssetInspection::VERSION - 1;
+    old_inspection.version = previous_version;
+    let old_asset = asset("asset", ModelAssetKind::Model, old_inspection);
+    let mut manifest = BrowserRegistryManifest::default();
+    manifest.assets.insert(old_asset.id.clone(), old_asset);
+
+    let error = BrowserLifecycleService::create(BrowserCreateConfig {
+        manifest: Some(manifest),
+    })
+    .expect_err("previous inspection version");
+
+    assert!(matches!(
+        error,
+        ModelError::StorageCorrupt(message)
+            if message == format!(
+                "expected asset inspection version {}, got {previous_version}",
+                AssetInspection::VERSION
+            )
     ));
 }
 

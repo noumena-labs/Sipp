@@ -127,7 +127,7 @@ public struct ResponseMetadata: Equatable, Sendable {
 
 /// The terminal value of a query or chat run.
 public struct TextResponse: Equatable, Sendable {
-    public let endpoint: String
+    public let endpoint: EndpointRef
     public let text: String
     public let finishReason: FinishReason
     public let usage: TokenUsage?
@@ -147,12 +147,22 @@ public enum PoolingType: Equatable, Sendable {
 
 /// The terminal value of an embedding run.
 public struct EmbeddingResponse: Equatable, Sendable {
-    public let endpoint: String
+    public let endpoint: EndpointRef
     public let values: [Float]
     public let usage: TokenUsage?
     public let localStats: RequestStats?
     public let pooling: PoolingType?
     public let normalized: Bool?
+    public let metadata: ResponseMetadata
+}
+
+/// The terminal mono PCM16 WAV value of a speech-synthesis run.
+public struct AudioResponse: Equatable, Sendable {
+    public let endpoint: EndpointRef
+    public let audio: Data
+    public let sampleRateHz: UInt32
+    public let channels: UInt16
+    public let durationMs: UInt64
     public let metadata: ResponseMetadata
 }
 
@@ -301,7 +311,7 @@ extension ResponseMetadata {
 
 extension TextResponse {
     init(_ response: FfiTextResponse) {
-        endpoint = response.endpoint
+        endpoint = EndpointRef(id: response.endpoint)
         text = response.text
         finishReason = FinishReason(response.finishReason)
         usage = response.usage.map(TokenUsage.init)
@@ -331,12 +341,23 @@ extension PoolingType {
 
 extension EmbeddingResponse {
     init(_ response: FfiEmbeddingResponse) {
-        endpoint = response.endpoint
+        endpoint = EndpointRef(id: response.endpoint)
         values = response.values
         usage = response.usage.map(TokenUsage.init)
         localStats = response.localStats.map(RequestStats.init)
         pooling = response.pooling.map(PoolingType.init)
         normalized = response.normalized
+        metadata = ResponseMetadata(response.metadata)
+    }
+}
+
+extension AudioResponse {
+    init(_ response: FfiAudioResponse) {
+        endpoint = EndpointRef(id: response.endpoint)
+        audio = response.audio
+        sampleRateHz = response.sampleRateHz
+        channels = response.channels
+        durationMs = response.durationMs
         metadata = ResponseMetadata(response.metadata)
     }
 }

@@ -44,6 +44,12 @@ pub(crate) fn mtmd_default_marker() -> String {
     ffi::bridge::mtmd_default_marker()
 }
 
+pub(crate) struct NativeAudio {
+    pub(crate) data: Vec<u8>,
+    pub(crate) sample_count: u64,
+    pub(crate) sample_rate_hz: u32,
+}
+
 pub(crate) struct NativeRuntimeHandle {
     inner: cxx::UniquePtr<ffi::bridge::NativeRuntime>,
 }
@@ -231,6 +237,71 @@ impl NativeRuntimeHandle {
         })?
     }
 
+    pub(crate) fn apply_asr_chat_template(&self, language: &str) -> Result<String> {
+        self.with_required_ref(|runtime| {
+            runtime
+                .apply_asr_chat_template(language)
+                .map_err(|error| Error::RuntimeCommand(error.to_string()))
+        })?
+    }
+
+    pub(crate) fn parse_asr_output(&self, language: &str, output: &str) -> Result<String> {
+        self.with_required_ref(|runtime| {
+            runtime
+                .parse_asr_output(language, output)
+                .map_err(|error| Error::RuntimeCommand(error.to_string()))
+        })?
+    }
+
+    pub(crate) fn begin_speech(
+        &mut self,
+        text: &str,
+        language: Option<&str>,
+        speaker_audio: Option<&[u8]>,
+        max_duration_ms: Option<u32>,
+    ) -> Result<()> {
+        let (has_max_duration, max_duration_ms) = match max_duration_ms {
+            Some(value) => (true, value),
+            None => (false, 0),
+        };
+        self.pin_mut()?
+            .begin_speech(
+                text,
+                language.unwrap_or_default(),
+                speaker_audio.unwrap_or_default(),
+                has_max_duration,
+                max_duration_ms,
+            )
+            .map_err(|error| Error::RuntimeCommand(error.to_string()))
+    }
+
+    pub(crate) fn step_speech(&mut self) -> Result<bool> {
+        self.pin_mut()?
+            .step_speech()
+            .map_err(|error| Error::RuntimeCommand(error.to_string()))
+    }
+
+    pub(crate) fn finish_speech(&mut self) -> Result<NativeAudio> {
+        let mut audio = self
+            .pin_mut()?
+            .finish_speech()
+            .map_err(|error| Error::RuntimeCommand(error.to_string()))?;
+        let audio_ref = audio.as_ref().ok_or(Error::RuntimeNotReady)?;
+        let sample_count = audio_ref.sample_count();
+        let sample_rate_hz = audio_ref.sample_rate_hz();
+        Ok(NativeAudio {
+            data: audio.pin_mut().take_data(),
+            sample_count,
+            sample_rate_hz,
+        })
+    }
+
+    pub(crate) fn cancel_speech(&mut self) -> Result<()> {
+        self.pin_mut()?
+            .cancel_speech()
+            .map_err(|error| Error::RuntimeCommand(error.to_string()))
+    }
+
     pub(crate) fn decode(&mut self, batch: &NativeBatchHandle) -> Result<i32> {
         let batch = batch.as_ref()?;
         self.pin_mut()?
@@ -313,12 +384,39 @@ impl NativeRuntimeHandle {
             .unwrap_or(false)
     }
 
+    pub(crate) fn mtmd_audio_sample_rate(&self) -> Result<Option<u32>> {
+        let sample_rate = self.with_required_ref(|runtime| runtime.mtmd_audio_sample_rate())?;
+        if sample_rate == -1 {
+            return Ok(None);
+        }
+        match u32::try_from(sample_rate) {
+            Ok(sample_rate) if sample_rate > 0 => Ok(Some(sample_rate)),
+            _ => Err(Error::RuntimeCommand(
+                "audio-capable mtmd context returned an invalid sample rate".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn mtmd_generated_audio_sample_rate(&self) -> Result<Option<u32>> {
+        let sample_rate =
+            self.with_required_ref(|runtime| runtime.mtmd_generated_audio_sample_rate())?;
+        if sample_rate == -1 {
+            return Ok(None);
+        }
+        match u32::try_from(sample_rate) {
+            Ok(sample_rate) if sample_rate > 0 => Ok(Some(sample_rate)),
+            _ => Err(Error::RuntimeCommand(
+                "audio-generating mtmd context returned an invalid sample rate".to_string(),
+            )),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn mtmd_eval_images(
+    pub(crate) fn mtmd_eval_media(
         &mut self,
         prompt: &str,
-        image_bytes: &[u8],
-        image_sizes: &[i32],
+        media_bytes: &[u8],
+        media_sizes: &[i32],
         add_special: bool,
         parse_special: bool,
         n_past: i32,
@@ -327,10 +425,10 @@ impl NativeRuntimeHandle {
         logits_last: bool,
     ) -> Result<i32> {
         self.pin_mut()?
-            .mtmd_eval_images(
+            .mtmd_eval_media(
                 prompt,
-                image_bytes,
-                image_sizes,
+                media_bytes,
+                media_sizes,
                 add_special,
                 parse_special,
                 n_past,

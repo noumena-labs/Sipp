@@ -14,7 +14,7 @@ use futures::executor::block_on;
 use futures::StreamExt;
 use pyo3::exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBool, PyDict, PyFloat, PyList, PyLong, PyString, PyTuple};
+use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyFloat, PyList, PyLong, PyString, PyTuple};
 use sipp::backend::{
     backend_observability_json as core_backend_observability_json,
     set_llama_log_quiet as core_set_llama_log_quiet,
@@ -26,14 +26,17 @@ use sipp::engine::{
     SchedulerRuntimeConfig, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 use sipp::{
-    EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
-    LocalDescriptor as CoreLocalDescriptor, ManagedModel as CoreManagedModel,
-    ProviderEndpointError as CoreProviderEndpointError, SippChatRequest as ClientChatRequest,
+    Endpoint as CoreEndpoint, EndpointRef as CoreEndpointRef, ManagedModel as CoreManagedModel,
+    ProviderEndpointError as CoreProviderEndpointError, SippAudioResponse as ClientAudioResponse,
+    SippAudioResponseFuture as ClientAudioResponseFuture, SippAudioRun as CoreClientAudioRun,
+    SippCancellationHandle as CoreCancellationHandle,
+    SippCancellationReason as CoreCancellationReason, SippChatRequest as ClientChatRequest,
     SippClient as CoreSippClient, SippEmbedRequest as ClientEmbedRequest,
     SippEmbeddingResponse as ClientEmbeddingResponse,
     SippEmbeddingResponseFuture as ClientEmbeddingResponseFuture,
     SippEmbeddingRun as CoreClientEmbeddingRun, SippError as ClientError,
-    SippQueryRequest as ClientQueryRequest, SippTextOptions as ClientTextOptions,
+    SippListenRequest as ClientListenRequest, SippQueryRequest as ClientQueryRequest,
+    SippSpeakRequest as ClientSpeakRequest, SippTextOptions as ClientTextOptions,
     SippTextResponse as ClientTextResponse, SippTextResponseFuture as ClientTextResponseFuture,
     SippTextRun as CoreClientTextRun, SippTokenBatches as ClientTokenBatches,
 };
@@ -58,12 +61,15 @@ pyo3::create_exception!(
 const PY_CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const PY_CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
 const PY_CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
+const PY_CLIENT_AUDIO_RESPONSE_MUTEX_POISONED: &str = "audio response mutex is poisoned";
 const PY_CLIENT_TOKEN_BATCHES_MUTEX_POISONED: &str = "token batches mutex is poisoned";
 const PY_CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
 const PY_CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
+const PY_CLIENT_AUDIO_RESPONSE_CONSUMED: &str = "audio response already consumed";
 
 type PySharedClientTextResponse = Arc<Mutex<Option<ClientTextResponseFuture>>>;
 type PySharedClientEmbeddingResponse = Arc<Mutex<Option<ClientEmbeddingResponseFuture>>>;
+type PySharedClientAudioResponse = Arc<Mutex<Option<ClientAudioResponseFuture>>>;
 type PySharedClientTokenBatches = Arc<Mutex<Option<ClientTokenBatches>>>;
 
 /// Sampling controls used by local text generation.
@@ -419,7 +425,6 @@ impl PySchedulerRuntimeConfig {
             prefill_chunk_size,
             max_running_requests,
             max_queued_requests,
-            ..Default::default()
         };
         SchedulerRuntimeConfig::try_from(&dto).map_err(convert_error)?;
         Ok(Self { dto })
@@ -748,30 +753,32 @@ impl PyLocalEmbedOptions {
     }
 }
 
-/// Endpoint descriptor accepted by SippClient.add.
-#[pyclass(name = "EndpointDescriptor")]
+/// Unregistered endpoint configuration accepted by `SippClient.add`.
+#[pyclass(name = "Endpoint")]
 #[derive(Clone)]
-struct PyEndpointDescriptor {
-    core: CoreEndpointDescriptor,
+struct PyEndpoint {
+    core: CoreEndpoint,
 }
 
 #[pymethods]
-impl PyEndpointDescriptor {
+impl PyEndpoint {
     /// Create a local endpoint for a managed model.
     #[staticmethod]
-    #[pyo3(signature = (model_id, *, runtime = None))]
+    #[pyo3(signature = (model, *, runtime = None))]
     fn local(
         py: Python<'_>,
-        model_id: String,
+        model: Py<PyManagedModel>,
         runtime: Option<Py<PyNativeRuntimeConfig>>,
     ) -> PyResult<Self> {
-        let mut descriptor = CoreLocalDescriptor::new(model_id);
-        if let Some(runtime) = runtime {
-            descriptor.runtime = NativeRuntimeConfig::try_from(&runtime.borrow(py).to_dto())
-                .map_err(convert_error)?;
-        }
+        let runtime = runtime
+            .map(|runtime| runtime.borrow(py).to_dto())
+            .unwrap_or_default();
+        let input = dto::LocalEndpointInput {
+            model: model.borrow(py).core.clone(),
+            runtime,
+        };
         Ok(Self {
-            core: descriptor.into(),
+            core: input.try_into().map_err(convert_error)?,
         })
     }
 
@@ -793,16 +800,16 @@ impl PyEndpointDescriptor {
         embed_route: Option<String>,
         protocol_options: Option<PyObject>,
     ) -> PyResult<Self> {
-        let dto = dto::EndpointDescriptor {
-            kind: "gateway".to_string(),
-            target: Some(target),
-            base_url: Some(base_url),
-            authentication: Some(dto::GatewayAuthentication {
+        let input = dto::GatewayEndpointInput {
+            target,
+            base_url,
+            authentication: dto::GatewayAuthentication::try_from(dto::GatewayAuthenticationInput {
                 kind: authentication_kind.to_string(),
                 value: authentication_value,
                 header_name: authentication_header,
-            }),
-            static_headers: static_headers.map(py_static_headers),
+            })
+            .map_err(convert_error)?,
+            static_headers: static_headers.map(py_static_headers).unwrap_or_default(),
             timeout_ms,
             query_route,
             chat_route,
@@ -810,9 +817,8 @@ impl PyEndpointDescriptor {
             protocol_options: protocol_options
                 .map(|value| py_to_json(value.bind(py)))
                 .transpose()?,
-            ..dto::EndpointDescriptor::default()
         };
-        let core = CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
+        let core = input.try_into().map_err(convert_error)?;
         Ok(Self { core })
     }
 
@@ -831,10 +837,9 @@ impl PyEndpointDescriptor {
         auth_header_value: Option<String>,
         static_headers: Option<Vec<(String, String)>>,
     ) -> PyResult<Self> {
-        let dto = dto::EndpointDescriptor {
-            kind: "provider".to_string(),
-            provider: Some(provider),
-            model: Some(model),
+        let input = dto::ProviderEndpointInput::try_from(dto::ProviderSelectionInput {
+            provider,
+            model,
             api_key,
             base_url,
             timeout_ms,
@@ -842,9 +847,10 @@ impl PyEndpointDescriptor {
             auth_header_name,
             auth_header_value,
             static_headers: static_headers.map(py_static_headers),
-            ..dto::EndpointDescriptor::default()
-        };
-        let core = CoreEndpointDescriptor::try_from(&dto).map_err(convert_error)?;
+            correlation_header: None,
+        })
+        .map_err(convert_error)?;
+        let core = input.try_into().map_err(convert_error)?;
         Ok(Self { core })
     }
 }
@@ -852,27 +858,40 @@ impl PyEndpointDescriptor {
 /// Model managed by a client model store.
 #[pyclass(name = "ManagedModel", frozen)]
 struct PyManagedModel {
-    #[pyo3(get)]
-    id: String,
-    #[pyo3(get)]
-    name: String,
-    #[pyo3(get)]
-    bytes: u64,
-    #[pyo3(get)]
-    modality: String,
-    #[pyo3(get)]
-    status: String,
+    core: CoreManagedModel,
+}
+
+#[pymethods]
+impl PyManagedModel {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.core.id
+    }
+
+    #[getter]
+    fn name(&self) -> &str {
+        &self.core.name
+    }
+
+    #[getter]
+    fn bytes(&self) -> u64 {
+        self.core.bytes
+    }
+
+    #[getter]
+    fn modality(&self) -> &'static str {
+        self.core.modality.as_str()
+    }
+
+    #[getter]
+    fn status(&self) -> &'static str {
+        self.core.status.as_str()
+    }
 }
 
 impl From<CoreManagedModel> for PyManagedModel {
     fn from(model: CoreManagedModel) -> Self {
-        Self {
-            id: model.id,
-            name: model.name,
-            bytes: model.bytes,
-            modality: model.modality.as_str().to_string(),
-            status: model.status.as_str().to_string(),
-        }
+        Self { core: model }
     }
 }
 
@@ -964,20 +983,15 @@ impl PySippClient {
     }
 
     /// Register or replace an endpoint and return its current reference.
-    fn add(
-        &self,
-        py: Python<'_>,
-        id: String,
-        descriptor: Py<PyEndpointDescriptor>,
-    ) -> PyResult<PyEndpointRef> {
-        let descriptor = descriptor.borrow(py).core.clone();
+    fn add(&self, py: Python<'_>, id: String, endpoint: Py<PyEndpoint>) -> PyResult<PyEndpointRef> {
+        let endpoint = endpoint.borrow(py).core.clone();
         let inner = self.inner.clone();
         let endpoint = py
             .allow_threads(move || {
                 let mut client = inner
                     .lock()
                     .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
-                block_on(client.add(id, descriptor))
+                block_on(client.add(id, endpoint))
             })
             .map_err(to_py_client_error)?;
         Ok(PyEndpointRef {
@@ -1090,6 +1104,60 @@ impl PySippClient {
             .embed(request);
         Ok(PySippEmbeddingRun::from_core(run))
     }
+
+    /// Start speech recognition with an optional transcript token limit.
+    #[pyo3(signature = (audio, *, endpoint = None, language = None, max_tokens = None))]
+    fn listen(
+        &self,
+        py: Python<'_>,
+        audio: Vec<u8>,
+        endpoint: Option<Py<PyEndpointRef>>,
+        language: Option<String>,
+        max_tokens: Option<u32>,
+    ) -> PyResult<PySippTextRun> {
+        let request = ClientListenRequest {
+            endpoint: endpoint
+                .as_ref()
+                .map(|endpoint| CoreEndpointRef::from_id(endpoint.borrow(py).to_dto().id)),
+            audio,
+            language,
+            max_tokens,
+        };
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
+            .listen(request);
+        Ok(PySippTextRun::from_core(run))
+    }
+
+    /// Start speech synthesis with an optional hard duration limit.
+    #[pyo3(signature = (text, *, endpoint = None, language = None, speaker_audio = None, max_duration_ms = None))]
+    fn speak(
+        &self,
+        py: Python<'_>,
+        text: String,
+        endpoint: Option<Py<PyEndpointRef>>,
+        language: Option<String>,
+        speaker_audio: Option<Vec<u8>>,
+        max_duration_ms: Option<u32>,
+    ) -> PyResult<PySippAudioRun> {
+        let request = ClientSpeakRequest {
+            endpoint: endpoint
+                .as_ref()
+                .map(|endpoint| CoreEndpointRef::from_id(endpoint.borrow(py).to_dto().id)),
+            text,
+            language,
+            speaker_audio,
+            max_duration_ms,
+        };
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_MUTEX_POISONED))?
+            .speak(request);
+        Ok(PySippAudioRun::from_core(run))
+    }
 }
 
 /// Text generation handle with a final response and optional token stream.
@@ -1176,6 +1244,44 @@ impl PySippEmbeddingRun {
     }
 }
 
+/// Speech-synthesis handle with a final WAV response.
+#[pyclass(name = "SippAudioRun")]
+struct PySippAudioRun {
+    response: PySharedClientAudioResponse,
+    cancellation: CoreCancellationHandle,
+}
+
+impl PySippAudioRun {
+    fn from_core(run: CoreClientAudioRun) -> Self {
+        let (response, cancellation) = run.into_parts();
+        Self {
+            response: Arc::new(Mutex::new(Some(response))),
+            cancellation,
+        }
+    }
+}
+
+#[pymethods]
+impl PySippAudioRun {
+    fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let response = self
+            .response
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err(PY_CLIENT_AUDIO_RESPONSE_MUTEX_POISONED))?
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err(PY_CLIENT_AUDIO_RESPONSE_CONSUMED))?;
+        let response = py
+            .allow_threads(|| block_on(response))
+            .map_err(to_py_client_error)?;
+        sipp_audio_response_to_dict(py, response)
+    }
+
+    fn cancel(&self) {
+        self.cancellation
+            .cancel(CoreCancellationReason::CallerCancelled);
+    }
+}
+
 #[pymethods]
 impl PySippEmbeddingRun {
     fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -1245,7 +1351,8 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySippTextRun>()?;
     module.add_class::<PySippTokenIterator>()?;
     module.add_class::<PySippEmbeddingRun>()?;
-    module.add_class::<PyEndpointDescriptor>()?;
+    module.add_class::<PySippAudioRun>()?;
+    module.add_class::<PyEndpoint>()?;
     module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
     module.add("DEFAULT_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
     module.add_function(wrap_pyfunction!(backend_observability_json, module)?)?;
@@ -1255,10 +1362,10 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn py_static_headers(
     headers: impl IntoIterator<Item = (String, String)>,
-) -> Vec<dto::ProviderStaticHeader> {
+) -> Vec<dto::StaticHeader> {
     headers
         .into_iter()
-        .map(|(name, value)| dto::ProviderStaticHeader { name, value })
+        .map(|(name, value)| dto::StaticHeader { name, value })
         .collect()
 }
 
@@ -1437,6 +1544,19 @@ fn sipp_embedding_response_to_dict(
     Ok(dict.into_py(py))
 }
 
+fn sipp_audio_response_to_dict(
+    py: Python<'_>,
+    response: ClientAudioResponse,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("endpoint", endpoint_ref_to_dict(py, response.endpoint)?)?;
+    dict.set_item("audio", PyBytes::new_bound(py, &response.audio))?;
+    dict.set_item("sample_rate_hz", response.sample_rate_hz)?;
+    dict.set_item("channels", response.channels)?;
+    dict.set_item("duration_ms", response.duration_ms)?;
+    Ok(dict.into_py(py))
+}
+
 fn token_usage_to_dict(py: Python<'_>, usage: TokenUsage) -> PyResult<Py<PyAny>> {
     let usage = dto::TokenUsage::from(usage);
     let dict = PyDict::new_bound(py);
@@ -1568,7 +1688,7 @@ fn to_py_client_error(error: ClientError) -> PyErr {
                 Err(error) => error,
             }
         }),
-        ClientError::Provider(error) => to_py_provider_error(error),
+        ClientError::Provider(error) => to_py_provider_error(*error),
         ClientError::InvalidRequest(message) => PyValueError::new_err(message),
         ClientError::UnsupportedOperation {
             endpoint,

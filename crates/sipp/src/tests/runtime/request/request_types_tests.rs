@@ -119,7 +119,7 @@ fn reset_for_queue_preserves_identity_and_clears_runtime_state() {
 #[test]
 fn multimodal_payload_and_request_overrides_are_plain_value_fields() {
     let payload = MultimodalPayload {
-        image_buffers: vec![vec![1, 2, 3]],
+        media_buffers: vec![vec![1, 2, 3]],
     };
     let mut request = GenerateRequest::new(9, "embed");
     request.original_prompt = "prompt".to_string();

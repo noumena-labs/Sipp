@@ -11,12 +11,12 @@ endpoint.
 | --- | --- | --- | --- |
 | Client options | `new SippClient(options)` | `new SippClient(options)` | Model storage plus browser assets, workers, cache policy, and native backend setup. |
 | Model sources | `client.models.add(sources)` | `client.models.add(sources)` | Browser files or HTTP(S) URLs; native paths or HTTP(S) URLs. Model shards and projectors share one list. |
-| Local endpoint load options | `EndpointDescriptor.local(model.id, options)` | `EndpointDescriptor.local(model.id, { runtime })` | Backend preference and native runtime config. |
+| Local endpoint load options | `Endpoint.local(model, options)` | `Endpoint.local(model, { runtime })` | Backend preference and native runtime config. |
 | Text request options | `client.query(prompt, options)` | `client.query({ options })` | Output length, sampling shortcuts, streaming, cancellation, and stop strings. |
 | Local request options | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | Local-only prompt state, grammars, images, and embedding normalization. |
 | Request extensions | `extra` | `extra` | Extra fields interpreted by gateway or provider endpoints. Local endpoints reject them. |
 
-Python and Rust expose the same concepts with language-native descriptors and
+Python and Rust expose the same concepts with language-native endpoint inputs and
 runtime config classes or structs.
 
 ## Browser Client Options
@@ -27,7 +27,6 @@ and browser storage. They do not select a model by themselves.
 | Option | Use |
 | --- | --- |
 | `storageRoot` | Select the OPFS directory for the client model store. |
-| `executionMode` | `auto` uses a worker when available. `worker` forces worker transport. `main-thread` is useful for debugging or constrained hosts. |
 | `wasmThreading` | `pthread` loads the bundled pthread runtime. `single-thread` is only valid with explicit custom `moduleUrl` and `wasmUrl` assets. |
 | `moduleUrl`, `wasmUrl` | Override the selected runtime asset URLs. Provide both together. |
 | `browserCache` | Tune OPFS split thresholds and direct-load behavior for browser GGUF storage. |
@@ -41,10 +40,13 @@ assets with `moduleUrl` and `wasmUrl`.
 
 ```ts
 const client = new SippClient({
-  executionMode: 'worker',
   wasmThreading: 'pthread',
 });
 ```
+
+Browser local inference always runs in a dedicated worker. Activating a model
+replaces the worker and its Wasm instance so retired runtime memory cannot leak
+into the next model session.
 
 ## Local Endpoint Options
 
@@ -56,7 +58,7 @@ const model = await client.models.add([
 ]);
 const endpoint = await client.add(
   'browser-local',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     backend: 'webgpu',
     runtime: {
       context: { n_ctx: 2048 },
@@ -73,7 +75,7 @@ const client = new SippClient({ storageRoot: '/models/.sipp' });
 const model = await client.models.add(['/models/model.gguf']);
 const endpoint = await client.add(
   'node-local',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     runtime: {
       context: { n_ctx: 2048, n_threads: 8, n_threads_batch: 8 },
     },
@@ -84,6 +86,16 @@ const endpoint = await client.add(
 Browser `backend` accepts `auto`, `cpu`, or `webgpu`. Native package backend
 selection is package-specific: Node.js uses `SIPP_NODE_BACKEND`, Python
 uses `SIPP_PYTHON_BACKEND`, and the CLI uses `--backend`.
+
+If the browser fails the functional JSPI suspend/resume probe, Sipp selects its
+bundled CPU-only runtime. That runtime accepts `auto` and `cpu` but rejects
+`webgpu` with `UNSUPPORTED_OPERATION`. Custom `moduleUrl` and `wasmUrl` assets
+bypass bundled selection, so Sipp does not infer their compiled backends.
+When `runtime.context.n_ctx` is omitted, browser CPU activation uses the smaller
+of 4096 and the model's trained context capacity when that metadata is available,
+or 4096 when it is not. This bounds large Wasm KV caches without inflating models
+known to be trained for smaller contexts. Set `n_ctx` explicitly when a different
+CPU context capacity is required.
 
 ## Native Runtime Config
 

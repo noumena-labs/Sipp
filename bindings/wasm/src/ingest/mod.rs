@@ -20,6 +20,14 @@ pub(crate) type GgufOpenShardCallback =
 pub(crate) type GgufWriteShardCallback = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> i32;
 pub(crate) type GgufCloseShardCallback = unsafe extern "C" fn(*mut c_void) -> i32;
 
+pub(crate) struct GgufSplitCallbacks {
+    pub user_data: *mut c_void,
+    pub read_at: GgufReadAtCallback,
+    pub open_shard: GgufOpenShardCallback,
+    pub write_shard: GgufWriteShardCallback,
+    pub close_shard: GgufCloseShardCallback,
+}
+
 pub(crate) fn browser_cache_layout(
     source_bytes: u64,
     source_bytes_known: bool,
@@ -58,18 +66,17 @@ pub(crate) fn gguf_split_stream(
     source_bytes: u64,
     output_prefix: &str,
     shard_max_bytes: u64,
-    user_data: *mut c_void,
-    read_at: GgufReadAtCallback,
-    open_shard: GgufOpenShardCallback,
-    write_shard: GgufWriteShardCallback,
-    close_shard: GgufCloseShardCallback,
+    callbacks: GgufSplitCallbacks,
 ) -> i32 {
-    let mut source = RawReadAt { user_data, read_at };
+    let mut source = RawReadAt {
+        user_data: callbacks.user_data,
+        read_at: callbacks.read_at,
+    };
     let mut sink = RawShardSink {
-        user_data,
-        open_shard,
-        write_shard,
-        close_shard,
+        user_data: callbacks.user_data,
+        open_shard: callbacks.open_shard,
+        write_shard: callbacks.write_shard,
+        close_shard: callbacks.close_shard,
     };
     split_gguf(
         source_bytes,

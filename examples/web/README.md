@@ -16,6 +16,8 @@ Open:
 - `/query.html`: local GGUF query
 - `/chat.html`: local GGUF chat with streaming
 - `/embed.html`: local GGUF embeddings
+- `/speech.html`: local GGUF speech recognition and synthesis
+- `/switching.html`: LLM -> embedding -> VLM -> TTS -> STT -> LLM replacement
 - `/gateway_local.html`: browser-local GGUF and a separate local gateway side by side
 - `/gateway_query.html`: gateway query
 - `/gateway_chat.html`: gateway chat with streaming

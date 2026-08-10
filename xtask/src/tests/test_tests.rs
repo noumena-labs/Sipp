@@ -26,8 +26,9 @@ use super::{
     duration_millis, filtered_rust_targets, is_allowed_rust_test_file, is_cpp_test_file_name,
     is_first_party_source_path, is_inverted_rust_test_file, is_probable_test_path, list_json_value,
     markdown_cell, normalize_relative_path, parse_junit_case_reports, parse_lcov_summary,
-    parse_libtest_case_reports, parse_quoted_test_name, parse_rust_fn_name, parse_tap_case_reports,
-    path_components, path_matches_root, python_venv_exe, selected_smoke_suites,
+    parse_libtest_case_reports, parse_quoted_test_name, parse_rust_fn_name,
+    parse_swift_case_reports, parse_tap_case_reports, path_components, path_matches_root,
+    python_venv_exe, reconcile_executed_cases, rust_host_cfg_enabled, selected_smoke_suites,
     selected_unit_suites, selected_verify_suites, source_owner_suites, suite_by_id, test_backends,
     validate_package_filter, validate_suite_backends, CaseDiscoverer, CaseStatus,
     CoverageSummaries, LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase,
@@ -281,13 +282,6 @@ fn public_doc_checker_reports_missing_exports() {
 }
 
 #[test]
-fn old_flag_based_test_commands_are_rejected_by_clap() {
-    assert!(Cli::try_parse_from(["xtask", "test", "run", "--suite", "nope"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "list", "--category", "unit"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "list", "--suite", "xtask"]).is_err());
-}
-
-#[test]
 fn unit_group_selection_expands_expected_suites() {
     let selection = selected_unit_suites(&TestUnitArgs {
         no_coverage: false,
@@ -522,7 +516,10 @@ fn run_report_serializes_suite_status_and_coverage_artifacts() {
         &ctx,
         suite,
         42,
-        Some(TestCounts::passed(7)),
+        Some(TestCounts {
+            passed: 7,
+            ..Default::default()
+        }),
         vec![TestCaseReport {
             suite_id: TestSuiteId::Xtask,
             name: "case | one".to_owned(),
@@ -566,7 +563,10 @@ fn run_report_marks_disabled_coverage_without_artifacts() {
         &ctx,
         suite,
         1,
-        Some(TestCounts::passed(1)),
+        Some(TestCounts {
+            passed: 1,
+            ..Default::default()
+        }),
         Vec::new(),
         false,
     );
@@ -588,7 +588,10 @@ fn run_report_summarizes_failed_and_unknown_suite_counts() {
         &ctx,
         passed,
         10,
-        Some(TestCounts::passed(3)),
+        Some(TestCounts {
+            passed: 3,
+            ..Default::default()
+        }),
         Vec::new(),
         true,
     ));
@@ -645,6 +648,8 @@ fn case_report_parsers_handle_junit_tap_and_libtest() {
     "#;
     let junit_cases = parse_junit_case_reports(junit, TestSuiteId::PackageTs);
     assert_eq!(junit_cases.len(), 3);
+    assert_eq!(junit_cases[0].name, "passes");
+    assert_eq!(junit_cases[0].path.as_deref(), Some("tests/pkg.test.ts"));
     assert_eq!(junit_cases[0].status, CaseStatus::Passed);
     assert_eq!(junit_cases[1].status, CaseStatus::Failed);
     assert_eq!(junit_cases[1].error.as_deref(), Some("bad & broken"));
@@ -662,6 +667,60 @@ fn case_report_parsers_handle_junit_tap_and_libtest() {
     assert_eq!(libtest_cases[0].status, CaseStatus::Passed);
     assert_eq!(libtest_cases[1].status, CaseStatus::Failed);
     assert_eq!(libtest_cases[2].status, CaseStatus::Skipped);
+
+    let swift = "\u{1b}[32mTest Case 'SippTests.URLTests.testFileURL' passed (0.001 seconds)\u{1b}[0m\nTest Case '-[SippTests.URLTests testHttpURL]' failed (0.001 seconds)\n";
+    let swift_cases = parse_swift_case_reports(swift, TestSuiteId::SwiftPackage);
+    assert_eq!(swift_cases[0].name, "testFileURL");
+    assert_eq!(swift_cases[0].status, CaseStatus::Passed);
+    assert_eq!(swift_cases[1].name, "testHttpURL");
+    assert_eq!(swift_cases[1].status, CaseStatus::Failed);
+}
+
+#[test]
+fn executed_case_reconciliation_rejects_discovered_cases_missing_from_the_run() {
+    let suite = suite_by_id(TestSuiteId::RustBindings).unwrap();
+    let discovered = vec![TestCase {
+        suite_id: suite.id,
+        name: "stale_request_generation_does_not_touch_the_current_engine".to_owned(),
+        path: "bindings/wasm/src/tests/exports_tests.rs".to_owned(),
+    }];
+    let mut executed = vec![TestCaseReport {
+        suite_id: suite.id,
+        name: "tests::engine::root_tests::another_test".to_owned(),
+        path: None,
+        status: CaseStatus::Passed,
+        error: None,
+    }];
+
+    let error = reconcile_executed_cases(suite, &discovered, &mut executed).unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("stale_request_generation_does_not_touch_the_current_engine"));
+}
+
+#[test]
+fn executed_case_reconciliation_matches_qualified_libtest_names() {
+    let suite = suite_by_id(TestSuiteId::Xtask).unwrap();
+    let discovered = vec![TestCase {
+        suite_id: suite.id,
+        name: "catalog_suite_ids_are_unique".to_owned(),
+        path: "xtask/src/tests/test_tests.rs".to_owned(),
+    }];
+    let mut executed = vec![TestCaseReport {
+        suite_id: suite.id,
+        name: "test::test_tests::catalog_suite_ids_are_unique".to_owned(),
+        path: None,
+        status: CaseStatus::Passed,
+        error: None,
+    }];
+
+    reconcile_executed_cases(suite, &discovered, &mut executed).unwrap();
+
+    assert_eq!(
+        executed[0].path.as_deref(),
+        Some("xtask/src/tests/test_tests.rs")
+    );
 }
 
 #[test]
@@ -776,39 +835,6 @@ fn catalog_owns_every_first_party_test_file_once() {
 }
 
 #[test]
-fn old_test_commands_are_rejected() {
-    assert!(Cli::try_parse_from(["xtask", "test", "core"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "rust-api"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "model-smoke"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "all"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "whitebox"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "interface"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "coverage"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "whitebox"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "interface"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "xtask"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "rust"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "bindings"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "browser"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "demos"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "api"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "cli"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "node"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "unit", "python"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "all"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "model"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "browser"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "rust"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "node"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "python"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "cli"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "provider-gateway"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "suite", "provider-gateway"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "test", "smoke", "llama"]).is_err());
-}
-
-#[test]
 fn test_help_uses_clap_help_subcommand() {
     assert_eq!(
         Cli::try_parse_from(["xtask", "test", "help"])
@@ -838,13 +864,6 @@ fn test_help_uses_clap_help_subcommand() {
             .kind(),
         ErrorKind::DisplayHelp
     );
-}
-
-#[test]
-fn old_run_test_commands_are_rejected() {
-    assert!(Cli::try_parse_from(["xtask", "run", "all"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "run", "apps", "build", "chat"]).is_err());
-    assert!(Cli::try_parse_from(["xtask", "run", "bindings", "node"]).is_err());
 }
 
 #[test]
@@ -1039,6 +1058,15 @@ fn cpp_and_rust_case_name_parsers_handle_supported_shapes() {
     assert_eq!(
         parse_quoted_test_name("test(\"routes aliases\", () => {})", "test("),
         Some("routes aliases".to_owned())
+    );
+    assert_eq!(rust_host_cfg_enabled("#[cfg(unix)]"), Some(cfg!(unix)));
+    assert_eq!(
+        rust_host_cfg_enabled("#[cfg(target_family = \"wasm\")]"),
+        Some(cfg!(target_family = "wasm"))
+    );
+    assert_eq!(
+        rust_host_cfg_enabled("#[cfg(feature = \"providers\")]"),
+        None
     );
 }
 

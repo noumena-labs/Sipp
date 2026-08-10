@@ -54,7 +54,7 @@ Sipp is an all-in-one, high-performance AI framework for building web, desktop, 
 At its core is **Sipp Engine**, a blazing-fast runtime built to run anywhere: in the browser, on the desktop, or on bare-metal cloud infrastructure, that delivers low startup times and a minimal memory footprint.
 
 ```javascript
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+import { Endpoint, SippClient } from '@sipphq/sipp';
 
 const blender = new SippClient();
 
@@ -62,13 +62,13 @@ const blender = new SippClient();
 const edgeModel = await blender.models.add(['/models/llama3.gguf']);
 const juice = await blender.add(
   'edge',
-  EndpointDescriptor.local(edgeModel.id, { backend: 'webgpu' })
+  Endpoint.local(edgeModel, { backend: 'webgpu' })
 );
 
 // 2. Or connect to a secure cloud gateway through the same client.
 const ice = await blender.add(
   'cloud',
-  EndpointDescriptor.gateway({
+  Endpoint.gateway({
     target: 'production',
     baseUrl: 'https://gateway.example.com',
     authentication: { kind: 'bearer', value: '<short-lived-token>' },
@@ -178,7 +178,7 @@ npm install @sipphq/sipp
 ```
 
 ```javascript
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+import { Endpoint, SippClient } from '@sipphq/sipp';
 
 const messages = [
   { role: 'system', content: 'Answer concisely.' },
@@ -189,7 +189,7 @@ const client = new SippClient();
 const model = await client.models.add(['/models/model.gguf']);
 const endpoint = await client.add(
   'default',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     backend: 'webgpu',
     runtime: { context: { n_ctx: 2048 } },
   })
@@ -211,12 +211,12 @@ model paths, provider credentials, access policies, and centralized metrics;
 your client only needs its public target, URL, and authentication.
 
 ```javascript
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+import { Endpoint, SippClient } from '@sipphq/sipp';
 
 const client = new SippClient();
 const endpoint = await client.add(
   'gateway',
-  EndpointDescriptor.gateway({
+  Endpoint.gateway({
     target: 'upstream-cluster',
     baseUrl: 'https://gateway.example.com',
     authentication: { kind: 'bearer', value: await getGatewayToken() },

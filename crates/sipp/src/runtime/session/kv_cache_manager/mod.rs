@@ -424,10 +424,7 @@ impl KvCacheManager {
     }
 
     fn set_session_idle(&mut self, context_key: &str, resident: ResidentRef) {
-        let record = self
-            .sessions
-            .entry(context_key.to_string())
-            .or_insert_with(SessionRecord::default);
+        let record = self.sessions.entry(context_key.to_string()).or_default();
         record.resident = Some(resident);
         record.in_flight = false;
         self.refresh_lru_key(context_key);

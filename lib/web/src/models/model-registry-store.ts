@@ -1,4 +1,5 @@
 import { FileSystemStorage } from '../engine/file-system-storage.js';
+import { AsyncSerialQueue } from '../utils/async-queue.js';
 import { recoverBrowserAcquisitionJournals } from './acquisition-journal.js';
 import {
   QueryError,
@@ -6,10 +7,11 @@ import {
 } from './types.js';
 
 const REGISTRY_FILE_NAME = 'registry.json';
+const CURRENT_REGISTRY_VERSION = 7;
 
 function emptyManifest(): RegistryManifest {
   return {
-    version: 4,
+    version: CURRENT_REGISTRY_VERSION,
     projectorIndexRevision: 0,
     assets: {},
     models: {},
@@ -22,8 +24,12 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function parseManifest(text: string): RegistryManifest {
   const parsed = JSON.parse(text) as unknown;
-  if (!isObject(parsed) || parsed.version !== 4) {
-    throw new QueryError('STORAGE_CORRUPT', 'Model registry must be manifest version 3.');
+  if (!isObject(parsed) || parsed.version !== CURRENT_REGISTRY_VERSION) {
+    throw new QueryError(
+      'STORAGE_CORRUPT',
+      `Model registry must be manifest version ${CURRENT_REGISTRY_VERSION}. ` +
+        'Clear browser site data and add the model again.'
+    );
   }
   if (!isObject(parsed.assets) || !isObject(parsed.models)) {
     throw new QueryError('STORAGE_CORRUPT', 'Model registry is missing assets or models.');
@@ -39,7 +45,7 @@ function parseManifest(text: string): RegistryManifest {
     );
   }
   return {
-    version: 4,
+    version: CURRENT_REGISTRY_VERSION,
     projectorIndexRevision: parsed.projectorIndexRevision,
     assets: parsed.assets as RegistryManifest['assets'],
     models: parsed.models as RegistryManifest['models'],
@@ -49,7 +55,7 @@ function parseManifest(text: string): RegistryManifest {
 export class ModelRegistryStore {
   private manifest: RegistryManifest | null = null;
   private initPromise: Promise<void> | null = null;
-  private operationChain: Promise<void> = Promise.resolve();
+  private readonly writeOperations = new AsyncSerialQueue();
 
   constructor(private readonly storage = new FileSystemStorage()) {}
 
@@ -61,7 +67,7 @@ export class ModelRegistryStore {
   public async write(
     update: (manifest: RegistryManifest) => void | Promise<void>
   ): Promise<RegistryManifest> {
-    return this.withLock(async () => {
+    return this.writeOperations.run(async () => {
       await this.ensureInitialized();
       const manifest = this.clone(this.getManifest());
       await update(manifest);
@@ -118,17 +124,4 @@ export class ModelRegistryStore {
     return JSON.parse(JSON.stringify(manifest)) as RegistryManifest;
   }
 
-  private async withLock<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.operationChain;
-    let release!: () => void;
-    this.operationChain = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
-  }
 }

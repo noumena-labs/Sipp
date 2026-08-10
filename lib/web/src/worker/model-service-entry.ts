@@ -1,10 +1,16 @@
 import { ModelService } from '../models/model-service.js';
 import { AssetStore } from '../models/asset-store.js';
 import { ModelRegistryStore } from '../models/model-registry-store.js';
-import { QueryError, type TokenBatch } from '../models/types.js';
+import {
+  QueryError,
+  type AudioResult,
+  type GenerationResult,
+  type InternalTextRequestOptions,
+  type TokenBatch,
+} from '../models/types.js';
 import { FileSystemStorage } from '../engine/file-system-storage.js';
-import { resolveRuntimeUrls } from '../engine/runtime-assets.js';
-import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
+import { resolveRuntimeAssetSelection } from '../engine/runtime-assets.js';
+import { WasmEngineRuntime } from '../runtime/wasm/engine-runtime.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -12,70 +18,82 @@ import {
 } from './model-service-protocol.js';
 
 let service: ModelService | null = null;
-let runtime: MainThreadEngineRuntime | null = null;
-let serviceConfigFingerprint: string | null = null;
+let runtime: WasmEngineRuntime | null = null;
+let serviceInitialization: Promise<ModelService> | null = null;
 const activeCalls = new Map<number, AbortController>();
+const activeOperations = new Map<number, Promise<void>>();
+let shuttingDown = false;
 
 type WorkerOperationRequest = Exclude<
   WorkerRequestMessage,
-  { kind: 'cancel' }
+  { kind: 'initialize' | 'cancel' | 'shutdown' }
 >;
 
-function buildServiceConfig(config: WorkerRuntimeConfig) {
-  const runtimeUrls = resolveRuntimeUrls(config);
-
-  return {
-    moduleUrl: runtimeUrls.moduleUrl,
-    wasmUrl: runtimeUrls.wasmUrl,
-    wasmThreading: runtimeUrls.threading,
-    defaultBackendOverride: config.defaultBackendOverride,
-    moduleOptions: config.moduleOptions,
-    maxModelBytes: config.maxModelBytes,
-    storageRoot: config.storageRoot,
-    browserCache: config.browserCache,
-    trustedOrigins: config.trustedOrigins,
-  };
-}
-
-function ensureService(config: WorkerRuntimeConfig): ModelService {
-  const serviceConfig = buildServiceConfig(config);
-  const fingerprint = JSON.stringify(serviceConfig);
-  if (service != null) {
-    if (serviceConfigFingerprint !== fingerprint) {
-      throw new Error('Worker model service was initialized with different runtime options.');
-    }
-    return service;
-  }
-  runtime = new MainThreadEngineRuntime(
+async function createService(config: WorkerRuntimeConfig): Promise<ModelService> {
+  const runtimeAssets = await resolveRuntimeAssetSelection(config);
+  const storage = new FileSystemStorage(config.storageRoot);
+  runtime = new WasmEngineRuntime(
     {
-      moduleUrl: serviceConfig.moduleUrl,
-      wasmUrl: serviceConfig.wasmUrl,
-      wasmThreading: serviceConfig.wasmThreading,
-      moduleOptions: serviceConfig.moduleOptions,
-      maxModelBytes: serviceConfig.maxModelBytes,
-      storageRoot: serviceConfig.storageRoot,
-      browserCache: serviceConfig.browserCache,
-      trustedOrigins: serviceConfig.trustedOrigins,
-      executionMode: 'worker',
+      moduleUrl: runtimeAssets.moduleUrl,
+      wasmUrl: runtimeAssets.wasmUrl,
+      wasmThreading: runtimeAssets.threading,
+      moduleOptions: config.moduleOptions,
+      maxModelBytes: config.maxModelBytes,
+      storageRoot: config.storageRoot,
+      browserCache: config.browserCache,
+      trustedOrigins: config.trustedOrigins,
     },
-    {
-      defaultBackendOverride: serviceConfig.defaultBackendOverride,
-    }
+    { backendConstraint: runtimeAssets.backendConstraint }
   );
-  const storage = new FileSystemStorage(serviceConfig.storageRoot);
-  service = new ModelService(
+  const initialized = new ModelService(
     runtime,
     new ModelRegistryStore(storage),
-    new AssetStore(storage, serviceConfig.browserCache)
+    new AssetStore(storage, config.browserCache)
   );
-  service.subscribeObservability((event) => {
+  initialized.subscribeObservability((event) => {
     post({ kind: 'observability-event', event });
   });
-  service.subscribeEvents((event) => {
+  initialized.subscribeEvents((event) => {
     post({ kind: 'engine-event', event });
   });
-  serviceConfigFingerprint = fingerprint;
-  return service;
+  service = initialized;
+  return initialized;
+}
+
+function initializeService(config: WorkerRuntimeConfig): void {
+  // One Worker configures one service. A failed initialization keeps its
+  // rejected promise so every later operation reports the original cause
+  // instead of a misleading "not initialized".
+  serviceInitialization ??= createService(config).catch((error) => {
+    service = null;
+    runtime = null;
+    throw error;
+  });
+  void serviceInitialization.catch(() => {});
+}
+
+async function requireService(): Promise<ModelService> {
+  if (serviceInitialization == null) {
+    throw new QueryError(
+      'ENGINE_CLOSED',
+      'Worker model service received a request before it was initialized.'
+    );
+  }
+  return await serviceInitialization;
+}
+
+/**
+ * Extracts the cleanup failures attached by `attachCleanupFailures`. Messages
+ * cross the boundary explicitly rather than relying on browser-specific
+ * structured-clone support for AggregateError.
+ */
+function cleanupFailureMessages(error: unknown): readonly string[] | undefined {
+  const failures = (error as { cleanupFailures?: AggregateError } | null)
+    ?.cleanupFailures;
+  if (failures == null) {
+    return undefined;
+  }
+  return failures.errors.map((failure: unknown) => toErrorMessage(failure));
 }
 
 function toErrorMessage(error: unknown): string {
@@ -85,8 +103,28 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function post(message: WorkerResponseMessage): void {
-  self.postMessage(message);
+function post(message: WorkerResponseMessage, transfer: Transferable[] = []): void {
+  self.postMessage(message, { transfer });
+}
+
+function postResolved(message: WorkerOperationRequest, value: unknown): void {
+  if (message.kind === 'speak') {
+    const audio = value as AudioResult;
+    post(
+      {
+        kind: 'resolve',
+        callId: message.callId,
+        value: audio,
+      },
+      [audio.audio.buffer]
+    );
+    return;
+  }
+  post({
+    kind: 'resolve',
+    callId: message.callId,
+    value,
+  });
 }
 
 function postTokenRingReady(): boolean {
@@ -131,8 +169,7 @@ function postLoadProgress(callId: number): NonNullable<Parameters<ModelService['
 
 function tokenEmissionOptionsFor(
   callId: number,
-  emitTokens: boolean,
-  config: WorkerRuntimeConfig
+  emitTokens: boolean
 ): {
   emitTokens: boolean;
   onRequestStarted?: (requestId: number) => void;
@@ -141,7 +178,7 @@ function tokenEmissionOptionsFor(
   if (!emitTokens) {
     return { emitTokens: false };
   }
-  if (config.wasmThreading !== 'pthread') {
+  if (runtime?.getWasmThreadingMode() !== 'pthread') {
     return {
       emitTokens: true,
       tokenBatchSink: (batch) => post({ kind: 'token-batch', callId, batch }),
@@ -160,18 +197,42 @@ function tokenEmissionOptionsFor(
   };
 }
 
+/**
+ * Runs a token-emitting text request. Query and chat differ only in which
+ * service method consumes the shared abort, emission, and streaming setup.
+ */
+async function runTextRequest(
+  message: Extract<WorkerOperationRequest, { kind: 'query' | 'chat' }>,
+  run: (
+    modelService: ModelService,
+    options: InternalTextRequestOptions
+  ) => Promise<GenerationResult>
+): Promise<GenerationResult> {
+  return await withAbortController(message.callId, async (signal) => {
+    const modelService = await requireService();
+    const emission = tokenEmissionOptionsFor(message.callId, message.options.emitTokens);
+    return await run(modelService, {
+      ...message.options,
+      signal,
+      emitTokens: emission.emitTokens,
+      onRequestStarted: emission.onRequestStarted,
+      tokenBatchSink: emission.tokenBatchSink,
+    });
+  });
+}
+
 async function handleRequest(message: WorkerOperationRequest): Promise<unknown> {
   switch (message.kind) {
     case 'models-install':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).add(message.source, {
+      return await withAbortController(message.callId, async (signal) =>
+        (await requireService()).add(message.source, {
           signal,
           onProgress: postLoadProgress(message.callId),
         })
       );
     case 'models-load': {
-      const result = await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).load(message.modelId, {
+      const result = await withAbortController(message.callId, async (signal) =>
+        (await requireService()).load(message.modelId, {
           ...message.options,
           signal,
           onProgress: postLoadProgress(message.callId),
@@ -181,56 +242,37 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
       return result;
     }
     case 'models-list':
-      return await ensureService(message.config).list();
-    case 'models-unload':
-      await ensureService(message.config).unload();
-      return null;
+      return await (await requireService()).list();
     case 'models-remove': {
-      const modelService = ensureService(message.config);
+      const modelService = await requireService();
       await modelService.remove(message.id);
       return modelService.current();
     }
     case 'query':
-      return await withAbortController(message.callId, (signal) => {
-        const modelService = ensureService(message.config);
-        const emission = tokenEmissionOptionsFor(
-          message.callId,
-          message.options.emitTokens,
-          message.config
-        );
-        return modelService.runQuery(
-          message.input,
-          {
-            ...message.options,
-            signal,
-            emitTokens: emission.emitTokens,
-            onRequestStarted: emission.onRequestStarted,
-            tokenBatchSink: emission.tokenBatchSink,
-          }
-        );
-      });
+      return await runTextRequest(message, (modelService, options) =>
+        modelService.runQuery(message.input, options)
+      );
     case 'chat':
-      return await withAbortController(message.callId, (signal) => {
-        const modelService = ensureService(message.config);
-        const emission = tokenEmissionOptionsFor(
-          message.callId,
-          message.options.emitTokens,
-          message.config
-        );
-        return modelService.runChat(
-          message.input,
-          {
-            ...message.options,
-            signal,
-            emitTokens: emission.emitTokens,
-            onRequestStarted: emission.onRequestStarted,
-            tokenBatchSink: emission.tokenBatchSink,
-          }
-        );
-      });
+      return await runTextRequest(message, (modelService, options) =>
+        modelService.runChat(message.input, options)
+      );
     case 'embed':
-      return await withAbortController(message.callId, (signal) =>
-        ensureService(message.config).runEmbedding(message.input, {
+      return await withAbortController(message.callId, async (signal) =>
+        (await requireService()).runEmbedding(message.input, {
+          ...message.options,
+          signal,
+        })
+      );
+    case 'listen':
+      return await withAbortController(message.callId, async (signal) =>
+        (await requireService()).runListen(message.audio, {
+          ...message.options,
+          signal,
+        })
+      );
+    case 'speak':
+      return await withAbortController(message.callId, async (signal) =>
+        (await requireService()).runSpeak(message.text, {
           ...message.options,
           signal,
         })
@@ -238,27 +280,69 @@ async function handleRequest(message: WorkerOperationRequest): Promise<unknown> 
   }
 }
 
-self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
+function postRejected(callId: number, error: unknown): void {
+  post({
+    kind: 'reject',
+    callId,
+    message: toErrorMessage(error),
+    errorName: error instanceof Error ? error.name : undefined,
+    errorStack: error instanceof Error ? error.stack : undefined,
+    queryErrorCode: error instanceof QueryError ? error.code : undefined,
+    cleanupFailures: cleanupFailureMessages(error),
+  });
+}
+
+async function processOperation(message: WorkerOperationRequest): Promise<void> {
+  try {
+    const value = await handleRequest(message);
+    postResolved(message, value);
+  } catch (error) {
+    postRejected(message.callId, error);
+  }
+}
+
+async function shutDown(message: Extract<WorkerRequestMessage, { kind: 'shutdown' }>): Promise<void> {
+  shuttingDown = true;
+  for (const controller of activeCalls.values()) {
+    controller.abort();
+  }
+  try {
+    await Promise.allSettled(activeOperations.values());
+    await service?.close();
+    service = null;
+    runtime = null;
+    serviceInitialization = null;
+    post({ kind: 'resolve', callId: message.callId });
+  } catch (error) {
+    postRejected(message.callId, error);
+  }
+}
+
+self.onmessage = (event: MessageEvent<WorkerRequestMessage>) => {
   const message = event.data;
+  if (message.kind === 'initialize') {
+    initializeService(message.config);
+    return;
+  }
   if (message.kind === 'cancel') {
     abortActiveCall(message.targetCallId);
     return;
   }
-
-  try {
-    const value = await handleRequest(message);
-    post({
-      kind: 'resolve',
-      callId: message.callId,
-      value,
-    });
-  } catch (error) {
-    post({
-      kind: 'reject',
-      callId: message.callId,
-      message: toErrorMessage(error),
-      errorName: error instanceof Error ? error.name : undefined,
-      queryErrorCode: error instanceof QueryError ? error.code : undefined,
-    });
+  if (message.kind === 'shutdown') {
+    void shutDown(message);
+    return;
   }
+  if (shuttingDown) {
+    postRejected(
+      message.callId,
+      new QueryError('ENGINE_CLOSED', 'Worker runtime is shutting down.')
+    );
+    return;
+  }
+
+  const operation = processOperation(message);
+  activeOperations.set(message.callId, operation);
+  void operation.finally(() => {
+    activeOperations.delete(message.callId);
+  });
 };

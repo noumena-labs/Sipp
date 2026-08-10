@@ -1,5 +1,5 @@
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   QueryError,
   type BrowserTextRun,
@@ -316,7 +316,7 @@ async function loadSelectedModel(): Promise<void> {
     const model = await addModel(nextClient, resolved.location, { onProgress });
     await nextClient.add(
       'chat-model',
-      EndpointDescriptor.local(model.id, {
+      Endpoint.local(model, {
         backend: 'webgpu',
         observability: 'runtime',
         runtime: DEFAULT_RUNTIME,

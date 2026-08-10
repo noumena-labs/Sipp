@@ -1,5 +1,6 @@
 use crate::client::{
-    SippChatRequest, SippEmbedRequest, SippError, SippQueryRequest, SippTextOptions,
+    SippChatRequest, SippEmbedRequest, SippError, SippListenRequest, SippQueryRequest,
+    SippSpeakRequest, SippTextOptions,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -52,6 +53,60 @@ pub(crate) fn local_embed(request: &SippEmbedRequest) -> Result<(), SippError> {
     reject_extra(&request.extra, "local endpoints")
 }
 
+pub(crate) fn listen(request: &SippListenRequest) -> Result<(), SippError> {
+    if request.audio.is_empty() {
+        return Err(SippError::InvalidRequest(
+            "listen audio must not be empty".to_string(),
+        ));
+    }
+    if matches!(request.max_tokens, Some(0)) {
+        return Err(SippError::InvalidRequest(
+            "max_tokens must be positive".to_string(),
+        ));
+    }
+    if let Some(language) = &request.language {
+        validate_language("listen", language)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn speak(request: &SippSpeakRequest) -> Result<(), SippError> {
+    if request.text.trim().is_empty() {
+        return Err(SippError::InvalidRequest(
+            "speak text must not be empty".to_string(),
+        ));
+    }
+    if let Some(language) = &request.language {
+        validate_language("speak", language)?;
+    }
+    if request.speaker_audio.as_ref().is_some_and(Vec::is_empty) {
+        return Err(SippError::InvalidRequest(
+            "speak speaker audio must not be empty".to_string(),
+        ));
+    }
+    if matches!(request.max_duration_ms, Some(0)) {
+        return Err(SippError::InvalidRequest(
+            "max_duration_ms must be positive".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_language(operation: &'static str, language: &str) -> Result<(), SippError> {
+    if language.trim().is_empty() {
+        return Err(SippError::InvalidRequest(format!(
+            "{operation} language must not be empty"
+        )));
+    }
+    if language.trim() != language {
+        return Err(SippError::InvalidRequest(format!(
+            "{operation} language must not contain surrounding whitespace"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn gateway_query(request: &SippQueryRequest) -> Result<(), SippError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
@@ -63,6 +118,7 @@ pub(crate) fn gateway_query(request: &SippQueryRequest) -> Result<(), SippError>
     Ok(())
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn gateway_chat(request: &SippChatRequest) -> Result<(), SippError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
@@ -74,6 +130,7 @@ pub(crate) fn gateway_chat(request: &SippChatRequest) -> Result<(), SippError> {
     Ok(())
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn gateway_embed(request: &SippEmbedRequest) -> Result<(), SippError> {
     if request.local.has_fields() {
         return Err(SippError::InvalidRequest(
@@ -84,7 +141,7 @@ pub(crate) fn gateway_embed(request: &SippEmbedRequest) -> Result<(), SippError>
     Ok(())
 }
 
-#[cfg(feature = "providers")]
+#[cfg(all(feature = "providers", not(target_family = "wasm")))]
 pub(crate) fn provider_query(request: &SippQueryRequest) -> Result<(), SippError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
@@ -95,7 +152,7 @@ pub(crate) fn provider_query(request: &SippQueryRequest) -> Result<(), SippError
     Ok(())
 }
 
-#[cfg(feature = "providers")]
+#[cfg(all(feature = "providers", not(target_family = "wasm")))]
 pub(crate) fn provider_chat(request: &SippChatRequest) -> Result<(), SippError> {
     common_text_options(&request.options)?;
     if request.local.has_fields() {
@@ -106,7 +163,7 @@ pub(crate) fn provider_chat(request: &SippChatRequest) -> Result<(), SippError> 
     Ok(())
 }
 
-#[cfg(feature = "providers")]
+#[cfg(all(feature = "providers", not(target_family = "wasm")))]
 pub(crate) fn provider_embed(request: &SippEmbedRequest) -> Result<(), SippError> {
     if request.local.has_fields() {
         return Err(SippError::InvalidRequest(
@@ -129,6 +186,7 @@ fn reject_extra(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 const LOCAL_ONLY_EXTRA_FIELDS: &[&str] = &[
     "context_key",
     "contextKey",
@@ -141,6 +199,7 @@ const LOCAL_ONLY_EXTRA_FIELDS: &[&str] = &[
     "local",
 ];
 
+#[cfg(not(target_family = "wasm"))]
 fn reject_local_only_extra(
     extra: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), SippError> {

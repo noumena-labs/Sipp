@@ -51,7 +51,7 @@ final class BridgeValueTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(response.endpoint, "chat")
+        XCTAssertEqual(response.endpoint.id, "chat")
         XCTAssertEqual(response.text, "hello")
         XCTAssertEqual(response.finishReason, .length)
         XCTAssertEqual(response.usage?.totalTokens, 6)

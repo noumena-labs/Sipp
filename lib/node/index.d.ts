@@ -5,7 +5,7 @@ export declare class SippClient {
   constructor(options?: SippClientOptions)
   readonly models: ModelStore
   /** Register or replace a local, gateway, or direct provider endpoint. */
-  add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef>
+  add(id: string, endpoint: Endpoint): Promise<EndpointRef>
   /** Remove a registered endpoint. */
   remove(id: string): Promise<void>
   /** Start raw-prompt text generation and return the run handle. */
@@ -14,6 +14,10 @@ export declare class SippClient {
   chat(request: SippChatRequest): SippTextRun
   /** Start a single-input embedding request. */
   embed(request: SippEmbedRequest): SippEmbeddingRun
+  /** Start speech recognition from encoded WAV, MP3, or FLAC audio. */
+  listen(request: SippListenRequest): SippTextRun
+  /** Start speech synthesis and return a WAV response. */
+  speak(request: SippSpeakRequest): SippAudioRun
 }
 
 /** Client storage configuration. */
@@ -51,6 +55,12 @@ export declare class SippTextRun {
 /** Embedding request handle with a final embedding response. */
 export declare class SippEmbeddingRun {
   readonly response: Promise<SippEmbeddingResponse>
+  cancel(reason?: CancellationReason): void
+}
+
+/** Speech-synthesis handle with a final WAV response. */
+export declare class SippAudioRun {
+  readonly response: Promise<SippAudioResponse>
   cancel(reason?: CancellationReason): void
 }
 
@@ -138,6 +148,27 @@ export interface SippEmbedRequest {
   extra?: Record<string, unknown>
 }
 
+/** Speech-recognition request for encoded WAV, MP3, or FLAC audio. */
+export interface SippListenRequest {
+  requestId?: string
+  endpoint?: EndpointRef
+  audio: Buffer
+  language?: string
+  /** Maximum transcript tokens. Omitted requests use the core default. */
+  maxTokens?: number
+}
+
+/** Speech-synthesis request with an optional encoded speaker reference. */
+export interface SippSpeakRequest {
+  requestId?: string
+  endpoint?: EndpointRef
+  text: string
+  language?: string
+  speakerAudio?: Buffer
+  /** Hard duration limit. Reaching it before end of generation fails. */
+  maxDurationMs?: number
+}
+
 /** Token accounting returned by an inference endpoint. */
 export interface TokenUsage {
   inputTokens?: number
@@ -163,6 +194,16 @@ export interface SippEmbeddingResponse {
   localStats?: RequestStats
   pooling?: PoolingType
   normalized?: boolean
+  metadata: SippResponseMetadata
+}
+
+/** Final mono PCM16 WAV response from speech synthesis. */
+export interface SippAudioResponse {
+  endpoint: EndpointRef
+  audio: Buffer
+  sampleRateHz: number
+  channels: number
+  durationMs: number
   metadata: SippResponseMetadata
 }
 
@@ -291,13 +332,6 @@ export interface ProviderStaticHeader {
   readonly value: string
 }
 
-declare const endpointDescriptorBrand: unique symbol
-
-/** Opaque endpoint descriptor accepted by the client registration API. */
-export type EndpointDescriptor = {
-  readonly [endpointDescriptorBrand]: true
-}
-
 /** Options for a local model endpoint. */
 export interface LocalEndpointOptions {
   readonly runtime?: NativeRuntimeConfig
@@ -317,11 +351,12 @@ export interface ProviderEndpointOptions {
   readonly correlationHeader?: string
 }
 
-/** Construct endpoint descriptors from explicit endpoint configuration. */
-export declare const EndpointDescriptor: {
-  local(modelId: string, options?: LocalEndpointOptions): EndpointDescriptor
-  gateway(options: GatewayEndpointOptions): EndpointDescriptor
-  provider(options: ProviderEndpointOptions): EndpointDescriptor
+/** Unregistered endpoint configuration accepted by the client. */
+export declare class Endpoint {
+  private constructor()
+  static local(model: ManagedModel, options?: LocalEndpointOptions): Endpoint
+  static gateway(options: GatewayEndpointOptions): Endpoint
+  static provider(options: ProviderEndpointOptions): Endpoint
 }
 
 /** Error raised when native model acquisition or lifecycle processing fails. */

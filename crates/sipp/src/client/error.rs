@@ -56,7 +56,6 @@ impl EndpointError {
 }
 
 /// Classification for direct provider execution failures.
-#[cfg(feature = "providers")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderEndpointErrorKind {
     /// Authentication failed.
@@ -83,7 +82,6 @@ pub enum ProviderEndpointErrorKind {
     Provider,
 }
 
-#[cfg(feature = "providers")]
 impl ProviderEndpointErrorKind {
     /// Stable string used by bindings and diagnostics.
     pub const fn as_str(self) -> &'static str {
@@ -104,7 +102,6 @@ impl ProviderEndpointErrorKind {
 }
 
 /// Structured error returned by direct provider endpoints.
-#[cfg(feature = "providers")]
 #[derive(Debug, Clone, Error)]
 #[error("provider error ({} {provider}): {message}", kind.as_str())]
 pub struct ProviderEndpointError {
@@ -126,7 +123,6 @@ pub struct ProviderEndpointError {
     pub raw: Option<Box<serde_json::Value>>,
 }
 
-#[cfg(feature = "providers")]
 impl ProviderEndpointError {
     /// Create a provider error with no optional transport metadata.
     pub fn new(
@@ -146,6 +142,7 @@ impl ProviderEndpointError {
         }
     }
 
+    #[cfg(feature = "providers")]
     pub(crate) fn from_provider_error(error: ProviderError, secrets: &[String]) -> Self {
         Self {
             kind: match error.kind {
@@ -189,12 +186,11 @@ pub enum SippError {
 
     /// Gateway endpoint error.
     #[error(transparent)]
-    Endpoint(EndpointError),
+    Endpoint(Box<EndpointError>),
 
     /// Direct provider endpoint error.
-    #[cfg(feature = "providers")]
     #[error(transparent)]
-    Provider(ProviderEndpointError),
+    Provider(Box<ProviderEndpointError>),
 
     /// The caller cancelled an in-flight request.
     #[error("request cancelled ({})", reason.as_str())]
@@ -237,6 +233,18 @@ pub enum SippError {
     /// Request validation failed before execution.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+}
+
+impl From<EndpointError> for SippError {
+    fn from(error: EndpointError) -> Self {
+        Self::Endpoint(Box::new(error))
+    }
+}
+
+impl From<ProviderEndpointError> for SippError {
+    fn from(error: ProviderEndpointError) -> Self {
+        Self::Provider(Box::new(error))
+    }
 }
 
 #[cfg(feature = "providers")]

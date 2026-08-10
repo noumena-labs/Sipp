@@ -19,7 +19,12 @@ python examples/python/query.py <model.gguf> [input]
 python examples/python/chat.py <model.gguf> [input]
 python examples/python/embed.py <model.gguf> [input]
 python examples/python/vision_chat.py <model.gguf> <projector.gguf> <image> [input]
+python examples/python/listen.py <asr.gguf> <projector.gguf> <audio>
+python examples/python/speak.py <tts.gguf> <projector.gguf> <output.wav> [text]
 ```
+
+Set `SIPP_LANGUAGE` for an ASR/TTS language hint and
+`SIPP_SPEAKER_AUDIO` for optional speaker-conditioned synthesis.
 
 Note that if you encountered `ModuleNotFoundError: No module named 'sipp'`,
 use `.\lib\python\.venv\Scripts\python`.
@@ -49,7 +54,7 @@ python examples/python/gateway_embed.py <model.gguf> local [input]
 
 Direct provider examples call the selected provider from the Python process
 without a gateway. By default they use the `gemini` preset, which maps to
-Sipp's OpenAI-compatible provider descriptor.
+Sipp's OpenAI-compatible provider endpoint.
 
 ```bash
 export SIPP_PROVIDER="gemini"
@@ -57,7 +62,7 @@ export GEMINI_API_KEY="<gemini-api-key>"
 python examples/python/provider_chat.py [input]
 ```
 
-For any OpenAI-compatible provider, pass the generic descriptor fields:
+For any OpenAI-compatible provider, pass the generic endpoint fields:
 
 ```bash
 export SIPP_PROVIDER="openai_compatible"

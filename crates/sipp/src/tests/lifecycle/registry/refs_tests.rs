@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use crate::lifecycle::{
-    AssetRecord, AssetSource, LocalPathAnchor, ModelAssetKind, ModelModality, ModelStatus,
-    REGISTRY_MANIFEST_VERSION,
+    AssetInspection, AssetRecord, AssetSource, LocalPathAnchor, ModelAssetKind, ModelModality,
+    ModelStatus, REGISTRY_MANIFEST_VERSION,
 };
 
 use super::*;
@@ -101,6 +101,30 @@ fn validate_manifest_rejects_missing_model_asset() {
     assert!(
         matches!(error, ModelError::StorageCorrupt(message) if message.contains("model model-a references missing asset asset-a"))
     );
+}
+
+#[test]
+fn validate_manifest_rejects_previous_inspection_version() {
+    let mut manifest = manifest_with_assets(&[("asset-a", 0)]);
+    let mut inspection = AssetInspection::unknown();
+    let previous_version = AssetInspection::VERSION - 1;
+    inspection.version = previous_version;
+    manifest
+        .assets
+        .get_mut("asset-a")
+        .expect("asset")
+        .inspection = Some(inspection);
+
+    let error = validate_manifest(&manifest).expect_err("old inspection version");
+
+    assert!(matches!(
+        error,
+        ModelError::StorageCorrupt(message)
+            if message == format!(
+                "expected asset inspection version {}, got {previous_version}",
+                AssetInspection::VERSION
+            )
+    ));
 }
 
 #[test]

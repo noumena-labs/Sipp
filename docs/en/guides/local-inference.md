@@ -11,8 +11,8 @@ reference, and pass that reference to `query`, `chat`, or `embed`.
 
 1. Choose a GGUF model that supports the requested capability.
 2. Add its files or URLs through `client.models`.
-3. Create a local endpoint descriptor from the returned model ID.
-4. Set load-time runtime options on the endpoint descriptor.
+3. Create a local endpoint from the returned `ManagedModel`.
+4. Set load-time runtime options on the endpoint.
 5. Pass request-time options to `query`, `chat`, or `embed`.
 6. Stream tokens or await the final response.
 7. Close the client when the page, worker, service, or script no longer needs
@@ -32,8 +32,8 @@ All packages add models before creating local endpoints:
 - Pass model shards and a vision projector in the same source list. GGUF
   metadata determines their roles and validates the pairing.
 
-`models.add` returns a model ID. `EndpointDescriptor.local(model.id)` or
-`LocalDescriptor::new(model.id)` loads that model. If a referenced native file
+`models.add` returns a `ManagedModel`. `Endpoint.local(model)` or
+`endpoint::Local::new(&model)` selects its stable identity for loading. If a referenced native file
 is deleted or changed, the stale registry entry is removed.
 
 Source examples and smoke workflows can use cached sample models under
@@ -43,7 +43,7 @@ Source examples and smoke workflows can use cached sample models under
 
 Keep option layers separate:
 
-- Browser client options such as `executionMode`, `wasmThreading`, runtime
+- Browser client options such as `wasmThreading`, runtime
   asset URLs, and `browserCache` belong on `new SippClient(...)`.
 - `models.add` accepts one homogeneous list of local files or HTTP(S) URLs;
   options provide progress and cancellation where supported.
@@ -62,17 +62,14 @@ map and field groups.
 
 ## Threads And Browser Execution
 
-Browser execution has two separate choices:
-
-- `executionMode: 'worker'` or `auto` keeps inference work off the UI thread
-  when workers are available.
-- `wasmThreading: 'pthread'` enables the pthread WASM runtime and requires
+Browser local inference always runs in a dedicated worker. Each model
+activation gets a fresh worker and Wasm instance. `wasmThreading: 'pthread'`
+enables the pthread WASM runtime and requires
   `SharedArrayBuffer` plus cross-origin isolation headers.
 
 The bundled browser runtime requires COOP/COEP headers. Apps that cannot serve
 those headers must set `wasmThreading: 'single-thread'` and provide custom
-single-thread `moduleUrl` and `wasmUrl` assets. Use
-`executionMode: 'main-thread'` mainly for debugging or constrained hosts.
+single-thread `moduleUrl` and `wasmUrl` assets.
 
 Native Node.js, Python, and Rust local endpoints can tune CPU thread counts
 with `context.n_threads` and `context.n_threads_batch`. Leave them unset for

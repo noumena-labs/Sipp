@@ -25,3 +25,14 @@ fn copy_bytes_rejects_missing_nul_capacity() {
         STATUS_INVALID_ARGUMENTS
     );
 }
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn runtime_session_projection_requires_a_wasm_runtime() {
+    let engine = BrowserEngine::create();
+
+    assert_eq!(
+        engine.runtime_session_json(),
+        Err("browser runtime is unavailable for this target".to_string())
+    );
+}

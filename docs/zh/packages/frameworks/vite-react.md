@@ -12,11 +12,11 @@ npm install @sipphq/sipp
 
 ## 浏览器本地推理
 
-仅在浏览器端代码中使用 `@sipphq/sipp`。通过 `client.models.add` 添加一个或多个模型 URL 或用户选择的 `File`；多个输入可表示模型分片或模型/投影器组合。将返回的模型 ID 传给 `EndpointDescriptor.local(...)`。
+仅在浏览器端代码中使用 `@sipphq/sipp`。通过 `client.models.add` 添加一个或多个模型 URL 或用户选择的 `File`；多个输入可表示模型分片或模型/投影器组合。将返回的 `ManagedModel` 传给 `Endpoint.local(...)`。
 
 ```ts
 import { useState } from 'react';
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+import { Endpoint, SippClient } from '@sipphq/sipp';
 
 export function LocalQuery(): JSX.Element {
   const [text, setText] = useState('');
@@ -29,7 +29,7 @@ export function LocalQuery(): JSX.Element {
       ]);
       const endpoint = await client.add(
         'default',
-        EndpointDescriptor.local(model.id, {
+        Endpoint.local(model, {
           backend: 'webgpu',
           runtime: {
             context: { n_ctx: 2048 },
@@ -80,7 +80,7 @@ export default defineConfig({
 });
 ```
 
-应用无法配置这些响应头时，需要设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。仅在调试或受限主机环境中使用 `executionMode: 'main-thread'`。
+应用无法配置这些响应头时，需要设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。
 
 ## 运行时资源覆盖
 
@@ -101,7 +101,7 @@ const client = new SippClient({
 
 应用可以直接提供模型文件的 URL，也可以让用户选取本地的 `.gguf` 文件。浏览器支持时，运行时会模型数据存储到 OPFS 中。首次下载或导入文件后，后续加载直接读取本地缓存。
 
-通过 `SippClient` 上的 `browserCache` 选项调整浏览器缓存策略，或通过本地端点描述符的 `options.runtime` 调整本地运行时行为。详情见[浏览器缓存](../../guides/browser-caching.md)和[运行时选项](../../reference/runtime-options.md)。
+通过 `SippClient` 上的 `browserCache` 选项调整浏览器缓存策略，或通过本地端点的 `options.runtime` 调整本地运行时行为。详情见[浏览器缓存](../../guides/browser-caching.md)和[运行时选项](../../reference/runtime-options.md)。
 
 ## 官方示例
 

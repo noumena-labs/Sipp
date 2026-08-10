@@ -100,17 +100,13 @@ std::vector<std::string> parse_args_json(rust::Str args_json) {
 
 rust::Vec<std::uint8_t> copy_bytes(const std::uint8_t * data, std::size_t size) {
   rust::Vec<std::uint8_t> out;
-  for (std::size_t i = 0; i < size; ++i) {
-    out.push_back(data[i]);
-  }
+  extend_bytes(out, rust::Slice<const std::uint8_t>(data, size));
   return out;
 }
 
 rust::Vec<float> copy_floats(const float * data, std::size_t size) {
   rust::Vec<float> out;
-  for (std::size_t i = 0; i < size; ++i) {
-    out.push_back(data[i]);
-  }
+  extend_floats(out, rust::Slice<const float>(data, size));
   return out;
 }
 
@@ -177,14 +173,47 @@ std::string token_to_piece_string(
   return out;
 }
 
+void write_audio(void * user_data, const std::uint8_t * data, std::size_t size) {
+  extend_bytes(
+      *static_cast<rust::Vec<std::uint8_t> *>(user_data),
+      rust::Slice<const std::uint8_t>(data, size));
+}
+
 } // namespace
+
+NativeAudio::NativeAudio(
+    rust::Vec<std::uint8_t> data,
+    std::uint64_t sample_count,
+    std::uint32_t sample_rate_hz)
+    : data_(std::move(data)),
+      sample_count_(sample_count),
+      sample_rate_hz_(sample_rate_hz) {}
+
+NativeAudio::NativeAudio(NativeAudio &&) noexcept = default;
+NativeAudio & NativeAudio::operator=(NativeAudio &&) noexcept = default;
+
+rust::Vec<std::uint8_t> NativeAudio::take_data() {
+  return std::move(data_);
+}
+
+std::uint64_t NativeAudio::sample_count() const {
+  return sample_count_;
+}
+
+std::uint32_t NativeAudio::sample_rate_hz() const {
+  return sample_rate_hz_;
+}
 
 struct NativeRuntime::Impl {
   sipp_common_init * init = nullptr;
   sipp_chat_templates * chat_templates = nullptr;
   sipp_mtmd_context * mtmd = nullptr;
+  sipp_mtmd_audio_job * audio_job = nullptr;
 
   ~Impl() {
+    if (audio_job != nullptr) {
+      sipp_mtmd_audio_free(audio_job);
+    }
     if (mtmd != nullptr) {
       sipp_mtmd_free(mtmd);
     }
@@ -307,6 +336,84 @@ NativeRuntime::NativeRuntime(std::unique_ptr<NativeRuntime::Impl> impl) : impl_(
 NativeRuntime::~NativeRuntime() = default;
 NativeRuntime::NativeRuntime(NativeRuntime &&) noexcept = default;
 NativeRuntime & NativeRuntime::operator=(NativeRuntime &&) noexcept = default;
+
+void NativeRuntime::begin_speech(
+    rust::Str text,
+    rust::Str language,
+    rust::Slice<const std::uint8_t> voice,
+    bool has_max_duration,
+    std::uint32_t max_duration_ms) {
+  if (impl_->audio_job != nullptr) {
+    throw std::runtime_error("audio generation is already active");
+  }
+  const std::string language_value = to_c_string_argument(language, "speech language");
+  char * error = nullptr;
+  impl_->audio_job = sipp_mtmd_audio_begin(
+      impl_->init,
+      impl_->mtmd,
+      text.data(),
+      text.size(),
+      language_value.c_str(),
+      voice.data(),
+      voice.size(),
+      has_max_duration,
+      max_duration_ms,
+      &error);
+  if (impl_->audio_job == nullptr) {
+    throw std::runtime_error(take_error(error, "failed to begin audio generation"));
+  }
+}
+
+bool NativeRuntime::step_speech() {
+  if (impl_->audio_job == nullptr) {
+    throw std::runtime_error("audio generation is not active");
+  }
+  char * error = nullptr;
+  const std::int32_t result = sipp_mtmd_audio_step(impl_->audio_job, &error);
+  if (result == SIPP_MTMD_AUDIO_STEP_RUNNING) {
+    return false;
+  }
+  if (result == SIPP_MTMD_AUDIO_STEP_COMPLETE) {
+    return true;
+  }
+  sipp_mtmd_audio_free(impl_->audio_job);
+  impl_->audio_job = nullptr;
+  throw std::runtime_error(take_error(error, "audio generation step failed"));
+}
+
+std::unique_ptr<NativeAudio> NativeRuntime::finish_speech() {
+  if (impl_->audio_job == nullptr) {
+    throw std::runtime_error("audio generation is not active");
+  }
+  rust::Vec<std::uint8_t> data;
+  std::int64_t sample_count = 0;
+  std::int32_t sample_rate = 0;
+  char * error = nullptr;
+  const bool generated = sipp_mtmd_audio_finish(
+      impl_->audio_job,
+      write_audio,
+      &data,
+      &sample_count,
+      &sample_rate,
+      &error);
+  sipp_mtmd_audio_free(impl_->audio_job);
+  impl_->audio_job = nullptr;
+  if (!generated) {
+    throw std::runtime_error(take_error(error, "failed to finish audio generation"));
+  }
+  return std::unique_ptr<NativeAudio>(new NativeAudio(
+      std::move(data),
+      static_cast<std::uint64_t>(sample_count),
+      static_cast<std::uint32_t>(sample_rate)));
+}
+
+void NativeRuntime::cancel_speech() {
+  if (impl_->audio_job == nullptr) {
+    throw std::runtime_error("audio generation is not active");
+  }
+  sipp_mtmd_audio_free(impl_->audio_job);
+  impl_->audio_job = nullptr;
+}
 
 std::int32_t NativeRuntime::n_ctx() const {
   return sipp_common_init_n_ctx(impl_->init);
@@ -478,6 +585,32 @@ rust::String NativeRuntime::apply_chat_template_json(
   return take_owned_string(rendered, "");
 }
 
+rust::String NativeRuntime::apply_asr_chat_template(rust::Str language) const {
+  char * rendered = sipp_apply_asr_chat_template(
+      impl_->chat_templates,
+      language.data(),
+      language.size());
+  if (rendered == nullptr) {
+    throw std::runtime_error("failed to apply ASR chat template");
+  }
+  return take_owned_string(rendered, "");
+}
+
+rust::String NativeRuntime::parse_asr_output(
+    rust::Str language,
+    rust::Str output) const {
+  char * parsed = sipp_parse_asr_output(
+      impl_->chat_templates,
+      language.data(),
+      language.size(),
+      output.data(),
+      output.size());
+  if (parsed == nullptr) {
+    throw std::runtime_error("failed to parse ASR output");
+  }
+  return take_owned_string(parsed, "");
+}
+
 std::int32_t NativeRuntime::decode(const NativeBatch & batch) {
   const std::int32_t status = sipp_llama_decode(impl_->context(), &batch.impl_->batch);
   if (status < 0) {
@@ -568,10 +701,18 @@ bool NativeRuntime::mtmd_support_vision() const {
   return impl_->mtmd != nullptr && sipp_mtmd_support_vision(impl_->mtmd);
 }
 
-std::int32_t NativeRuntime::mtmd_eval_images(
+std::int32_t NativeRuntime::mtmd_audio_sample_rate() const {
+  return sipp_mtmd_get_audio_sample_rate(impl_->mtmd);
+}
+
+std::int32_t NativeRuntime::mtmd_generated_audio_sample_rate() const {
+  return sipp_mtmd_generated_audio_sample_rate(impl_->mtmd);
+}
+
+std::int32_t NativeRuntime::mtmd_eval_media(
     rust::Str prompt,
-    rust::Slice<const std::uint8_t> image_bytes,
-    rust::Slice<const std::int32_t> image_sizes,
+    rust::Slice<const std::uint8_t> media_bytes,
+    rust::Slice<const std::int32_t> media_sizes,
     bool add_special,
     bool parse_special,
     std::int32_t n_past,
@@ -582,34 +723,34 @@ std::int32_t NativeRuntime::mtmd_eval_images(
     throw std::runtime_error("multimodal context is not initialized");
   }
 
-  std::size_t expected_image_bytes = 0;
-  for (std::size_t i = 0; i < image_sizes.size(); ++i) {
-    if (image_sizes[i] <= 0) {
-      throw std::runtime_error("multimodal image payload size must be positive");
+  std::size_t expected_media_bytes = 0;
+  for (std::size_t i = 0; i < media_sizes.size(); ++i) {
+    if (media_sizes[i] <= 0) {
+      throw std::runtime_error("multimodal media payload size must be positive");
     }
-    const auto len = static_cast<std::size_t>(image_sizes[i]);
-    if (expected_image_bytes > image_bytes.size() ||
-        len > image_bytes.size() - expected_image_bytes) {
-      throw std::runtime_error("multimodal image sizes exceed payload length");
+    const auto len = static_cast<std::size_t>(media_sizes[i]);
+    if (expected_media_bytes > media_bytes.size() ||
+        len > media_bytes.size() - expected_media_bytes) {
+      throw std::runtime_error("multimodal media sizes exceed payload length");
     }
-    expected_image_bytes += len;
+    expected_media_bytes += len;
   }
-  if (expected_image_bytes != image_bytes.size()) {
-    throw std::runtime_error("multimodal image sizes do not match payload length");
+  if (expected_media_bytes != media_bytes.size()) {
+    throw std::runtime_error("multimodal media sizes do not match payload length");
   }
 
   std::vector<OwnedMtmdBitmap> owned_bitmaps;
   std::vector<const sipp_mtmd_bitmap *> bitmap_refs;
-  owned_bitmaps.reserve(image_sizes.size());
-  bitmap_refs.reserve(image_sizes.size());
+  owned_bitmaps.reserve(media_sizes.size());
+  bitmap_refs.reserve(media_sizes.size());
 
   std::size_t offset = 0;
-  for (std::size_t i = 0; i < image_sizes.size(); ++i) {
-    const auto len = static_cast<std::size_t>(image_sizes[i]);
+  for (std::size_t i = 0; i < media_sizes.size(); ++i) {
+    const auto len = static_cast<std::size_t>(media_sizes[i]);
     sipp_mtmd_bitmap * bitmap =
-        sipp_mtmd_bitmap_init_from_buf(impl_->mtmd, image_bytes.data() + offset, len);
+        sipp_mtmd_bitmap_init_from_buf(impl_->mtmd, media_bytes.data() + offset, len);
     if (bitmap == nullptr) {
-      throw std::runtime_error("failed to decode multimodal image payload");
+      throw std::runtime_error("failed to decode multimodal media payload");
     }
     owned_bitmaps.emplace_back(bitmap);
     bitmap_refs.push_back(bitmap);
@@ -626,6 +767,7 @@ std::int32_t NativeRuntime::mtmd_eval_images(
       impl_->mtmd,
       chunks.get(),
       text.c_str(),
+      text.size(),
       add_special,
       parse_special,
       bitmap_refs.data(),

@@ -1,4 +1,11 @@
+#![allow(
+    clippy::empty_line_after_doc_comments,
+    reason = "test and source section banners follow repository style"
+)]
+
+use std::fs;
 use std::io::{self, Write};
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -11,6 +18,9 @@ use sipp::lifecycle::{BackendPolicy, BackendPreference, ModelLoadOptions, StatsM
 use sipp::runtime::metrics::RuntimeObservabilityMetrics;
 use sipp::runtime::request::{GenerateResponseStatus, ResponseOutput};
 use sipp::runtime::{InferenceRuntime, RequestStepResult};
+use sipp::{endpoint, SippClient, SippListenRequest, SippSpeakRequest};
+
+const DEFAULT_TEXT_MAX_TOKENS: u32 = 64;
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -31,12 +41,36 @@ struct Args {
     /// Path to a GGUF model.
     model: PathBuf,
 
-    /// Prompt text.
-    prompt: String,
+    /// Prompt text for generation or speech synthesis.
+    prompt: Option<String>,
 
-    /// Maximum generated tokens.
-    #[arg(long, default_value_t = 64)]
-    max_tokens: u32,
+    /// Audio projector paired with an ASR or TTS model.
+    #[arg(long)]
+    projector: Option<PathBuf>,
+
+    /// Transcribe encoded WAV, MP3, or FLAC audio.
+    #[arg(long, conflicts_with = "speak")]
+    listen: Option<PathBuf>,
+
+    /// Synthesize the prompt and write a mono PCM16 WAV file.
+    #[arg(long, value_name = "OUTPUT_WAV", conflicts_with = "listen")]
+    speak: Option<PathBuf>,
+
+    /// Optional ASR or TTS language hint.
+    #[arg(long)]
+    language: Option<String>,
+
+    /// Optional encoded speaker-reference audio for TTS.
+    #[arg(long, requires = "speak")]
+    speaker: Option<PathBuf>,
+
+    /// Maximum synthesized duration in milliseconds.
+    #[arg(long, value_name = "MILLISECONDS", requires = "speak")]
+    max_duration_ms: Option<NonZeroU32>,
+
+    /// Maximum generated tokens. Text defaults to 64; listen uses the core default.
+    #[arg(long)]
+    max_tokens: Option<NonZeroU32>,
 
     /// Context size in tokens.
     #[arg(long, default_value_t = 8196)]
@@ -129,13 +163,35 @@ impl CliStatsMode {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    validate_args(&args)?;
     set_llama_log_quiet(true);
 
     let mut stdout = io::stdout().lock();
     run_native_runtime(&args, &mut stdout)
         .with_context(|| format!("native runtime failed for {}", args.model.display()))?;
 
-    writeln!(stdout)?;
+    if args.speak.is_none() {
+        writeln!(stdout)?;
+    }
+    Ok(())
+}
+
+fn validate_args(args: &Args) -> anyhow::Result<()> {
+    let speech_mode = args.listen.is_some() || args.speak.is_some();
+    if !speech_mode && args.prompt.is_none() {
+        bail!("prompt is required unless --listen is used");
+    }
+    if speech_mode && args.projector.is_none() {
+        bail!("--projector is required for --listen and --speak");
+    }
+    if args.speak.is_some() && args.prompt.is_none() {
+        bail!("prompt is required for --speak");
+    }
+    if let Some(language) = &args.language {
+        if language.trim().is_empty() || language.trim() != language {
+            bail!("--language must not be empty or contain surrounding whitespace");
+        }
+    }
     Ok(())
 }
 
@@ -146,22 +202,32 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
         runtime: runtime_config_from_args(args),
     };
     let backend_plan = BackendPolicy::select(&load_options)?;
+    if args.listen.is_some() || args.speak.is_some() {
+        return run_speech(args, backend_plan.config, stdout);
+    }
     let mut runtime = InferenceRuntime::load(&args.model, backend_plan.config)?;
+    let prompt = args
+        .prompt
+        .as_deref()
+        .context("prompt is required unless --listen is used")?;
     let prompt = if args.chat {
-        let messages = json!([{ "role": "user", "content": args.prompt }]);
+        let messages = json!([{ "role": "user", "content": prompt }]);
         let rendered = runtime.apply_chat_template_json(&messages.to_string(), true)?;
         if rendered.is_empty() {
             bail!("model did not provide a usable chat template");
         }
         rendered
     } else {
-        args.prompt.clone()
+        prompt.to_string()
     };
 
     let request_id = runtime.enqueue_request(
         "",
         prompt,
-        args.max_tokens.min(i32::MAX as u32) as i32,
+        args.max_tokens
+            .map(NonZeroU32::get)
+            .unwrap_or(DEFAULT_TEXT_MAX_TOKENS)
+            .min(i32::MAX as u32) as i32,
         "",
         "",
         Vec::new(),
@@ -177,6 +243,9 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
                     ResponseOutput::Text(text) => text,
                     ResponseOutput::Embedding { .. } => {
                         bail!("generation request completed with embedding output")
+                    }
+                    ResponseOutput::Audio(_) => {
+                        bail!("generation request completed with audio output")
                     }
                 };
                 stdout.write_all(output.as_bytes())?;
@@ -204,6 +273,67 @@ fn run_native_runtime(args: &Args, stdout: &mut impl Write) -> anyhow::Result<()
     bail!("scheduler did not complete request {request_id} before the tick limit")
 }
 
+fn run_speech(
+    args: &Args,
+    config: NativeRuntimeConfig,
+    stdout: &mut impl Write,
+) -> anyhow::Result<()> {
+    let projector = args
+        .projector
+        .as_ref()
+        .context("--projector is required for --listen and --speak")?;
+    let mut config = config;
+    config.multimodal.projector_path = Some(projector.to_string_lossy().into_owned());
+
+    let mut client = SippClient::new()?;
+    let model =
+        futures::executor::block_on(client.models().add([args.model.clone(), projector.clone()]))?;
+    let local = endpoint::Local::new(&model).runtime(config);
+    futures::executor::block_on(client.add("speech", local))?;
+
+    if let Some(audio_path) = &args.listen {
+        let audio = fs::read(audio_path)
+            .with_context(|| format!("failed to read {}", audio_path.display()))?;
+        let response = futures::executor::block_on(client.listen(SippListenRequest {
+            endpoint: None,
+            audio,
+            language: args.language.clone(),
+            max_tokens: args.max_tokens.map(NonZeroU32::get),
+        }))?;
+        stdout.write_all(response.text.as_bytes())?;
+        Ok(())
+    } else {
+        let output_path = args.speak.as_ref().context("speech mode is missing")?;
+        let text = args
+            .prompt
+            .as_ref()
+            .context("prompt is required for --speak")?;
+        let speaker_audio = args
+            .speaker
+            .as_ref()
+            .map(|path| {
+                fs::read(path).with_context(|| format!("failed to read {}", path.display()))
+            })
+            .transpose()?;
+        let response = futures::executor::block_on(client.speak(SippSpeakRequest {
+            endpoint: None,
+            text: text.clone(),
+            language: args.language.clone(),
+            speaker_audio,
+            max_duration_ms: args.max_duration_ms.map(NonZeroU32::get),
+        }))?;
+        fs::write(output_path, &response.audio)
+            .with_context(|| format!("failed to write {}", output_path.display()))?;
+        eprintln!(
+            "wrote {} ms at {} Hz to {}",
+            response.duration_ms,
+            response.sample_rate_hz,
+            output_path.display()
+        );
+        Ok(())
+    }
+}
+
 fn runtime_config_from_args(args: &Args) -> NativeRuntimeConfig {
     let mut config = NativeRuntimeConfig::default();
     config.context.n_ctx = Some(args.ctx_size.min(i32::MAX as u32) as i32);
@@ -215,6 +345,10 @@ fn runtime_config_from_args(args: &Args) -> NativeRuntimeConfig {
     if let Some(gpu_layers) = args.gpu_layers {
         config.placement.gpu_layers = GpuLayerConfig::from_layer_count(gpu_layers);
     }
+    config.multimodal.projector_path = args
+        .projector
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned());
     config.sampling = SamplingRuntimeConfig {
         temperature: Some(args.temperature),
         top_k: Some(args.top_k),

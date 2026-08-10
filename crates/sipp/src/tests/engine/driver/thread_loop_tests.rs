@@ -25,6 +25,9 @@ fn model_state() -> ModelState {
             model_class: ModelClass::DecoderOnly,
             supports_text_generation: true,
             supports_embeddings: false,
+            supports_vision: false,
+            audio_sample_rate_hz: None,
+            generated_audio_sample_rate_hz: None,
             has_chat_template: false,
             embedding: None,
         },
@@ -59,6 +62,26 @@ fn get_state_command_returns_ready_snapshot_for_idle_thread() {
         .expect("state ok");
     assert_eq!(snapshot.status, EngineStatus::Ready);
     assert_eq!(snapshot.model.as_ref().expect("model").id, "model");
+}
+
+#[test]
+fn current_state_reports_running_for_active_speech() {
+    let (event_tx, _event_rx) = mpsc::channel();
+    let mut state = thread_state(event_tx);
+    let (response_tx, _response_rx) = oneshot::channel();
+    state.active_requests.insert(
+        1,
+        ActiveRequest {
+            output: ActiveRequestOutput::Speech,
+            response_tx,
+            token: None,
+            cancellation: Some(EngineCancellation::new()),
+        },
+    );
+
+    let snapshot = state.current_state().expect("state snapshot");
+
+    assert_eq!(snapshot.status, EngineStatus::Running);
 }
 
 #[test]
@@ -133,6 +156,51 @@ fn embed_command_on_not_ready_runtime_returns_error_without_tracking_request() {
 }
 
 #[test]
+fn cancelled_speak_command_skips_native_execution() {
+    let (event_tx, event_rx) = mpsc::channel();
+    let mut state = thread_state(event_tx);
+    let (response_tx, response_rx) = oneshot::channel();
+    drop(response_rx);
+
+    assert!(state.process_command(EngineThreadCommand::Speak(
+        SpeakRequest {
+            text: "hello".to_string(),
+            language: Some("en".to_string()),
+            speaker_audio: Some(vec![1]),
+            max_duration_ms: Some(1_000),
+        },
+        EngineCancellation::new(),
+        response_tx,
+    )));
+
+    assert!(event_rx.try_recv().is_err());
+}
+
+#[test]
+fn explicitly_cancelled_speak_command_skips_native_execution() {
+    let (event_tx, event_rx) = mpsc::channel();
+    let mut state = thread_state(event_tx);
+    let (response_tx, response_rx) = oneshot::channel();
+    let cancellation = EngineCancellation::new();
+    cancellation.cancel();
+
+    assert!(state.process_command(EngineThreadCommand::Speak(
+        SpeakRequest {
+            text: "hello".to_string(),
+            language: Some("en".to_string()),
+            speaker_audio: Some(vec![1]),
+            max_duration_ms: Some(1_000),
+        },
+        cancellation,
+        response_tx,
+    )));
+
+    assert!(block_on(response_rx).is_err());
+    assert!(!state.has_active_speech());
+    assert!(event_rx.try_recv().is_err());
+}
+
+#[test]
 fn dropped_response_receiver_cancels_active_request_and_emits_failure() {
     let (event_tx, event_rx) = mpsc::channel();
     let mut state = thread_state(event_tx);
@@ -144,6 +212,7 @@ fn dropped_response_receiver_cancels_active_request_and_emits_failure() {
             output: ActiveRequestOutput::Text,
             response_tx,
             token: None,
+            cancellation: None,
         },
     );
 

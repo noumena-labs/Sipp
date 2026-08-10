@@ -22,13 +22,13 @@ if the launcher is not active.
 ## Local GGUF Query
 
 ```ts
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+import { Endpoint, SippClient } from '@sipphq/sipp';
 
 const client = new SippClient();
 const model = await client.models.add(['/models/model.gguf']);
 await client.add(
   'default',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     runtime: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },

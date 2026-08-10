@@ -19,6 +19,7 @@ use crate::toolchains::python::{apply_uv_env, ensure_python, setup_uv, PYTHON_BU
 use crate::utils::{ensure_playwright_chromium, BuildContext};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -472,14 +473,22 @@ fn run_selected_suites(
 
     for (index, suite) in suites.iter().enumerate() {
         let started_at = Instant::now();
-        if let Err(error) = prepare_suite_case_report_dir(ctx, suite) {
-            output::warning(format!(
-                "Could not prepare structured test report directory for {}: {error:#}",
-                suite.id.as_str()
-            ));
-        }
         print_suite_start(suite, index + 1, suites.len());
-        let result = run_suite(sh, ctx, suite, options, &mut coverage_state);
+        // Reports left by an earlier run would satisfy reconciliation for a run
+        // that produced none, so a suite cannot proceed on a dirty directory.
+        let mut reports_prepared = false;
+        let result = prepare_suite_case_report_dir(ctx, suite)
+            .with_context(|| {
+                format!(
+                    "could not clear the structured test report directory for {}; \
+                     stale reports could be mistaken for this run's results",
+                    suite.id.as_str()
+                )
+            })
+            .and_then(|()| {
+                reports_prepared = true;
+                run_suite(sh, ctx, suite, options, &mut coverage_state)
+            });
         let duration_ms = started_at.elapsed().as_millis();
         match result {
             Ok(outcome) => {
@@ -505,7 +514,13 @@ fn run_selected_suites(
             }
             Err(error) => {
                 let message = format!("{error:#}");
-                let cases = failed_suite_cases(ctx, suite, options, &error);
+                // If report-directory preparation failed, its contents are
+                // explicitly untrusted and must not appear as this run's cases.
+                let cases = if reports_prepared {
+                    failed_suite_cases(ctx, suite, options, &error)
+                } else {
+                    Vec::new()
+                };
                 let counts = case_counts(&cases);
                 let suite_report = SuiteReport::failed(
                     ctx,
@@ -546,7 +561,14 @@ fn run_suite(
     options: &SuiteRunOptions<'_>,
     coverage_state: &mut RunCoverageState,
 ) -> Result<SuiteOutcome> {
-    match suite.runner {
+    // Smoke suites report declared cases and never parse runner output, so
+    // only unit suites need their command logs captured.
+    if suite.group == TestGroup::Smoke {
+        run_smoke_suite(sh, ctx, suite, options)?;
+        return successful_suite_outcome(ctx, suite, options, &[]);
+    }
+
+    let command_logs = match suite.runner {
         SuiteRunner::RustTargets(targets) => {
             let package = if suite.id == TestSuiteId::RustCrates {
                 options.package
@@ -555,15 +577,34 @@ fn run_suite(
             };
             run_rust_target_tests(sh, ctx, targets, package, options.coverage, coverage_state)
         }
-        SuiteRunner::PackageTs => run_package_ts_tests(sh, ctx, options.wasm_threading),
+        SuiteRunner::PackageTs => {
+            run_package_ts_tests(sh, ctx, options.wasm_threading).map(|path| vec![path])
+        }
         SuiteRunner::DemoTs => run_demo_ts_tests(sh, ctx, options.wasm_threading),
         SuiteRunner::NodePackage => {
             run_node_package_tests(sh, ctx, &options.backend, options.coverage)
         }
         SuiteRunner::PythonPackage => {
             run_python_package_tests(sh, ctx, &options.backend, options.coverage)
+                .map(|path| vec![path])
         }
-        SuiteRunner::SwiftPackage => targets::swift::test(sh, ctx),
+        SuiteRunner::SwiftPackage => targets::swift::test(sh, ctx).map(|path| vec![path]),
+        runner => anyhow::bail!(
+            "{} declares unit runner {runner:?} without executed-case reporting",
+            suite.id.as_str()
+        ),
+    }?;
+
+    successful_suite_outcome(ctx, suite, options, &command_logs)
+}
+
+fn run_smoke_suite(
+    sh: &Shell,
+    ctx: &BuildContext,
+    suite: &TestSuite,
+    options: &SuiteRunOptions<'_>,
+) -> Result<()> {
+    match suite.runner {
         SuiteRunner::CliSmoke => run_cli_model_smoke(sh, ctx, options),
         SuiteRunner::RustSmoke => run_rust_model_smoke(sh, ctx, options),
         SuiteRunner::NodeSmoke => run_node_model_smoke(sh, ctx, options),
@@ -576,22 +617,21 @@ fn run_suite(
         SuiteRunner::LlamaBackendOps => {
             run_llama_backend_ops_suite(sh, ctx, &options.backend, &options.llama)
         }
-    }?;
-
-    successful_suite_outcome(ctx, suite, options)
+        runner => anyhow::bail!(
+            "{} is grouped as a smoke suite but declares unit runner {runner:?}",
+            suite.id.as_str()
+        ),
+    }
 }
 
 fn successful_suite_outcome(
     ctx: &BuildContext,
     suite: &TestSuite,
     options: &SuiteRunOptions<'_>,
+    command_logs: &[PathBuf],
 ) -> Result<SuiteOutcome> {
-    let cases = successful_suite_cases(ctx, suite, options)?;
-    let counts = if cases.is_empty() {
-        known_success_counts(ctx, suite, options)?
-    } else {
-        case_counts(&cases)
-    };
+    let cases = successful_suite_cases(ctx, suite, options, command_logs)?;
+    let counts = case_counts(&cases);
     Ok(SuiteOutcome { counts, cases })
 }
 
@@ -599,30 +639,55 @@ fn successful_suite_cases(
     ctx: &BuildContext,
     suite: &TestSuite,
     options: &SuiteRunOptions<'_>,
+    command_logs: &[PathBuf],
 ) -> Result<Vec<TestCaseReport>> {
-    let mut cases = Vec::new();
-    match suite.discoverer {
-        CaseDiscoverer::None => {}
-        CaseDiscoverer::RustTargets(targets) if suite.id == TestSuiteId::RustCrates => {
-            let targets = filtered_rust_targets(targets, options.package)?;
-            discover_rust_cases(
-                ctx,
-                suite.id,
-                rust_target_case_files(ctx, &targets)?,
-                &mut cases,
-            )?;
+    if suite.group == TestGroup::Smoke {
+        let cases = synthetic_suite_cases(suite, options, CaseStatus::Passed);
+        if cases.is_empty() {
+            anyhow::bail!("{} did not declare any smoke cases", suite.id.as_str());
         }
-        _ => discover_suite_cases(ctx, suite, &mut cases)?,
+        return Ok(cases);
+    }
+
+    let mut cases = read_structured_case_reports(ctx, suite.id)?;
+    if cases.is_empty() {
+        for log_path in command_logs {
+            let contents = std::fs::read_to_string(log_path)
+                .with_context(|| format!("failed to read {}", log_path.display()))?;
+            match suite.runner {
+                SuiteRunner::RustTargets(_) => {
+                    cases.extend(parse_libtest_case_reports(&contents, suite.id));
+                }
+                SuiteRunner::SwiftPackage => {
+                    cases.extend(parse_swift_case_reports(&contents, suite.id));
+                }
+                _ => {}
+            }
+        }
     }
 
     if cases.is_empty() {
-        return Ok(synthetic_suite_cases(suite, options, CaseStatus::Passed));
+        anyhow::bail!(
+            "{} completed without reporting any executed test cases",
+            suite.id.as_str()
+        );
+    }
+    if cases.iter().any(|case| case.status == CaseStatus::Failed) {
+        anyhow::bail!(
+            "{} reported failed cases despite a successful runner exit",
+            suite.id.as_str()
+        );
     }
 
-    Ok(cases
-        .into_iter()
-        .map(|case| TestCaseReport::from_case(case, CaseStatus::Passed))
-        .collect())
+    let discovered = discovered_suite_cases(ctx, suite, options.package)?;
+    if discovered.is_empty() {
+        anyhow::bail!(
+            "{} did not discover any source test cases",
+            suite.id.as_str()
+        );
+    }
+    reconcile_executed_cases(suite, &discovered, &mut cases)?;
+    Ok(cases)
 }
 
 fn failed_suite_cases(
@@ -728,35 +793,11 @@ fn case_counts(cases: &[TestCaseReport]) -> Option<TestCounts> {
     Some(counts)
 }
 
-fn known_success_counts(
-    ctx: &BuildContext,
-    suite: &TestSuite,
-    options: &SuiteRunOptions<'_>,
-) -> Result<Option<TestCounts>> {
-    let total = match suite.runner {
-        SuiteRunner::RustTargets(_) => discovered_suite_case_count(ctx, suite, options.package)?,
-        SuiteRunner::PackageTs
-        | SuiteRunner::DemoTs
-        | SuiteRunner::NodePackage
-        | SuiteRunner::PythonPackage
-        | SuiteRunner::SwiftPackage => discovered_suite_case_count(ctx, suite, None)?,
-        SuiteRunner::CliSmoke
-        | SuiteRunner::PlaygroundBrowserSmoke
-        | SuiteRunner::LlamaBackendOps => 1,
-        SuiteRunner::RustSmoke => selected_rust_smoke_examples(options.cases).len(),
-        SuiteRunner::NodeSmoke => selected_node_smoke_scripts(options.cases).len(),
-        SuiteRunner::PythonSmoke => selected_python_smoke_scripts(options.cases).len(),
-        SuiteRunner::ExampleGatewaySmoke => selected_gateway_smoke_labels(options.cases).len(),
-        SuiteRunner::ExampleBrowserSmoke => selected_smoke_cases(options.cases).len(),
-    };
-    Ok(Some(TestCounts::passed(total)))
-}
-
-fn discovered_suite_case_count(
+fn discovered_suite_cases(
     ctx: &BuildContext,
     suite: &TestSuite,
     package: Option<&str>,
-) -> Result<usize> {
+) -> Result<Vec<TestCase>> {
     let mut cases = Vec::new();
     match suite.discoverer {
         CaseDiscoverer::RustTargets(targets) if suite.id == TestSuiteId::RustCrates => {
@@ -770,7 +811,52 @@ fn discovered_suite_case_count(
         }
         _ => discover_suite_cases(ctx, suite, &mut cases)?,
     }
-    Ok(cases.len())
+    Ok(cases)
+}
+
+fn reconcile_executed_cases(
+    suite: &TestSuite,
+    discovered: &[TestCase],
+    executed: &mut [TestCaseReport],
+) -> Result<()> {
+    let mut unmatched = vec![true; executed.len()];
+    let mut missing = Vec::new();
+
+    for expected in discovered {
+        let matching_index = executed.iter().enumerate().find_map(|(index, actual)| {
+            (unmatched[index] && executed_case_matches(suite.runner, &actual.name, &expected.name))
+                .then_some(index)
+        });
+        let Some(index) = matching_index else {
+            missing.push(format!("{} ({})", expected.name, expected.path));
+            continue;
+        };
+        unmatched[index] = false;
+        if executed[index].path.is_none() {
+            executed[index].path = Some(expected.path.clone());
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "{} did not execute {} discovered test case(s): {}",
+        suite.id.as_str(),
+        missing.len(),
+        missing.join(", ")
+    )
+}
+
+fn executed_case_matches(runner: SuiteRunner, actual: &str, expected: &str) -> bool {
+    if actual == expected {
+        return true;
+    }
+    matches!(runner, SuiteRunner::RustTargets(_))
+        && actual
+            .strip_suffix(expected)
+            .is_some_and(|prefix| prefix.ends_with("::"))
 }
 
 fn print_run_summary(report: &RunReport) {
@@ -886,7 +972,7 @@ fn run_rust_target_tests(
     package: Option<&str>,
     coverage_enabled: bool,
     coverage_state: &mut RunCoverageState,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     output::phase("Rust tests");
     let targets = filtered_rust_targets(targets, package)?;
     if coverage_enabled {
@@ -900,8 +986,9 @@ fn run_rust_plain_targets(
     sh: &Shell,
     ctx: &BuildContext,
     targets: &[RustTestTarget],
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     let _dir = sh.push_dir(ctx.workspace_root());
+    let mut command_logs = Vec::new();
     for target in targets {
         let package = target.package;
         let mut test_cmd = cmd!(sh, "cargo test -p {package}");
@@ -920,9 +1007,12 @@ fn run_rust_plain_targets(
             }
         }
         let test_cmd = apply_toolchains(sh, ctx, test_cmd, None)?;
-        output::run_test_command(format!("Running {} Rust tests", target.label()), test_cmd)?;
+        command_logs.push(output::run_test_command(
+            format!("Running {} Rust tests", target.label()),
+            test_cmd,
+        )?);
     }
-    Ok(())
+    Ok(command_logs)
 }
 
 fn run_rust_coverage_targets(
@@ -930,7 +1020,7 @@ fn run_rust_coverage_targets(
     ctx: &BuildContext,
     targets: &[RustTestTarget],
     coverage_state: &mut RunCoverageState,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     ensure_cargo_llvm_cov()?;
     let coverage_root = ctx.build_root().join("coverage");
     let rust_dir = coverage_root.join("rust");
@@ -939,6 +1029,7 @@ fn run_rust_coverage_targets(
     let rust_html = rust_dir.join("html");
 
     let _dir = sh.push_dir(ctx.workspace_root());
+    let mut command_logs = Vec::new();
     for target in targets {
         let package = target.package;
         let mut lcov_cmd = cmd!(
@@ -967,10 +1058,10 @@ fn run_rust_coverage_targets(
         // on Linux (the binary SIGSEGVs mid-run while every test still passes).
         // Give the test threads headroom; this is a ceiling, not an allocation.
         let lcov_cmd = apply_toolchains(sh, ctx, lcov_cmd, None)?.env("RUST_MIN_STACK", "33554432");
-        output::run_test_command(
+        command_logs.push(output::run_test_command(
             format!("Running {} Rust coverage tests", target.label()),
             lcov_cmd,
-        )?;
+        )?);
         coverage_state.rust_started = true;
     }
 
@@ -980,14 +1071,14 @@ fn run_rust_coverage_targets(
     );
     let html_cmd = apply_toolchains(sh, ctx, html_cmd, None)?;
     output::run_build_command("Writing Rust HTML coverage report", html_cmd)?;
-    Ok(())
+    Ok(command_logs)
 }
 
 fn run_package_ts_tests(
     sh: &Shell,
     ctx: &BuildContext,
     wasm_threading: WasmThreading,
-) -> Result<()> {
+) -> Result<PathBuf> {
     output::phase("White-box browser TypeScript tests");
     targets::wasm::build(sh, ctx, wasm_threading, WasmRuntime::Auto)?;
     let browser_package_dir = ctx.browser_package_dir();
@@ -1002,12 +1093,15 @@ fn run_package_ts_tests(
     )
 }
 
-fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext, wasm_threading: WasmThreading) -> Result<()> {
+fn run_demo_ts_tests(
+    sh: &Shell,
+    ctx: &BuildContext,
+    wasm_threading: WasmThreading,
+) -> Result<Vec<PathBuf>> {
     output::phase("White-box browser demo TypeScript tests");
     let tests = demo_test_files(ctx)?;
     if tests.is_empty() {
-        output::warning("No demo TypeScript tests were found under demos/");
-        return Ok(());
+        anyhow::bail!("no demo TypeScript tests were found under demos/");
     }
 
     let workspaces = demo_test_workspaces(ctx, &tests)?;
@@ -1015,13 +1109,14 @@ fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext, wasm_threading: WasmThreadi
     targets::wasm::build(sh, ctx, wasm_threading, WasmRuntime::Auto)?;
 
     output::detail("Test files", tests.len());
+    let mut command_logs = Vec::new();
     for (index, test) in tests.into_iter().enumerate() {
         let workspace = demo_test_workspace(ctx, &test)?;
         let relative_test = test.strip_prefix(&workspace).unwrap_or(&test);
         let junit_path =
             suite_case_report_file(ctx, TestSuiteId::DemoTs, &format!("demo-{index}.xml"));
         let _dir = sh.push_dir(&workspace);
-        output::run_test_command(
+        command_logs.push(output::run_test_command(
             format!(
                 "Running demo TypeScript test {}",
                 display_relative(ctx, &test)
@@ -1030,9 +1125,9 @@ fn run_demo_ts_tests(sh: &Shell, ctx: &BuildContext, wasm_threading: WasmThreadi
                 sh,
                 "bun test {relative_test} --reporter=junit --reporter-outfile {junit_path}"
             ),
-        )?;
+        )?);
     }
-    Ok(())
+    Ok(command_logs)
 }
 
 fn run_node_package_tests(
@@ -1040,7 +1135,7 @@ fn run_node_package_tests(
     ctx: &BuildContext,
     backend: &Backend,
     coverage_enabled: bool,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     output::phase("Interface Node package tests");
     targets::node::build(sh, ctx, Some(backend))?;
 
@@ -1050,7 +1145,15 @@ fn run_node_package_tests(
     let node_dir = ctx.node_package_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, std::slice::from_ref(&node_dir))?;
     let bun_exe = setup_bun(sh, ctx)?;
+    let test_files = node_test_files(ctx)?
+        .into_iter()
+        .map(|path| path.strip_prefix(&node_dir).unwrap_or(&path).to_path_buf())
+        .collect::<Vec<_>>();
+    if test_files.is_empty() {
+        anyhow::bail!("no Node package tests were found under lib/node/tests");
+    }
     let _node = sh.push_dir(&node_dir);
+    let mut command_logs = Vec::new();
     for backend in node_test_backends(ctx, backend)? {
         let report_path = suite_case_report_file(
             ctx,
@@ -1060,23 +1163,24 @@ fn run_node_package_tests(
         let mut test_cmd = if coverage_enabled {
             cmd!(
                 sh,
-                "{bun_exe} x c8 --reporter=lcov --reports-dir {coverage_dir} node --test --test-reporter=tap --test-reporter-destination {report_path} tests/router.test.mjs"
+                "{bun_exe} x c8 --reporter=lcov --reports-dir {coverage_dir} node --test --test-reporter=tap --test-reporter-destination {report_path}"
             )
         } else {
             cmd!(
                 sh,
-                "node --test --test-reporter=tap --test-reporter-destination {report_path} tests/router.test.mjs"
+                "node --test --test-reporter=tap --test-reporter-destination {report_path}"
             )
         };
         test_cmd = test_cmd
+            .args(&test_files)
             .env("SIPP_NODE_BACKEND", backend.as_str())
             .env("SIPP_NODE_TEST_BACKEND", backend.as_str());
-        output::run_test_command(
+        command_logs.push(output::run_test_command(
             format!("Running Node.js package tests ({})", backend.as_str()),
             test_cmd,
-        )?;
+        )?);
     }
-    Ok(())
+    Ok(command_logs)
 }
 
 fn run_python_package_tests(
@@ -1084,7 +1188,7 @@ fn run_python_package_tests(
     ctx: &BuildContext,
     backend: &Backend,
     coverage_enabled: bool,
-) -> Result<()> {
+) -> Result<PathBuf> {
     if *backend == Backend::All {
         anyhow::bail!(
             "python-package requires a concrete backend; choose cpu, vulkan, cuda, or metal"
@@ -1221,7 +1325,7 @@ fn run_browser_example_smoke(
     for case in selected_smoke_cases(options.cases) {
         smoke_cmd = smoke_cmd.arg("--case").arg(case.as_str());
     }
-    output::run_test_command("Running browser example smoke", smoke_cmd)
+    output::run_test_command("Running browser example smoke", smoke_cmd).map(|_| ())
 }
 
 fn run_playground_browser_runtime_smoke(
@@ -1252,7 +1356,7 @@ fn run_playground_browser_runtime_smoke(
     if options.require_webgpu {
         smoke_cmd = smoke_cmd.arg("--require-webgpu");
     }
-    output::run_test_command("Running playground browser runtime smoke", smoke_cmd)
+    output::run_test_command("Running playground browser runtime smoke", smoke_cmd).map(|_| ())
 }
 
 fn run_llama_backend_ops_suite(
@@ -1318,7 +1422,7 @@ fn run_cli_smoke(
     if options.backend != Backend::Cpu {
         smoke_cmd = smoke_cmd.arg("--backend").arg(options.backend.as_str());
     }
-    output::run_test_command("Running CLI local inference smoke", smoke_cmd)
+    output::run_test_command("Running CLI local inference smoke", smoke_cmd).map(|_| ())
 }
 
 fn run_rust_generation_smoke(
@@ -2566,29 +2670,56 @@ fn discover_rust_cases(
     for path in files {
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let mut pending_test = false;
+        let mut pending_test = None;
+        let mut next_test_enabled = true;
         for line in contents.lines() {
             let trimmed = line.trim_start();
+            if let Some(enabled) = rust_host_cfg_enabled(trimmed) {
+                next_test_enabled &= enabled;
+                continue;
+            }
             if trimmed.starts_with("#[test]") || trimmed.starts_with("#[tokio::test]") {
-                pending_test = true;
+                pending_test = Some(next_test_enabled);
+                next_test_enabled = true;
                 continue;
             }
             if trimmed.starts_with("#[ignore") {
                 continue;
             }
-            if pending_test {
+            if let Some(enabled) = pending_test {
                 if let Some(name) = parse_rust_fn_name(trimmed) {
-                    cases.push(TestCase {
-                        suite_id,
-                        name,
-                        path: display_relative(ctx, &path),
-                    });
+                    if enabled {
+                        cases.push(TestCase {
+                            suite_id,
+                            name,
+                            path: display_relative(ctx, &path),
+                        });
+                    }
+                    pending_test = None;
+                } else if !trimmed.is_empty() && !trimmed.starts_with("#[") {
+                    pending_test = None;
                 }
-                pending_test = false;
+                continue;
+            }
+            if !trimmed.is_empty() && !trimmed.starts_with("#[") {
+                next_test_enabled = true;
             }
         }
     }
     Ok(())
+}
+
+fn rust_host_cfg_enabled(line: &str) -> Option<bool> {
+    let compact = line.replace(' ', "");
+    match compact.as_str() {
+        "#[cfg(unix)]" => Some(cfg!(unix)),
+        "#[cfg(windows)]" => Some(cfg!(windows)),
+        "#[cfg(target_family=\"wasm\")]" => Some(cfg!(target_family = "wasm")),
+        "#[cfg(not(target_family=\"wasm\"))]" => Some(!cfg!(target_family = "wasm")),
+        // Cataloged suites use their declared/default Cargo features. If a caller changes
+        // that feature set, discovery must learn the corresponding cfg predicate too.
+        _ => None,
+    }
 }
 
 fn discover_node_cases(
@@ -3926,7 +4057,7 @@ fn parse_junit_case_reports(contents: &str, suite_id: TestSuiteId) -> Vec<TestCa
         let Some(name) = xml_attr(tag, "name") else {
             continue;
         };
-        let path = xml_attr(tag, "file").or_else(|| xml_attr(tag, "classname"));
+        let path = xml_attr(tag, "file");
         let failure = body.contains("<failure");
         let error = body.contains("<error");
         let skipped = body.contains("<skipped");
@@ -3995,7 +4126,7 @@ fn parse_tap_case_reports(contents: &str, suite_id: TestSuiteId) -> Vec<TestCase
 
 fn parse_libtest_case_reports(contents: &str, suite_id: TestSuiteId) -> Vec<TestCaseReport> {
     let mut reports = Vec::new();
-    for line in contents.lines().map(clean_log_line) {
+    for line in contents.lines().map(clean_test_log_line) {
         let Some(rest) = line.strip_prefix("test ") else {
             continue;
         };
@@ -4022,6 +4153,70 @@ fn parse_libtest_case_reports(contents: &str, suite_id: TestSuiteId) -> Vec<Test
     reports
 }
 
+fn parse_swift_case_reports(contents: &str, suite_id: TestSuiteId) -> Vec<TestCaseReport> {
+    let mut reports = Vec::new();
+    for line in contents.lines().map(clean_test_log_line) {
+        let Some(rest) = line.strip_prefix("Test Case '") else {
+            continue;
+        };
+        let Some((identity, outcome)) = rest.split_once("' ") else {
+            continue;
+        };
+        let status = if outcome.starts_with("passed") {
+            CaseStatus::Passed
+        } else if outcome.starts_with("failed") {
+            CaseStatus::Failed
+        } else if outcome.starts_with("skipped") {
+            CaseStatus::Skipped
+        } else {
+            continue;
+        };
+        let name = identity
+            .strip_prefix("-[")
+            .and_then(|identity| identity.strip_suffix(']'))
+            .and_then(|identity| identity.rsplit_once(' ').map(|(_, name)| name))
+            .or_else(|| identity.rsplit_once('.').map(|(_, name)| name))
+            .unwrap_or(identity)
+            .to_owned();
+        reports.push(TestCaseReport {
+            suite_id,
+            name,
+            path: None,
+            status,
+            error: None,
+        });
+    }
+    reports
+}
+
+fn clean_test_log_line(line: &str) -> Cow<'_, str> {
+    match strip_ansi_escape_sequences(line) {
+        Cow::Borrowed(borrowed) => Cow::Borrowed(clean_log_line(borrowed)),
+        Cow::Owned(owned) => Cow::Owned(clean_log_line(&owned).to_owned()),
+    }
+}
+
+fn strip_ansi_escape_sequences(value: &str) -> Cow<'_, str> {
+    if !value.contains('\u{1b}') {
+        return Cow::Borrowed(value);
+    }
+    let mut result = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\u{1b}' || chars.peek() != Some(&'[') {
+            result.push(character);
+            continue;
+        }
+        let _ = chars.next();
+        for code in chars.by_ref() {
+            if ('@'..='~').contains(&code) {
+                break;
+            }
+        }
+    }
+    Cow::Owned(result)
+}
+
 fn clean_log_line(line: &str) -> &str {
     let trimmed = line.trim_start();
     if let Some(rest) = trimmed.strip_prefix("[stdout] ") {
@@ -4044,10 +4239,22 @@ fn xml_element_attr(contents: &str, element: &str, attr: &str) -> Option<String>
 
 fn xml_attr(tag: &str, attr: &str) -> Option<String> {
     let needle = format!("{attr}=\"");
-    let start = tag.find(&needle)? + needle.len();
-    let rest = &tag[start..];
-    let end = rest.find('"')?;
-    Some(xml_unescape(&rest[..end]))
+    let mut offset = 0;
+    while let Some(relative_start) = tag[offset..].find(&needle) {
+        let attr_start = offset + relative_start;
+        let has_attribute_boundary = tag[..attr_start]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace);
+        if has_attribute_boundary {
+            let value_start = attr_start + needle.len();
+            let rest = &tag[value_start..];
+            let end = rest.find('"')?;
+            return Some(xml_unescape(&rest[..end]));
+        }
+        offset = attr_start + needle.len();
+    }
+    None
 }
 
 fn xml_unescape(value: &str) -> String {
@@ -4472,16 +4679,6 @@ struct TestCaseReport {
 }
 
 impl TestCaseReport {
-    fn from_case(case: TestCase, status: CaseStatus) -> Self {
-        Self {
-            suite_id: case.suite_id,
-            name: case.name,
-            path: Some(case.path),
-            status,
-            error: None,
-        }
-    }
-
     fn as_json(&self) -> Value {
         json!({
             "suite": self.suite_id.as_str(),
@@ -4501,14 +4698,6 @@ struct TestCounts {
 }
 
 impl TestCounts {
-    fn passed(passed: usize) -> Self {
-        Self {
-            passed,
-            failed: 0,
-            skipped: 0,
-        }
-    }
-
     fn total(&self) -> usize {
         self.passed + self.failed + self.skipped
     }

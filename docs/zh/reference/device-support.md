@@ -114,7 +114,7 @@ Sipp 默认提供 pthread WASM 运行时产物：
 
 > ⁷ 默认为 `min(4, navigator.hardwareConcurrency)`。可以通过模型加载选项中的 `runtime.context.n_threads` 覆盖此默认值。
 
-客户端会为 Firefox 类运行时，以及任何不暴露 JSPI的运行时自动选择 CPU non-JSPI 产物，其余运行时选择 WebGPU+JSPI 产物。当前 Safari 不支持 JSPI，因此会加载 CPU non-JSPI 产物；当某个 Safari 版本提供了 JSPI（Safari Technology Preview / 27 beta，或在 26.4+ 中启用实验性开关）时，客户端会在运行时检测并自动升级为 WebGPU+JSPI 产物。内置运行时需要支持 pthread：
+Worker 会先运行功能性 JSPI 探测：实例化一个小型模块，并验证一次真实的挂起/恢复周期。探测成功时选择 WebGPU+JSPI；JSPI 缺失、不完整或执行失败时选择 CPU non-JSPI。选择过程不依赖浏览器 User-Agent，也不只检查某个 WebAssembly 属性。显式运行时 URL 会原样传给 Worker，并绕过内置产物选择。选择内置 CPU 产物会形成强制后端约束：`backend: 'webgpu'` 会在模型激活前被拒绝。浏览器 CPU 激活在省略 `runtime.context.n_ctx` 时，若元数据中有模型训练上下文容量，则使用它与 4096 中的较小值；若无法确定，则使用 4096。这样既避免大上下文耗尽 Wasm 内存，也不会扩大已知的较小模型 KV 缓存。内置运行时需要支持 pthread：
 
 ```ts
 function supportsWasmPthreads(): boolean {
@@ -212,20 +212,18 @@ Python 原生包只会被 x64 Node/Python 进程使用；原生 arm64 Node/Pytho
 
 #### Firefox 运行时测试结论
 
-在已测试的 Windows 配置中，Firefox 152.0.2 暴露了 WASM pthread、Worker、
-WebGPU 和 `shader-f16` 能力。启用 Firefox 的实验性 JSPI 后，JSPI 运行时
-路径可以正常工作：模型可以加载并生成 token。但该路径性能不足以作为发布
-路径。因此 Firefox 浏览器运行时选择 pthread CPU no-JSPI 产物。
-
-Firefox 浏览器路径是 pthread CPU no-JSPI。该路径仍然需要
-`SharedArrayBuffer`、Worker，以及 COOP/COEP 响应头。
+在已测试的 Windows 配置中，Firefox 150.0.2 暴露了 WASM pthread、Worker、
+WebGPU 和 `shader-f16` 能力。无法完成 JSPI 挂起/恢复探测的默认构建会选择
+pthread CPU no-JSPI；通过探测的实验性构建可以选择 WebGPU+JSPI，而不需要
+Firefox 专用分支。两条路径都需要 `SharedArrayBuffer`、Worker 和 COOP/COEP
+响应头。
 
 #### Safari 运行时测试结论
 
-当前发布版的大多数 Safari 不暴露 JSPI。客户端会检测到这一点，转而选择
-pthread CPU no-JSPI 产物，从而让 Safari 以 CPU 后端运行，而不是启动失败。JSPI
-正在以实验性方式引入（Safari 26.4 需开启开关，Safari Technology Preview / 27
-beta。Safari 仍然需要 `SharedArrayBuffer`、Worker，以及 COOP/COEP 响应头。
+无法完成 JSPI 挂起/恢复探测的 Safari 构建会选择 pthread CPU no-JSPI，避免
+启动失败。提供完整 JSPI 实现并通过探测的构建可以选择 WebGPU+JSPI，而不需要
+Safari 专用分支。Safari 仍然需要 `SharedArrayBuffer`、Worker 和 COOP/COEP
+响应头。
 
 ---
 

@@ -16,8 +16,7 @@ use axum::http::{
 use sipp::engine::{GpuLayerConfig, NativeRuntimeConfig};
 use sipp::lifecycle::{BackendCapabilities, StatsMode};
 use sipp::{
-    EndpointDescriptor, GatewayAuthentication, GatewayDescriptor, GatewayRoutes,
-    GatewayTimeoutPolicy, SippClient,
+    GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewayTimeoutPolicy, SippClient,
 };
 use tower::ServiceExt;
 use wiremock::matchers::{method, path};
@@ -28,7 +27,7 @@ use crate::config::{
     GatewayBackendPreference, GatewayServerConfig, GatewayServerRuntime, LoadedToken,
     RateLimitConfig, RouteConfig, SecurityConfig, TargetKind, TargetSummary,
 };
-use crate::http::GatewayHttpService;
+use crate::http::{GatewayHttpOptions, GatewayHttpService};
 use crate::metrics::GatewayMetrics;
 
 async fn service(base_url: String) -> GatewayHttpService {
@@ -46,11 +45,12 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
         metrics: Some("/telemetry".to_string()),
         admin: Some("/admin".to_string()),
     };
-    let mut client = SippClient::new().expect("client");
+    let storage_root = std::env::temp_dir().join(unique_env_name("sipp-gateway-client"));
+    let mut client = SippClient::with_storage_root(storage_root).expect("client");
     let endpoint = client
         .add(
             "gateway-upstream",
-            EndpointDescriptor::Gateway(GatewayDescriptor {
+            GatewayDescriptor {
                 target: "upstream".to_string(),
                 base_url: base_url.clone(),
                 routes: GatewayRoutes::default(),
@@ -58,7 +58,7 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
                 static_headers: Default::default(),
                 timeouts: GatewayTimeoutPolicy::default(),
                 protocol_options: Default::default(),
-            }),
+            },
         )
         .await
         .expect("gateway endpoint");
@@ -76,7 +76,6 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
 
     GatewayHttpService::new(
         runtime,
-        routes,
         vec![LoadedToken {
             secret: "test-secret".to_string(),
             caller: "test-client".to_string(),
@@ -84,11 +83,14 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
         }],
         "admin-password".to_string(),
         Arc::new(GatewayMetrics::new()),
-        1024,
-        &[],
-        None,
-        security,
-        admin_asset_dir(),
+        GatewayHttpOptions {
+            routes,
+            max_request_bytes: 1024,
+            allowed_origins: Vec::new(),
+            max_concurrent_requests: None,
+            security,
+            admin_assets_dir: admin_asset_dir(),
+        },
     )
     .expect("service")
 }
@@ -127,7 +129,7 @@ fn test_gateway_config() -> GatewayServerConfig {
                 model: "model.gguf".into(),
                 backend: GatewayBackendPreference::Auto,
                 stats: StatsMode::Basic,
-                runtime: NativeRuntimeConfig::default(),
+                runtime: Box::new(NativeRuntimeConfig::default()),
             },
         }],
         max_concurrent_requests: None,

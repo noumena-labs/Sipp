@@ -4,6 +4,8 @@ const links: readonly ExampleLink[] = [
   { href: '/query.html', label: 'Query' },
   { href: '/chat.html', label: 'Chat' },
   { href: '/embed.html', label: 'Embed' },
+  { href: '/speech.html', label: 'Speech' },
+  { href: '/switching.html', label: 'Model switching' },
   { href: '/gateway_local.html', label: 'Gateway local' },
   { href: '/gateway_query.html', label: 'Gateway query' },
   { href: '/gateway_chat.html', label: 'Gateway chat' },

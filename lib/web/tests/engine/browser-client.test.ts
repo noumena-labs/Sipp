@@ -2,14 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  EndpointDescriptor,
+  Endpoint,
   QueryError,
   SippClient,
 } from '../../src/index.js';
 import type {
   GatewayEndpointOptions,
+  ModelInfo,
   TokenBatch,
 } from '../../src/index.js';
+import {
+  FakeModelWorker,
+  waitForModelWorker,
+  waitForWorkerMessage,
+  withFakeModelWorker,
+} from '../support/fake-model-worker.js';
 
 async function withGlobalFetch<T>(
   fetchImpl: typeof globalThis.fetch,
@@ -45,8 +52,8 @@ function textResponse(text: string): Response {
   });
 }
 
-function gateway(overrides: Partial<GatewayEndpointOptions> = {}): EndpointDescriptor {
-  return EndpointDescriptor.gateway({
+function gateway(overrides: Partial<GatewayEndpointOptions> = {}): Endpoint {
+  return Endpoint.gateway({
     target: 'developer-model',
     baseUrl: 'https://inference.example.test',
     authentication: { kind: 'bearer', value: 'endpoint-secret' },
@@ -54,15 +61,52 @@ function gateway(overrides: Partial<GatewayEndpointOptions> = {}): EndpointDescr
   });
 }
 
+function localModel(id: string) {
+  return {
+    id,
+    name: `${id}.gguf`,
+    bytes: 1,
+    modality: 'text' as const,
+    status: 'ready' as const,
+  };
+}
+
+function loadedModel(id: string): ModelInfo {
+  return {
+    ...localModel(id),
+    source: 'remote',
+    assetFingerprint: `asset-${id}`,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    loaded: true,
+    chatTemplate: null,
+    bosText: '',
+    eosText: '',
+    mediaMarker: null,
+    capabilities: null,
+  };
+}
+
+function workerClient(): SippClient {
+  return new SippClient({
+    workerUrl: '/worker.js',
+    wasmThreading: 'single-thread',
+    moduleUrl: 'https://example.test/runtime.js',
+    wasmUrl: 'https://example.test/runtime.wasm',
+  });
+}
+
 test('SippClient exposes typed inference and endpoint registration', async () => {
-  assert.deepEqual(Object.keys(EndpointDescriptor), ['local', 'gateway', 'provider']);
-  const client = new SippClient({ executionMode: 'main-thread' });
+  assert.deepEqual(Object.keys(Endpoint), ['local', 'gateway', 'provider']);
+  const client = new SippClient();
 
   assert.equal(typeof client.add, 'function');
   assert.equal(typeof client.remove, 'function');
   assert.equal(typeof client.query, 'function');
   assert.equal(typeof client.chat, 'function');
   assert.equal(typeof client.embed, 'function');
+  assert.equal(typeof client.listen, 'function');
+  assert.equal(typeof client.speak, 'function');
   assert.equal(typeof client.models.add, 'function');
   assert.equal(typeof client.models.list, 'function');
   assert.equal(typeof client.models.remove, 'function');
@@ -71,7 +115,7 @@ test('SippClient exposes typed inference and endpoint registration', async () =>
 });
 
 test('model sources reject empty, mixed, and unsupported inputs before storage access', async () => {
-  const client = new SippClient({ executionMode: 'main-thread' });
+  const client = new SippClient();
 
   await assert.rejects(client.models.add([]), { code: 'INVALID_MODEL_SOURCE' });
   await assert.rejects(
@@ -93,7 +137,7 @@ test('gateway query uses custom routes, authentication, headers, and extra field
       return textResponse('custom route response');
     },
     async () => {
-      const client = new SippClient({ executionMode: 'main-thread' });
+      const client = new SippClient();
       const endpoint = await client.add(
         'custom-http',
         gateway({
@@ -152,7 +196,7 @@ test('gateway chat and embed preserve typed capabilities', async () => {
       return textResponse('chat response');
     },
     async () => {
-      const client = new SippClient({ executionMode: 'main-thread' });
+      const client = new SippClient();
       const endpoint = await client.add(
         'typed-http',
         gateway({
@@ -222,7 +266,7 @@ test('gateway streaming exposes token batches and terminal response', async () =
         },
       }),
     async () => {
-      const client = new SippClient({ executionMode: 'main-thread' });
+      const client = new SippClient();
       const endpoint = await client.add(
         'stream-http',
         gateway({ authentication: { kind: 'none' } })
@@ -255,7 +299,7 @@ test('gateway supports custom authentication headers from async providers', asyn
       return textResponse('authenticated');
     },
     async () => {
-      const client = new SippClient({ executionMode: 'main-thread' });
+      const client = new SippClient();
       const endpoint = await client.add(
         'header-http',
         gateway({
@@ -294,7 +338,7 @@ test('gateway errors expose protocol metadata without leaking secrets', async ()
         }
       ),
     async () => {
-      const client = new SippClient({ executionMode: 'main-thread' });
+      const client = new SippClient();
       const endpoint = await client.add('error-http', gateway());
 
       await assert.rejects(
@@ -314,7 +358,7 @@ test('gateway errors expose protocol metadata without leaking secrets', async ()
 });
 
 test('gateway configuration rejects invalid and unknown fields', async () => {
-  const client = new SippClient({ executionMode: 'main-thread' });
+  const client = new SippClient();
 
   await assert.rejects(
     client.add(
@@ -329,7 +373,7 @@ test('gateway configuration rejects invalid and unknown fields', async () => {
   await assert.rejects(
     client.add(
       'unknown-field',
-      EndpointDescriptor.gateway({
+      Endpoint.gateway({
         target: 'developer-model',
         baseUrl: 'https://inference.example.test',
         authentication: { kind: 'none' },
@@ -344,28 +388,88 @@ test('gateway configuration rejects invalid and unknown fields', async () => {
   await client.close();
 });
 
-test('endpoints require the descriptor factory', async () => {
-  const descriptor = EndpointDescriptor.local('model-a', { observability: 'runtime' });
-  assert.deepEqual(Object.keys(descriptor), []);
+test('local endpoints retain their managed model identity opaquely', () => {
+  const endpoint = Endpoint.local({
+    id: 'model-a',
+    name: 'Model A',
+    bytes: 1,
+    modality: 'text',
+    status: 'ready',
+  }, { observability: 'runtime' });
 
-  const client = new SippClient({ executionMode: 'main-thread' });
-  await assert.rejects(
-    client.add(
-      'raw-local',
-      {
-        kind: 'local',
-        modelId: 'model-a',
-      } as unknown as EndpointDescriptor
-    ),
-    (error) =>
-      error instanceof QueryError &&
-      error.message === 'endpoint descriptors must be created by EndpointDescriptor'
-  );
-  await client.close();
+  assert.deepEqual(Object.keys(endpoint), []);
+});
+
+test('local endpoint publication waits for activation and failed replacement leaves no route', async () => {
+  await withFakeModelWorker(async () => {
+    const client = workerClient();
+    const firstAdd = client.add('local', Endpoint.local(localModel('first')));
+    const firstWorker = await waitForModelWorker(0);
+    const firstLoad = await waitForWorkerMessage(firstWorker, 'models-load');
+    assert.throws(() => client.query('before publish'), { code: 'MODEL_NOT_FOUND' });
+    firstWorker.respond({
+      kind: 'resolve',
+      callId: firstLoad.callId,
+      value: loadedModel('first'),
+    });
+    const endpoint = await firstAdd;
+
+    const replacement = client.add('local', Endpoint.local(localModel('broken')));
+    const shutdown = await waitForWorkerMessage(firstWorker, 'shutdown');
+    assert.throws(() => client.query('during replacement', { endpoint }), {
+      code: 'MODEL_NOT_FOUND',
+    });
+    assert.equal(FakeModelWorker.instances.length, 1);
+
+    firstWorker.respond({ kind: 'resolve', callId: shutdown.callId });
+    const replacementWorker = await waitForModelWorker(1);
+    const replacementLoad = await waitForWorkerMessage(replacementWorker, 'models-load');
+    replacementWorker.respond({
+      kind: 'reject',
+      callId: replacementLoad.callId,
+      message: 'native activation failed',
+    });
+    await assert.rejects(replacement, /native activation failed/u);
+    assert.equal(replacementWorker.terminated, true);
+    assert.throws(() => client.query('after failed replacement', { endpoint }), {
+      code: 'MODEL_NOT_FOUND',
+    });
+    await client.close();
+  });
+});
+
+test('cross-kind replacement unpublishes local before worker shutdown completes', async () => {
+  await withFakeModelWorker(async () => {
+    const client = workerClient();
+    const localAdd = client.add('shared', Endpoint.local(localModel('first')));
+    const worker = await waitForModelWorker(0);
+    const load = await waitForWorkerMessage(worker, 'models-load');
+    worker.respond({ kind: 'resolve', callId: load.callId, value: loadedModel('first') });
+    const local = await localAdd;
+
+    const gatewayAdd = client.add(
+      'shared',
+      gateway({ authentication: { kind: 'none' } })
+    );
+    const shutdown = await waitForWorkerMessage(worker, 'shutdown');
+    assert.throws(() => client.query('during replacement', { endpoint: local }), {
+      code: 'MODEL_NOT_FOUND',
+    });
+    worker.respond({ kind: 'resolve', callId: shutdown.callId });
+
+    const remote = await gatewayAdd;
+    await withGlobalFetch(
+      async () => textResponse('remote response'),
+      async () => {
+        assert.equal((await client.query('remote', { endpoint: remote }).response).text, 'remote response');
+      }
+    );
+    await client.close();
+  });
 });
 
 test('gateway endpoints reject local-only inference options', async () => {
-  const client = new SippClient({ executionMode: 'main-thread' });
+  const client = new SippClient();
   const endpoint = await client.add(
     'gateway-options',
     gateway({ authentication: { kind: 'none' } })

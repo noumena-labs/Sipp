@@ -90,8 +90,8 @@ impl EngineThreadState {
 
             let result = match response.status {
                 GenerateResponseStatus::Completed => {
-                    match self.validate_completed_response(request_id, &response) {
-                        Ok(()) => {
+                    match self.map_completed_response(request_id, response) {
+                        Ok(response) => {
                             emit_event(
                                 &self.event_subscribers,
                                 EngineEvent::RequestCompleted {
@@ -167,28 +167,45 @@ impl EngineThreadState {
         }
     }
 
-    fn validate_completed_response(
+    fn map_completed_response(
         &self,
         request_id: u32,
-        response: &GenerateResponse,
-    ) -> Result<()> {
+        mut response: GenerateResponse,
+    ) -> Result<GenerateResponse> {
         let expected = self
             .active_requests
             .get(&request_id)
-            .map(|request| request.output)
+            .map(|request| &request.output)
             .ok_or_else(|| runtime_command("completed request is not active"))?;
 
-        match (expected, &response.output) {
+        match (expected, &mut response.output) {
             (ActiveRequestOutput::Text, ResponseOutput::Text(_))
-            | (ActiveRequestOutput::Embedding, ResponseOutput::Embedding { .. }) => Ok(()),
-            (ActiveRequestOutput::Text, ResponseOutput::Embedding { .. }) => {
-                Err(Error::RuntimeCommand(
-                    "generation request completed with embedding output".to_string(),
-                ))
+            | (ActiveRequestOutput::Embedding, ResponseOutput::Embedding { .. })
+            | (ActiveRequestOutput::Speech, ResponseOutput::Audio(_)) => Ok(response),
+            (ActiveRequestOutput::Transcription { language }, ResponseOutput::Text(output)) => {
+                let runtime = self
+                    .runtime
+                    .as_ref()
+                    .ok_or_else(|| runtime_command("runtime is closed"))?;
+                let language: &str = language.as_deref().unwrap_or_default();
+                *output = runtime.parse_asr_output(language, output)?;
+                Ok(response)
             }
+            (
+                ActiveRequestOutput::Text | ActiveRequestOutput::Transcription { .. },
+                ResponseOutput::Embedding { .. },
+            ) => Err(Error::RuntimeCommand(
+                "generation request completed with embedding output".to_string(),
+            )),
             (ActiveRequestOutput::Embedding, ResponseOutput::Text(_)) => Err(
                 Error::RuntimeCommand("embedding request completed with text output".to_string()),
             ),
+            (ActiveRequestOutput::Speech, _) => Err(Error::RuntimeCommand(
+                "speech request completed without audio output".to_string(),
+            )),
+            (_, ResponseOutput::Audio(_)) => Err(Error::RuntimeCommand(
+                "non-speech request completed with audio output".to_string(),
+            )),
         }
     }
 

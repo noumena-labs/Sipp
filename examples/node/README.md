@@ -19,7 +19,12 @@ node examples/node/query.mjs <model.gguf> [input]
 node examples/node/chat.mjs <model.gguf> [input]
 node examples/node/embed.mjs <model.gguf> [input]
 node examples/node/vision_chat.mjs <model.gguf> <projector.gguf> <image> [input]
+node examples/node/listen.mjs <asr.gguf> <projector.gguf> <audio>
+node examples/node/speak.mjs <tts.gguf> <projector.gguf> <output.wav> [text]
 ```
+
+Set `SIPP_LANGUAGE` for an ASR/TTS language hint and
+`SIPP_SPEAKER_AUDIO` for optional speaker-conditioned synthesis.
 
 Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a built backend.
 
@@ -46,7 +51,7 @@ node examples/node/gateway_embed.mjs <model.gguf> local [input]
 
 Direct provider examples call the selected provider from the Node process
 without a gateway. By default they use the `gemini` preset, which maps to
-Sipp's OpenAI-compatible provider descriptor.
+Sipp's OpenAI-compatible provider endpoint.
 
 ```bash
 export SIPP_PROVIDER="gemini"
@@ -54,7 +59,7 @@ export GEMINI_API_KEY="<gemini-api-key>"
 node examples/node/provider_chat.mjs [input]
 ```
 
-For any OpenAI-compatible provider, pass the generic descriptor fields:
+For any OpenAI-compatible provider, pass the generic endpoint fields:
 
 ```bash
 export SIPP_PROVIDER="openai_compatible"

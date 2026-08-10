@@ -40,6 +40,7 @@ pub(super) fn normalize_asset_name(path: &Path) -> String {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(super) fn normalize_asset_file_name(name: &str) -> String {
     let name = name.trim();
     if name.is_empty() {

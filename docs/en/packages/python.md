@@ -1,7 +1,7 @@
 # Python Package
 
 The Python wheel is named `sipppy`. Python code imports the `sipp` module, which
-exposes native descriptor classes, run handles, token streaming, and the same
+exposes typed endpoint values, run handles, token streaming, and the same
 endpoint model as the Rust client.
 
 Published wheels require Python 3.10 or newer.
@@ -44,7 +44,7 @@ raised.
 
 - Python applications that need local GGUF inference.
 - Gateway-backed inference from Python services or scripts.
-- Direct provider descriptors where server-side credentials are appropriate.
+- Direct provider endpoints where server-side credentials are appropriate.
 - Runtime metrics and backend selection in Python services.
 
 ## Local GGUF Query
@@ -57,7 +57,7 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    EndpointDescriptor,
+    Endpoint,
     LocalTextOptions,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
@@ -69,7 +69,7 @@ client = SippClient()
 model = client.models.add([sys.argv[1]])
 endpoint = client.add(
     "default",
-    EndpointDescriptor.local(
+    Endpoint.local(
         model.id,
         runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
@@ -115,13 +115,13 @@ only by an x64 Python process; native arm64 Python should use arm64 wheels.
 ```python
 import os
 
-from sipp import ChatMessage, SippClient, SippTextOptions, EndpointDescriptor
+from sipp import ChatMessage, SippClient, SippTextOptions, Endpoint
 
 
 client = SippClient()
 endpoint = client.add(
     "gateway",
-    EndpointDescriptor.gateway(
+    Endpoint.gateway(
         os.environ["SIPP_GATEWAY_TARGET"],
         os.environ["SIPP_GATEWAY_URL"],
         authentication_kind="bearer",

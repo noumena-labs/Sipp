@@ -17,16 +17,20 @@ use sipp::backend::{
 use sipp::core::TokenUsage as CoreTokenUsage;
 use sipp::engine::protocol::RequestStats as CoreRequestStats;
 use sipp::engine::{PoolingType as CorePoolingType, TokenBatch as CoreTokenBatch};
+use sipp::lifecycle::{ModelModality as CoreModelModality, ModelStatus as CoreModelStatus};
 use sipp::{
-    EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
-    ManagedModel as CoreManagedModel, ProviderEndpointError as CoreProviderEndpointError,
+    Endpoint as CoreEndpoint, EndpointRef as CoreEndpointRef, ManagedModel as CoreManagedModel,
+    ProviderEndpointError as CoreProviderEndpointError,
     ProviderEndpointErrorKind as CoreProviderEndpointErrorKind,
+    SippAudioResponse as CoreClientAudioResponse,
+    SippAudioResponseFuture as CoreClientAudioResponseFuture, SippAudioRun as CoreClientAudioRun,
     SippCancellationHandle as CoreCancellationHandle,
     SippCancellationReason as CoreCancellationReason, SippClient as CoreClient,
     SippEmbeddingResponse as CoreClientEmbeddingResponse,
     SippEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
     SippEmbeddingRun as CoreClientEmbeddingRun, SippError as CoreClientError,
-    SippRequestContext as CoreClientRequestContext, SippTextResponse as CoreClientTextResponse,
+    SippListenRequest as CoreClientListenRequest, SippRequestContext as CoreClientRequestContext,
+    SippSpeakRequest as CoreClientSpeakRequest, SippTextResponse as CoreClientTextResponse,
     SippTextResponseFuture as CoreClientTextResponseFuture, SippTextRun as CoreClientTextRun,
     SippTokenBatches as CoreClientTokenBatches,
 };
@@ -41,6 +45,7 @@ fn convert_error(error: dto::ConvertError) -> Error {
 type SharedSippClient = Arc<Mutex<CoreClient>>;
 type SharedClientTextResponse = Arc<Mutex<Option<CoreClientTextResponseFuture>>>;
 type SharedClientEmbeddingResponse = Arc<Mutex<Option<CoreClientEmbeddingResponseFuture>>>;
+type SharedClientAudioResponse = Arc<Mutex<Option<CoreClientAudioResponseFuture>>>;
 type SharedClientTokenBatches = Arc<Mutex<Option<CoreClientTokenBatches>>>;
 type ClientTaskOutput<T> = std::result::Result<T, CoreClientError>;
 type ModelTaskOutput<T> = std::result::Result<T, sipp::lifecycle::ModelError>;
@@ -48,9 +53,11 @@ type ModelTaskOutput<T> = std::result::Result<T, sipp::lifecycle::ModelError>;
 const CLIENT_MUTEX_POISONED: &str = "client mutex is poisoned";
 const CLIENT_TEXT_RESPONSE_CONSUMED: &str = "text response already consumed";
 const CLIENT_EMBEDDING_RESPONSE_CONSUMED: &str = "embedding response already consumed";
+const CLIENT_AUDIO_RESPONSE_CONSUMED: &str = "audio response already consumed";
 const CLIENT_TOKEN_BATCHES_MUTEX_POISONED: &str = "token batches mutex is poisoned";
 const CLIENT_TEXT_RESPONSE_MUTEX_POISONED: &str = "text response mutex is poisoned";
 const CLIENT_EMBEDDING_RESPONSE_MUTEX_POISONED: &str = "embedding response mutex is poisoned";
+const CLIENT_AUDIO_RESPONSE_MUTEX_POISONED: &str = "audio response mutex is poisoned";
 
 /// Per-token logit bias applied during sampling.
 #[napi(object)]
@@ -654,6 +661,33 @@ pub struct SippEmbedRequest {
     pub extra: Option<serde_json::Value>,
 }
 
+/// Speech-recognition request routed to a local audio endpoint.
+#[napi(object)]
+pub struct SippListenRequest {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
+    pub endpoint: Option<EndpointRef>,
+    pub audio: Buffer,
+    pub language: Option<String>,
+    /// Maximum number of transcript tokens to generate.
+    #[napi(js_name = "maxTokens")]
+    pub max_tokens: Option<u32>,
+}
+
+/// Speech-synthesis request routed to a local audio endpoint.
+#[napi(object)]
+pub struct SippSpeakRequest {
+    #[napi(js_name = "requestId")]
+    pub request_id: Option<String>,
+    pub endpoint: Option<EndpointRef>,
+    pub text: String,
+    pub language: Option<String>,
+    #[napi(js_name = "speakerAudio")]
+    pub speaker_audio: Option<Buffer>,
+    #[napi(js_name = "maxDurationMs")]
+    pub max_duration_ms: Option<u32>,
+}
+
 impl From<SippEmbedRequest> for dto::SippEmbedRequest {
     fn from(value: SippEmbedRequest) -> Self {
         Self {
@@ -683,7 +717,7 @@ pub struct GatewayAuthentication {
     pub header_name: Option<String>,
 }
 
-/// Static header entry for an OpenAI-compatible provider descriptor.
+/// Static header entry for an OpenAI-compatible provider endpoint.
 #[napi(object)]
 pub struct ProviderStaticHeader {
     pub name: String,
@@ -699,40 +733,51 @@ impl From<ChatMessage> for dto::ChatMessage {
     }
 }
 
-impl From<&GatewayAuthentication> for dto::GatewayAuthentication {
-    fn from(value: &GatewayAuthentication) -> Self {
+impl From<ProviderStaticHeader> for dto::StaticHeader {
+    fn from(value: ProviderStaticHeader) -> Self {
         Self {
-            kind: value.kind.clone(),
-            value: value.value.clone(),
-            header_name: value.header_name.clone(),
+            name: value.name,
+            value: value.value,
         }
     }
 }
 
-impl From<&ProviderStaticHeader> for dto::ProviderStaticHeader {
-    fn from(value: &ProviderStaticHeader) -> Self {
-        Self {
-            name: value.name.clone(),
-            value: value.value.clone(),
-        }
-    }
-}
-
-/// Local, gateway, or direct provider endpoint descriptor accepted by add.
+/// Options for a local model endpoint.
 #[napi(object)]
-pub struct EndpointDescriptor {
-    pub kind: String,
-    #[napi(js_name = "modelId")]
-    pub model_id: Option<String>,
+pub struct LocalEndpointOptions {
     pub runtime: Option<NativeRuntimeConfig>,
+}
+
+/// Options for a client-owned HTTP gateway endpoint.
+#[napi(object)]
+pub struct GatewayEndpointOptions {
     #[napi(js_name = "baseUrl")]
-    pub base_url: Option<String>,
-    pub target: Option<String>,
+    pub base_url: String,
+    pub target: String,
     pub authentication: Option<GatewayAuthentication>,
-    pub provider: Option<String>,
-    pub model: Option<String>,
+    #[napi(js_name = "staticHeaders")]
+    pub static_headers: Option<Vec<ProviderStaticHeader>>,
+    #[napi(js_name = "timeoutMs")]
+    pub timeout_ms: Option<u32>,
+    #[napi(js_name = "queryRoute")]
+    pub query_route: Option<String>,
+    #[napi(js_name = "chatRoute")]
+    pub chat_route: Option<String>,
+    #[napi(js_name = "embedRoute")]
+    pub embed_route: Option<String>,
+    #[napi(js_name = "protocolOptions")]
+    pub protocol_options: Option<serde_json::Value>,
+}
+
+/// Options for an explicitly selected external provider adapter.
+#[napi(object)]
+pub struct ProviderEndpointOptions {
+    pub provider: String,
+    pub model: String,
     #[napi(js_name = "apiKey")]
     pub api_key: Option<String>,
+    #[napi(js_name = "baseUrl")]
+    pub base_url: Option<String>,
     #[napi(js_name = "timeoutMs")]
     pub timeout_ms: Option<u32>,
     pub version: Option<String>,
@@ -744,47 +789,87 @@ pub struct EndpointDescriptor {
     pub static_headers: Option<Vec<ProviderStaticHeader>>,
     #[napi(js_name = "correlationHeader")]
     pub correlation_header: Option<String>,
-    #[napi(js_name = "queryRoute")]
-    pub query_route: Option<String>,
-    #[napi(js_name = "chatRoute")]
-    pub chat_route: Option<String>,
-    #[napi(js_name = "embedRoute")]
-    pub embed_route: Option<String>,
-    #[napi(js_name = "protocolOptions")]
-    pub protocol_options: Option<serde_json::Value>,
 }
 
-impl From<&EndpointDescriptor> for dto::EndpointDescriptor {
-    fn from(value: &EndpointDescriptor) -> Self {
-        Self {
-            kind: value.kind.clone(),
-            model_id: value.model_id.clone(),
-            runtime: value.runtime.as_ref().map(dto::NativeRuntimeConfig::from),
-            base_url: value.base_url.clone(),
-            target: value.target.clone(),
-            authentication: value
-                .authentication
-                .as_ref()
-                .map(dto::GatewayAuthentication::from),
-            provider: value.provider.clone(),
-            model: value.model.clone(),
-            api_key: value.api_key.clone(),
-            timeout_ms: value.timeout_ms.map(u64::from),
-            version: value.version.clone(),
-            auth_header_name: value.auth_header_name.clone(),
-            auth_header_value: value.auth_header_value.clone(),
-            static_headers: value.static_headers.as_ref().map(|headers| {
-                headers
-                    .iter()
-                    .map(dto::ProviderStaticHeader::from)
-                    .collect()
-            }),
-            correlation_header: value.correlation_header.clone(),
-            query_route: value.query_route.clone(),
-            chat_route: value.chat_route.clone(),
-            embed_route: value.embed_route.clone(),
-            protocol_options: value.protocol_options.clone(),
-        }
+/// Unregistered endpoint configuration accepted by `SippClient.add`.
+#[napi]
+pub struct Endpoint {
+    core: CoreEndpoint,
+}
+
+#[napi]
+impl Endpoint {
+    /// Create a local endpoint from a managed model.
+    #[napi(factory)]
+    pub fn local(model: ManagedModel, options: Option<LocalEndpointOptions>) -> Result<Self> {
+        let runtime = options
+            .and_then(|options| options.runtime)
+            .map(|runtime| dto::NativeRuntimeConfig::from(&runtime))
+            .unwrap_or_default();
+        let input = dto::LocalEndpointInput {
+            model: model.try_into()?,
+            runtime,
+        };
+        Ok(Self {
+            core: input.try_into().map_err(convert_error)?,
+        })
+    }
+
+    /// Create a gateway endpoint.
+    #[napi(factory)]
+    pub fn gateway(options: GatewayEndpointOptions) -> Result<Self> {
+        let authentication = match options.authentication {
+            Some(authentication) => dto::GatewayAuthenticationInput {
+                kind: authentication.kind,
+                value: authentication.value,
+                header_name: authentication.header_name,
+            }
+            .try_into()
+            .map_err(convert_error)?,
+            None => dto::GatewayAuthentication::None,
+        };
+        let input = dto::GatewayEndpointInput {
+            target: options.target,
+            base_url: options.base_url,
+            authentication,
+            static_headers: options
+                .static_headers
+                .unwrap_or_default()
+                .into_iter()
+                .map(dto::StaticHeader::from)
+                .collect(),
+            timeout_ms: options.timeout_ms.map(u64::from),
+            query_route: options.query_route,
+            chat_route: options.chat_route,
+            embed_route: options.embed_route,
+            protocol_options: options.protocol_options,
+        };
+        Ok(Self {
+            core: input.try_into().map_err(convert_error)?,
+        })
+    }
+
+    /// Create a direct provider endpoint.
+    #[napi(factory)]
+    pub fn provider(options: ProviderEndpointOptions) -> Result<Self> {
+        let input = dto::ProviderEndpointInput::try_from(dto::ProviderSelectionInput {
+            provider: options.provider,
+            model: options.model,
+            api_key: options.api_key,
+            base_url: options.base_url,
+            timeout_ms: options.timeout_ms.map(u64::from),
+            version: options.version,
+            auth_header_name: options.auth_header_name,
+            auth_header_value: options.auth_header_value,
+            static_headers: options
+                .static_headers
+                .map(|headers| headers.into_iter().map(dto::StaticHeader::from).collect()),
+            correlation_header: options.correlation_header,
+        })
+        .map_err(convert_error)?;
+        Ok(Self {
+            core: input.try_into().map_err(convert_error)?,
+        })
     }
 }
 
@@ -796,6 +881,42 @@ pub struct ManagedModel {
     pub bytes: f64,
     pub modality: String,
     pub status: String,
+}
+
+impl TryFrom<ManagedModel> for CoreManagedModel {
+    type Error = Error;
+
+    fn try_from(model: ManagedModel) -> Result<Self> {
+        let modality = match model.modality.as_str() {
+            "text" => CoreModelModality::Text,
+            "vision" => CoreModelModality::Vision,
+            "audio" => CoreModelModality::Audio,
+            "multimodal" => CoreModelModality::Multimodal,
+            _ => return Err(invalid_arg("managed model modality is invalid")),
+        };
+        let status = match model.status.as_str() {
+            "ready" => CoreModelStatus::Ready,
+            "needs_projector" => CoreModelStatus::NeedsProjector,
+            "broken" => CoreModelStatus::Broken,
+            _ => return Err(invalid_arg("managed model status is invalid")),
+        };
+        if !model.bytes.is_finite()
+            || model.bytes < 0.0
+            || model.bytes.fract() != 0.0
+            || model.bytes > u64::MAX as f64
+        {
+            return Err(invalid_arg(
+                "managed model bytes must be an unsigned integer",
+            ));
+        }
+        Ok(Self {
+            id: model.id,
+            name: model.name,
+            bytes: model.bytes as u64,
+            modality,
+            status,
+        })
+    }
 }
 
 fn managed_model_to_node(model: CoreManagedModel) -> ManagedModel {
@@ -916,6 +1037,19 @@ pub struct SippEmbeddingResponse {
     pub metadata: SippResponseMetadata,
 }
 
+/// Final WAV response from a speech-synthesis request.
+#[napi(object)]
+pub struct SippAudioResponse {
+    pub endpoint: EndpointRef,
+    pub audio: Buffer,
+    #[napi(js_name = "sampleRateHz")]
+    pub sample_rate_hz: u32,
+    pub channels: u32,
+    #[napi(js_name = "durationMs")]
+    pub duration_ms: f64,
+    pub metadata: SippResponseMetadata,
+}
+
 /// Request and upstream correlation metadata.
 #[napi(object)]
 pub struct SippResponseMetadata {
@@ -968,6 +1102,17 @@ fn sipp_embedding_response_to_node(response: CoreClientEmbeddingResponse) -> Sip
         local_stats: response.local_stats.map(request_stats_to_node),
         pooling: response.pooling.map(PoolingType::from),
         normalized: response.normalized,
+        metadata: response_metadata_to_node(response.metadata),
+    }
+}
+
+fn sipp_audio_response_to_node(response: CoreClientAudioResponse) -> SippAudioResponse {
+    SippAudioResponse {
+        endpoint: endpoint_ref_to_node(response.endpoint),
+        audio: response.audio.into(),
+        sample_rate_hz: response.sample_rate_hz,
+        channels: u32::from(response.channels),
+        duration_ms: response.duration_ms as f64,
         metadata: response_metadata_to_node(response.metadata),
     }
 }
@@ -1066,18 +1211,11 @@ impl SippClient {
 
     /// Register or replace an endpoint and return its current reference.
     #[napi(ts_return_type = "Promise<EndpointRef>")]
-    pub fn add(
-        &self,
-        id: String,
-        descriptor: EndpointDescriptor,
-    ) -> Result<AsyncTask<ClientAddTask>> {
+    pub fn add(&self, id: String, endpoint: &Endpoint) -> Result<AsyncTask<ClientAddTask>> {
         Ok(AsyncTask::new(ClientAddTask {
             client: self.inner.clone(),
             id,
-            descriptor: {
-                let descriptor = dto::EndpointDescriptor::from(&descriptor);
-                CoreEndpointDescriptor::try_from(&descriptor).map_err(convert_error)?
-            },
+            endpoint: endpoint.core.clone(),
         }))
     }
 
@@ -1133,6 +1271,50 @@ impl SippClient {
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
             .embed_with_context(context, request);
         Ok(SippEmbeddingRun::from_core(run))
+    }
+
+    /// Start speech recognition with an optional transcript token limit.
+    #[napi(ts_return_type = "SippTextRun")]
+    pub fn listen(&self, request: SippListenRequest) -> Result<SippTextRun> {
+        let context = CoreClientRequestContext {
+            request_id: request.request_id,
+        };
+        let request = CoreClientListenRequest {
+            endpoint: request
+                .endpoint
+                .map(|endpoint| CoreEndpointRef::from_id(endpoint.id)),
+            audio: request.audio.into(),
+            language: request.language,
+            max_tokens: request.max_tokens,
+        };
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .listen_with_context(context, request);
+        Ok(SippTextRun::from_core(run))
+    }
+
+    #[napi(ts_return_type = "SippAudioRun")]
+    pub fn speak(&self, request: SippSpeakRequest) -> Result<SippAudioRun> {
+        let context = CoreClientRequestContext {
+            request_id: request.request_id,
+        };
+        let request = CoreClientSpeakRequest {
+            endpoint: request
+                .endpoint
+                .map(|endpoint| CoreEndpointRef::from_id(endpoint.id)),
+            text: request.text,
+            language: request.language,
+            speaker_audio: request.speaker_audio.map(Vec::<u8>::from),
+            max_duration_ms: request.max_duration_ms,
+        };
+        let run = self
+            .inner
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
+            .speak_with_context(context, request);
+        Ok(SippAudioRun::from_core(run))
     }
 }
 
@@ -1196,6 +1378,40 @@ impl SippEmbeddingRun {
     }
 }
 
+/// Speech-synthesis handle with a final WAV response.
+#[napi(js_name = "SippAudioRun")]
+pub struct SippAudioRun {
+    response: SharedClientAudioResponse,
+    cancellation: CoreCancellationHandle,
+}
+
+impl SippAudioRun {
+    fn from_core(run: CoreClientAudioRun) -> Self {
+        let (response, cancellation) = run.into_parts();
+        Self {
+            response: Arc::new(Mutex::new(Some(response))),
+            cancellation,
+        }
+    }
+}
+
+#[napi]
+impl SippAudioRun {
+    #[napi(js_name = "__response", ts_return_type = "Promise<SippAudioResponse>")]
+    pub fn response(&self) -> AsyncTask<ClientAudioResultTask> {
+        AsyncTask::new(ClientAudioResultTask {
+            response: self.response.clone(),
+        })
+    }
+
+    /// Cancel the native run and abort local execution.
+    #[napi]
+    pub fn cancel(&self, reason: Option<String>) -> Result<()> {
+        self.cancellation.cancel(cancellation_reason(reason)?);
+        Ok(())
+    }
+}
+
 #[napi]
 impl SippEmbeddingRun {
     #[napi(
@@ -1231,7 +1447,7 @@ fn cancellation_reason(reason: Option<String>) -> Result<CoreCancellationReason>
 pub struct ClientAddTask {
     client: SharedSippClient,
     id: String,
-    descriptor: CoreEndpointDescriptor,
+    endpoint: CoreEndpoint,
 }
 
 impl Task for ClientAddTask {
@@ -1243,9 +1459,7 @@ impl Task for ClientAddTask {
             .client
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
-        Ok(block_on(
-            client.add(self.id.clone(), self.descriptor.clone()),
-        ))
+        Ok(block_on(client.add(self.id.clone(), self.endpoint.clone())))
     }
 
     fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -1380,6 +1594,31 @@ impl Task for ClientTextResultTask {
 
 pub struct ClientEmbeddingResultTask {
     response: SharedClientEmbeddingResponse,
+}
+
+pub struct ClientAudioResultTask {
+    response: SharedClientAudioResponse,
+}
+
+impl Task for ClientAudioResultTask {
+    type Output = ClientTaskOutput<CoreClientAudioResponse>;
+    type JsValue = SippAudioResponse;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let response = self
+            .response
+            .lock()
+            .map_err(|_| napi_error(CLIENT_AUDIO_RESPONSE_MUTEX_POISONED))?
+            .take()
+            .ok_or_else(|| napi_error(CLIENT_AUDIO_RESPONSE_CONSUMED))?;
+        Ok(block_on(response))
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output
+            .map(sipp_audio_response_to_node)
+            .map_err(|error| client_error_to_node(env, error))
+    }
 }
 
 impl Task for ClientEmbeddingResultTask {
@@ -1580,8 +1819,8 @@ fn client_error_to_node(env: Env, error: CoreClientError) -> Error {
     match error {
         CoreClientError::Local(error) => core_error(error),
         CoreClientError::ModelLifecycle(error) => model_lifecycle_error_to_node(env, error),
-        CoreClientError::Endpoint(error) => endpoint_error_to_node(env, error),
-        CoreClientError::Provider(error) => provider_error_to_node(env, error),
+        CoreClientError::Endpoint(error) => endpoint_error_to_node(env, *error),
+        CoreClientError::Provider(error) => provider_error_to_node(env, *error),
         CoreClientError::InvalidRequest(message) => invalid_arg(message),
         CoreClientError::UnsupportedOperation {
             endpoint,

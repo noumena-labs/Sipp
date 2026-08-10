@@ -12,12 +12,15 @@ use crate::engine::{
     ChatRequest, EmbedRequest, EmbeddingResult, GenerationResult, PoolingType, QueryRequest,
     RequestStats,
 };
+use crate::runtime::SynthesizedAudio;
 use futures::executor::block_on;
 use futures::StreamExt;
 
 #[derive(Default)]
 struct FakeLocalRuntime {
     calls: Mutex<Vec<&'static str>>,
+    listen_requests: Mutex<Vec<ListenRequest>>,
+    speak_requests: Mutex<Vec<SpeakRequest>>,
     text_error: Option<&'static str>,
     embed_error: Option<&'static str>,
 }
@@ -71,6 +74,48 @@ impl LocalRuntime for FakeLocalRuntime {
             tokens: None,
             response: Box::pin(async move { result }),
         }
+    }
+
+    fn listen(&self, request: ListenRequest) -> LocalTextRun {
+        self.calls.lock().expect("calls").push("listen");
+        self.listen_requests
+            .lock()
+            .expect("listen requests")
+            .push(request);
+        let result = self.text_error.map_or_else(
+            || {
+                Ok(GenerationResult {
+                    id: "listen-id".to_string(),
+                    text: "transcript".to_string(),
+                    finish_reason: FinishReason::Stop,
+                    stats: RequestStats {
+                        input_tokens: 6,
+                        output_tokens: 2,
+                        ..RequestStats::default()
+                    },
+                })
+            },
+            |message| Err(crate::error::Error::RuntimeCommand(message.to_string())),
+        );
+        LocalTextRun {
+            tokens: None,
+            response: Box::pin(async move { result }),
+        }
+    }
+
+    fn speak(&self, request: SpeakRequest) -> EngineAudioRun {
+        self.calls.lock().expect("calls").push("speak");
+        self.speak_requests
+            .lock()
+            .expect("speak requests")
+            .push(request);
+        EngineAudioRun::from_response(Box::pin(async {
+            Ok(SynthesizedAudio {
+                data: b"RIFF....WAVE".to_vec(),
+                sample_count: 24_000,
+                sample_rate_hz: 24_000,
+            })
+        }))
     }
 
     fn chat(&self, request: ChatRequest) -> LocalTextRun {
@@ -130,6 +175,8 @@ fn endpoint(runtime: Arc<dyn LocalRuntime>) -> LocalEndpoint {
             query: crate::core::CapabilitySupport::Supported,
             chat: crate::core::CapabilitySupport::Supported,
             embed: crate::core::CapabilitySupport::Supported,
+            listen: crate::core::CapabilitySupport::Supported,
+            speak: crate::core::CapabilitySupport::Unsupported,
         },
         runtime,
     )
@@ -212,6 +259,98 @@ fn chat_maps_local_response() {
     assert_eq!(response.finish_reason, FinishReason::Length);
     assert_eq!(response.usage.expect("usage").total_tokens, Some(9));
     assert_eq!(runtime.calls(), vec!["chat"]);
+}
+
+#[test]
+fn listen_dispatches_once_and_maps_the_existing_text_response() {
+    let runtime = Arc::new(FakeLocalRuntime::default());
+    let endpoint = endpoint(runtime.clone());
+    let context = SippRequestContext {
+        request_id: Some("request-1".to_string()),
+    };
+    let run = endpoint.listen_with_context(
+        context,
+        SippListenRequest {
+            endpoint: Some(EndpointRef::from_id("local")),
+            audio: vec![1, 2, 3],
+            language: Some("en".to_string()),
+            max_tokens: Some(96),
+        },
+    );
+    let (mut tokens, response) = run.into_parts();
+    let response = block_on(response).expect("listen response");
+
+    assert_eq!(response.endpoint, *endpoint.endpoint());
+    assert_eq!(response.text, "transcript");
+    assert_eq!(response.usage.expect("usage").total_tokens, Some(8));
+    assert_eq!(response.metadata.request_id.as_deref(), Some("request-1"));
+    assert!(block_on(tokens.next()).is_none());
+    assert_eq!(runtime.calls(), vec!["listen"]);
+    assert_eq!(
+        *runtime.listen_requests.lock().expect("listen requests"),
+        vec![ListenRequest {
+            audio: vec![1, 2, 3],
+            language: Some("en".to_string()),
+            max_tokens: 96,
+        }]
+    );
+}
+
+#[test]
+fn speak_dispatches_once_and_maps_native_wav_output() {
+    let runtime = Arc::new(FakeLocalRuntime::default());
+    let endpoint = endpoint(runtime.clone());
+    let response = block_on(
+        endpoint.speak_with_context(
+            SippRequestContext {
+                request_id: Some("request-2".to_string()),
+            },
+            SippSpeakRequest::new("hello")
+                .language("en")
+                .speaker([1, 2, 3])
+                .max_duration_ms(2_000),
+        ),
+    )
+    .expect("speak response");
+
+    assert_eq!(response.endpoint, *endpoint.endpoint());
+    assert_eq!(response.audio, b"RIFF....WAVE");
+    assert_eq!(response.sample_rate_hz, 24_000);
+    assert_eq!(response.channels, 1);
+    assert_eq!(response.duration_ms, 1_000);
+    assert_eq!(response.metadata.request_id.as_deref(), Some("request-2"));
+    assert_eq!(runtime.calls(), vec!["speak"]);
+    assert_eq!(
+        *runtime.speak_requests.lock().expect("speak requests"),
+        vec![SpeakRequest {
+            text: "hello".to_string(),
+            language: Some("en".to_string()),
+            speaker_audio: Some(vec![1, 2, 3]),
+            max_duration_ms: Some(2_000),
+        }]
+    );
+}
+
+#[test]
+fn speak_preserves_absent_backend_hints_until_the_native_boundary() {
+    let runtime = Arc::new(FakeLocalRuntime::default());
+    let endpoint = endpoint(runtime.clone());
+
+    block_on(endpoint.speak_with_context(
+        SippRequestContext::default(),
+        SippSpeakRequest::new("hello"),
+    ))
+    .expect("speak response");
+
+    assert_eq!(
+        *runtime.speak_requests.lock().expect("speak requests"),
+        vec![SpeakRequest {
+            text: "hello".to_string(),
+            language: None,
+            speaker_audio: None,
+            max_duration_ms: None,
+        }]
+    );
 }
 
 #[test]

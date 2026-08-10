@@ -18,6 +18,9 @@ fn help_exposes_user_facing_flags() {
     assert!(stdout.contains("--max-tokens"));
     assert!(stdout.contains("--backend"));
     assert!(stdout.contains("--stats"));
+    assert!(stdout.contains("--listen"));
+    assert!(stdout.contains("--speak"));
+    assert!(stdout.contains("--projector"));
 }
 
 #[test]

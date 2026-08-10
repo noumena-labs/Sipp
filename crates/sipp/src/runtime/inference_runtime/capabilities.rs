@@ -8,6 +8,9 @@ pub(crate) struct RuntimeModelCapabilities {
     pub decoder_start_token: Option<i32>,
     pub has_chat_template: bool,
     pub embedding_context: bool,
+    pub supports_vision: bool,
+    pub audio_sample_rate_hz: Option<u32>,
+    pub generated_audio_sample_rate_hz: Option<u32>,
 }
 
 impl RuntimeModelCapabilities {
@@ -35,6 +38,9 @@ impl RuntimeModelCapabilities {
             model_class: self.class,
             supports_text_generation: self.supports_text_generation(),
             supports_embeddings: self.supports_embeddings(),
+            supports_vision: self.supports_vision,
+            audio_sample_rate_hz: self.audio_sample_rate_hz,
+            generated_audio_sample_rate_hz: self.generated_audio_sample_rate_hz,
             has_chat_template: self.has_chat_template,
             embedding: self.supports_embeddings().then_some(EmbeddingCapabilities {
                 dimensions: self.embedding_dimensions,

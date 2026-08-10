@@ -13,6 +13,9 @@ pub struct SippRequestContext {
 /// Endpoint-specific free-form fields carried by request envelopes.
 pub type RequestExtra = serde_json::Map<String, serde_json::Value>;
 
+/// Default maximum output token count for speech recognition.
+pub const DEFAULT_TRANSCRIPTION_MAX_TOKENS: u32 = 512;
+
 /// Text generation options shared by inference endpoints.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SippTextOptions {
@@ -42,6 +45,7 @@ pub struct LocalTextOptions {
 }
 
 impl LocalTextOptions {
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn has_fields(&self) -> bool {
         self.context_key.is_some()
             || self.grammar.is_some()
@@ -61,6 +65,7 @@ pub struct LocalEmbedOptions {
 }
 
 impl LocalEmbedOptions {
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn has_fields(&self) -> bool {
         self.context_key.is_some() || self.normalize.is_some()
     }
@@ -111,4 +116,117 @@ pub struct SippEmbedRequest {
     pub local: LocalEmbedOptions,
     /// Extra fields interpreted by gateway and provider endpoints.
     pub extra: RequestExtra,
+}
+
+/// Encoded-audio transcription request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SippListenRequest {
+    /// Target endpoint, or the single matching local endpoint when omitted.
+    pub endpoint: Option<EndpointRef>,
+    /// Complete encoded WAV, MP3, or FLAC payload.
+    pub audio: Vec<u8>,
+    /// Optional language hint supplied to the local transcription model.
+    pub language: Option<String>,
+    /// Maximum number of transcript tokens to generate.
+    pub max_tokens: Option<u32>,
+}
+
+impl SippListenRequest {
+    /// Create a transcription request without a language hint.
+    pub fn new(audio: impl Into<Vec<u8>>) -> Self {
+        Self {
+            endpoint: None,
+            audio: audio.into(),
+            language: None,
+            max_tokens: None,
+        }
+    }
+
+    /// Attach an exact language hint.
+    pub fn language(mut self, language: impl Into<String>) -> Self {
+        self.language = Some(language.into());
+        self
+    }
+
+    /// Set the maximum number of transcript tokens to generate.
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+}
+
+impl From<Vec<u8>> for SippListenRequest {
+    fn from(audio: Vec<u8>) -> Self {
+        Self::new(audio)
+    }
+}
+
+impl From<&[u8]> for SippListenRequest {
+    fn from(audio: &[u8]) -> Self {
+        Self::new(audio)
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for SippListenRequest {
+    fn from(audio: [u8; N]) -> Self {
+        Self::new(audio)
+    }
+}
+
+/// Text-to-WAV synthesis request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SippSpeakRequest {
+    /// Target endpoint, or the single matching local endpoint when omitted.
+    pub endpoint: Option<EndpointRef>,
+    /// Text to synthesize.
+    pub text: String,
+    /// Optional language hint passed to the loaded synthesizer.
+    pub language: Option<String>,
+    /// Optional encoded WAV, MP3, or FLAC speaker reference.
+    pub speaker_audio: Option<Vec<u8>>,
+    /// Optional hard duration limit in milliseconds.
+    pub max_duration_ms: Option<u32>,
+}
+
+impl SippSpeakRequest {
+    /// Create a synthesis request using the loaded model's defaults.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            endpoint: None,
+            text: text.into(),
+            language: None,
+            speaker_audio: None,
+            max_duration_ms: None,
+        }
+    }
+
+    /// Attach an exact language hint.
+    pub fn language(mut self, language: impl Into<String>) -> Self {
+        self.language = Some(language.into());
+        self
+    }
+
+    /// Attach encoded speaker-reference audio.
+    pub fn speaker(mut self, audio: impl Into<Vec<u8>>) -> Self {
+        self.speaker_audio = Some(audio.into());
+        self
+    }
+
+    /// Set a hard duration limit; reaching it before end of generation fails.
+    pub fn max_duration_ms(mut self, max_duration_ms: u32) -> Self {
+        self.max_duration_ms = Some(max_duration_ms);
+        self
+    }
+}
+
+impl From<String> for SippSpeakRequest {
+    fn from(text: String) -> Self {
+        Self::new(text)
+    }
+}
+
+impl From<&str> for SippSpeakRequest {
+    fn from(text: &str) -> Self {
+        Self::new(text)
+    }
 }

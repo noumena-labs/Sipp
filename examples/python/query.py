@@ -5,7 +5,7 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    EndpointDescriptor,
+    Endpoint,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
@@ -72,7 +72,7 @@ def main() -> None:
     model = client.models.add([model_path])
     client.add(
         "default",
-        EndpointDescriptor.local(model.id, runtime=runtime_config(embeddings=False)),
+        Endpoint.local(model, runtime=runtime_config(embeddings=False)),
     )
 
     # `query` is the simplest text-generation call: one prompt in, one response out.

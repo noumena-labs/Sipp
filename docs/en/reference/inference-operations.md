@@ -1,14 +1,14 @@
 # Inference Operations
 
-Sipp separates the operation from the endpoint. Choose `query`, `chat`, or
-`embed` based on the input shape and expected output, then pass the endpoint
-reference that decides where the request runs.
+Sipp separates the operation from the endpoint. Choose `query`, `chat`,
+`embed`, `listen`, or `speak` based on the input shape and expected output,
+then pass the endpoint reference that decides where the request runs.
 
 ## Shared Contract
 
-1. Register a local, gateway, or provider descriptor with `SippClient.add`.
+1. Register a local, gateway, or provider endpoint with `SippClient.add`.
 2. Keep the returned endpoint reference.
-3. Pass that reference to `query`, `chat`, or `embed`.
+3. Pass that reference to the operation.
 
 `query` and `chat` both produce text. They share `maxTokens`, `temperature`,
 `topP`, `stop`, cancellation, and token streaming. `embed` produces vectors and
@@ -19,6 +19,8 @@ does not use generation options or token streaming.
 | `query` | One already-rendered prompt string. | Generated text. | Raw completions, custom templates, encoder-decoder text generation, few-shot prompts, and agent loops that render prompts themselves. |
 | `chat` | Ordered `{ role, content }` messages. | Generated assistant text. | Conversation-shaped model calls where the endpoint owns the chat-template or provider-message mapping. |
 | `embed` | One text input. | One embedding vector. | Retrieval, semantic search, ranking, clustering, and memory indexes. |
+| `listen` | Encoded WAV, MP3, or FLAC audio. | Transcript text. | Local speech recognition with an ASR model/projector pair. |
+| `speak` | Text and an optional encoded speaker reference. | Mono PCM16 WAV audio. | Local speech synthesis with a TTS model/projector pair. |
 
 ## Local Inference
 
@@ -30,6 +32,8 @@ or CLI process.
 | `query` | The prompt string exactly as supplied. Decoder-only models run the normal decode path; encoder-decoder models run an encoder pass and then the decoder loop. | No chat template is applied. Use this when the application owns a custom or generic prompt format. | Context keys, grammars, JSON schema, sampling overrides, media inputs. |
 | `chat` | Messages are rendered to one prompt with llama.cpp chat-template support and `add_assistant = true`. | Requires the GGUF to declare `tokenizer.chat_template`. Sipp checks model metadata, not the llama.cpp fallback chain, before allowing local `chat`. | Same text options as `query`, including context keys and media inputs. |
 | `embed` | The input text is encoded by the local embedding runtime. | No chat template and no generation. | Context key and embedding normalization. |
+| `listen` | Encoded audio is processed by the model projector, then transcript tokens are generated. | Uses the model-specific ASR prompt and response parser. | Language and transcript `maxTokens` (default: 512). |
+| `speak` | Text is converted to codec frames and decoded to a terminal WAV payload. | Uses the model-specific TTS pipeline. | Language, optional speaker-reference audio, and optional `maxDurationMs`. |
 
 Local `chat` is a prompt renderer plus generation call, not a conversation
 store. Pass prior turns in `messages` when they should be visible to the model.
@@ -47,7 +51,7 @@ or application-provided chat template.
 const model = await client.models.add(['/models/model.gguf']);
 const endpoint = await client.add(
   'local',
-  EndpointDescriptor.local(model.id)
+  Endpoint.local(model)
 );
 
 const prompt = [
@@ -99,7 +103,7 @@ first; Sipp then drives the decoder from the model's decoder-start token.
 const model = await client.models.add(['/models/t5-small-f16.gguf']);
 const endpoint = await client.add(
   't5-local',
-  EndpointDescriptor.local(model.id)
+  Endpoint.local(model)
 );
 
 const run = client.query({
@@ -126,6 +130,43 @@ const run = client.embed({
 
 const embedding = (await run.response).values;
 ```
+
+### Local Speech
+
+Speech models require both their main GGUF and matching projector GGUF. The
+public API remains operation-level: callers submit `listen()` or `speak()` and
+receive a cancellable run. Speech synthesis returns one terminal WAV payload.
+
+```ts
+const asr = await client.models.add([
+  '/models/qwen3-asr.gguf',
+  '/models/mmproj-qwen3-asr.gguf',
+]);
+const asrEndpoint = await client.add('asr', Endpoint.local(asr));
+const transcript = await client.listen(encodedAudio, {
+  endpoint: asrEndpoint,
+  language: 'en',
+  maxTokens: 512,
+}).response;
+
+const tts = await client.models.add([
+  '/models/qwen3-tts.gguf',
+  '/models/mmproj-qwen3-tts.gguf',
+]);
+const ttsEndpoint = await client.add('tts', Endpoint.local(tts));
+const speech = await client.speak('Hello from Sipp.', {
+  endpoint: ttsEndpoint,
+  language: 'en',
+  maxDurationMs: 10_000,
+}).response;
+const wav = new Blob([speech.audio], { type: 'audio/wav' });
+```
+
+The model's end-of-generation token completes synthesis successfully.
+`maxDurationMs` is an optional safety limit: reaching it first fails the
+request. When it is omitted, the loaded model adapter owns the generation
+default. Sipp does not infer a duration from text or token length. Context size
+only bounds model state and is not a synthesis stop policy.
 
 ## Remote Gateway
 
@@ -165,9 +206,9 @@ an OpenAI-compatible target may expose chat but not completions, so gateway
 ### Gateway Client Chat
 
 ```ts
-import { EndpointDescriptor } from '@sipphq/sipp-server';
+import { Endpoint } from '@sipphq/sipp-server';
 
-const endpoint = await client.add('gateway-openai', EndpointDescriptor.gateway({
+const endpoint = await client.add('gateway-openai', Endpoint.gateway({
   target: 'openai-chat',
   baseUrl: process.env.SIPP_GATEWAY_URL!,
   authentication: {
@@ -238,6 +279,8 @@ curl -X POST "$SIPP_GATEWAY_URL/v1/embed" \
   application already has role messages.
 - Use local `embed` when vectors should be produced in the current process and
   local normalization matters.
+- Use local `listen` or `speak` with the matching speech model/projector pair;
+  use cancellation when a long-running browser request is no longer needed.
 - Use gateway `query` when the target supports raw-prompt generation, including
   local decoder-only or encoder-decoder GGUF targets and OpenAI-compatible
   completions targets.

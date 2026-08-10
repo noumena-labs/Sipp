@@ -11,35 +11,50 @@ export interface RuntimeUrls {
   threading: WasmThreadingMode;
 }
 
-export type WasmThreadingPreference = 'single-thread' | 'pthread';
+export interface RuntimeAssetSelection extends RuntimeUrls {
+  readonly backendConstraint: RuntimeBackendConstraint | null;
+}
+
 export type WasmThreadingMode = 'single-thread' | 'pthread';
-export type RuntimeBackendOverride = 'cpu';
+export type RuntimeBackendConstraint = 'cpu-only';
 
 interface BundledRuntimeAsset {
   readonly artifactName: string;
-  readonly backendOverride: RuntimeBackendOverride | null;
+  readonly backendConstraint: RuntimeBackendConstraint | null;
 }
 
 interface RuntimeUrlResolutionOptions {
   readonly bundledRuntimeUrls?: () => RuntimeUrls;
 }
 
+interface RuntimeAssetSelectionOptions {
+  readonly importerUrl?: string;
+  readonly probeWasmJspi?: () => Promise<boolean>;
+}
+
 const DEFAULT_BUNDLED_RUNTIME: BundledRuntimeAsset = {
   artifactName: 'sipp-wasm-pthread',
-  backendOverride: null,
+  backendConstraint: null,
 };
 const CPU_NOJSPI_BUNDLED_RUNTIME: BundledRuntimeAsset = {
   artifactName: 'sipp-wasm-pthread-cpu-nojspi',
-  backendOverride: 'cpu',
+  backendConstraint: 'cpu-only',
 };
+
+const JSPI_PROBE_MODULE = Uint8Array.from([
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+  0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
+  0x02, 0x07, 0x01, 0x01, 0x6d, 0x01, 0x73, 0x00, 0x00,
+  0x03, 0x02, 0x01, 0x00,
+  0x07, 0x07, 0x01, 0x03, 0x72, 0x75, 0x6e, 0x00, 0x01,
+  0x0a, 0x06, 0x01, 0x04, 0x00, 0x10, 0x00, 0x0b,
+]);
+/** Verifies that JSPI can suspend and resume an actual Wasm export. */
+const supportsFunctionalWasmJspi = memoizeWasmJspiProbe(runFunctionalWasmJspiProbe);
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed == null || trimmed.length === 0 ? undefined : trimmed;
-}
-
-function parseConfiguredUrl(rawUrl: string, fieldName: string): URL {
-  return resolveUrl(rawUrl, fieldName);
 }
 
 export function resolveOptimizedPackageAssetUrl(
@@ -86,11 +101,7 @@ function packageRootForOptimizedDependency(optimizedPath: string): string | null
   return null;
 }
 
-export function getDefaultRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls {
-  assertWasmPthreadsSupported();
-  return bundledRuntimeUrls(importerUrl);
-}
-
+/** @internal Exported for tests; not part of the package's public surface. */
 export function supportsWasmPthreads(): boolean {
   return (
     typeof SharedArrayBuffer !== 'undefined' &&
@@ -123,23 +134,6 @@ export function resolveRuntimeThreadingMode(
   return 'pthread';
 }
 
-export function resolveRuntimeBackendOverride(
-  config: Pick<
-    SippClientOptions,
-    | 'moduleUrl'
-    | 'wasmUrl'
-    | 'pthreadModuleUrl'
-    | 'pthreadWasmUrl'
-    | 'wasmThreading'
-  >
-): RuntimeBackendOverride | null {
-  if (hasRuntimeUrlOverride(config)) {
-    return null;
-  }
-  resolveRuntimeThreadingMode(config);
-  return selectBundledRuntime().backendOverride;
-}
-
 function assertWasmPthreadsSupported(): void {
   if (supportsWasmPthreads()) {
     return;
@@ -149,8 +143,10 @@ function assertWasmPthreadsSupported(): void {
   );
 }
 
-function bundledRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls {
-  const runtime = selectBundledRuntime();
+function bundledRuntimeUrls(
+  runtime: BundledRuntimeAsset,
+  importerUrl: string = import.meta.url
+): RuntimeUrls {
   const optimizedRuntimeAssetsUrl = resolveOptimizedPackageAssetUrl(
     'dist/esm/engine/runtime-assets.js',
     importerUrl
@@ -170,35 +166,101 @@ function bundledRuntimeUrls(importerUrl: string = import.meta.url): RuntimeUrls 
   };
 }
 
-function selectBundledRuntime(): BundledRuntimeAsset {
-  return isFirefoxLikeRuntime() || !supportsWasmJspi() ? CPU_NOJSPI_BUNDLED_RUNTIME : DEFAULT_BUNDLED_RUNTIME;
+/** @internal Exported for tests; not part of the package's public surface. */
+export function memoizeWasmJspiProbe(
+  probe: () => Promise<boolean>
+): () => Promise<boolean> {
+  let result: Promise<boolean> | null = null;
+  return async () => {
+    result ??= probe().catch(() => false);
+    return await result;
+  };
 }
 
-function supportsWasmJspi(): boolean {
-  return (
-    typeof WebAssembly !== 'undefined' &&
-    typeof (WebAssembly as { Suspending?: unknown }).Suspending === 'function'
-  );
-}
-
-function isFirefoxLikeRuntime(): boolean {
-  if (typeof navigator === 'undefined') {
+async function runFunctionalWasmJspiProbe(): Promise<boolean> {
+  if (typeof WebAssembly === 'undefined') {
     return false;
   }
-  return /\b(?:Firefox|FxiOS)\//.test(navigator.userAgent);
+  const jspi = WebAssembly as typeof WebAssembly & {
+    readonly Suspending?: new (
+      callback: () => Promise<number>
+    ) => WebAssembly.ImportValue;
+    readonly promising?: (
+      exported: WebAssembly.ExportValue
+    ) => () => Promise<number>;
+  };
+  if (typeof jspi.Suspending !== 'function' || typeof jspi.promising !== 'function') {
+    return false;
+  }
+
+  try {
+    let resumed = false;
+    const suspended = new jspi.Suspending(async () => {
+      await Promise.resolve();
+      resumed = true;
+      return 37;
+    });
+    const instantiated = await WebAssembly.instantiate(JSPI_PROBE_MODULE, {
+      m: { s: suspended },
+    });
+    const instance = instantiated instanceof WebAssembly.Instance
+      ? instantiated
+      : instantiated.instance;
+    const run = instance.exports.run;
+    if (typeof run !== 'function') {
+      return false;
+    }
+    const result = await jspi.promising(run)();
+    return resumed && result === 37;
+  } catch {
+    return false;
+  }
+}
+
+/** Resolves one bundled or explicit runtime choice after the functional probe. */
+export async function resolveRuntimeAssetSelection(
+  config: Pick<
+    SippClientOptions,
+    | 'moduleUrl'
+    | 'wasmUrl'
+    | 'trustedOrigins'
+    | 'wasmThreading'
+  >,
+  options: RuntimeAssetSelectionOptions = {}
+): Promise<RuntimeAssetSelection> {
+  if (hasRuntimeUrlOverride(config)) {
+    return {
+      ...resolveRuntimeUrls(config),
+      backendConstraint: null,
+    };
+  }
+
+  let supportsJspi = false;
+  try {
+    supportsJspi = await (options.probeWasmJspi ?? supportsFunctionalWasmJspi)();
+  } catch {
+    supportsJspi = false;
+  }
+  const runtime = supportsJspi
+    ? DEFAULT_BUNDLED_RUNTIME
+    : CPU_NOJSPI_BUNDLED_RUNTIME;
+  return {
+    ...resolveRuntimeUrls(config, {
+      bundledRuntimeUrls: () => bundledRuntimeUrls(runtime, options.importerUrl),
+    }),
+    backendConstraint: runtime.backendConstraint,
+  };
 }
 
 function hasRuntimeUrlOverride(
   config: Pick<
     SippClientOptions,
-    'moduleUrl' | 'wasmUrl' | 'pthreadModuleUrl' | 'pthreadWasmUrl'
+    'moduleUrl' | 'wasmUrl'
   >
 ): boolean {
   return (
     normalizeOptionalString(config.moduleUrl) != null ||
-    normalizeOptionalString(config.wasmUrl) != null ||
-    normalizeOptionalString(config.pthreadModuleUrl) != null ||
-    normalizeOptionalString(config.pthreadWasmUrl) != null
+    normalizeOptionalString(config.wasmUrl) != null
   );
 }
 
@@ -206,7 +268,7 @@ function resolveTrustedOrigins(configuredOrigins: SippClientOptions['trustedOrig
   if (configuredOrigins != null && configuredOrigins.length > 0) {
     const allowed = new Set<string>();
     for (const originValue of configuredOrigins) {
-      allowed.add(parseConfiguredUrl(originValue, 'trustedOrigins').origin);
+      allowed.add(resolveUrl(originValue, 'trustedOrigins').origin);
     }
     return allowed;
   }
@@ -220,8 +282,6 @@ export function resolveRuntimeUrls(
     SippClientOptions,
     | 'moduleUrl'
     | 'wasmUrl'
-    | 'pthreadModuleUrl'
-    | 'pthreadWasmUrl'
     | 'trustedOrigins'
     | 'wasmThreading'
   >,
@@ -229,8 +289,6 @@ export function resolveRuntimeUrls(
 ): RuntimeUrls {
   const configuredModuleUrl = normalizeOptionalString(config.moduleUrl);
   const configuredWasmUrl = normalizeOptionalString(config.wasmUrl);
-  const configuredPthreadModuleUrl = normalizeOptionalString(config.pthreadModuleUrl);
-  const configuredPthreadWasmUrl = normalizeOptionalString(config.pthreadWasmUrl);
 
   if ((configuredModuleUrl == null) !== (configuredWasmUrl == null)) {
     throw new Error(
@@ -238,34 +296,28 @@ export function resolveRuntimeUrls(
     );
   }
 
-  if ((configuredPthreadModuleUrl == null) !== (configuredPthreadWasmUrl == null)) {
-    throw new Error(
-      'Both "pthreadModuleUrl" and "pthreadWasmUrl" must be provided when overriding SippClient pthread runtime assets.'
-    );
-  }
-
   const threading = resolveRuntimeThreadingMode(config);
   let resolved: { moduleUrl: URL; wasmUrl: URL };
   if (threading === 'single-thread') {
     resolved = {
-      moduleUrl: parseConfiguredUrl(configuredModuleUrl!, 'moduleUrl'),
-      wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
+      moduleUrl: resolveUrl(configuredModuleUrl!, 'moduleUrl'),
+      wasmUrl: resolveUrl(configuredWasmUrl!, 'wasmUrl'),
     };
   } else if (configuredModuleUrl != null) {
     resolved = {
-      moduleUrl: parseConfiguredUrl(configuredModuleUrl, 'moduleUrl'),
-      wasmUrl: parseConfiguredUrl(configuredWasmUrl!, 'wasmUrl'),
-    };
-  } else if (configuredPthreadModuleUrl != null) {
-    resolved = {
-      moduleUrl: parseConfiguredUrl(configuredPthreadModuleUrl, 'pthreadModuleUrl'),
-      wasmUrl: parseConfiguredUrl(configuredPthreadWasmUrl!, 'pthreadWasmUrl'),
+      moduleUrl: resolveUrl(configuredModuleUrl, 'moduleUrl'),
+      wasmUrl: resolveUrl(configuredWasmUrl!, 'wasmUrl'),
     };
   } else {
-    const defaults = (options.bundledRuntimeUrls ?? bundledRuntimeUrls)();
+    const defaults = options.bundledRuntimeUrls?.();
+    if (defaults == null) {
+      throw new Error(
+        'Bundled runtime assets must be selected asynchronously inside the Worker.'
+      );
+    }
     resolved = {
-      moduleUrl: parseConfiguredUrl(defaults.moduleUrl, 'moduleUrl'),
-      wasmUrl: parseConfiguredUrl(defaults.wasmUrl, 'wasmUrl'),
+      moduleUrl: resolveUrl(defaults.moduleUrl, 'moduleUrl'),
+      wasmUrl: resolveUrl(defaults.wasmUrl, 'wasmUrl'),
     };
   }
 

@@ -19,7 +19,7 @@ pub struct RequestQueue {
 
 #[derive(Debug, Clone)]
 enum RequestQueueEntry {
-    Pending(GenerateRequest),
+    Pending(Box<GenerateRequest>),
     State {
         lifecycle: GenerateRequestLifecycle,
         cancel_requested: bool,
@@ -89,9 +89,20 @@ impl RequestQueue {
             return false;
         }
         self.entries
-            .insert(request_id, RequestQueueEntry::Pending(request));
+            .insert(request_id, RequestQueueEntry::Pending(Box::new(request)));
         self.pending_request_ids.push_back(request_id);
         true
+    }
+
+    pub(crate) fn admit_external_request(&mut self, request_id: GenerateRequestId) {
+        let previous = self.entries.insert(
+            request_id,
+            RequestQueueEntry::State {
+                lifecycle: GenerateRequestLifecycle::Admitted,
+                cancel_requested: false,
+            },
+        );
+        debug_assert!(previous.is_none());
     }
 
     pub fn try_pop_next_admissible(
@@ -122,7 +133,7 @@ impl RequestQueue {
                 cancel_requested,
             },
         );
-        Some(request)
+        Some(*request)
     }
 
     pub(crate) fn pending_request(

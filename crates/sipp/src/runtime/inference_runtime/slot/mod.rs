@@ -58,20 +58,21 @@ impl InferenceRuntime {
                 if seq_id >= 0 && self.resident_backend_samplers.remove(&seq_id).is_some() {
                     self.native_runtime.detach_sampler(seq_id);
                 }
-            } else if slot.sampler.is_none() {
-                if !ensure_slot_sampler(
+            } else if slot.sampler.is_none()
+                && !ensure_slot_sampler(
                     slot,
                     &mut self.native_runtime,
                     &self.config,
                     &mut self.sampler_pool,
                     &mut self.resident_backend_samplers,
-                ) {
-                    continue;
-                }
+                )
+            {
+                continue;
             }
 
-            if slot.phase == SlotPhase::Prefill && slot.prefill_cursor == 0 {
-                if run_initial_prefill(
+            if slot.phase == SlotPhase::Prefill
+                && slot.prefill_cursor == 0
+                && run_initial_prefill(
                     slot,
                     &mut self.native_runtime,
                     &self.config,
@@ -80,9 +81,9 @@ impl InferenceRuntime {
                     &mut self.total_cache_hits,
                     &mut self.request_queue,
                     &mut self.scratch_token_piece,
-                ) {
-                    continue;
-                }
+                )
+            {
+                continue;
             }
 
             if slot.phase == SlotPhase::Decode

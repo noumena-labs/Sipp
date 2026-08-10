@@ -103,11 +103,17 @@ struct PendingLogitsContribution {
     sampled_token: llama_token,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ActiveSpeechRequest {
+    request_id: crate::runtime::request::GenerateRequestId,
+}
+
 pub struct InferenceRuntime {
     config: NativeRuntimeConfig,
     pub(crate) resolved_limits: ResolvedRuntimeLimits,
     pub(crate) capabilities: capabilities::RuntimeModelCapabilities,
     native_runtime: NativeRuntimeHandle,
+    active_speech: Option<ActiveSpeechRequest>,
     // Held for RAII. Field order drops the native runtime before releasing residency.
     _residency_lease: Option<ResidencyLease>,
     last_runtime_observability: RuntimeObservabilityMetrics,
@@ -155,6 +161,9 @@ impl InferenceRuntime {
     fn run_scheduler_tick_locked(&mut self) -> RequestStepResult {
         if !self.is_ready() {
             return RequestStepResult::Invalid;
+        }
+        if self.active_speech.is_some() {
+            return self.run_speech_scheduler_tick_locked();
         }
 
         let completed_before = self.request_queue.completed_responses.len();

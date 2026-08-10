@@ -15,6 +15,7 @@ pub use driver::{
     EngineEventReceiver, EngineLoad, EngineTextResponseFuture, EngineTextRun, EngineTokenBatches,
     QueryOptions, QueryRequest, SippEngine,
 };
+pub(crate) use driver::{EngineAudioRun, EngineCancellation, ListenRequest, SpeakRequest};
 pub use protocol::{
     CacheSource, EmbedOptions, EmbedRequest, EmbeddingCapabilities, EmbeddingResult, EngineEvent,
     EngineState, EngineStats, FinishReason, GenerationResult, ModelCapabilities, ModelClass,

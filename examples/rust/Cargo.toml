@@ -24,6 +24,14 @@ name = "vision_chat"
 path = "src/vision_chat.rs"
 
 [[bin]]
+name = "listen"
+path = "src/listen.rs"
+
+[[bin]]
+name = "speak"
+path = "src/speak.rs"
+
+[[bin]]
 name = "provider_chat"
 path = "src/provider_chat.rs"
 

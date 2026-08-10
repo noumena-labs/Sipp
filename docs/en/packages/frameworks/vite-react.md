@@ -18,12 +18,12 @@ npm install @sipphq/sipp
 
 Use `@sipphq/sipp` only in browser code. Add one or more model URLs or
 user-provided `File` objects through `client.models`; multiple inputs represent
-model shards or a model/projector pair. `models.add` returns the model ID passed
-to `EndpointDescriptor.local(...)`.
+model shards or a model/projector pair. Pass the `ManagedModel` returned by
+`models.add` to `Endpoint.local(...)`.
 
 ```ts
 import { useState } from 'react';
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+import { Endpoint, SippClient } from '@sipphq/sipp';
 
 export function LocalQuery(): JSX.Element {
   const [text, setText] = useState('');
@@ -36,7 +36,7 @@ export function LocalQuery(): JSX.Element {
       ]);
       const endpoint = await client.add(
         'default',
-        EndpointDescriptor.local(model.id, {
+        Endpoint.local(model, {
           backend: 'webgpu',
           runtime: {
             context: { n_ctx: 2048 },
@@ -92,8 +92,7 @@ export default defineConfig({
 ```
 
 Apps that cannot serve those headers must provide custom single-thread
-assets with `wasmThreading: 'single-thread'`, `moduleUrl`, and `wasmUrl`. Use
-`executionMode: 'main-thread'` only for debugging or constrained hosts.
+assets with `wasmThreading: 'single-thread'`, `moduleUrl`, and `wasmUrl`.
 
 ## Runtime Asset Overrides
 
@@ -122,7 +121,7 @@ The browser runtime stores model data through OPFS where available, so repeated
 loads can stay local after the first import or fetch.
 
 Tune browser storage with `browserCache` on `SippClient` and tune local
-runtime behavior with `options.runtime` on the local endpoint descriptor. See
+runtime behavior with `options.runtime` on the local endpoint. See
 [Browser Caching](../../guides/browser-caching.md) and
 [Runtime Options](../../reference/runtime-options.md).
 

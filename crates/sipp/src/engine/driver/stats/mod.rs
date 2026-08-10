@@ -16,6 +16,7 @@ use crate::runtime::config::KvReuseMode;
 use crate::runtime::metrics::{CacheMetricMode, RuntimeObservabilityMetrics};
 use crate::runtime::numeric::MILLIS_PER_SECOND_F64;
 use crate::runtime::request::{GenerateResponse, GenerateResponseStatus, ResponseOutput};
+use crate::runtime::SynthesizedAudio;
 
 const UNKNOWN_BACKEND: &str = "unknown";
 
@@ -55,6 +56,11 @@ pub(super) fn generation_result_from_response(
                 "generation request completed with embedding output".to_string(),
             ));
         }
+        ResponseOutput::Audio(_) => {
+            return Err(Error::RuntimeCommand(
+                "generation request completed with audio output".to_string(),
+            ));
+        }
     };
     Ok(GenerationResult {
         id: response.request_id.to_string(),
@@ -85,6 +91,18 @@ pub(super) fn embedding_result_from_response(
         }),
         ResponseOutput::Text(_) => Err(Error::RuntimeCommand(
             "embedding request completed with text output".to_string(),
+        )),
+        ResponseOutput::Audio(_) => Err(Error::RuntimeCommand(
+            "embedding request completed with audio output".to_string(),
+        )),
+    }
+}
+
+pub(super) fn audio_result_from_response(response: GenerateResponse) -> Result<SynthesizedAudio> {
+    match response.output {
+        ResponseOutput::Audio(audio) => Ok(audio),
+        ResponseOutput::Text(_) | ResponseOutput::Embedding { .. } => Err(Error::RuntimeCommand(
+            "speech request completed without audio output".to_string(),
         )),
     }
 }

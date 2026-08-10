@@ -53,14 +53,14 @@ pub(crate) fn setup_emsdk(sh: &Shell, ctx: &BuildContext) -> Result<EmscriptenTo
 
     let _dir = sh.push_dir(&emsdk_dir);
     output::detail("Emscripten version", EMSDK_VERSION);
+    let uv_exe = python::setup_uv(sh, ctx)?;
+    let python_exe = python::ensure_python(sh, ctx, &uv_exe)?;
 
     if cfg!(windows) {
         patch_emsdk_windows(&emsdk_dir)?;
-        install_emsdk_windows(sh, &emsdk_dir)?;
-        activate_emsdk_windows(sh, &emsdk_dir)?;
+        install_emsdk_windows(sh, &emsdk_dir, &python_exe)?;
+        activate_emsdk_windows(sh, &emsdk_dir, &python_exe)?;
     } else {
-        let uv_exe = python::setup_uv(sh, ctx)?;
-        let python_exe = python::ensure_python(sh, ctx, &uv_exe)?;
         output::run_command(
             format!("Installing emsdk {EMSDK_VERSION}"),
             cmd!(sh, "bash -c")
@@ -247,7 +247,7 @@ pub(crate) fn run_with_emsdk(
     Ok(())
 }
 
-fn install_emsdk_windows(sh: &Shell, emsdk_dir: &Path) -> Result<()> {
+fn install_emsdk_windows(sh: &Shell, emsdk_dir: &Path, python_exe: &Path) -> Result<()> {
     if emsdk_is_installed(emsdk_dir)? {
         output::success(format!("Using installed emsdk {EMSDK_VERSION}"));
         return Ok(());
@@ -260,29 +260,27 @@ fn install_emsdk_windows(sh: &Shell, emsdk_dir: &Path) -> Result<()> {
         attempts += 1;
         let result = output::run_command(
             format!("Installing emsdk {EMSDK_VERSION}"),
-            clean_windows_emsdk_env(
-                cmd!(sh, "cmd.exe /c emsdk.bat install {EMSDK_VERSION}").env("EMSDK_USE_CURL", "1"),
-            ),
+            emsdk_python_command(sh, python_exe, emsdk_dir, "install").env("EMSDK_USE_CURL", "1"),
         );
 
-        if result.is_ok() {
-            return Ok(());
-        }
-
-        if attempts >= max_attempts {
-            anyhow::bail!(
-                "emsdk install failed after {max_attempts} attempts. Please check your network connection."
-            );
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) if attempts >= max_attempts => {
+                return Err(error).context(format!(
+                    "emsdk install failed after {max_attempts} attempts"
+                ));
+            }
+            Err(_) => {}
         }
 
         output::warning(format!(
-            "Download truncated or locked by Windows Defender; retrying ({attempts}/{max_attempts})"
+            "emsdk install failed; retrying in case of a transient download or file-lock error ({attempts}/{max_attempts})"
         ));
         thread::sleep(Duration::from_secs(2));
     }
 }
 
-fn activate_emsdk_windows(sh: &Shell, emsdk_dir: &Path) -> Result<()> {
+fn activate_emsdk_windows(sh: &Shell, emsdk_dir: &Path, python_exe: &Path) -> Result<()> {
     if emsdk_is_active(emsdk_dir)? {
         output::success(format!("Using active emsdk {EMSDK_VERSION}"));
         return Ok(());
@@ -290,9 +288,19 @@ fn activate_emsdk_windows(sh: &Shell, emsdk_dir: &Path) -> Result<()> {
 
     output::run_command(
         format!("Activating emsdk {EMSDK_VERSION}"),
-        clean_windows_emsdk_env(cmd!(sh, "cmd.exe /c emsdk.bat activate {EMSDK_VERSION}")),
+        emsdk_python_command(sh, python_exe, emsdk_dir, "activate"),
     )?;
     Ok(())
+}
+
+fn emsdk_python_command<'a>(
+    sh: &'a Shell,
+    python_exe: &Path,
+    emsdk_dir: &Path,
+    action: &str,
+) -> Cmd<'a> {
+    let emsdk_py = emsdk_dir.join("emsdk.py");
+    clean_windows_emsdk_env(cmd!(sh, "{python_exe} {emsdk_py} {action} {EMSDK_VERSION}"))
 }
 
 fn emsdk_is_active(emsdk_dir: &Path) -> Result<bool> {
@@ -409,6 +417,8 @@ fn clean_windows_emsdk_env<'a>(cmd: Cmd<'a>) -> Cmd<'a> {
         .env("EMSDK_ARCH", "x86_64")
         .env_remove("SHELL")
         .env_remove("MSYSTEM")
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH")
         .env_remove("EMSDK")
         .env_remove("EMSDK_PYTHON")
         .env_remove("EM_CONFIG")

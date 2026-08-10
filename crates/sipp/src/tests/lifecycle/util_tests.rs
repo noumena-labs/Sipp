@@ -18,15 +18,6 @@ fn asset_summary_totals_bytes_and_promotes_remote_source() {
 }
 
 #[test]
-fn media_marker_for_modality_defaults_only_for_vision_models() {
-    assert_eq!(
-        media_marker_for_modality(ModelModality::Vision).as_deref(),
-        Some(DEFAULT_MEDIA_MARKER)
-    );
-    assert_eq!(media_marker_for_modality(ModelModality::Text), None);
-}
-
-#[test]
 fn classified_asset_defaults_missing_inspection_to_unknown() {
     let asset = classified_asset("asset-id", "asset-name", None);
 
@@ -95,6 +86,20 @@ fn manifest_corruption_errors_use_shared_messages() {
     assert!(
         matches!(error, ModelError::StorageCorrupt(message) if message == format!("expected manifest version {REGISTRY_MANIFEST_VERSION}, got {}", REGISTRY_MANIFEST_VERSION - 1))
     );
+
+    validate_asset_inspection_version(AssetInspection::VERSION)
+        .expect("current inspection version is accepted");
+    let previous_inspection_version = AssetInspection::VERSION - 1;
+    let error = validate_asset_inspection_version(previous_inspection_version)
+        .expect_err("old inspection is rejected");
+    assert!(matches!(
+        error,
+        ModelError::StorageCorrupt(message)
+            if message == format!(
+                "expected asset inspection version {}, got {previous_inspection_version}",
+                AssetInspection::VERSION
+            )
+    ));
 
     let error = manifest_key_mismatch("asset", "asset-key", "asset-id");
     assert!(

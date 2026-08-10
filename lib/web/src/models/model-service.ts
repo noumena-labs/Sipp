@@ -5,7 +5,7 @@ import {
   TokenBoundaryTextSanitizer,
 } from '../engine/chat-boundary-sanitizer.js';
 import type {
-  GenerateRequestId,
+  GenerateRequestHandle,
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
@@ -13,7 +13,13 @@ import type {
   TransportObservability,
 } from '../engine/inference-types.js';
 import { hasSamplingRuntimeOverrideFields } from '../engine/inference-types.js';
-import { createLinkedAbortController, isAbortError } from '../utils/abort.js';
+import {
+  createAbortError,
+  createLinkedAbortController,
+  isAbortError,
+} from '../utils/abort.js';
+import { AsyncSerialQueue } from '../utils/async-queue.js';
+import { attachCleanupFailures, releaseAll, releaseAllAsync } from '../utils/cleanup.js';
 import { AssetStore } from './asset-store.js';
 import { RemoteAcquisitionHost } from './remote-acquisition-host.js';
 import { ModelRegistryStore } from './model-registry-store.js';
@@ -21,14 +27,16 @@ import type {
   RustLifecycleBridge,
   RustLifecycleInstallSource,
   RustLifecycleInstallValue,
-  RustLifecyclePrepareLoadValue,
   RustRemoteCommandValue,
 } from '../wasm/wasm-bridge.js';
 import { queryErrorFromLifecycleError } from '../wasm/wasm-bridge.js';
 import {
   QueryError,
   type AssetRecord,
+  type AudioResult,
   type BrowserBackendPreference,
+  type CatalogModelInfo,
+  type CatalogObservabilityEvent,
   type ChatInput,
   type ClassifiedAsset,
   type ClassifiedAssetFile,
@@ -36,16 +44,10 @@ import {
   type EmbeddingResult,
   type EngineEvent,
   type EngineState,
-  type InternalBundleDescriptor,
-  type LoadedModelState,
-  type ModelBundleFileProjectorDescriptor,
-  type ModelBundleShard,
   type ModelEntry,
-  type ModelDetectionResult,
   type ModelInfo,
   type ModelAddOptions,
   type ModelAddSource,
-  type ModelLifecycleService,
   type ModelLoadOptions,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
@@ -54,11 +56,18 @@ import {
   type QueryOptions,
   type GenerationResult,
   type InternalTextRequestOptions,
+  type ListenOptions,
   type TokenBatch,
   type RegistryManifest,
+  type RuntimeBundleDescriptor,
+  type RuntimeBundleFile,
+  type RuntimeSessionDescriptor,
+  type RuntimeSessionSnapshot,
+  type SpeakOptions,
   type WebGpuAdapterInfo,
 } from './types.js';
 import {
+  audioResultFromGenerateResponse,
   embeddingResultFromGenerateResponse,
   generationResultFromGenerateResponse,
   generationResultFromText,
@@ -68,7 +77,10 @@ import {
   toBackendProfileObservation,
   toRuntimeObservation,
 } from './observability-controller.js';
-import type { RuntimeBackendOverride, WasmThreadingMode } from '../engine/runtime-assets.js';
+import type {
+  RuntimeBackendConstraint,
+  WasmThreadingMode,
+} from '../engine/runtime-assets.js';
 
 interface InstalledAsset {
   record: AssetRecord;
@@ -91,6 +103,23 @@ interface RuntimeRequestOptions {
   tokenBatchSink?: (batch: TokenBatch) => void;
   grammar?: string;
   onRequestStarted?: (requestId: number) => void;
+}
+
+const DEFAULT_TRANSCRIPTION_MAX_TOKENS = 512;
+const MAX_LOCAL_TOKEN_COUNT = 0x7fffffff;
+const MAX_SPEECH_DURATION_MS = 0xffffffff;
+const OPFS_LOCK_RETRY_DELAYS_MS = [25, 50, 100, 200, 400] as const;
+
+function validateSpeechLanguage(operation: string, language: string | undefined): void {
+  if (language == null) {
+    return;
+  }
+  if (language.trim().length === 0 || language.trim() !== language) {
+    throw new QueryError(
+      'QUERY_FAILED',
+      `${operation} language must not be empty or contain surrounding whitespace.`
+    );
+  }
 }
 
 type NavigatorWithGpu = Navigator & {
@@ -117,14 +146,22 @@ function isFile(value: unknown): value is File {
 
 async function resolveBrowserBackend(
   backend: BrowserBackendPreference | undefined,
-  defaultBackendOverride: RuntimeBackendOverride | null
+  constraint: RuntimeBackendConstraint | null
 ): Promise<ResolvedBrowserBackend> {
   const requestedBackend = backend === 'auto' ? undefined : backend;
+  if (constraint === 'cpu-only') {
+    if (requestedBackend === 'webgpu') {
+      throw new QueryError(
+        'UNSUPPORTED_OPERATION',
+        'The active browser runtime is CPU-only because this browser did not pass the JSPI ' +
+          'suspend/resume probe. Remove backend: "webgpu", or supply WebGPU-capable ' +
+          'moduleUrl and wasmUrl assets.'
+      );
+    }
+    return { backend: 'cpu', webgpuAdapter: null };
+  }
   if (requestedBackend === 'cpu') {
     return { backend: requestedBackend, webgpuAdapter: null };
-  }
-  if (requestedBackend == null && defaultBackendOverride === 'cpu') {
-    return { backend: 'cpu', webgpuAdapter: null };
   }
   const gpu = (globalThis.navigator as NavigatorWithGpu | undefined)?.gpu;
   const adapter = gpu == null ? null : await gpu.requestAdapter();
@@ -161,6 +198,10 @@ async function readWebGpuAdapterInfo(
   };
 }
 
+function hostSleep(delayMs: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -187,8 +228,6 @@ function tokenBatchFromText(
       framesSent: sequenceStart + 1,
       bytesSent: byteCount,
       batchesSent: sequenceStart + 1,
-      drainMs: 0,
-      drainCalls: 0,
     },
   };
 }
@@ -197,11 +236,8 @@ function utf8ByteLength(text: string): number {
   return textEncoder.encode(text).byteLength;
 }
 
-function entryAssetFingerprint(entry: Pick<ModelEntry, 'modelAssetIds' | 'projectorAssetId'>): string {
-  return JSON.stringify({
-    modelAssetIds: [...entry.modelAssetIds].sort((left, right) => left.localeCompare(right)),
-    projectorAssetId: entry.projectorAssetId ?? null,
-  });
+function requestHandleLabel(request: GenerateRequestHandle): string {
+  return `${request.generation}:${request.requestId}`;
 }
 
 function normalizeLocalSourceFileName(file: File): string {
@@ -235,12 +271,9 @@ function applyBrowserRuntimeDefaults(
   };
 }
 
-export class ModelService implements ModelLifecycleService {
-  private currentLoaded: LoadedModelState | null = null;
+export class ModelService {
   private chatBoundaryMarkersPromise: Promise<readonly string[]> | null = null;
-  private chatBoundaryMarkersKey: string | null = null;
-  private operationChain: Promise<void> = Promise.resolve();
-  private transitioning = false;
+  private readonly lifecycleOperations = new AsyncSerialQueue();
   private readonly observability = new ObservabilityController();
   private readonly engineEventListeners = new Set<(event: EngineEvent) => void>();
   private rustLifecyclePromise: Promise<RustLifecycleBridge> | null = null;
@@ -249,7 +282,9 @@ export class ModelService implements ModelLifecycleService {
     private readonly runtime: EngineRuntime,
     private readonly registry = new ModelRegistryStore(),
     private readonly assetStore = new AssetStore(),
-    assetClassifier?: AssetClassifier
+    assetClassifier?: AssetClassifier,
+    /** @internal Test seam; production always waits on real time. */
+    private readonly sleep: (delayMs: number) => Promise<void> = hostSleep
   ) {
     this.assetClassifier = assetClassifier ?? {
       classify: async (assetId, file, signal) => {
@@ -270,19 +305,31 @@ export class ModelService implements ModelLifecycleService {
   private readonly assetClassifier: AssetClassifier;
 
   public current(): ModelInfo | null {
-    const current = this.currentLoaded;
-    if (current == null) {
-      return null;
-    }
-    return this.currentSnapshot ?? null;
+    const session = this.runtime.currentRuntimeSession();
+    return session == null ? null : modelInfoFromCatalog(session.model, session);
   }
 
-  private currentSnapshot: ModelInfo | null = null;
+  private requireOperation(
+    operation: keyof RuntimeSessionSnapshot['capabilities']['operations']
+  ): RuntimeSessionSnapshot {
+    const session = this.runtime.currentRuntimeSession();
+    if (session == null) {
+      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.add(...) first.');
+    }
+    if (!session.capabilities.operations[operation]) {
+      throw new QueryError(
+        'UNSUPPORTED_OPERATION',
+        `Loaded model "${session.model.id}" does not support ${operation}.`
+      );
+    }
+    return session;
+  }
 
   public async list(): Promise<ModelInfo[]> {
     const manifest = await this.registry.read();
     const rust = await this.getRustLifecycle(manifest);
-    return rust.list();
+    const session = this.runtime.currentRuntimeSession();
+    return (await rust.list()).map((model) => modelInfoFromCatalog(model, session));
   }
 
   public currentObservability(): ObservabilitySnapshot {
@@ -308,7 +355,7 @@ export class ModelService implements ModelLifecycleService {
     source: ModelAddSource,
     options: ModelAddOptions = {}
   ): Promise<ModelInfo> {
-    return this.withLifecycleLock(async () => {
+    return this.lifecycleOperations.run(async () => {
       if (options.signal?.aborted) {
         throw new DOMException('Model install aborted.', 'AbortError');
       }
@@ -317,7 +364,7 @@ export class ModelService implements ModelLifecycleService {
   }
 
   public async load(modelId: string, options: ModelLoadOptions = {}): Promise<ModelInfo> {
-    return this.withLifecycleLock(async () => {
+    return this.lifecycleOperations.run(async () => {
       if (options.signal?.aborted) {
         throw new DOMException('Model load aborted.', 'AbortError');
       }
@@ -326,10 +373,11 @@ export class ModelService implements ModelLifecycleService {
   }
 
   public async remove(id: string): Promise<void> {
-    await this.withLifecycleLock(async () => {
+    await this.lifecycleOperations.run(async () => {
       const manifest = await this.registry.read();
       const rust = await this.getRustLifecycle(manifest);
-      const removed = rust.remove(id);
+      const activeModelId = this.runtime.currentRuntimeSession()?.model.id ?? null;
+      const removed = await rust.remove(id, activeModelId);
       await this.replaceManifest(removed.manifest);
       for (const asset of removed.orphanedAssets) {
         await this.assetStore.delete(asset);
@@ -338,31 +386,11 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  public async unload(): Promise<void> {
-    await this.withLifecycleLock(async () => {
-      const rust = await this.getRustLifecycle(await this.registry.read());
-      if (this.currentLoaded != null) {
-        this.runtime.close();
-        this.currentLoaded = null;
-        this.currentSnapshot = null;
-      }
-      const snapshot = rust.unload();
-      this.ingestRustEvents(rust.drainEvents());
-      this.observability.ingest({ type: 'load-complete', snapshot });
-      this.emitEngineEvent({ type: 'state', state: this.state() });
-    });
-  }
-
   public async runQuery(
     input: QueryInput,
     options: InternalTextRequestOptions
   ): Promise<GenerationResult> {
-    if (this.transitioning) {
-      throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
-    }
-    if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.add(...) first.');
-    }
+    this.requireOperation('query');
     let prompt = typeof input === 'string' ? input : input.prompt;
     const media = typeof input === 'string' ? undefined : input.media;
     if (media != null && media.length > 0) {
@@ -389,12 +417,7 @@ export class ModelService implements ModelLifecycleService {
     input: string,
     options: EmbedOptions
   ): Promise<EmbeddingResult> {
-    if (this.transitioning) {
-      throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
-    }
-    if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.add(...) first.');
-    }
+    this.requireOperation('embed');
 
     const response = await this.runRuntimeRequest(
       {
@@ -412,20 +435,95 @@ export class ModelService implements ModelLifecycleService {
     return embeddingResultFromGenerateResponse(response);
   }
 
+  public async runListen(
+    audio: Uint8Array,
+    options: ListenOptions
+  ): Promise<GenerationResult> {
+    this.requireOperation('listen');
+    if (audio.byteLength === 0) {
+      throw new QueryError('QUERY_FAILED', 'Listen audio must not be empty.');
+    }
+    validateSpeechLanguage('Listen', options.language);
+    if (
+      options.maxTokens != null &&
+      (!Number.isInteger(options.maxTokens) ||
+        options.maxTokens <= 0 ||
+        options.maxTokens > MAX_LOCAL_TOKEN_COUNT)
+    ) {
+      throw new QueryError(
+        'QUERY_FAILED',
+        `Listen maxTokens must be an integer between 1 and ${MAX_LOCAL_TOKEN_COUNT}.`
+      );
+    }
+    const maxTokens = options.maxTokens ?? DEFAULT_TRANSCRIPTION_MAX_TOKENS;
+    const response = await this.runRuntimeRequest(
+      {
+        maxTokens,
+        signal: options.signal,
+      },
+      undefined,
+      (_contextKey, promptOptions) =>
+        this.runtime.enqueueListen(
+          audio,
+          options.language ?? '',
+          promptOptions
+        ),
+      'Model listen'
+    );
+    return generationResultFromGenerateResponse(response, {
+      maxTokens,
+    });
+  }
+
+  public async runSpeak(text: string, options: SpeakOptions): Promise<AudioResult> {
+    this.requireOperation('speak');
+    if (text.trim().length === 0 || text.trim() !== text) {
+      throw new QueryError(
+        'QUERY_FAILED',
+        'Speak text must not be empty or contain surrounding whitespace.'
+      );
+    }
+    validateSpeechLanguage('Speak', options.language);
+    if (options.speakerAudio != null && options.speakerAudio.byteLength === 0) {
+      throw new QueryError('QUERY_FAILED', 'Speak speakerAudio must not be empty.');
+    }
+    if (
+      options.maxDurationMs != null &&
+      (!Number.isInteger(options.maxDurationMs) ||
+        options.maxDurationMs <= 0 ||
+        options.maxDurationMs > MAX_SPEECH_DURATION_MS)
+    ) {
+      throw new QueryError(
+        'QUERY_FAILED',
+        `Speak maxDurationMs must be an integer between 1 and ${MAX_SPEECH_DURATION_MS}.`
+      );
+    }
+    const response = await this.runRuntimeRequest(
+      { signal: options.signal },
+      undefined,
+      (_contextKey, promptOptions) =>
+        this.runtime.enqueueSpeak(
+          text,
+          options.language ?? '',
+          options.speakerAudio ?? new Uint8Array(),
+          options.maxDurationMs,
+          promptOptions
+        ),
+      'Model speak'
+    );
+    return audioResultFromGenerateResponse(response);
+  }
+
   private async runRuntimeRequest(
     options: RuntimeRequestOptions,
     media: Uint8Array[] | undefined,
-    enqueue: (contextKey: string, promptOptions: PromptOptions) => Promise<GenerateRequestId>,
+    enqueue: (contextKey: string, promptOptions: PromptOptions) => Promise<GenerateRequestHandle>,
     operationLabel = 'Model query'
   ): Promise<GenerateResponse> {
-    let tokenDrainMs = 0;
-    let tokenDrainCalls = 0;
     const deliverTokenBatch = (batch: TokenBatch): void => {
       if (batch.text.length === 0) {
         return;
       }
-      tokenDrainMs = batch.stats.drainMs;
-      tokenDrainCalls = batch.stats.drainCalls;
       options.tokenBatchSink?.(batch);
     };
     const promptOptions: PromptOptions = {
@@ -441,6 +539,9 @@ export class ModelService implements ModelLifecycleService {
     };
     const contextKey = options.contextKey ?? 'default';
     const emitsTokens = promptOptions.emitTokens === true;
+    const transportStart = this.runtime.getTransportObservability();
+    const requestTransport = (): TransportObservability =>
+      this.requestTransportObservability(transportStart, emitsTokens);
     const start = nowMs();
     this.observability.emit('query-start', {
       state: 'querying',
@@ -452,55 +553,47 @@ export class ModelService implements ModelLifecycleService {
         outputTokens: null,
       },
     });
-    let requestId = 0;
+    let request: GenerateRequestHandle | null = null;
     let failureRecorded = false;
     try {
-      requestId = await enqueue(contextKey, promptOptions);
-      this.emitEngineEvent({ type: 'request-started', requestId: String(requestId), streamId: requestId });
-      const response = await this.runtime.awaitQuery(requestId, { signal: options.signal });
-      if (response.cancelled) {
-        const error = new DOMException(response.errorMessage ?? 'Queued request cancelled.', 'AbortError');
+      request = await enqueue(contextKey, promptOptions);
+      const requestLabel = requestHandleLabel(request);
+      this.emitEngineEvent({
+        type: 'request-started',
+        requestId: requestLabel,
+        streamId: request.requestId,
+      });
+      const response = await this.runtime.awaitQuery(request, { signal: options.signal });
+      const terminalError = response.cancelled
+        ? new DOMException(response.errorMessage ?? 'Queued request cancelled.', 'AbortError')
+        : response.failed
+          ? new Error(response.errorMessage ?? 'Queued prompt failed.')
+          : null;
+      if (terminalError != null) {
         this.recordQueryFailure(
           contextKey,
           start,
-          error,
+          terminalError,
           response,
-          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+          requestTransport()
         );
         this.emitEngineEvent({
           type: 'request-failed',
-          requestId: String(requestId),
-          error: error.message,
+          requestId: requestLabel,
+          error: terminalError.message,
         });
         failureRecorded = true;
-        throw error;
-      }
-      if (response.failed) {
-        const error = new Error(response.errorMessage ?? 'Queued prompt failed.');
-        this.recordQueryFailure(
-          contextKey,
-          start,
-          error,
-          response,
-          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
-        );
-        this.emitEngineEvent({
-          type: 'request-failed',
-          requestId: String(requestId),
-          error: error.message,
-        });
-        failureRecorded = true;
-        throw error;
+        throw terminalError;
       }
       this.recordQuerySuccess(
         contextKey,
         start,
         response,
-        this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+        requestTransport()
       );
       this.emitEngineEvent({
         type: 'request-completed',
-        requestId: String(requestId),
+        requestId: requestLabel,
       });
       return response;
     } catch (error) {
@@ -510,7 +603,7 @@ export class ModelService implements ModelLifecycleService {
           start,
           error,
           undefined,
-          this.requestTransportObservability(emitsTokens, tokenDrainMs, tokenDrainCalls)
+          requestTransport()
         );
       }
       if (error instanceof QueryError) {
@@ -523,10 +616,10 @@ export class ModelService implements ModelLifecycleService {
           : `${operationLabel} failed.`,
         { cause: error }
       );
-      if (!failureRecorded && requestId !== 0) {
+      if (!failureRecorded && request != null) {
         this.emitEngineEvent({
           type: 'request-failed',
-          requestId: String(requestId),
+          requestId: requestHandleLabel(request),
           error: wrapped.message,
         });
       }
@@ -538,20 +631,13 @@ export class ModelService implements ModelLifecycleService {
     input: ChatInput,
     options: InternalTextRequestOptions
   ): Promise<GenerationResult> {
-    if (this.transitioning) {
-      throw new QueryError('MODEL_NOT_READY', 'A model lifecycle transition is in progress.');
-    }
-    if (this.currentLoaded == null) {
-      throw new QueryError('MODEL_NOT_READY', 'No model is loaded. Call client.add(...) first.');
-    }
-
-    const current = this.currentLoaded;
+    const current = this.requireOperation('chat');
     const messages = isChatInputObject(input) ? input.messages : input;
     const media = isChatInputObject(input) ? input.media : undefined;
     if (media != null && media.length > 0 && this.runtime.readMediaMarker() == null) {
       throw new QueryError('MODEL_NOT_READY', 'The loaded model does not accept media input.');
     }
-    const boundaryMarkers = await this.getChatBoundaryMarkers(current);
+    const boundaryMarkers = await this.getChatBoundaryMarkers();
     const outputSanitizer = new TokenBoundaryTextSanitizer(boundaryMarkers);
     const linkedAbort = createLinkedAbortController(options.signal);
     let deliveredOutputText = '';
@@ -642,12 +728,21 @@ export class ModelService implements ModelLifecycleService {
     }
   }
 
-  public close(): void {
-    this.runtime.close();
-    this.currentLoaded = null;
-    this.currentSnapshot = null;
-    void this.closeRustLifecycle();
-    this.observability.markClosed();
+  public async close(): Promise<void> {
+    try {
+      await releaseAllAsync('Failed to close the browser model service.', [
+        {
+          label: 'close Rust lifecycle service',
+          release: () => this.closeRustLifecycle(),
+        },
+        {
+          label: 'close Wasm engine runtime',
+          release: () => this.runtime.close(),
+        },
+      ]);
+    } finally {
+      this.observability.markClosed();
+    }
   }
 
   private async addWithRustLifecycle(
@@ -698,7 +793,7 @@ export class ModelService implements ModelLifecycleService {
             remoteAcquisitionId = acquisitionId;
           }
         )
-        : rust.install(await this.buildRustInstallSource(source, manifest, addOptions));
+        : await rust.install(await this.buildRustInstallSource(source, manifest, addOptions));
       remoteAcquisitionId = null;
       await this.replaceManifest(installed.manifest);
       if (remoteHost != null) {
@@ -706,13 +801,30 @@ export class ModelService implements ModelLifecycleService {
         await remoteHost.commitJournal();
       }
       this.ingestRustEvents(installed.events);
-      return installed.model;
+      return modelInfoFromCatalog(installed.model, this.runtime.currentRuntimeSession());
     } catch (error) {
-      if (remoteAcquisitionId != null && rust != null && remoteHost != null) {
-        await this.cancelRemoteAcquisition(rust, remoteHost, remoteAcquisitionId);
-      }
-      if (remoteHost != null && !remoteManifestCommitted) {
-        await remoteHost.cleanupUncommittedJournal(manifest);
+      const lifecycle = rust;
+      const journalHost = remoteHost;
+      const acquisitionId: string | null = remoteAcquisitionId;
+      const committed = remoteManifestCommitted;
+      try {
+        await releaseAllAsync('Failed to clean up an unsuccessful model install.', [
+          ...(acquisitionId != null && lifecycle != null && journalHost != null
+            ? [{
+                label: 'cancel remote acquisition',
+                release: () =>
+                  this.cancelRemoteAcquisition(lifecycle, journalHost, acquisitionId),
+              }]
+            : []),
+          ...(journalHost != null && !committed
+            ? [{
+                label: 'discard uncommitted acquisition journal',
+                release: () => journalHost.cleanupUncommittedJournal(manifest),
+              }]
+            : []),
+        ]);
+      } catch (cleanupError) {
+        throw attachCleanupFailures(error, cleanupError);
       }
       throw error;
     }
@@ -740,105 +852,80 @@ export class ModelService implements ModelLifecycleService {
     const wasmThreading = this.runtime.getWasmThreadingMode();
     const backendPromise = resolveBrowserBackend(
       options.backend,
-      this.runtime.getDefaultBackendOverride()
+      this.runtime.backendConstraint
     );
-    let prepared: RustLifecyclePrepareLoadValue | null = null;
-    let rust: RustLifecycleBridge | null = null;
-    try {
-      const [resolvedRust, resolvedBackend] = await Promise.all([rustPromise, backendPromise]);
-      rust = resolvedRust;
-      const runtimeConfig = applyBrowserRuntimeDefaults(
-        options.runtime,
-        wasmThreading
+    const [resolvedRust, resolvedBackend] = await Promise.all([rustPromise, backendPromise]);
+    const runtimeConfig = applyBrowserRuntimeDefaults(options.runtime, wasmThreading);
+    const rustOptions = {
+      backend: resolvedBackend.backend,
+      runtime: runtimeConfig,
+      observability: observabilityMode,
+    } as const;
+    const prepared = await resolvedRust.prepareLoad({ modelId }, rustOptions);
+    this.ingestRustEvents(prepared.events);
+
+    if (prepared.model.status !== 'ready') {
+      throw new QueryError(
+        'MODEL_NOT_READY',
+        `Model "${prepared.model.id}" is not ready to load.`
       );
-      const rustOptions = {
-        backend: resolvedBackend.backend,
-        runtime: runtimeConfig,
-        observability: observabilityMode,
-      } as const;
-      prepared = rust.prepareLoad({ modelId }, rustOptions);
-      await this.replaceManifest(prepared.manifest);
-      this.ingestRustEvents(prepared.events);
-
-      if (prepared.model.status !== 'ready') {
-        throw new QueryError(
-          'MODEL_NOT_READY',
-          `Model "${prepared.model.id}" is not ready to load.`
-        );
-      }
-
-      const entry = prepared.manifest.models[prepared.model.id];
-      if (entry == null) {
-        throw new QueryError('STORAGE_CORRUPT', `Rust lifecycle omitted model "${prepared.model.id}".`);
-      }
-
-      if (prepared.loadRequired) {
-        const descriptor = await this.openBundleForEntry(entry, prepared.manifest);
-        loadOptions.onProgress?.({
-          phase: 'load',
-          loadedBytes: 0,
-          totalBytes: null,
-          percent: null,
-          assetName: entry.name,
-        });
-        const staged = await this.runtime.stageModelBundle(descriptor, {
-          signal: options.signal,
-        });
-        await this.runtime.loadRuntimeModel(staged, prepared.runtimeConfig);
-      }
-
-      const runtime = toRuntimeObservation(
-        this.runtime.getRuntimeObservability(),
-        this.runtime.getTransportObservability()
-      );
-      // Backend identity (registry, devices, adapter) is cheap read-only data
-      // and stays available in every observability mode; only the native
-      // profiling instrumentation remains gated on 'profile'.
-      const profile = toBackendProfileObservation(
-        await this.runtime.getBackendObservability(),
-        resolvedBackend.webgpuAdapter
-      );
-      const committed = rust.commitLoad({
-        loadId: prepared.loadId,
-        modelId: prepared.model.id,
-        runtimeFingerprint: prepared.runtimeFingerprint,
-        chatTemplate: this.runtime.getChatTemplate(),
-        bosText: this.runtime.getBosText(),
-        eosText: this.runtime.getEosText(),
-        mediaMarker: this.runtime.readMediaMarker(),
-        runtime,
-        profile,
-      });
-      await this.replaceManifest(committed.manifest);
-      const loadedEntry = committed.manifest.models[committed.model.id] ?? entry;
-      this.currentLoaded = {
-        id: committed.model.id,
-        assetFingerprint: entryAssetFingerprint(loadedEntry),
-        runtimeFingerprint: prepared.runtimeFingerprint,
-      };
-      this.currentSnapshot = committed.model;
-      loadOptions.onProgress?.({
-        phase: 'load',
-        loadedBytes: 1,
-        totalBytes: 1,
-        percent: 100,
-        assetName: committed.model.name,
-      });
-      this.ingestRustEvents(committed.events);
-      return committed.model;
-    } catch (error) {
-      if (rust == null) {
-        rust = await rustPromise.catch(() => null);
-      }
-      if (prepared != null && rust != null) {
-        const snapshot = rust.abortLoad({
-          message: error instanceof Error ? error.message : String(error),
-        });
-        this.observability.ingest({ type: 'error', snapshot });
-        this.ingestRustEvents(rust.drainEvents());
-      }
-      throw error;
     }
+
+    const entry = prepared.manifest.models[prepared.model.id];
+    if (entry == null) {
+      throw new QueryError('STORAGE_CORRUPT', `Rust lifecycle omitted model "${prepared.model.id}".`);
+    }
+
+    const targetSession: RuntimeSessionDescriptor = {
+      model: prepared.model,
+      runtimeFingerprint: prepared.runtimeFingerprint,
+    };
+    const descriptor = await this.openBundleForEntry(
+      entry,
+      prepared.manifest,
+      options.signal
+    );
+    loadOptions.onProgress?.({
+      phase: 'load',
+      loadedBytes: 0,
+      totalBytes: null,
+      percent: null,
+      assetName: entry.name,
+    });
+    const activation = await this.runtime.activateRuntime(descriptor, {
+      session: targetSession,
+      config: prepared.runtimeConfig,
+      signal: options.signal,
+      commit: async (report) => {
+        const runtime = toRuntimeObservation(
+          report.runtimeObservability,
+          this.runtime.getTransportObservability()
+        );
+        const profile = toBackendProfileObservation(
+          report.backendObservability,
+          resolvedBackend.webgpuAdapter
+        );
+        const committed = await resolvedRust.commitLoad({
+          loadId: prepared.loadId,
+          modelId: prepared.model.id,
+          runtimeFingerprint: prepared.runtimeFingerprint,
+          runtime,
+          profile,
+        });
+        await this.replaceManifest(committed.manifest);
+        return committed;
+      },
+    });
+    const committed = activation.committed;
+    loadOptions.onProgress?.({
+      phase: 'load',
+      loadedBytes: 1,
+      totalBytes: 1,
+      percent: 100,
+      assetName: committed.model.name,
+    });
+    this.ingestRustEvents(committed.events);
+    return modelInfoFromCatalog(committed.model, activation.session);
   }
 
   private async acquireRemote(
@@ -847,14 +934,14 @@ export class ModelService implements ModelLifecycleService {
     source: Extract<ModelAddSource, { kind: 'remote' }>,
     setAcquisitionId: (acquisitionId: string | null) => void
   ): Promise<RustLifecycleInstallValue> {
-    let response = rust.remoteAcquisition({
+    let response = await rust.remoteAcquisition({
       command: 'begin',
       urls: source.urls,
     });
     while (response.kind === 'action') {
       setAcquisitionId(response.action.acquisitionId);
       const result = await host.execute(response.action);
-      response = rust.remoteAcquisition({
+      response = await rust.remoteAcquisition({
         command: 'advance',
         event: result.event,
         ...(result.assets == null ? {} : { assets: result.assets }),
@@ -876,13 +963,13 @@ export class ModelService implements ModelLifecycleService {
     host: RemoteAcquisitionHost,
     acquisitionId: string
   ): Promise<void> {
-    let response: RustRemoteCommandValue = rust.remoteAcquisition({
+    let response: RustRemoteCommandValue = await rust.remoteAcquisition({
       command: 'cancel',
       acquisitionId,
     });
     while (response.kind === 'action') {
       const result = await host.execute(response.action);
-      response = rust.remoteAcquisition({
+      response = await rust.remoteAcquisition({
         command: 'advance',
         event: result.event,
       });
@@ -924,11 +1011,24 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  private ingestRustEvents(events: readonly ObservabilityEvent[]): void {
+  private ingestRustEvents(events: readonly CatalogObservabilityEvent[]): void {
     for (const event of events) {
-      this.observability.ingest(event);
-      this.emitEngineEvent(observabilityEventToStateEvent(event));
+      const runtimeEvent = this.runtimeEvent(event);
+      this.observability.ingest(runtimeEvent);
+      this.emitEngineEvent(observabilityEventToStateEvent(runtimeEvent));
     }
+  }
+
+  private runtimeEvent(event: CatalogObservabilityEvent): ObservabilityEvent {
+    const model = event.snapshot.model;
+    const session = this.runtime.currentRuntimeSession();
+    return {
+      ...event,
+      snapshot: {
+        ...event.snapshot,
+        model: model == null ? null : modelInfoFromCatalog(model, session),
+      },
+    };
   }
 
   private emitEngineEvent(event: EngineEvent): void {
@@ -942,7 +1042,7 @@ export class ModelService implements ModelLifecycleService {
       return;
     }
     const rust = await this.rustLifecyclePromise;
-    rust.close();
+    await rust.close();
     this.rustLifecyclePromise = null;
   }
 
@@ -993,13 +1093,14 @@ export class ModelService implements ModelLifecycleService {
   }
 
   private requestTransportObservability(
-    emitsTokens: boolean,
-    tokenDrainMs = 0,
-    tokenDrainCalls = 0
+    start: TransportObservability,
+    emitsTokens: boolean
   ): TransportObservability {
     const current = this.runtime.getTransportObservability();
     const transport: TransportObservability = {
       ...current,
+      wasmRunLoopCalls: current.wasmRunLoopCalls - start.wasmRunLoopCalls,
+      wasmRunLoopMs: current.wasmRunLoopMs - start.wasmRunLoopMs,
       activeTokenEmission: emitsTokens,
       activeTokenTransport: emitsTokens ? 'token-stream' : 'none',
     };
@@ -1008,8 +1109,12 @@ export class ModelService implements ModelLifecycleService {
       delete transport.tokenDrainMs;
       return transport;
     }
-    transport.tokenDrainCalls = tokenDrainCalls;
-    transport.tokenDrainMs = tokenDrainMs;
+    // The runtime accumulates ring-drain cost across every request it serves,
+    // so report the delta observed while this request was in flight. Concurrent
+    // requests each attribute the whole overlapping window to themselves.
+    transport.tokenDrainCalls =
+      (current.tokenDrainCalls ?? 0) - (start.tokenDrainCalls ?? 0);
+    transport.tokenDrainMs = (current.tokenDrainMs ?? 0) - (start.tokenDrainMs ?? 0);
     return transport;
   }
 
@@ -1160,7 +1265,7 @@ export class ModelService implements ModelLifecycleService {
   ): Promise<ClassifiedAssetFile[]> {
     return Promise.all(
       assets.map(async (asset) => {
-        if (asset.record.inspection?.version === 1) {
+        if (asset.record.inspection != null) {
           return {
             assetId: asset.record.id,
             file: asset.file,
@@ -1173,99 +1278,99 @@ export class ModelService implements ModelLifecycleService {
     );
   }
 
-  private async getAssetFileForEntry(entry: ModelEntry, asset: AssetRecord): Promise<File> {
+  private async openBundleForEntry(
+    entry: ModelEntry,
+    manifest: RegistryManifest,
+    signal?: AbortSignal
+  ): Promise<RuntimeBundleDescriptor> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.openBundleOnce(entry, manifest);
+      } catch (error) {
+        const delayMs = OPFS_LOCK_RETRY_DELAYS_MS[attempt];
+        if (delayMs == null || !isOpfsExclusiveLockError(error)) {
+          throw error;
+        }
+        if (signal?.aborted) {
+          throw createAbortError('Model load aborted while waiting for an OPFS lock.');
+        }
+        await this.sleep(delayMs);
+        if (signal?.aborted) {
+          throw createAbortError('Model load aborted while waiting for an OPFS lock.');
+        }
+      }
+    }
+  }
+
+  private async openBundleOnce(
+    entry: ModelEntry,
+    manifest: RegistryManifest
+  ): Promise<RuntimeBundleDescriptor> {
+    const modelFiles: RuntimeBundleFile[] = [];
+    let projector: RuntimeBundleFile | undefined;
     try {
-      return await this.assetStore.getFile(asset);
+      for (const assetId of entry.modelAssetIds) {
+        modelFiles.push(await this.openEntryAsset(entry, manifest, assetId, 'asset'));
+      }
+
+      if (entry.projectorAssetId != null) {
+        projector = await this.openEntryAsset(
+          entry,
+          manifest,
+          entry.projectorAssetId,
+          'projector'
+        );
+      }
+
+      return { modelFiles, projector };
+    } catch (error) {
+      const openedProjector = projector;
+      try {
+        releaseAll('Failed to close a partially opened runtime model bundle.', [
+          ...modelFiles.map((file) => ({
+            label: `close model handle "${file.name}"`,
+            release: () => file.handle.close(),
+          })),
+          ...(openedProjector == null
+            ? []
+            : [{
+              label: `close projector handle "${openedProjector.name}"`,
+              release: () => openedProjector.handle.close(),
+            }]),
+        ]);
+      } catch (cleanupError) {
+        throw attachCleanupFailures(error, cleanupError);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Opens one of an entry's assets, marking the model broken when the asset is
+   * missing from the manifest or the store reports it unusable.
+   */
+  private async openEntryAsset(
+    entry: ModelEntry,
+    manifest: RegistryManifest,
+    assetId: string,
+    role: 'asset' | 'projector'
+  ): Promise<RuntimeBundleFile> {
+    const asset = manifest.assets[assetId];
+    if (asset == null) {
+      await this.markBroken(entry.id);
+      throw new QueryError(
+        'MODEL_BROKEN',
+        `Model "${entry.id}" references a missing ${role}.`
+      );
+    }
+    try {
+      return await this.assetStore.openSyncHandle(asset);
     } catch (error) {
       if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
         await this.markBroken(entry.id);
       }
       throw error;
     }
-  }
-
-  private async openBundleForEntry(
-    entry: ModelEntry,
-    manifest: RegistryManifest
-  ): Promise<InternalBundleDescriptor> {
-    const detection = this.detectionForEntry(entry, manifest);
-    if (detection == null) {
-      await this.markBroken(entry.id);
-      throw new QueryError(
-        'MODEL_BROKEN',
-        `Model "${entry.id}" is missing detection metadata; add the model again.`
-      );
-    }
-
-    const shards: ModelBundleShard[] = [];
-    try {
-      for (const assetId of entry.modelAssetIds) {
-        const asset = manifest.assets[assetId];
-        if (asset == null) {
-          await this.markBroken(entry.id);
-          throw new QueryError(
-            'MODEL_BROKEN',
-            `Model "${entry.id}" references a missing asset.`
-          );
-        }
-        try {
-          shards.push(await this.assetStore.openSyncHandle(asset));
-        } catch (error) {
-          if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
-            await this.markBroken(entry.id);
-          }
-          throw error;
-        }
-      }
-
-      let projector: ModelBundleFileProjectorDescriptor | undefined;
-      if (entry.projectorAssetId != null) {
-        const projectorAsset = manifest.assets[entry.projectorAssetId];
-        if (projectorAsset == null) {
-          await this.markBroken(entry.id);
-          throw new QueryError(
-            'MODEL_BROKEN',
-            `Model "${entry.id}" references a missing projector.`
-          );
-        }
-        try {
-          projector = { file: await this.assetStore.getFile(projectorAsset) };
-        } catch (error) {
-          if (error instanceof QueryError && error.code === 'MODEL_BROKEN') {
-            await this.markBroken(entry.id);
-          }
-          throw error;
-        }
-      }
-
-      return { shards, projector, detection };
-    } catch (error) {
-      for (const shard of shards) {
-        try {
-          shard.handle.close();
-        } catch {}
-      }
-      throw error;
-    }
-  }
-
-  private detectionForEntry(
-    entry: ModelEntry,
-    manifest: RegistryManifest
-  ): ModelDetectionResult | undefined {
-    for (const assetId of entry.modelAssetIds) {
-      const inspection = manifest.assets[assetId]?.inspection;
-      if (inspection != null) {
-        return {
-          inspection,
-          detectionMethod: inspection.role === 'unknown' ? 'none' : 'gguf-metadata',
-          modelName: entry.name,
-          modelType: null,
-          modelArchitecture: inspection.architecture,
-        };
-      }
-    }
-    return undefined;
   }
 
   private async markBroken(id: string): Promise<void> {
@@ -1278,36 +1383,29 @@ export class ModelService implements ModelLifecycleService {
     });
   }
 
-  private async withLifecycleLock<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.operationChain;
-    let release!: () => void;
-    this.operationChain = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    this.transitioning = true;
-    try {
-      return await operation();
-    } finally {
-      this.transitioning = false;
-      release();
-    }
-  }
-
-  private getChatBoundaryMarkers(current: LoadedModelState): Promise<readonly string[]> {
-    const key = `${current.id}:${current.assetFingerprint}`;
-    if (this.chatBoundaryMarkersPromise == null || this.chatBoundaryMarkersKey !== key) {
-      this.chatBoundaryMarkersKey = key;
-      this.chatBoundaryMarkersPromise = this.runtime.probeChatTemplateBoundaryInfo()
-        .then(buildBoundaryMarkers)
-        .catch((error) => {
-          this.chatBoundaryMarkersPromise = null;
-          this.chatBoundaryMarkersKey = null;
-          throw error;
-        });
-    }
+  /**
+   * Probes chat-template boundaries once per runtime session. A Worker hosts
+   * exactly one session, so there is nothing to invalidate against; a failed
+   * probe clears the cache so the next chat retries it.
+   */
+  private getChatBoundaryMarkers(): Promise<readonly string[]> {
+    this.chatBoundaryMarkersPromise ??= this.runtime
+      .probeChatTemplateBoundaryInfo()
+      .then(buildBoundaryMarkers)
+      .catch((error) => {
+        this.chatBoundaryMarkersPromise = null;
+        throw error;
+      });
     return this.chatBoundaryMarkersPromise;
   }
+}
+
+function isOpfsExclusiveLockError(error: unknown): boolean {
+  if (typeof DOMException !== 'function' || !(error instanceof DOMException)) {
+    return false;
+  }
+  const withCleanup = error as DOMException & { readonly cleanupFailures?: unknown };
+  return withCleanup.cleanupFailures == null && error.name === 'NoModificationAllowedError';
 }
 
 function samplingRuntimeOverride(
@@ -1340,4 +1438,34 @@ function mergeSamplingOverrideField(
 
 function isChatInputObject(input: ChatInput): input is Extract<ChatInput, { messages: unknown }> {
   return !Array.isArray(input);
+}
+
+function modelInfoFromCatalog(
+  model: CatalogModelInfo,
+  session: RuntimeSessionSnapshot | null
+): ModelInfo {
+  if (
+    session == null ||
+    session.model.id !== model.id ||
+    session.model.assetFingerprint !== model.assetFingerprint
+  ) {
+    return {
+      ...model,
+      loaded: false,
+      chatTemplate: null,
+      bosText: '',
+      eosText: '',
+      mediaMarker: null,
+      capabilities: null,
+    };
+  }
+  return {
+    ...model,
+    loaded: true,
+    chatTemplate: session.chatTemplate,
+    bosText: session.bosText,
+    eosText: session.eosText,
+    mediaMarker: session.mediaMarker,
+    capabilities: session.capabilities,
+  };
 }

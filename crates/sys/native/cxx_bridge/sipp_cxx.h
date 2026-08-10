@@ -7,8 +7,14 @@
 
 namespace sipp::sys {
 
+void extend_bytes(
+    rust::Vec<std::uint8_t> & output,
+    rust::Slice<const std::uint8_t> data) noexcept;
+void extend_floats(rust::Vec<float> & output, rust::Slice<const float> data) noexcept;
+
 class NativeBatch;
 class NativeRuntime;
+class NativeAudio;
 class CommonSampler;
 
 void backend_init();
@@ -18,6 +24,29 @@ rust::String backend_observability_json(bool include_details);
 rust::String mtmd_default_marker();
 
 std::unique_ptr<NativeRuntime> load_native_runtime(rust::Str model_path, rust::Str args_json);
+class NativeAudio {
+public:
+  NativeAudio(const NativeAudio &) = delete;
+  NativeAudio & operator=(const NativeAudio &) = delete;
+  NativeAudio(NativeAudio &&) noexcept;
+  NativeAudio & operator=(NativeAudio &&) noexcept;
+
+  rust::Vec<std::uint8_t> take_data();
+  std::uint64_t sample_count() const;
+  std::uint32_t sample_rate_hz() const;
+
+private:
+  rust::Vec<std::uint8_t> data_;
+  std::uint64_t sample_count_;
+  std::uint32_t sample_rate_hz_;
+
+  NativeAudio(
+      rust::Vec<std::uint8_t> data,
+      std::uint64_t sample_count,
+      std::uint32_t sample_rate_hz);
+
+  friend class NativeRuntime;
+};
 
 class NativeRuntime {
 public:
@@ -59,6 +88,17 @@ public:
       bool special,
       rust::Vec<std::uint8_t> & out) const;
   rust::String apply_chat_template_json(rust::Str messages_json, bool add_assistant) const;
+  rust::String apply_asr_chat_template(rust::Str language) const;
+  rust::String parse_asr_output(rust::Str language, rust::Str output) const;
+  void begin_speech(
+      rust::Str text,
+      rust::Str language,
+      rust::Slice<const std::uint8_t> voice,
+      bool has_max_duration,
+      std::uint32_t max_duration_ms);
+  bool step_speech();
+  std::unique_ptr<NativeAudio> finish_speech();
+  void cancel_speech();
   std::int32_t decode(const NativeBatch & batch);
   std::int32_t encode(const NativeBatch & batch);
   bool synchronize();
@@ -69,10 +109,12 @@ public:
   bool set_state_seq(std::int32_t seq_id, rust::Slice<const std::uint8_t> data);
   bool init_mtmd(rust::Str projector_path, bool use_gpu, std::int32_t n_threads);
   bool mtmd_support_vision() const;
-  std::int32_t mtmd_eval_images(
+  std::int32_t mtmd_audio_sample_rate() const;
+  std::int32_t mtmd_generated_audio_sample_rate() const;
+  std::int32_t mtmd_eval_media(
       rust::Str prompt,
-      rust::Slice<const std::uint8_t> image_bytes,
-      rust::Slice<const std::int32_t> image_sizes,
+      rust::Slice<const std::uint8_t> media_bytes,
+      rust::Slice<const std::int32_t> media_sizes,
       bool add_special,
       bool parse_special,
       std::int32_t n_past,

@@ -5,7 +5,7 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    EndpointDescriptor,
+    Endpoint,
     LocalTextOptions,
     ModelPlacementConfig,
     NativeRuntimeConfig,
@@ -72,11 +72,11 @@ def main() -> None:
     model = client.models.add([model_path])
     local_endpoint = client.add(
         "local",
-        EndpointDescriptor.local(model.id, runtime=runtime_config(embeddings=False)),
+        Endpoint.local(model, runtime=runtime_config(embeddings=False)),
     )
     gateway_endpoint = client.add(
         "gateway",
-        EndpointDescriptor.gateway(
+        Endpoint.gateway(
             target,
             required_env("SIPP_GATEWAY_URL"),
             authentication_kind="bearer",

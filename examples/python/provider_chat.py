@@ -7,7 +7,7 @@ from sipp import (
     ChatMessage,
     SippClient,
     SippTextOptions,
-    EndpointDescriptor,
+    Endpoint,
 )
 
 from _support import (
@@ -24,10 +24,10 @@ GEMINI_DEFAULT_MODEL = "gemini-3.5-flash"
 OPENAI_DEFAULT_MODEL = "gpt-5-mini"
 
 
-def provider_descriptor() -> EndpointDescriptor:
+def provider_endpoint() -> Endpoint:
     provider = provider_name()
     if provider == "gemini":
-        return EndpointDescriptor.provider(
+        return Endpoint.provider(
             "openai_compatible",
             env_any(("SIPP_PROVIDER_MODEL", "GEMINI_MODEL"), GEMINI_DEFAULT_MODEL),
             api_key=required_env_any(("SIPP_PROVIDER_API_KEY", "GEMINI_API_KEY")),
@@ -35,7 +35,7 @@ def provider_descriptor() -> EndpointDescriptor:
             timeout_ms=provider_timeout_ms(),
         )
     if provider == "openai":
-        return EndpointDescriptor.provider(
+        return Endpoint.provider(
             "openai",
             env_any(("SIPP_PROVIDER_MODEL", "OPENAI_MODEL"), OPENAI_DEFAULT_MODEL),
             api_key=required_env_any(("SIPP_PROVIDER_API_KEY", "OPENAI_API_KEY")),
@@ -43,7 +43,7 @@ def provider_descriptor() -> EndpointDescriptor:
             timeout_ms=provider_timeout_ms(),
         )
     if provider == "anthropic":
-        return EndpointDescriptor.provider(
+        return Endpoint.provider(
             "anthropic",
             required_env_any(("SIPP_PROVIDER_MODEL", "ANTHROPIC_MODEL")),
             api_key=required_env_any(("SIPP_PROVIDER_API_KEY", "ANTHROPIC_API_KEY")),
@@ -54,7 +54,7 @@ def provider_descriptor() -> EndpointDescriptor:
             timeout_ms=provider_timeout_ms(),
         )
     if provider == "openai_compatible":
-        return EndpointDescriptor.provider(
+        return Endpoint.provider(
             "openai_compatible",
             required_env_any(("SIPP_PROVIDER_MODEL",)),
             base_url=required_env_any(("SIPP_PROVIDER_BASE_URL",)),
@@ -130,7 +130,7 @@ def main() -> None:
     # Direct providers belong in trusted Python processes. Browser code should
     # call a gateway or application route instead of holding provider credentials.
     client = SippClient()
-    endpoint = client.add("provider", provider_descriptor())
+    endpoint = client.add("provider", provider_endpoint())
     run = client.chat(
         [ChatMessage("user", prompt)],
         endpoint=endpoint,

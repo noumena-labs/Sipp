@@ -49,3 +49,20 @@ pub struct SippEmbeddingResponse {
     /// Request and upstream correlation metadata.
     pub metadata: SippResponseMetadata,
 }
+
+/// Final WAV response from a speech synthesis endpoint.
+#[derive(Debug, PartialEq)]
+pub struct SippAudioResponse {
+    /// Endpoint that produced the response.
+    pub endpoint: EndpointRef,
+    /// Complete mono PCM16 WAV payload.
+    pub audio: Vec<u8>,
+    /// Audio sample rate in hertz.
+    pub sample_rate_hz: u32,
+    /// Audio channel count.
+    pub channels: u16,
+    /// Audio duration in milliseconds.
+    pub duration_ms: u64,
+    /// Request and upstream correlation metadata.
+    pub metadata: SippResponseMetadata,
+}

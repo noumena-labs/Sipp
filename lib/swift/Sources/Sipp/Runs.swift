@@ -216,3 +216,58 @@ public final class EmbeddingRun: Sendable {
         }
     }
 }
+
+/// An active speech-synthesis operation.
+public final class AudioRun: Sendable {
+    private let lifetime: RunLifetime<FfiAudioRun>
+    private let responseTask: Task<AudioResponse, Error>
+
+    init(
+        securityScopes: SecurityScopeManager,
+        start: @escaping @Sendable () async -> FfiAudioRun
+    ) {
+        let cancellation = RunCancellation<FfiAudioRun> { run in
+            run.cancel()
+        }
+        let lifetime = RunLifetime(
+            cancellation: cancellation,
+            securityScopes: securityScopes
+        )
+        let runTask = Task<FfiAudioRun, Never> {
+            let bridgeRun = await start()
+            await cancellation.install(bridgeRun)
+            return bridgeRun
+        }
+        self.lifetime = lifetime
+        responseTask = Task<AudioResponse, Error> {
+            defer { _ = securityScopes }
+            let bridgeRun = await runTask.value
+            let response = try await callBridge {
+                try await bridgeRun.takeResponse()
+            }
+            return AudioResponse(response)
+        }
+    }
+
+    /// The cached terminal WAV response. Every await observes the same result.
+    public var response: AudioResponse {
+        get async throws {
+            let cancellation = lifetime.cancellation
+            return try await withTaskCancellationHandler {
+                try await responseTask.value
+            } onCancel: {
+                Task {
+                    await cancellation.cancel()
+                }
+            }
+        }
+    }
+
+    /// Requests cancellation through the native Sipp cancellation handle.
+    public func cancel() {
+        let cancellation = lifetime.cancellation
+        Task {
+            await cancellation.cancel()
+        }
+    }
+}

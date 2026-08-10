@@ -1,11 +1,13 @@
 #include "sipp_shim.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <memory>
-#include <atomic>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -50,7 +52,9 @@ struct sipp_common_checkpoint {
 };
 
 struct sipp_mtmd_context {
-    mtmd_context * inner;
+    mtmd_context * inner = nullptr;
+    std::unique_ptr<mtmd_helper::gen_audio> audio_generator;
+    common_sampler_ptr audio_sampler;
 };
 
 struct sipp_mtmd_bitmap {
@@ -62,7 +66,59 @@ struct sipp_mtmd_input_chunks {
     mtmd_input_chunks * inner;
 };
 
+struct sipp_mtmd_audio_job {
+    enum class state {
+        prompt,
+        generation,
+        complete,
+        finished,
+    };
+
+    llama_context * lctx = nullptr;
+    const llama_vocab * vocab = nullptr;
+    mtmd_helper::gen_audio * generator = nullptr;
+    common_sampler * sampler = nullptr;
+    int32_t n_batch = 0;
+    int32_t frame_count = 0;
+    int32_t max_frames = 0;
+    bool has_max_duration = false;
+    uint32_t max_duration_ms = 0;
+    llama_token sampled = LLAMA_TOKEN_NULL;
+    const float * h_state = nullptr;
+    state current = state::prompt;
+
+    ~sipp_mtmd_audio_job() {
+        if (lctx != nullptr) {
+            llama_memory_seq_rm(llama_get_memory(lctx), 0, -1, -1);
+        }
+    }
+};
+
 namespace {
+
+// The released Qwen3-TTS generation configuration uses 8192 semantic frames.
+constexpr int32_t QWEN3_TTS_DEFAULT_MAX_FRAMES = 8192;
+// The 12 Hz codec emits 25 semantic frames for every two seconds of audio.
+constexpr int64_t QWEN3_TTS_FRAMES_PER_TWO_SECONDS = 25;
+constexpr int64_t MILLISECONDS_PER_TWO_SECONDS = 2000;
+constexpr int32_t QWEN3_TTS_TOP_K = 50;
+constexpr float QWEN3_TTS_TOP_P = 1.0f;
+constexpr float QWEN3_TTS_TEMPERATURE = 0.9f;
+constexpr float QWEN3_TTS_REPEAT_PENALTY = 1.05f;
+constexpr int32_t QWEN3_TTS_REPEAT_LAST_N = -1;
+
+int32_t qwen3_tts_frame_limit(bool has_max_duration, uint32_t max_duration_ms) {
+    if (!has_max_duration) {
+        return QWEN3_TTS_DEFAULT_MAX_FRAMES;
+    }
+    const int64_t scaled = static_cast<int64_t>(max_duration_ms) * QWEN3_TTS_FRAMES_PER_TWO_SECONDS;
+    const int32_t frames = static_cast<int32_t>(scaled / MILLISECONDS_PER_TWO_SECONDS);
+    if (frames == 0) {
+        throw std::invalid_argument(
+            "max_duration_ms is shorter than one Qwen3-TTS audio frame");
+    }
+    return frames;
+}
 
 char * copy_string(const std::string & value) {
     char * out = static_cast<char *>(std::malloc(value.size() + 1));
@@ -221,6 +277,85 @@ bool parse_messages(const char * messages_json, std::vector<common_chat_msg> & o
 
     out = common_chat_msgs_parse_oaicompat(parsed);
     return true;
+}
+
+char * apply_chat_template(
+    const sipp_chat_templates * templates,
+    std::vector<common_chat_msg> messages,
+    bool add_assistant) {
+    common_chat_templates_inputs inputs;
+    inputs.messages = std::move(messages);
+    inputs.add_generation_prompt = add_assistant;
+    inputs.use_jinja = true;
+
+    return copy_string(common_chat_templates_apply(templates->inner.get(), inputs).prompt);
+}
+
+common_chat_params apply_asr_chat_template(
+    const sipp_chat_templates * templates,
+    std::string_view language) {
+    const common_chat_prompt_preset preset =
+        common_chat_get_asr_prompt(templates->inner.get());
+    std::vector<common_chat_msg> messages;
+    if (!preset.system.empty()) {
+        common_chat_msg system;
+        system.role = "system";
+        system.content = preset.system;
+        messages.push_back(std::move(system));
+    }
+
+    common_chat_msg user;
+    user.role = "user";
+    user.content = preset.user;
+    if (!language.empty()) {
+        user.content += " (language: ";
+        user.content.append(language.data(), language.size());
+        user.content += ")";
+    }
+    user.content += mtmd_default_marker();
+    messages.push_back(std::move(user));
+
+    common_chat_templates_inputs inputs;
+    inputs.messages = std::move(messages);
+    inputs.add_generation_prompt = true;
+    inputs.use_jinja = true;
+    return common_chat_templates_apply(templates->inner.get(), inputs);
+}
+
+enum class asr_output_protocol {
+    tagged,
+    plain,
+};
+
+asr_output_protocol resolve_asr_output_protocol(const common_chat_prompt_preset & preset) {
+    if (preset.system.empty() && preset.user == "Transcribe audio to text") {
+        return asr_output_protocol::tagged;
+    }
+    if (preset.system == "Perform ASR." && preset.user.empty()) {
+        return asr_output_protocol::plain;
+    }
+    throw std::invalid_argument("unsupported llama.cpp ASR prompt preset");
+}
+
+std::string parse_asr_content(
+    const common_chat_params & chat_params,
+    asr_output_protocol protocol,
+    std::string_view output) {
+    common_chat_parser_params parser_params(chat_params);
+    if (!chat_params.parser.empty()) {
+        parser_params.parser.load(chat_params.parser);
+    }
+
+    std::string content = common_chat_parse(std::string(output), false, parser_params).content;
+    if (protocol == asr_output_protocol::tagged) {
+        constexpr const char * output_marker = "<asr_text>";
+        const size_t marker = content.find(output_marker);
+        if (marker == std::string::npos) {
+            throw std::invalid_argument("ASR output does not contain the preset response marker");
+        }
+        content = content.substr(marker + std::strlen(output_marker));
+    }
+    return string_strip(content);
 }
 
 const char * backend_dev_type_name(enum ggml_backend_dev_type type) {
@@ -834,13 +969,48 @@ char * sipp_apply_chat_template(
         if (!parse_messages(messages_json, messages)) {
             return nullptr;
         }
+        return apply_chat_template(templates, std::move(messages), add_assistant);
+    } catch (const std::exception &) {
+        return nullptr;
+    }
+}
 
-        common_chat_templates_inputs inputs;
-        inputs.messages = std::move(messages);
-        inputs.add_generation_prompt = add_assistant;
-        inputs.use_jinja = true;
+char * sipp_apply_asr_chat_template(
+    const sipp_chat_templates * templates,
+    const char * language,
+    size_t language_len) {
+    if (templates == nullptr || !templates->inner || language == nullptr) {
+        return nullptr;
+    }
 
-        return copy_string(common_chat_templates_apply(templates->inner.get(), inputs).prompt);
+    try {
+        return copy_string(
+            apply_asr_chat_template(templates, std::string_view(language, language_len)).prompt);
+    } catch (const std::exception &) {
+        return nullptr;
+    }
+}
+
+char * sipp_parse_asr_output(
+    const sipp_chat_templates * templates,
+    const char * language,
+    size_t language_len,
+    const char * output,
+    size_t output_len) {
+    if (templates == nullptr || !templates->inner || language == nullptr || output == nullptr) {
+        return nullptr;
+    }
+
+    try {
+        const common_chat_prompt_preset preset =
+            common_chat_get_asr_prompt(templates->inner.get());
+        const common_chat_params chat_params = apply_asr_chat_template(
+            templates,
+            std::string_view(language, language_len));
+        return copy_string(parse_asr_content(
+            chat_params,
+            resolve_asr_output_protocol(preset),
+            std::string_view(output, output_len)));
     } catch (const std::exception &) {
         return nullptr;
     }
@@ -1115,6 +1285,8 @@ void sipp_mtmd_free(sipp_mtmd_context * context) {
         return;
     }
 
+    context->audio_generator.reset();
+    context->audio_sampler.reset();
     if (context->inner != nullptr) {
         mtmd_free(context->inner);
     }
@@ -1123,6 +1295,237 @@ void sipp_mtmd_free(sipp_mtmd_context * context) {
 
 bool sipp_mtmd_support_vision(const sipp_mtmd_context * context) {
     return context != nullptr && context->inner != nullptr && mtmd_support_vision(context->inner);
+}
+
+int32_t sipp_mtmd_get_audio_sample_rate(const sipp_mtmd_context * context) {
+    if (context == nullptr || context->inner == nullptr) {
+        return -1;
+    }
+    return mtmd_get_audio_sample_rate(context->inner);
+}
+
+int32_t sipp_mtmd_generated_audio_sample_rate(const sipp_mtmd_context * context) {
+    if (context == nullptr || context->inner == nullptr) {
+        return -1;
+    }
+    const mtmd_gen_audio_info info = mtmd_gen_audio_get_info(context->inner);
+    return info.type == MTMD_GEN_AUDIO_TYPE_NONE ? -1 : info.sample_rate;
+}
+
+sipp_mtmd_audio_job * sipp_mtmd_audio_begin(
+    sipp_common_init * init,
+    sipp_mtmd_context * context,
+    const char * text,
+    size_t text_len,
+    const char * language,
+    const uint8_t * voice,
+    size_t voice_len,
+    bool has_max_duration,
+    uint32_t max_duration_ms,
+    char ** error_out) {
+    if (init == nullptr || !init->inner || context == nullptr || context->inner == nullptr ||
+        text == nullptr || language == nullptr || (voice == nullptr && voice_len != 0)) {
+        set_error(error_out, "audio generation received an invalid native input");
+        return nullptr;
+    }
+
+    try {
+        std::unique_ptr<sipp_mtmd_bitmap, decltype(&sipp_mtmd_bitmap_free)> speaker(
+            nullptr,
+            sipp_mtmd_bitmap_free);
+        if (voice_len != 0) {
+            speaker.reset(sipp_mtmd_bitmap_init_from_buf(context, voice, voice_len));
+            if (!speaker) {
+                throw std::runtime_error("failed to decode the speaker reference audio");
+            }
+        }
+
+        llama_context * lctx = init->inner->context();
+        llama_model * model = init->inner->model();
+        const mtmd_gen_audio_info audio_info = mtmd_gen_audio_get_info(context->inner);
+        if (audio_info.type != MTMD_GEN_AUDIO_TYPE_QWEN3TTS) {
+            throw std::runtime_error("loaded model does not support Qwen3-TTS generation");
+        }
+        if (!llama_memory_seq_rm(llama_get_memory(lctx), 0, -1, -1)) {
+            throw std::runtime_error("failed to clear the audio generation sequence");
+        }
+
+        auto job = std::make_unique<sipp_mtmd_audio_job>();
+        job->lctx = lctx;
+        job->vocab = llama_model_get_vocab(model);
+        job->n_batch = static_cast<int32_t>(llama_n_batch(lctx));
+        job->max_frames = qwen3_tts_frame_limit(has_max_duration, max_duration_ms);
+        job->has_max_duration = has_max_duration;
+        job->max_duration_ms = max_duration_ms;
+
+        common_params_sampling sampling;
+        sampling.top_k = QWEN3_TTS_TOP_K;
+        sampling.top_p = QWEN3_TTS_TOP_P;
+        sampling.min_p = 0.0f;
+        sampling.temp = QWEN3_TTS_TEMPERATURE;
+        sampling.penalty_repeat = QWEN3_TTS_REPEAT_PENALTY;
+        sampling.penalty_last_n = QWEN3_TTS_REPEAT_LAST_N;
+        if (!context->audio_sampler) {
+            context->audio_sampler.reset(common_sampler_init(model, sampling));
+            if (!context->audio_sampler) {
+                throw std::runtime_error("failed to initialize the audio generation sampler");
+            }
+        } else {
+            common_sampler_reset(context->audio_sampler.get());
+        }
+        job->sampler = context->audio_sampler.get();
+
+        if (!context->audio_generator) {
+            context->audio_generator = std::make_unique<mtmd_helper::gen_audio>(lctx, context->inner);
+            if (!context->audio_generator->ctx) {
+                throw std::runtime_error("failed to initialize the audio generator");
+            }
+        }
+        job->generator = context->audio_generator.get();
+        mtmd_helper_gen_audio_inp input{};
+        input.seq_id = 0;
+        input.prompt = text;
+        input.prompt_len = text_len;
+        input.speaker_ref = speaker ? speaker->inner : nullptr;
+        input.lang = language;
+        input.top_k = sampling.top_k;
+        input.top_p = sampling.top_p;
+        input.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+        if (job->generator->set_input(&input) != 0) {
+            throw std::runtime_error("failed to initialize audio generation");
+        }
+
+        return job.release();
+    } catch (const std::exception & error) {
+        set_error(error_out, error.what());
+        return nullptr;
+    } catch (...) {
+        set_error(error_out, "unknown audio generation failure");
+        return nullptr;
+    }
+}
+
+int32_t sipp_mtmd_audio_step(sipp_mtmd_audio_job * job, char ** error_out) {
+    if (job == nullptr || !job->generator || !job->sampler || job->lctx == nullptr ||
+        job->vocab == nullptr || job->n_batch <= 0) {
+        set_error(error_out, "audio generation step received an invalid job");
+        return SIPP_MTMD_AUDIO_STEP_FAILED;
+    }
+
+    try {
+        if (job->current == sipp_mtmd_audio_job::state::prompt) {
+            const int32_t remaining = job->generator->step_prompt(job->n_batch);
+            if (remaining < 0) {
+                throw std::runtime_error("audio prompt processing failed");
+            }
+            if (remaining > 0) {
+                return SIPP_MTMD_AUDIO_STEP_RUNNING;
+            }
+            job->sampled = common_sampler_sample(job->sampler, job->lctx, -1);
+            common_sampler_accept(job->sampler, job->sampled, true);
+            job->h_state = llama_get_embeddings_ith(job->lctx, -1);
+            if (llama_vocab_is_eog(job->vocab, job->sampled)) {
+                job->current = sipp_mtmd_audio_job::state::complete;
+                return SIPP_MTMD_AUDIO_STEP_COMPLETE;
+            }
+            if (job->h_state == nullptr) {
+                throw std::runtime_error("audio prompt produced no hidden state");
+            }
+            job->current = sipp_mtmd_audio_job::state::generation;
+            return SIPP_MTMD_AUDIO_STEP_RUNNING;
+        }
+
+        if (job->current == sipp_mtmd_audio_job::state::generation) {
+            const llama_pos next_position =
+                llama_memory_seq_pos_max(llama_get_memory(job->lctx), 0) + 1;
+            if (next_position >= static_cast<llama_pos>(llama_n_ctx(job->lctx))) {
+                throw std::runtime_error(
+                    "speech synthesis exhausted context capacity (n_ctx=" +
+                    std::to_string(llama_n_ctx(job->lctx)) + ") before end of generation");
+            }
+            const float * next_state = nullptr;
+            if (job->generator->step_gen(job->sampled, job->h_state, &next_state) != 0) {
+                throw std::runtime_error("audio frame generation failed");
+            }
+            if (next_state == nullptr) {
+                throw std::runtime_error("audio frame generation produced no hidden state");
+            }
+            job->h_state = next_state;
+            job->sampled = common_sampler_sample(job->sampler, job->lctx, -1);
+            common_sampler_accept(job->sampler, job->sampled, true);
+            ++job->frame_count;
+            if (llama_vocab_is_eog(job->vocab, job->sampled)) {
+                job->current = sipp_mtmd_audio_job::state::complete;
+                return SIPP_MTMD_AUDIO_STEP_COMPLETE;
+            }
+            if (job->frame_count >= job->max_frames) {
+                if (job->has_max_duration) {
+                    throw std::runtime_error(
+                        "speech synthesis reached max_duration_ms=" +
+                        std::to_string(job->max_duration_ms) +
+                        " before end of generation");
+                }
+                throw std::runtime_error(
+                    "speech synthesis reached the Qwen3-TTS default generation limit "
+                    "before end of generation");
+            }
+            return SIPP_MTMD_AUDIO_STEP_RUNNING;
+        }
+
+        throw std::runtime_error("audio generation step called after completion");
+    } catch (const std::exception & error) {
+        set_error(error_out, error.what());
+        return SIPP_MTMD_AUDIO_STEP_FAILED;
+    } catch (...) {
+        set_error(error_out, "unknown audio generation failure");
+        return SIPP_MTMD_AUDIO_STEP_FAILED;
+    }
+}
+
+bool sipp_mtmd_audio_finish(
+    sipp_mtmd_audio_job * job,
+    sipp_audio_sink sink,
+    void * sink_user_data,
+    int64_t * sample_count_out,
+    int32_t * sample_rate_out,
+    char ** error_out) {
+    if (job == nullptr || !job->generator || job->current != sipp_mtmd_audio_job::state::complete ||
+        sink == nullptr || sample_count_out == nullptr || sample_rate_out == nullptr) {
+        set_error(error_out, "audio generation finish received an invalid job");
+        return false;
+    }
+
+    try {
+        int32_t sample_rate = 0;
+        const char * data = nullptr;
+        size_t data_len = 0;
+        int64_t sample_count = 0;
+        if (job->generator->get_output(&sample_rate, &data, &data_len, &sample_count) != 0) {
+            throw std::runtime_error("failed to finalize generated audio");
+        }
+        if (data == nullptr || data_len == 0 || sample_count <= 0 || sample_rate <= 0) {
+            throw std::runtime_error("audio generation produced no waveform");
+        }
+
+        sink(
+            sink_user_data,
+            reinterpret_cast<const uint8_t *>(data),
+            data_len);
+        *sample_count_out = sample_count;
+        *sample_rate_out = sample_rate;
+        job->current = sipp_mtmd_audio_job::state::finished;
+        return true;
+    } catch (const std::exception & error) {
+        set_error(error_out, error.what());
+        return false;
+    } catch (...) {
+        set_error(error_out, "unknown audio generation failure");
+        return false;
+    }
+}
+
+void sipp_mtmd_audio_free(sipp_mtmd_audio_job * job) {
+    delete job;
 }
 
 sipp_mtmd_bitmap * sipp_mtmd_bitmap_init_from_buf(
@@ -1181,6 +1584,7 @@ bool sipp_mtmd_tokenize(
     sipp_mtmd_context * context,
     sipp_mtmd_input_chunks * chunks,
     const char * text,
+    size_t text_len,
     bool add_special,
     bool parse_special,
     const sipp_mtmd_bitmap * const * bitmaps,
@@ -1201,6 +1605,7 @@ bool sipp_mtmd_tokenize(
 
     mtmd_input_text text_input{};
     text_input.text = text;
+    text_input.text_len = text_len;
     text_input.add_special = add_special;
     text_input.parse_special = parse_special;
 

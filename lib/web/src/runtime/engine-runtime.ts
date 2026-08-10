@@ -2,8 +2,7 @@ import type {
   BackendObservability,
   ChatMessage,
   EmbedRuntimeOptions,
-  EngineExecutionMode,
-  GenerateRequestId,
+  GenerateRequestHandle,
   GenerateResponse,
   NativeRuntimeConfig,
   PromptOptions,
@@ -12,12 +11,12 @@ import type {
 } from '../engine/inference-types.js';
 import type {
   ClassifiedAsset,
-  InternalBundleDescriptor,
   ModelDetectionResult,
   PairingPlan,
   RegistryManifest,
-  StagedModelBundle,
-  StageModelBundleOptions,
+  RuntimeBundleDescriptor,
+  RuntimeSessionDescriptor,
+  RuntimeSessionSnapshot,
 } from '../models/types.js';
 import type { ChatBoundaryInfo } from '../engine/chat-boundary-sanitizer.js';
 import type {
@@ -26,23 +25,40 @@ import type {
   GgufSplitStreamCallbacks,
   RustLifecycleBridge,
 } from '../wasm/wasm-bridge.js';
-import type { RuntimeBackendOverride, WasmThreadingMode } from '../engine/runtime-assets.js';
+import type {
+  RuntimeBackendConstraint,
+  WasmThreadingMode,
+} from '../engine/runtime-assets.js';
+
+export interface RuntimeActivationReport {
+  readonly session: RuntimeSessionSnapshot;
+  readonly runtimeObservability: RequestObservabilityMetrics | null;
+  readonly backendObservability: BackendObservability | null;
+}
+
+export interface RuntimeActivation<TCommit> {
+  readonly session: RuntimeSessionDescriptor;
+  readonly config: NativeRuntimeConfig;
+  readonly signal?: AbortSignal;
+  readonly commit: (report: RuntimeActivationReport) => Promise<TCommit>;
+}
+
+export interface RuntimeActivationResult<TCommit> {
+  readonly session: RuntimeSessionSnapshot;
+  readonly committed: TCommit;
+}
 
 export interface EngineRuntime {
-  getExecutionMode(): EngineExecutionMode;
+  readonly backendConstraint: RuntimeBackendConstraint | null;
   getWasmThreadingMode(): WasmThreadingMode;
-  getDefaultBackendOverride(): RuntimeBackendOverride | null;
   getTransportObservability(): TransportObservability;
   initModule(): Promise<void>;
-  stageModelBundle(
-    descriptor: InternalBundleDescriptor,
-    options?: StageModelBundleOptions
-  ): Promise<StagedModelBundle>;
-  loadRuntimeModel(
-    modelPathOrBundle: string | StagedModelBundle,
-    config?: NativeRuntimeConfig
-  ): Promise<void>;
-  close(): void;
+  activateRuntime<TCommit>(
+    bundle: RuntimeBundleDescriptor,
+    activation: RuntimeActivation<TCommit>
+  ): Promise<RuntimeActivationResult<TCommit>>;
+  currentRuntimeSession(): RuntimeSessionSnapshot | null;
+  close(): Promise<void>;
   getChatTemplate(): string | null;
   readMediaMarker(): string | null;
   /**
@@ -81,20 +97,32 @@ export interface EngineRuntime {
     contextKey: string,
     messages: readonly ChatMessage[],
     options?: number | PromptOptions
-  ): Promise<GenerateRequestId>;
-  cancelQuery(requestId: GenerateRequestId): Promise<boolean>;
+  ): Promise<GenerateRequestHandle>;
+  cancelQuery(request: GenerateRequestHandle): Promise<boolean>;
   enqueueQuery(
     contextKey: string,
     promptText: string,
     options?: number | PromptOptions
-  ): Promise<GenerateRequestId>;
+  ): Promise<GenerateRequestHandle>;
   enqueueEmbedding(
     contextKey: string,
     input: string,
     options?: EmbedRuntimeOptions
-  ): Promise<GenerateRequestId>;
+  ): Promise<GenerateRequestHandle>;
+  enqueueListen(
+    audio: Uint8Array,
+    language: string,
+    options?: number | PromptOptions
+  ): Promise<GenerateRequestHandle>;
+  enqueueSpeak(
+    text: string,
+    language: string,
+    speakerAudio: Uint8Array,
+    maxDurationMs: number | undefined,
+    options?: PromptOptions
+  ): Promise<GenerateRequestHandle>;
   awaitQuery(
-    requestId: GenerateRequestId,
+    request: GenerateRequestHandle,
     options?: { signal?: AbortSignal }
   ): Promise<GenerateResponse>;
   getRuntimeObservability(): RequestObservabilityMetrics | null;

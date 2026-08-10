@@ -7,7 +7,7 @@ use sipp::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, PoolingType, ResidencyRuntimeConfig,
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
-use sipp::{LocalDescriptor, LocalEmbedOptions, SippClient, SippEmbedRequest};
+use sipp::{endpoint, LocalEmbedOptions, SippClient, SippEmbedRequest};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
@@ -16,9 +16,8 @@ fn main() -> support::ExampleResult<()> {
 
         let mut client = SippClient::new()?;
         let model = client.models().add([args.model_path]).await?;
-        let mut descriptor = LocalDescriptor::new(model.id);
-        descriptor.runtime = runtime_config(true);
-        client.add("default", descriptor).await?;
+        let local = endpoint::Local::new(&model).runtime(runtime_config(true));
+        client.add("default", local).await?;
 
         // Embeddings use the same client as text generation. The local runtime
         // is loaded with `embeddings=true`, and this request asks for a

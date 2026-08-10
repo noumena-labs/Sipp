@@ -49,7 +49,7 @@ Backend features add their own requirements:
 
 ```rust
 use sipp::{
-    LocalDescriptor, LocalTextOptions, SippClient, SippQueryRequest,
+    endpoint::Local, LocalTextOptions, SippClient, SippQueryRequest,
     SippTextOptions,
 };
 use sipp::engine::{
@@ -62,9 +62,9 @@ async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = SippClient::new()?;
     let model = client.models().add([model_path]).await?;
-    let mut descriptor = LocalDescriptor::new(model.id);
-    descriptor.runtime = runtime_config();
-    let endpoint = client.add("default", descriptor).await?;
+    let endpoint = client
+        .add("default", Local::new(&model).runtime(runtime_config()))
+        .await?;
 
     let response = client
         .query(SippQueryRequest {

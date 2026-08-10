@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   type ModelLoadProgress,
   type NativeRuntimeConfig,
@@ -615,7 +615,7 @@ export default function App() {
         const model = await nextClient.models.add([url], { onProgress });
         await nextClient.add(
           'local',
-          EndpointDescriptor.local(model.id, {
+          Endpoint.local(model, {
             onProgress,
             observability: 'runtime',
             runtime: SIMULATION_RUNTIME,

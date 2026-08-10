@@ -1,5 +1,5 @@
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   type BrowserEmbeddingRun,
   type EndpointRef,
@@ -30,7 +30,7 @@ elements.loadForm.addEventListener('submit', async (event) => {
     }
     endpoint = await client.add(
       EXAMPLE_LOCAL_ENDPOINT_ID,
-      EndpointDescriptor.local(model.id, { runtime: runtimeConfig() })
+      Endpoint.local(model, { runtime: runtimeConfig() })
     );
     write(elements.output, `Loaded ${model.name}.`);
   } catch (error) {

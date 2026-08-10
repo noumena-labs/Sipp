@@ -28,12 +28,9 @@ if(NOT EXISTS "${SIPP_LLAMA_CPP_DIR}/include/llama.h")
 endif()
 
 # --- INCLUDE SHARED LOGIC ---
-# Using the specific file shown in your VS Code tree
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/llama_mtmd_sources.cmake)
 
-# Native-specific mtmd configurations
-find_package(Threads REQUIRED)
-target_link_libraries(mtmd PRIVATE Threads::Threads)
+# Install the upstream-owned mtmd target with the rest of the native package.
 install(TARGETS mtmd ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 
 # Shim setup

@@ -25,6 +25,9 @@ fn model_state() -> ModelState {
             model_class: ModelClass::EncoderOnly,
             supports_text_generation: false,
             supports_embeddings: true,
+            supports_vision: false,
+            audio_sample_rate_hz: None,
+            generated_audio_sample_rate_hz: None,
             has_chat_template: false,
             embedding: Some(EmbeddingCapabilities {
                 dimensions: 2,
@@ -59,6 +62,7 @@ fn embedding_completion_is_forwarded_without_generation_mapping() {
             output: ActiveRequestOutput::Embedding,
             response_tx,
             token: None,
+            cancellation: None,
         },
     );
     let mut state = EngineThreadState {
@@ -101,6 +105,7 @@ fn wrong_completed_output_variant_is_a_failed_request() {
             output: ActiveRequestOutput::Embedding,
             response_tx,
             token: None,
+            cancellation: None,
         },
     );
     let mut state = EngineThreadState {
@@ -123,6 +128,51 @@ fn wrong_completed_output_variant_is_a_failed_request() {
 }
 
 #[test]
+fn asr_parser_failure_is_returned_without_raw_output_fallback() {
+    let mut runtime = test_runtime(NativeRuntimeConfig::default());
+    runtime
+        .request_queue
+        .mark_completed(GenerateResponse::terminal(
+            7,
+            GenerateResponseStatus::Completed,
+            ResponseOutput::Text("language English<asr_text>transcript".to_string()),
+            "",
+        ));
+
+    let (response_tx, response_rx) = oneshot::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let mut active_requests = HashMap::new();
+    active_requests.insert(
+        7,
+        ActiveRequest {
+            output: ActiveRequestOutput::Transcription {
+                language: Some("en".to_string()),
+            },
+            response_tx,
+            token: None,
+            cancellation: None,
+        },
+    );
+    let mut state = EngineThreadState {
+        runtime: Some(runtime),
+        active_requests,
+        model_state: model_state(),
+        event_subscribers: Arc::new(Mutex::new(vec![event_tx])),
+    };
+
+    state.complete_finished_requests();
+
+    let error = block_on(response_rx)
+        .expect("response")
+        .expect_err("parser failure");
+    assert!(matches!(error, crate::error::Error::RuntimeNotReady));
+    assert!(matches!(
+        event_rx.recv().expect("failure event"),
+        EngineEvent::RequestFailed { request_id, .. } if request_id == "7"
+    ));
+}
+
+#[test]
 fn cancelled_completion_uses_fallback_error_and_failure_event() {
     let mut runtime = test_runtime(NativeRuntimeConfig::default());
     runtime
@@ -138,6 +188,7 @@ fn cancelled_completion_uses_fallback_error_and_failure_event() {
             output: ActiveRequestOutput::Text,
             response_tx,
             token: None,
+            cancellation: None,
         },
     );
     let mut state = EngineThreadState {
@@ -181,6 +232,7 @@ fn pending_completion_returns_error_without_failure_event() {
             output: ActiveRequestOutput::Text,
             response_tx,
             token: None,
+            cancellation: None,
         },
     );
     let mut state = EngineThreadState {

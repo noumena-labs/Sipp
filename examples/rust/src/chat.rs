@@ -8,7 +8,7 @@ use sipp::engine::{
     ModelPlacementConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig,
     SamplingRuntimeConfig, SchedulerRuntimeConfig,
 };
-use sipp::{LocalDescriptor, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions};
+use sipp::{endpoint, LocalTextOptions, SippChatRequest, SippClient, SippTextOptions};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
@@ -17,9 +17,8 @@ fn main() -> support::ExampleResult<()> {
 
         let mut client = SippClient::new()?;
         let model = client.models().add([args.model_path]).await?;
-        let mut descriptor = LocalDescriptor::new(model.id);
-        descriptor.runtime = runtime_config(false);
-        client.add("default", descriptor).await?;
+        let local = endpoint::Local::new(&model).runtime(runtime_config(false));
+        client.add("default", local).await?;
 
         // `chat` accepts structured messages. Token streaming is enabled here
         // so the user can print partial output while the final response is

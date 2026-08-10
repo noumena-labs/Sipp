@@ -13,6 +13,8 @@ public struct ManagedModel: Equatable, Sendable {
 public enum ModelModality: Equatable, Sendable {
     case text
     case vision
+    case audio
+    case multimodal
 }
 
 /// The installation state of a managed model.
@@ -39,6 +41,10 @@ extension ModelModality {
             self = .text
         case .vision:
             self = .vision
+        case .audio:
+            self = .audio
+        case .multimodal:
+            self = .multimodal
         }
     }
 }

@@ -28,12 +28,19 @@ fn asset_record(id: &str, path: PathBuf) -> AssetRecord {
         ref_count: 1,
         created_at_unix_ms: now_unix_ms(),
         inspection: Some(crate::lifecycle::AssetInspection {
-            version: 1,
+            version: crate::lifecycle::AssetInspection::VERSION,
             role: AssetRole::Model,
             architecture: None,
+            trained_context_size: Some(4096),
             vision_capable: false,
+            audio_capable: false,
+            audio_generation_capable: false,
             compatible_vision_projector_types: Vec::new(),
+            compatible_audio_projector_types: Vec::new(),
+            compatible_audio_generation_projector_types: Vec::new(),
             provided_vision_projector_type: None,
+            provided_audio_projector_type: None,
+            provided_audio_generation_projector_type: None,
         }),
     }
 }

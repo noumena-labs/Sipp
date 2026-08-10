@@ -141,6 +141,37 @@ fn request_projection_preserves_typed_swift_values() {
     assert_eq!(embed.endpoint.as_ref().map(EndpointRef::id), Some("embed"));
     assert_eq!(embed.local.context_key.as_deref(), Some("embedding"));
     assert_eq!(embed.local.normalize, Some(true));
+
+    let (_, listen) = FfiListenRequest {
+        request_id: Some("listen-request".to_owned()),
+        endpoint: Some("listen".to_owned()),
+        audio: vec![1, 2, 3],
+        language: Some("en".to_owned()),
+        max_tokens: Some(96),
+    }
+    .into_core();
+    assert_eq!(
+        listen.endpoint.as_ref().map(EndpointRef::id),
+        Some("listen")
+    );
+    assert_eq!(listen.audio, vec![1, 2, 3]);
+    assert_eq!(listen.language.as_deref(), Some("en"));
+    assert_eq!(listen.max_tokens, Some(96));
+
+    let (_, speak) = FfiSpeakRequest {
+        request_id: Some("speak-request".to_owned()),
+        endpoint: Some("speak".to_owned()),
+        text: "hello".to_owned(),
+        language: Some("en".to_owned()),
+        speaker_audio: Some(vec![4, 5, 6]),
+        max_duration_ms: Some(2_000),
+    }
+    .into_core();
+    assert_eq!(speak.endpoint.as_ref().map(EndpointRef::id), Some("speak"));
+    assert_eq!(speak.text, "hello");
+    assert_eq!(speak.language.as_deref(), Some("en"));
+    assert_eq!(speak.speaker_audio, Some(vec![4, 5, 6]));
+    assert_eq!(speak.max_duration_ms, Some(2_000));
 }
 
 #[test]

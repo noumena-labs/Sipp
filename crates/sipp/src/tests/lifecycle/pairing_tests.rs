@@ -11,12 +11,19 @@ fn model(id: &str, name: &str, vision_types: &[&str]) -> ClassifiedAsset {
         asset_id: id.to_string(),
         name: name.to_string(),
         inspection: AssetInspection {
-            version: 1,
+            version: AssetInspection::VERSION,
             role: AssetRole::Model,
             architecture: Some("test".to_string()),
+            trained_context_size: Some(4096),
             vision_capable: !vision_types.is_empty(),
+            audio_capable: false,
+            audio_generation_capable: false,
             compatible_vision_projector_types: strings(vision_types),
+            compatible_audio_projector_types: Vec::new(),
+            compatible_audio_generation_projector_types: Vec::new(),
             provided_vision_projector_type: None,
+            provided_audio_projector_type: None,
+            provided_audio_generation_projector_type: None,
         },
     }
 }
@@ -26,12 +33,41 @@ fn projector(id: &str, name: &str, projector_type: Option<&str>) -> ClassifiedAs
         asset_id: id.to_string(),
         name: name.to_string(),
         inspection: AssetInspection {
-            version: 1,
+            version: AssetInspection::VERSION,
             role: AssetRole::Projector,
             architecture: Some("clip".to_string()),
+            trained_context_size: None,
             vision_capable: false,
+            audio_capable: false,
+            audio_generation_capable: false,
             compatible_vision_projector_types: Vec::new(),
+            compatible_audio_projector_types: Vec::new(),
+            compatible_audio_generation_projector_types: Vec::new(),
             provided_vision_projector_type: projector_type.map(str::to_string),
+            provided_audio_projector_type: None,
+            provided_audio_generation_projector_type: None,
+        },
+    }
+}
+
+fn audio_projector(id: &str, vision_capable: bool, projector_type: &str) -> ClassifiedAsset {
+    ClassifiedAsset {
+        asset_id: id.to_string(),
+        name: format!("{id}.gguf"),
+        inspection: AssetInspection {
+            version: AssetInspection::VERSION,
+            role: AssetRole::Projector,
+            architecture: Some("clip".to_string()),
+            trained_context_size: None,
+            vision_capable,
+            audio_capable: true,
+            audio_generation_capable: false,
+            compatible_vision_projector_types: Vec::new(),
+            compatible_audio_projector_types: Vec::new(),
+            compatible_audio_generation_projector_types: Vec::new(),
+            provided_vision_projector_type: vision_capable.then(|| "combined".to_string()),
+            provided_audio_projector_type: Some(projector_type.to_string()),
+            provided_audio_generation_projector_type: None,
         },
     }
 }
@@ -110,4 +146,70 @@ fn rejects_shards_with_conflicting_projector_types() {
     let error = PairingResolver::resolve(&[first, second]).expect_err("source error");
 
     assert!(matches!(error, ModelError::InvalidModelSource(_)));
+}
+
+#[test]
+fn derives_audio_and_multimodal_from_projector_encoders() {
+    let base = model("asset-model", "base.gguf", &[]);
+    let audio =
+        PairingResolver::resolve(&[base.clone(), audio_projector("asset-audio", false, "audio")])
+            .expect("audio plan");
+    assert_eq!(audio.modality, ModelModality::Audio);
+    assert_eq!(audio.status, ModelStatus::Ready);
+
+    let multimodal =
+        PairingResolver::resolve(&[base, audio_projector("asset-combined", true, "audio")])
+            .expect("multimodal plan");
+    assert_eq!(multimodal.modality, ModelModality::Multimodal);
+    assert_eq!(multimodal.status, ModelStatus::Ready);
+}
+
+#[test]
+fn audio_model_requires_a_matching_audio_projector_type() {
+    let mut base = model("asset-model", "base.gguf", &[]);
+    base.inspection.audio_capable = true;
+    base.inspection.compatible_audio_projector_types = vec!["qwen3a".to_string()];
+
+    let unresolved = PairingResolver::resolve(std::slice::from_ref(&base)).expect("base plan");
+    assert_eq!(unresolved.modality, ModelModality::Audio);
+    assert_eq!(unresolved.status, ModelStatus::NeedsProjector);
+    assert_eq!(unresolved.compatible_audio_projector_types, vec!["qwen3a"]);
+
+    let resolved = PairingResolver::resolve(&[
+        base.clone(),
+        audio_projector("asset-audio", false, "qwen3a"),
+    ])
+    .expect("compatible plan");
+    assert_eq!(resolved.modality, ModelModality::Audio);
+    assert_eq!(resolved.status, ModelStatus::Ready);
+
+    let error = PairingResolver::resolve(&[base, audio_projector("asset-audio", false, "lfm2a")])
+        .expect_err("incompatible audio projector");
+    assert!(matches!(error, ModelError::InvalidModelPairing(_)));
+}
+
+#[test]
+fn qwen3_tts_pairing_requires_speaker_and_generation_projector_types() {
+    let mut base = model("asset-model", "Qwen3-TTS.gguf", &[]);
+    base.inspection.architecture = Some("qwen3tts".to_string());
+    base.inspection.audio_capable = true;
+    base.inspection.audio_generation_capable = true;
+    base.inspection.compatible_audio_projector_types = vec!["qwen3tts_spkenc".to_string()];
+    base.inspection.compatible_audio_generation_projector_types = vec!["qwen3tts_gen".to_string()];
+
+    let mut mmproj = audio_projector("asset-projector", false, "qwen3tts_spkenc");
+    mmproj.inspection.audio_generation_capable = true;
+    mmproj.inspection.provided_audio_generation_projector_type = Some("qwen3tts_gen".to_string());
+
+    let plan = PairingResolver::resolve(&[base.clone(), mmproj]).expect("Qwen3-TTS pairing");
+    assert_eq!(plan.modality, ModelModality::Audio);
+    assert_eq!(plan.status, ModelStatus::Ready);
+    assert_eq!(plan.projector_asset_id, some_string("asset-projector"));
+
+    let error = PairingResolver::resolve(&[
+        base,
+        audio_projector("asset-projector", false, "qwen3tts_spkenc"),
+    ])
+    .expect_err("Qwen3-TTS projector without generation role");
+    assert!(matches!(error, ModelError::InvalidModelPairing(_)));
 }

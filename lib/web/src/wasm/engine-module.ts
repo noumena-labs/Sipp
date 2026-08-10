@@ -1,8 +1,6 @@
 export interface EmscriptenFs {
   analyzePath(path: string): { exists: boolean };
   mkdir(path: string): void;
-  writeFile(path: string, data: Uint8Array): void;
-  unlink(path: string): void;
   mount(type: any, opts: any, mountpoint: string): void;
   unmount(mountpoint: string): void;
 }

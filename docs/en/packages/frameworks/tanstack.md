@@ -25,7 +25,7 @@ real deployment, keep the key in your server environment or secret manager.
 ```ts
 // src/server/sipp.ts
 import { createServerFn } from '@tanstack/react-start';
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { Endpoint, SippClient } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -39,7 +39,7 @@ export const querySipp = createServerFn({ method: 'POST' })
   .inputValidator((data: { prompt: string }) => data)
   .handler(async ({ data }) => {
     const client = new SippClient();
-    const endpoint = await client.add('provider', EndpointDescriptor.provider({
+    const endpoint = await client.add('provider', Endpoint.provider({
       provider: 'openai',
       model: requiredEnv('OPENAI_MODEL'),
       apiKey: requiredEnv('OPENAI_API_KEY'),
@@ -75,7 +75,7 @@ then execute the request against a direct provider endpoint.
 // src/routes/api/sipp/query.ts
 import { createFileRoute } from '@tanstack/react-router';
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -98,7 +98,7 @@ export const Route = createFileRoute('/api/sipp/query')({
         try {
           const decoded = decodeGatewayQueryBody(await request.json());
           const client = new SippClient();
-          const endpoint = await client.add('provider', EndpointDescriptor.provider({
+          const endpoint = await client.add('provider', Endpoint.provider({
             provider: 'openai',
             model: decoded.target,
             apiKey: requiredEnv('OPENAI_API_KEY'),
@@ -203,7 +203,7 @@ same-origin server routes.
 
 ```ts
 import { useState } from 'react';
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+import { Endpoint, SippClient } from '@sipphq/sipp';
 
 export function LocalAnswer(): JSX.Element {
   const [text, setText] = useState('');
@@ -216,7 +216,7 @@ export function LocalAnswer(): JSX.Element {
       ]);
       const endpoint = await client.add(
         'browser-local',
-        EndpointDescriptor.local(model.id)
+        Endpoint.local(model)
       );
       const response = await client.query(prompt, {
         endpoint,
@@ -247,7 +247,7 @@ gateway profile to the browser client.
 
 ```ts
 import { useState } from 'react';
-import { EndpointDescriptor, SippClient, type EndpointRef } from '@sipphq/sipp';
+import { Endpoint, SippClient, type EndpointRef } from '@sipphq/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
@@ -263,11 +263,11 @@ export function HybridAnswer(): JSX.Element {
       ]);
       const localEndpoint = await client.add(
         'browser-local',
-        EndpointDescriptor.local(model.id)
+        Endpoint.local(model)
       );
       const providerRouteEndpoint = await client.add(
         'app-route',
-        EndpointDescriptor.gateway({
+        Endpoint.gateway({
           target: 'gpt-5-mini',
           baseUrl: window.location.origin,
           routes: { query: '/api/sipp/query' },
@@ -303,7 +303,7 @@ export function HybridAnswer(): JSX.Element {
 }
 ```
 
-Browser gateway descriptors need an absolute `http` or `https` `baseUrl`.
+Browser gateway endpoints need an absolute `http` or `https` `baseUrl`.
 Same-origin TanStack routes should use `window.location.origin` and route
 overrides such as `routes: { query: '/api/sipp/query' }`. The `target`
 value becomes the provider model in the server route above.

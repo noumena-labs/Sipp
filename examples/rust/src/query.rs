@@ -7,7 +7,7 @@ use sipp::engine::{
     NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, SamplingRuntimeConfig,
     SchedulerRuntimeConfig,
 };
-use sipp::{LocalDescriptor, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions};
+use sipp::{endpoint, LocalTextOptions, SippClient, SippQueryRequest, SippTextOptions};
 
 fn main() -> support::ExampleResult<()> {
     block_on(async {
@@ -20,9 +20,8 @@ fn main() -> support::ExampleResult<()> {
         // GGUF model and lets requests use it as the default endpoint.
         let mut client = SippClient::new()?;
         let model = client.models().add([args.model_path]).await?;
-        let mut descriptor = LocalDescriptor::new(model.id);
-        descriptor.runtime = runtime_config(false);
-        client.add("default", descriptor).await?;
+        let local = endpoint::Local::new(&model).runtime(runtime_config(false));
+        client.add("default", local).await?;
 
         // `query` is the simplest text-generation call: one prompt in, one
         // final text response out.

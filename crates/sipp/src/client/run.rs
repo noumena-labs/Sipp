@@ -4,13 +4,16 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use crate::core::TokenBatch;
-use crate::engine::EngineTokenBatches;
+use crate::engine::{EngineCancellation, EngineTokenBatches};
 use futures::future::{select, Either};
+#[cfg(not(target_family = "wasm"))]
 use futures_channel::mpsc;
 use futures_channel::oneshot;
 use futures_core::Stream;
 
-use crate::client::{SippEmbeddingResponse, SippError, SippResult, SippTextResponse};
+use crate::client::{
+    SippAudioResponse, SippEmbeddingResponse, SippError, SippResult, SippTextResponse,
+};
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -31,6 +34,10 @@ pub type SippTextResponseFuture =
 /// Final embedding response future.
 pub type SippEmbeddingResponseFuture =
     Pin<Box<dyn Future<Output = SippResult<SippEmbeddingResponse>> + Send>>;
+
+/// Final synthesized-audio response future.
+pub type SippAudioResponseFuture =
+    Pin<Box<dyn Future<Output = SippResult<SippAudioResponse>> + Send>>;
 
 /// Stable reason attached to explicit request cancellation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,11 +68,15 @@ impl SippCancellationReason {
 #[derive(Clone)]
 pub struct SippCancellationHandle {
     sender: Arc<Mutex<Option<oneshot::Sender<SippCancellationReason>>>>,
+    engine: Option<EngineCancellation>,
 }
 
 impl SippCancellationHandle {
     /// Cancel the run if it has not already completed or been cancelled.
     pub fn cancel(&self, reason: SippCancellationReason) {
+        if let Some(engine) = &self.engine {
+            engine.cancel();
+        }
         let Ok(mut sender) = self.sender.lock() else {
             return;
         };
@@ -75,20 +86,60 @@ impl SippCancellationHandle {
     }
 }
 
+struct CancellableResponse<T> {
+    response: Pin<Box<dyn Future<Output = SippResult<T>> + Send>>,
+    cancellation: SippCancellationHandle,
+}
+
+impl<T> CancellableResponse<T>
+where
+    T: Send + 'static,
+{
+    fn new(
+        response: Pin<Box<dyn Future<Output = SippResult<T>> + Send>>,
+        engine: Option<EngineCancellation>,
+    ) -> Self {
+        let (sender, receiver) = oneshot::channel();
+        let cancellation = SippCancellationHandle {
+            sender: Arc::new(Mutex::new(Some(sender))),
+            engine,
+        };
+        let response = Box::pin(async move {
+            match select(receiver, response).await {
+                Either::Left((Ok(reason), response)) => {
+                    drop(response);
+                    Err(SippError::Cancelled { reason })
+                }
+                Either::Left((Err(_), response)) => response.await,
+                Either::Right((result, _)) => result,
+            }
+        });
+        Self {
+            response,
+            cancellation,
+        }
+    }
+}
+
+impl<T> Future for CancellableResponse<T> {
+    type Output = SippResult<T>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.response.as_mut().poll(cx)
+    }
+}
+
 /// Awaitable text run plus token batches owner.
 pub struct SippTextRun {
-    response: SippTextResponseFuture,
+    response: CancellableResponse<SippTextResponse>,
     tokens: SippTokenBatches,
-    cancellation: SippCancellationHandle,
 }
 
 impl SippTextRun {
     pub(crate) fn new(response: SippTextResponseFuture, tokens: SippTokenBatches) -> Self {
-        let (response, cancellation) = cancellable_response(response);
         Self {
-            response,
+            response: CancellableResponse::new(response, None),
             tokens,
-            cancellation,
         }
     }
 
@@ -116,17 +167,17 @@ impl SippTextRun {
 
     /// Return a handle that can cancel this run from another task.
     pub fn cancellation_handle(&self) -> SippCancellationHandle {
-        self.cancellation.clone()
+        self.response.cancellation.clone()
     }
 
     /// Cancel this run.
     pub fn cancel(&self, reason: SippCancellationReason) {
-        self.cancellation.cancel(reason);
+        self.response.cancellation.cancel(reason);
     }
 
     /// Split the token batches from the final-response future.
     pub fn into_parts(self) -> (SippTokenBatches, SippTextResponseFuture) {
-        (self.tokens, self.response)
+        (self.tokens, self.response.response)
     }
 
     /// Split the run while retaining an explicit cancellation handle.
@@ -137,7 +188,11 @@ impl SippTextRun {
         SippTextResponseFuture,
         SippCancellationHandle,
     ) {
-        (self.tokens, self.response, self.cancellation)
+        (
+            self.tokens,
+            self.response.response,
+            self.response.cancellation,
+        )
     }
 }
 
@@ -145,22 +200,19 @@ impl Future for SippTextRun {
     type Output = SippResult<SippTextResponse>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.response.as_mut().poll(cx)
+        Pin::new(&mut self.response).poll(cx)
     }
 }
 
 /// Awaitable embedding run.
 pub struct SippEmbeddingRun {
-    response: SippEmbeddingResponseFuture,
-    cancellation: SippCancellationHandle,
+    response: CancellableResponse<SippEmbeddingResponse>,
 }
 
 impl SippEmbeddingRun {
     pub(crate) fn new(response: SippEmbeddingResponseFuture) -> Self {
-        let (response, cancellation) = cancellable_response(response);
         Self {
-            response,
-            cancellation,
+            response: CancellableResponse::new(response, None),
         }
     }
 
@@ -175,22 +227,22 @@ impl SippEmbeddingRun {
 
     /// Return a handle that can cancel this run from another task.
     pub fn cancellation_handle(&self) -> SippCancellationHandle {
-        self.cancellation.clone()
+        self.response.cancellation.clone()
     }
 
     /// Cancel this run.
     pub fn cancel(&self, reason: SippCancellationReason) {
-        self.cancellation.cancel(reason);
+        self.response.cancellation.cancel(reason);
     }
 
     /// Convert the run into its final-response future.
     pub fn into_response(self) -> SippEmbeddingResponseFuture {
-        self.response
+        self.response.response
     }
 
     /// Split the response future from its cancellation handle.
     pub fn into_parts(self) -> (SippEmbeddingResponseFuture, SippCancellationHandle) {
-        (self.response, self.cancellation)
+        (self.response.response, self.response.cancellation)
     }
 }
 
@@ -198,7 +250,66 @@ impl Future for SippEmbeddingRun {
     type Output = SippResult<SippEmbeddingResponse>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.response.as_mut().poll(cx)
+        Pin::new(&mut self.response).poll(cx)
+    }
+}
+
+/// Awaitable synthesized-audio run.
+pub struct SippAudioRun {
+    response: CancellableResponse<SippAudioResponse>,
+}
+
+impl SippAudioRun {
+    fn new(response: SippAudioResponseFuture) -> Self {
+        Self {
+            response: CancellableResponse::new(response, None),
+        }
+    }
+
+    pub(crate) fn new_with_engine_cancellation(
+        response: SippAudioResponseFuture,
+        cancellation: EngineCancellation,
+    ) -> Self {
+        Self {
+            response: CancellableResponse::new(response, Some(cancellation)),
+        }
+    }
+
+    /// Create an audio run from a response future.
+    pub fn from_response(response: SippAudioResponseFuture) -> Self {
+        Self::new(response)
+    }
+
+    pub(crate) fn ready_err(error: SippError) -> Self {
+        Self::new(Box::pin(async move { Err(error) }))
+    }
+
+    /// Return a handle that can cancel this run from another task.
+    pub fn cancellation_handle(&self) -> SippCancellationHandle {
+        self.response.cancellation.clone()
+    }
+
+    /// Cancel this run.
+    pub fn cancel(&self, reason: SippCancellationReason) {
+        self.response.cancellation.cancel(reason);
+    }
+
+    /// Convert the run into its final-response future.
+    pub fn into_response(self) -> SippAudioResponseFuture {
+        self.response.response
+    }
+
+    /// Split the response future from its cancellation handle.
+    pub fn into_parts(self) -> (SippAudioResponseFuture, SippCancellationHandle) {
+        (self.response.response, self.response.cancellation)
+    }
+}
+
+impl Future for SippAudioRun {
+    type Output = SippResult<SippAudioResponse>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.response).poll(cx)
     }
 }
 
@@ -210,6 +321,7 @@ pub struct SippTokenBatches {
 enum TokenBatchSource {
     Empty,
     Local(EngineTokenBatches),
+    #[cfg(not(target_family = "wasm"))]
     Receiver(mpsc::UnboundedReceiver<TokenBatch>),
     External(Pin<Box<dyn Stream<Item = TokenBatch> + Send>>),
 }
@@ -230,6 +342,7 @@ impl SippTokenBatches {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn from_receiver(receiver: mpsc::UnboundedReceiver<TokenBatch>) -> Self {
         Self {
             inner: TokenBatchSource::Receiver(receiver),
@@ -251,34 +364,9 @@ impl Stream for SippTokenBatches {
         match &mut self.inner {
             TokenBatchSource::Empty => Poll::Ready(None),
             TokenBatchSource::Local(stream) => Pin::new(stream).poll_next(cx),
+            #[cfg(not(target_family = "wasm"))]
             TokenBatchSource::Receiver(receiver) => Pin::new(receiver).poll_next(cx),
             TokenBatchSource::External(stream) => stream.as_mut().poll_next(cx),
         }
     }
-}
-
-fn cancellable_response<T>(
-    response: Pin<Box<dyn Future<Output = SippResult<T>> + Send>>,
-) -> (
-    Pin<Box<dyn Future<Output = SippResult<T>> + Send>>,
-    SippCancellationHandle,
-)
-where
-    T: Send + 'static,
-{
-    let (sender, receiver) = oneshot::channel();
-    let cancellation = SippCancellationHandle {
-        sender: Arc::new(Mutex::new(Some(sender))),
-    };
-    let response = Box::pin(async move {
-        match select(response, receiver).await {
-            Either::Left((result, _)) => result,
-            Either::Right((Ok(reason), response)) => {
-                drop(response);
-                Err(SippError::Cancelled { reason })
-            }
-            Either::Right((Err(_), response)) => response.await,
-        }
-    });
-    (response, cancellation)
 }

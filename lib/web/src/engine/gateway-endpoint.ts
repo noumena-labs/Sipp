@@ -1061,8 +1061,6 @@ function tokenBatch(
     framesSent: state.stats.framesSent + 1,
     bytesSent: state.stats.bytesSent + byteCount,
     batchesSent: state.stats.batchesSent + 1,
-    drainMs: state.stats.drainMs,
-    drainCalls: state.stats.drainCalls,
   };
   const batch: TokenBatch = {
     requestId: state.requestId,
@@ -1210,7 +1208,5 @@ function emptyTokenEmissionStats(): TokenEmissionStats {
     framesSent: 0,
     bytesSent: 0,
     batchesSent: 0,
-    drainMs: 0,
-    drainCalls: 0,
   };
 }

@@ -67,7 +67,7 @@ const run = client.chat({
 const model = await client.models.add(['/models/t5-small-f16.gguf']);
 const endpoint = await client.add(
   't5-local',
-  EndpointDescriptor.local(model.id)
+  Endpoint.local(model)
 );
 
 const run = client.query({
@@ -119,9 +119,9 @@ const embedding = (await run.response).values;
 ### 网关客户端示例
 
 ```ts
-import { EndpointDescriptor } from '@sipphq/sipp-server';
+import { Endpoint } from '@sipphq/sipp-server';
 
-const endpoint = await client.add('gateway-openai', EndpointDescriptor.gateway({
+const endpoint = await client.add('gateway-openai', Endpoint.gateway({
   target: 'openai-chat',
   baseUrl: process.env.SIPP_GATEWAY_URL!,
   authentication: {

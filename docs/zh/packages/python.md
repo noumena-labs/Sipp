@@ -41,7 +41,7 @@ from sipp import (
     SippClient,
     SippTextOptions,
     ContextRuntimeConfig,
-    EndpointDescriptor,
+    Endpoint,
     LocalTextOptions,
     NativeRuntimeConfig,
     ObservabilityRuntimeConfig,
@@ -53,7 +53,7 @@ client = SippClient()
 model = client.models.add([sys.argv[1]])
 endpoint = client.add(
     "default",
-    EndpointDescriptor.local(
+    Endpoint.local(
         model.id,
         runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
@@ -97,13 +97,13 @@ Python 应使用 arm64 Wheel。
 ```python
 import os
 
-from sipp import ChatMessage, SippClient, SippTextOptions, EndpointDescriptor
+from sipp import ChatMessage, SippClient, SippTextOptions, Endpoint
 
 
 client = SippClient()
 endpoint = client.add(
     "gateway",
-    EndpointDescriptor.gateway(
+    Endpoint.gateway(
         os.environ["SIPP_GATEWAY_TARGET"],
         os.environ["SIPP_GATEWAY_URL"],
         authentication_kind="bearer",

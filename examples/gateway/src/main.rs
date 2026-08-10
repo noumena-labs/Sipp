@@ -16,11 +16,11 @@ use bytes::Bytes;
 use clap::Parser;
 use futures_util::future::{select, Either};
 use futures_util::{stream, Stream, StreamExt};
+use sipp::core::Operation;
 use sipp::engine::{NativeRuntimeConfig, PoolingType};
-use sipp::gateway_core::{GatewayStreamEvent, Operation};
+use sipp::gateway_core::GatewayStreamEvent;
 use sipp::{
-    EndpointRef, LocalDescriptor, SippClient, SippRequestContext, SippTextResponseFuture,
-    SippTokenBatches,
+    endpoint, EndpointRef, SippClient, SippRequestContext, SippTextResponseFuture, SippTokenBatches,
 };
 use sipp_gateway::{request_id, GatewayCodec, GatewayHttpError, ProtocolCodec};
 
@@ -43,18 +43,17 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let mut client = SippClient::new()?;
     let model = client.models().add([cli.model]).await?;
-    let descriptor = LocalDescriptor::new(model.id);
+    let local = endpoint::Local::new(&model);
     let text_endpoint = client
-        .add("local-text", descriptor.clone())
+        .add("local-text", local.clone())
         .await
         .context("failed to load local text model")?;
     let mut embedding_runtime = NativeRuntimeConfig::default();
     embedding_runtime.context.embeddings = Some(true);
     embedding_runtime.context.pooling = Some(PoolingType::Mean);
-    let mut embedding_descriptor = descriptor;
-    embedding_descriptor.runtime = embedding_runtime;
+    let embedding_local = local.runtime(embedding_runtime);
     let embedding_endpoint = client
-        .add("local-embed", embedding_descriptor)
+        .add("local-embed", embedding_local)
         .await
         .context("failed to load local embedding model")?;
 
@@ -216,10 +215,18 @@ impl AppState {
                 "target not found",
             ));
         }
-        Ok(match operation {
+        let endpoint = match operation {
             Operation::Query | Operation::Chat => self.text_endpoint.clone(),
             Operation::Embed => self.embedding_endpoint.clone(),
-        })
+            Operation::Listen | Operation::Speak => {
+                return Err(GatewayHttpError::new(
+                    StatusCode::BAD_REQUEST,
+                    "unsupported_operation",
+                    format!("{operation} is not supported by this gateway"),
+                ));
+            }
+        };
+        Ok(endpoint)
     }
 }
 

@@ -32,6 +32,14 @@ fn empty_runtime_handle_reports_safe_defaults() {
     assert!(!runtime.is_eog(0));
     assert!(!runtime.mtmd_ready());
     assert!(!runtime.mtmd_support_vision());
+    assert!(matches!(
+        runtime.mtmd_audio_sample_rate(),
+        Err(Error::RuntimeNotReady)
+    ));
+    assert!(matches!(
+        runtime.mtmd_generated_audio_sample_rate(),
+        Err(Error::RuntimeNotReady)
+    ));
 
     let limits = runtime.resolved_limits();
     assert_eq!(limits.n_ctx, 0);
@@ -47,7 +55,7 @@ fn empty_runtime_handle_reports_safe_defaults() {
 
 #[test]
 fn empty_runtime_handle_rejects_required_native_calls() {
-    let runtime = NativeRuntimeHandle::empty_for_tests();
+    let mut runtime = NativeRuntimeHandle::empty_for_tests();
 
     assert!(matches!(
         runtime.chat_template_source(),
@@ -69,6 +77,18 @@ fn empty_runtime_handle_rejects_required_native_calls() {
     assert!(piece_scratch.is_empty());
     assert!(matches!(
         runtime.apply_chat_template_json("[]", true),
+        Err(Error::RuntimeNotReady)
+    ));
+    assert!(matches!(
+        runtime.apply_asr_chat_template("en"),
+        Err(Error::RuntimeNotReady)
+    ));
+    assert!(matches!(
+        runtime.parse_asr_output("en", "transcript"),
+        Err(Error::RuntimeNotReady)
+    ));
+    assert!(matches!(
+        runtime.begin_speech("hello", Some("en"), Some(&[1]), None),
         Err(Error::RuntimeNotReady)
     ));
     assert!(matches!(

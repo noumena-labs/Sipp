@@ -11,7 +11,7 @@ import {
   type SippClient,
 } from '@noumena-labs/sipp';
 
-export type ModelCapability = 'text' | 'vision' | 'embedding';
+export type ModelCapability = 'text' | 'vision' | 'embedding' | 'asr' | 'tts';
 
 export type ModelLocation =
   | {
@@ -81,6 +81,52 @@ export async function addModel(
 // ── Registry ─────────────────────────────────────────────────────────────
 
 export const MODEL_REGISTRY: ModelRegistryEntry[] = [
+  // Speech models
+  {
+    id: 'qwen3-asr-0.6b',
+    name: 'Qwen3 ASR 0.6B',
+    publisher: 'Qwen',
+    parameterCount: '0.6B',
+    capability: 'asr',
+    variants: [
+      {
+        quant: 'Q8_0',
+        sizeBytes: 804_749_248,
+        projectorSizeBytes: 214_392_480,
+        location: {
+          kind: 'urls',
+          modelUrls: [
+            'https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/Qwen3-ASR-0.6B-Q8_0.gguf',
+          ],
+          projectorUrl:
+            'https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf',
+        },
+      },
+    ],
+  },
+  {
+    id: 'qwen3-tts-1.7b-base',
+    name: 'Qwen3 TTS 1.7B Base',
+    publisher: 'Qwen',
+    parameterCount: '1.7B',
+    capability: 'tts',
+    variants: [
+      {
+        quant: 'Q4_K_M + Q8_0 projector',
+        sizeBytes: 1_035_965_280,
+        projectorSizeBytes: 446_422_912,
+        location: {
+          kind: 'urls',
+          modelUrls: [
+            'https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M.gguf',
+          ],
+          projectorUrl:
+            'https://huggingface.co/ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF/resolve/main/mmproj-Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf',
+        },
+      },
+    ],
+  },
+
   // ── Text models ──
   {
     id: 'qwen2.5-0.5b-instruct',
@@ -312,6 +358,14 @@ export function isVisionModel(model: ModelRegistryEntry): boolean {
 
 export function isEmbeddingModel(model: ModelRegistryEntry): boolean {
   return model.capability === 'embedding';
+}
+
+export function isSpeechModel(model: ModelRegistryEntry): boolean {
+  return model.capability === 'asr' || model.capability === 'tts';
+}
+
+export function getSpeechModels(): ModelRegistryEntry[] {
+  return MODEL_REGISTRY.filter((model) => isSpeechModel(model));
 }
 
 export function getVisionModels(): ModelRegistryEntry[] {

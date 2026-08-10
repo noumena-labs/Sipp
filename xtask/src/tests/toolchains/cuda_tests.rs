@@ -82,6 +82,7 @@ fn cuda_architectures_defaults_when_blank() {
 fn cuda_architectures_falls_back_to_config_file() {
     let temp = TempDir::new("cuda-arch-config");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
+    let _env = EnvGuard::new(&[("SIPP_CUDA_ARCHITECTURES", None)]);
 
     // Write a config file
     write_persisted_architectures(&ctx, "50-real;60-real").unwrap();
@@ -110,6 +111,7 @@ fn cuda_architectures_env_var_beats_config_file() {
 fn cuda_architecture_default_beats_empty_config_file() {
     let temp = TempDir::new("cuda-arch-empty-config");
     let ctx = BuildContext::from_workspace_root_for_test(temp.path());
+    let _env = EnvGuard::new(&[("SIPP_CUDA_ARCHITECTURES", None)]);
 
     // Write an empty config file (triggers read, returns None, falls through)
     let config_path = cuda_config_path(&ctx);
