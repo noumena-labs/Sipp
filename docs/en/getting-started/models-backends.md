@@ -7,9 +7,9 @@ vision chat workflows need both a model GGUF and a projector GGUF.
 ## Model Store
 
 Every client owns one model store. `models.add` returns a `ManagedModel`; pass
-its `id` to a local endpoint descriptor. Native local paths are referenced in
+that value to `Endpoint.local`. Native local paths are referenced in
 place, remote sources are stored under the client storage root, and browser
-sources are persisted in OPFS. Endpoint descriptors select models and contain
+sources are persisted in OPFS. Endpoints select models and contain
 only load-time options.
 
 Native clients store models under `.sipp-models` by default. Browser clients

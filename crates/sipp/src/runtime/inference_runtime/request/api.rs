@@ -33,7 +33,7 @@ pub(super) fn request_tokenization_flags_for_tests(tokenization: &str) -> Option
 /////////////////////////////////////////////////////////////////////////////////
 
 const N_TOKENS_PREDICT_POSITIVE: &str = "n_tokens_predict must be positive";
-const IMAGE_BUFFERS_REQUIRED: &str = "image_buffers must not be empty";
+const MEDIA_BUFFERS_REQUIRED: &str = "media_buffers must not be empty";
 const REQUEST_ID_OVERFLOW: &str = "request id overflow";
 const FAILED_TO_ENQUEUE_REQUEST: &str = "failed to enqueue request";
 
@@ -78,7 +78,7 @@ impl InferenceRuntime {
         context_key: impl Into<String>,
         prompt: impl Into<String>,
         n_tokens_predict: i32,
-        image_buffers: Vec<Vec<u8>>,
+        media_buffers: Vec<Vec<u8>>,
         grammar: impl Into<String>,
         json_schema: impl Into<String>,
         stop: Vec<String>,
@@ -91,8 +91,8 @@ impl InferenceRuntime {
         if n_tokens_predict <= 0 {
             return Err(Error::InvalidRequest(N_TOKENS_PREDICT_POSITIVE));
         }
-        if image_buffers.is_empty() {
-            return Err(Error::InvalidRequest(IMAGE_BUFFERS_REQUIRED));
+        if media_buffers.is_empty() {
+            return Err(Error::InvalidRequest(MEDIA_BUFFERS_REQUIRED));
         }
         self.text_generation_slot_plan()?;
 
@@ -107,7 +107,7 @@ impl InferenceRuntime {
             emit_tokens,
             tokenization: RequestTokenization::Multimodal,
         })?;
-        request.multimodal = Some(MultimodalPayload { image_buffers });
+        request.multimodal = Some(MultimodalPayload { media_buffers });
         request.is_multimodal_turn = true;
         self.enqueue_prepared_request(request)
     }
@@ -176,7 +176,9 @@ impl InferenceRuntime {
         }))
     }
 
-    fn next_generate_request_id(&mut self) -> Result<GenerateRequestId> {
+    pub(in crate::runtime::inference_runtime) fn next_generate_request_id(
+        &mut self,
+    ) -> Result<GenerateRequestId> {
         let request_id = self.next_request_id;
         self.next_request_id = self
             .next_request_id
@@ -189,6 +191,7 @@ impl InferenceRuntime {
         &mut self,
         mut request: GenerateRequest,
     ) -> Result<GenerateRequestId> {
+        self.ensure_speech_idle()?;
         let request_id = request.id;
         request.input_tokens = clamp_usize_to_i32(request.prompt_tokens.len());
         self.total_input_tokens = self

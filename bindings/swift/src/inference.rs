@@ -14,12 +14,15 @@ use sipp::engine::{
 };
 use sipp::{
     EndpointRef as CoreEndpointRef, LocalEmbedOptions as CoreLocalEmbedOptions,
-    LocalTextOptions as CoreLocalTextOptions, SippCancellationHandle as CoreCancellationHandle,
+    LocalTextOptions as CoreLocalTextOptions, SippAudioResponse as CoreAudioResponse,
+    SippAudioResponseFuture as CoreAudioResponseFuture, SippAudioRun as CoreAudioRun,
+    SippCancellationHandle as CoreCancellationHandle,
     SippCancellationReason as CoreCancellationReason, SippChatRequest as CoreChatRequest,
     SippEmbedRequest as CoreEmbedRequest, SippEmbeddingResponse as CoreEmbeddingResponse,
     SippEmbeddingResponseFuture as CoreEmbeddingResponseFuture,
-    SippEmbeddingRun as CoreEmbeddingRun, SippQueryRequest as CoreQueryRequest,
-    SippRequestContext as CoreRequestContext, SippResponseMetadata as CoreResponseMetadata,
+    SippEmbeddingRun as CoreEmbeddingRun, SippListenRequest as CoreListenRequest,
+    SippQueryRequest as CoreQueryRequest, SippRequestContext as CoreRequestContext,
+    SippResponseMetadata as CoreResponseMetadata, SippSpeakRequest as CoreSpeakRequest,
     SippTextOptions as CoreTextOptions, SippTextResponse as CoreTextResponse,
     SippTextResponseFuture as CoreTextResponseFuture, SippTextRun as CoreTextRun,
     SippTokenBatches as CoreTokenBatches,
@@ -238,6 +241,69 @@ impl FfiEmbedRequest {
             input: self.input,
             local: self.local.into(),
             extra: Default::default(),
+        };
+        (context, request)
+    }
+}
+
+/// Speech-recognition request accepted by the internal Swift bridge.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct FfiListenRequest {
+    /// Optional application request identifier.
+    pub request_id: Option<String>,
+    /// Registered endpoint identifier, or the single compatible local endpoint.
+    pub endpoint: Option<String>,
+    /// Encoded WAV, MP3, or FLAC audio.
+    pub audio: Vec<u8>,
+    /// Optional language hint.
+    pub language: Option<String>,
+    /// Maximum number of transcript tokens to generate.
+    pub max_tokens: Option<u32>,
+}
+
+impl FfiListenRequest {
+    pub(crate) fn into_core(self) -> (CoreRequestContext, CoreListenRequest) {
+        let context = CoreRequestContext {
+            request_id: self.request_id,
+        };
+        let request = CoreListenRequest {
+            endpoint: self.endpoint.map(CoreEndpointRef::from_id),
+            audio: self.audio,
+            language: self.language,
+            max_tokens: self.max_tokens,
+        };
+        (context, request)
+    }
+}
+
+/// Speech-synthesis request accepted by the internal Swift bridge.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct FfiSpeakRequest {
+    /// Optional application request identifier.
+    pub request_id: Option<String>,
+    /// Registered endpoint identifier, or the single compatible local endpoint.
+    pub endpoint: Option<String>,
+    /// Text to synthesize.
+    pub text: String,
+    /// Optional language hint.
+    pub language: Option<String>,
+    /// Optional encoded speaker-reference audio.
+    pub speaker_audio: Option<Vec<u8>>,
+    /// Optional hard duration limit in milliseconds.
+    pub max_duration_ms: Option<u32>,
+}
+
+impl FfiSpeakRequest {
+    pub(crate) fn into_core(self) -> (CoreRequestContext, CoreSpeakRequest) {
+        let context = CoreRequestContext {
+            request_id: self.request_id,
+        };
+        let request = CoreSpeakRequest {
+            endpoint: self.endpoint.map(CoreEndpointRef::from_id),
+            text: self.text,
+            language: self.language,
+            speaker_audio: self.speaker_audio,
+            max_duration_ms: self.max_duration_ms,
         };
         (context, request)
     }
@@ -501,6 +567,36 @@ impl From<CoreEmbeddingResponse> for FfiEmbeddingResponse {
     }
 }
 
+/// Final WAV response from an internal speech-synthesis run.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct FfiAudioResponse {
+    /// Endpoint that produced the response.
+    pub endpoint: String,
+    /// Complete mono PCM16 WAV payload.
+    pub audio: Vec<u8>,
+    /// Audio sample rate in hertz.
+    pub sample_rate_hz: u32,
+    /// Audio channel count.
+    pub channels: u16,
+    /// Audio duration in milliseconds.
+    pub duration_ms: u64,
+    /// Correlation metadata.
+    pub metadata: FfiResponseMetadata,
+}
+
+impl From<CoreAudioResponse> for FfiAudioResponse {
+    fn from(value: CoreAudioResponse) -> Self {
+        Self {
+            endpoint: value.endpoint.id().to_owned(),
+            audio: value.audio,
+            sample_rate_hz: value.sample_rate_hz,
+            channels: value.channels,
+            duration_ms: value.duration_ms,
+            metadata: value.metadata.into(),
+        }
+    }
+}
+
 /// Aggregate counters attached to an emitted token batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Record)]
 pub struct FfiTokenEmissionStats {
@@ -557,6 +653,7 @@ impl From<CoreTokenBatch> for FfiTokenBatch {
 
 type SharedTextResponse = Arc<Mutex<Option<CoreTextResponseFuture>>>;
 type SharedEmbeddingResponse = Arc<Mutex<Option<CoreEmbeddingResponseFuture>>>;
+type SharedAudioResponse = Arc<Mutex<Option<CoreAudioResponseFuture>>>;
 type SharedTokenBatches = Arc<Mutex<Option<CoreTokenBatches>>>;
 
 /// Internal text run exposed to generated Swift bindings.
@@ -603,9 +700,7 @@ impl FfiTextRun {
     /// Await and consume the next token batch, or return `None` at stream end.
     pub async fn next_token(&self) -> Option<FfiTokenBatch> {
         let mut slot = self.tokens.lock().await;
-        let Some(tokens) = slot.as_mut() else {
-            return None;
-        };
+        let tokens = slot.as_mut()?;
         match tokens.next().await {
             Some(batch) => Some(batch.into()),
             None => {
@@ -636,6 +731,52 @@ impl FfiEmbeddingRun {
             response: Arc::new(Mutex::new(Some(response))),
             cancellation,
         }
+    }
+}
+
+/// Internal speech-synthesis run exposed to generated Swift bindings.
+#[derive(uniffi::Object)]
+pub struct FfiAudioRun {
+    response: SharedAudioResponse,
+    cancellation: CoreCancellationHandle,
+}
+
+impl FfiAudioRun {
+    pub(crate) fn from_core(run: CoreAudioRun) -> Self {
+        let (response, cancellation) = run.into_parts();
+        Self {
+            response: Arc::new(Mutex::new(Some(response))),
+            cancellation,
+        }
+    }
+}
+
+#[uniffi::export]
+impl FfiAudioRun {
+    /// Await and consume the run's final response future.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed inference error, or `InvalidState` after prior consumption.
+    pub async fn take_response(&self) -> Result<FfiAudioResponse, FfiError> {
+        let response = self
+            .response
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| FfiError::InvalidState {
+                message: "audio response already consumed".to_owned(),
+            })?;
+        response
+            .await
+            .map(FfiAudioResponse::from)
+            .map_err(FfiError::from)
+    }
+
+    /// Cancel the native run as an explicit caller cancellation.
+    pub fn cancel(&self) {
+        self.cancellation
+            .cancel(CoreCancellationReason::CallerCancelled);
     }
 }
 

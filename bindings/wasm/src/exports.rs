@@ -17,15 +17,16 @@ use crate::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};
 const STATUS_OK: i32 = 0;
 const STATUS_FAILURE: i32 = -1;
 const STATUS_INVALID_ARGUMENTS: i32 = -2;
+const STATUS_STALE_RUNTIME_SESSION: i32 = -3;
 const COMPLETED_REQUEST_STATUS_UNKNOWN: i32 = 4;
 const MAX_EXACT_INTEGER: f64 = 9_007_199_254_740_991.0;
 const LLAMA_CACHE_DIR: &str = "/tmp/sipp-llama-cache";
 
 thread_local! {
-    static CURRENT_ENGINE: RefCell<Option<Box<BrowserEngine>>> = RefCell::new(None);
-    static LAST_ENGINE_ERROR: RefCell<String> = RefCell::new(String::new());
-    static MEDIA_MARKER_CACHE: RefCell<Option<CString>> = RefCell::new(None);
-    static CHAT_TEMPLATE_CACHE: RefCell<Option<CString>> = RefCell::new(None);
+    static CURRENT_ENGINE: RefCell<Option<Box<BrowserEngine>>> = const { RefCell::new(None) };
+    static LAST_ENGINE_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
+    static MEDIA_MARKER_CACHE: RefCell<Option<CString>> = const { RefCell::new(None) };
+    static CHAT_TEMPLATE_CACHE: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
 
 #[no_mangle]
@@ -110,11 +111,13 @@ pub unsafe extern "C" fn CE_GgufSplitStream(
             source_bytes,
             &output_prefix,
             shard_max_bytes,
-            user_data,
-            read_at,
-            open_shard,
-            write_shard,
-            close_shard,
+            crate::ingest::GgufSplitCallbacks {
+                user_data,
+                read_at,
+                open_shard,
+                write_shard,
+                close_shard,
+            },
         )
     })
 }
@@ -202,11 +205,6 @@ pub extern "C" fn CE_ModelServiceList(service: usize) -> *mut c_char {
 }
 
 #[no_mangle]
-pub extern "C" fn CE_ModelServiceCurrent(service: usize) -> *mut c_char {
-    owned_string(crate::lifecycle::model_service_current_json(service))
-}
-
-#[no_mangle]
 pub extern "C" fn CE_ModelServiceManifest(service: usize) -> *mut c_char {
     owned_string(crate::lifecycle::model_service_manifest_json(service))
 }
@@ -291,32 +289,17 @@ pub unsafe extern "C" fn CE_ModelServiceCommitLoad(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn CE_ModelServiceAbortLoad(
-    service: usize,
-    error_json: *const c_char,
-) -> *mut c_char {
-    owned_string(crate::lifecycle::model_service_abort_load_json(
-        service,
-        &optional_cstr(error_json),
-    ))
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn CE_ModelServiceRemove(
     service: usize,
-    model_id: *const c_char,
+    request_json: *const c_char,
 ) -> *mut c_char {
-    let Some(model_id) = required_cstr(model_id) else {
-        return owned_json_error("INVALID_MODEL_SOURCE", "model id is missing");
+    let Some(request_json) = required_cstr(request_json) else {
+        return owned_json_error("INVALID_MODEL_SOURCE", "remove request JSON is missing");
     };
     owned_string(crate::lifecycle::model_service_remove_json(
-        service, &model_id,
+        service,
+        &request_json,
     ))
-}
-
-#[no_mangle]
-pub extern "C" fn CE_ModelServiceUnload(service: usize) -> *mut c_char {
-    owned_string(crate::lifecycle::model_service_unload_json(service))
 }
 
 #[no_mangle]
@@ -354,20 +337,34 @@ pub unsafe extern "C" fn CE_ModelServiceRecordEvent(
 pub unsafe extern "C" fn CE_Init(
     model_path: *const c_char,
     runtime_config_json: *const c_char,
+    session_descriptor_json: *const c_char,
 ) -> i32 {
-    let (Some(model_path), Some(runtime_config_json)) = (
+    let (Some(model_path), Some(runtime_config_json), Some(session_descriptor_json)) = (
         required_cstr(model_path),
         required_cstr(runtime_config_json),
+        required_cstr(session_descriptor_json),
     ) else {
         set_last_engine_error("engine init received a null string");
         return STATUS_INVALID_ARGUMENTS;
+    };
+
+    let activation = match BrowserEngine::prepare_load(
+        &model_path,
+        &runtime_config_json,
+        &session_descriptor_json,
+    ) {
+        Ok(activation) => activation,
+        Err(error) => {
+            set_last_engine_error(error);
+            return STATUS_INVALID_ARGUMENTS;
+        }
     };
 
     close_current_engine();
     ensure_llama_cache_env();
 
     let mut engine = Box::new(BrowserEngine::create());
-    let status = engine.load(&model_path, &runtime_config_json);
+    let status = engine.load(activation);
     if status != STATUS_OK {
         let message = if engine.last_error().is_empty() {
             "Rust browser engine returned failure during load".to_string()
@@ -413,6 +410,22 @@ pub extern "C" fn CE_GetBackendObservabilityJson() -> *mut c_char {
 }
 
 #[no_mangle]
+pub extern "C" fn CE_GetRuntimeSessionJson() -> *mut c_char {
+    let session = with_current_engine(None, |engine| Some(engine.runtime_session_json()));
+    match session {
+        Some(Ok(session)) => owned_string(session),
+        Some(Err(error)) => {
+            set_last_engine_error(error);
+            ptr::null_mut()
+        }
+        None => {
+            set_last_engine_error("browser runtime session is not loaded");
+            ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn CE_GetMediaMarker() -> *const c_char {
     with_current_engine(ptr::null(), |engine| {
         cache_c_string(&MEDIA_MARKER_CACHE, engine.media_marker())
@@ -454,6 +467,7 @@ pub extern "C" fn CE_ProbeChatBoundaryInfo() -> *mut c_char {
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_StartTextRequest(
+    generation: u32,
     context_key: *const c_char,
     prompt: *const c_char,
     n_tokens: i32,
@@ -470,7 +484,7 @@ pub unsafe extern "C" fn CE_StartTextRequest(
     let grammar = optional_cstr(grammar);
     let stop_json = optional_cstr(stop_json);
     let sampling_json = optional_cstr(sampling_json);
-    with_current_engine_mut(0, |engine| {
+    with_session_engine_mut(generation, 0, |engine| {
         let request_id = engine.start_text_request(
             &context_key,
             &prompt,
@@ -489,6 +503,7 @@ pub unsafe extern "C" fn CE_StartTextRequest(
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_StartMediaRequest(
+    generation: u32,
     context_key: *const c_char,
     prompt: *const c_char,
     n_tokens: i32,
@@ -512,7 +527,7 @@ pub unsafe extern "C" fn CE_StartMediaRequest(
     let grammar = optional_cstr(grammar);
     let stop_json = optional_cstr(stop_json);
     let sampling_json = optional_cstr(sampling_json);
-    with_current_engine_mut(0, |engine| {
+    with_session_engine_mut(generation, 0, |engine| {
         let request_id = engine.start_media_request(
             &context_key,
             &prompt,
@@ -535,6 +550,7 @@ pub unsafe extern "C" fn CE_StartMediaRequest(
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_StartChatRequest(
+    generation: u32,
     context_key: *const c_char,
     messages_json: *const c_char,
     n_tokens: i32,
@@ -558,7 +574,7 @@ pub unsafe extern "C" fn CE_StartChatRequest(
     let grammar = optional_cstr(grammar);
     let stop_json = optional_cstr(stop_json);
     let sampling_json = optional_cstr(sampling_json);
-    with_current_engine_mut(0, |engine| {
+    with_session_engine_mut(generation, 0, |engine| {
         let request_id = engine.start_chat_request(
             &context_key,
             &messages_json,
@@ -581,6 +597,7 @@ pub unsafe extern "C" fn CE_StartChatRequest(
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_StartEmbeddingRequest(
+    generation: u32,
     context_key: *const c_char,
     input: *const c_char,
     normalize: i32,
@@ -590,7 +607,7 @@ pub unsafe extern "C" fn CE_StartEmbeddingRequest(
     }
     let context_key = optional_cstr(context_key);
     let input = optional_cstr(input);
-    with_current_engine_mut(0, |engine| {
+    with_session_engine_mut(generation, 0, |engine| {
         let request_id = engine.start_embedding_request(&context_key, &input, normalize);
         sync_start_request_error(engine, request_id);
         request_id
@@ -598,11 +615,73 @@ pub unsafe extern "C" fn CE_StartEmbeddingRequest(
 }
 
 #[no_mangle]
-pub extern "C" fn CE_CancelRequest(request_id: u32) -> i32 {
+pub unsafe extern "C" fn CE_StartListenRequest(
+    generation: u32,
+    audio: *const u8,
+    audio_len: i32,
+    language: *const c_char,
+    max_tokens: i32,
+) -> u32 {
+    let Some(audio_len) = read_nonnegative_count(audio_len) else {
+        return 0;
+    };
+    let Some(audio) = bytes_from_raw(audio, audio_len) else {
+        set_last_engine_error("listen audio buffer is invalid");
+        return 0;
+    };
+    let language = optional_cstr(language);
+    with_session_engine_mut(generation, 0, |engine| {
+        let request_id = engine.start_listen_request(audio, &language, max_tokens);
+        sync_start_request_error(engine, request_id);
+        request_id
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn CE_StartSpeakRequest(
+    generation: u32,
+    text: *const c_char,
+    language: *const c_char,
+    speaker_audio: *const u8,
+    speaker_audio_len: i32,
+    has_max_duration: i32,
+    max_duration_ms: u32,
+) -> u32 {
+    let Some(text) = required_cstr(text) else {
+        return 0;
+    };
+    let Some(speaker_audio_len) = read_nonnegative_count(speaker_audio_len) else {
+        return 0;
+    };
+    let Some(speaker_audio) = bytes_from_raw(speaker_audio, speaker_audio_len) else {
+        set_last_engine_error("speaker audio buffer is invalid");
+        return 0;
+    };
+    let max_duration_ms = match has_max_duration {
+        0 => None,
+        1 => Some(max_duration_ms),
+        _ => {
+            set_last_engine_error("has_max_duration must be 0 or 1");
+            return 0;
+        }
+    };
+    let language = optional_cstr(language);
+    with_session_engine_mut(generation, 0, |engine| {
+        let request_id =
+            engine.start_speak_request(&text, &language, speaker_audio, max_duration_ms);
+        sync_start_request_error(engine, request_id);
+        request_id
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn CE_CancelRequest(generation: u32, request_id: u32) -> i32 {
     if request_id == 0 {
         return 0;
     }
-    with_current_engine_mut(0, |engine| engine.cancel_request(request_id))
+    with_session_engine_mut(generation, STATUS_STALE_RUNTIME_SESSION, |engine| {
+        engine.cancel_request(request_id)
+    })
 }
 
 #[no_mangle]
@@ -619,39 +698,38 @@ pub unsafe extern "C" fn CE_GetRuntimeObservability(
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_RunSchedulerLoop(
+    generation: u32,
     max_ticks: i32,
     max_completed_responses: i32,
     max_generated_tokens: i32,
-    max_duration_us: i32,
     out_result: *mut BrowserSchedulerLoopResult,
 ) -> i32 {
     if out_result.is_null() {
         return STATUS_FAILURE;
     }
-    with_current_engine_mut(STATUS_FAILURE, |engine| {
+    with_session_engine_mut(generation, STATUS_STALE_RUNTIME_SESSION, |engine| {
         engine.run_scheduler_loop(
             max_ticks,
             max_completed_responses,
             max_generated_tokens,
-            max_duration_us,
             &mut *out_result,
         )
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetCompletedRequestStatus(request_id: u32) -> i32 {
+pub extern "C" fn CE_GetCompletedRequestStatus(generation: u32, request_id: u32) -> i32 {
     if request_id == 0 {
         return COMPLETED_REQUEST_STATUS_UNKNOWN;
     }
-    with_current_engine(COMPLETED_REQUEST_STATUS_UNKNOWN, |engine| {
+    with_session_engine(generation, STATUS_STALE_RUNTIME_SESSION, |engine| {
         engine.completed_status(request_id)
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetCompletedRequestOutputKind(request_id: u32) -> i32 {
-    with_current_engine(STATUS_FAILURE, |engine| {
+pub extern "C" fn CE_GetCompletedRequestOutputKind(generation: u32, request_id: u32) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.completed_output_kind(request_id)
     })
 }
@@ -676,14 +754,15 @@ pub extern "C" fn CE_GetTokenRingCapacity() -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetCompletedRequestOutputSize(request_id: u32) -> i32 {
-    with_current_engine(STATUS_FAILURE, |engine| {
+pub extern "C" fn CE_GetCompletedRequestOutputSize(generation: u32, request_id: u32) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.completed_output_size(request_id)
     })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_CopyCompletedRequestOutput(
+    generation: u32,
     request_id: u32,
     buffer: *mut c_char,
     capacity: i32,
@@ -691,20 +770,21 @@ pub unsafe extern "C" fn CE_CopyCompletedRequestOutput(
     let Some(buffer) = mutable_u8_slice(buffer as *mut u8, capacity) else {
         return STATUS_INVALID_ARGUMENTS;
     };
-    with_current_engine(STATUS_FAILURE, |engine| {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.copy_completed_output(request_id, buffer)
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetCompletedRequestEmbeddingLength(request_id: u32) -> i32 {
-    with_current_engine(STATUS_FAILURE, |engine| {
+pub extern "C" fn CE_GetCompletedRequestEmbeddingLength(generation: u32, request_id: u32) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.completed_embedding_len(request_id)
     })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_CopyCompletedRequestEmbedding(
+    generation: u32,
     request_id: u32,
     buffer: *mut f32,
     value_count: i32,
@@ -716,34 +796,81 @@ pub unsafe extern "C" fn CE_CopyCompletedRequestEmbedding(
         return STATUS_INVALID_ARGUMENTS;
     }
     let buffer = slice::from_raw_parts_mut(buffer, value_count);
-    with_current_engine(STATUS_FAILURE, |engine| {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.copy_completed_embedding(request_id, buffer)
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetCompletedRequestEmbeddingPooling(request_id: u32) -> i32 {
-    with_current_engine(STATUS_FAILURE, |engine| {
+pub extern "C" fn CE_GetCompletedRequestEmbeddingPooling(generation: u32, request_id: u32) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.completed_embedding_pooling(request_id)
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetCompletedRequestEmbeddingNormalized(request_id: u32) -> i32 {
-    with_current_engine(STATUS_FAILURE, |engine| {
+pub extern "C" fn CE_GetCompletedRequestEmbeddingNormalized(
+    generation: u32,
+    request_id: u32,
+) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.completed_embedding_normalized(request_id)
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_GetCompletedRequestErrorSize(request_id: u32) -> i32 {
-    with_current_engine(STATUS_FAILURE, |engine| {
+pub extern "C" fn CE_GetCompletedRequestAudioLength(generation: u32, request_id: u32) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
+        engine.completed_audio_len(request_id)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn CE_CopyCompletedRequestAudio(
+    generation: u32,
+    request_id: u32,
+    buffer: *mut u8,
+    capacity: i32,
+) -> i32 {
+    let Some(buffer) = mutable_u8_slice(buffer, capacity) else {
+        return STATUS_INVALID_ARGUMENTS;
+    };
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
+        engine.copy_completed_audio(request_id, buffer)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn CE_GetCompletedRequestAudioSampleRate(generation: u32, request_id: u32) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
+        engine.completed_audio_sample_rate(request_id)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn CE_GetCompletedRequestAudioChannels(generation: u32, request_id: u32) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
+        engine.completed_audio_channels(request_id)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn CE_GetCompletedRequestAudioDurationMs(generation: u32, request_id: u32) -> f64 {
+    with_session_engine(generation, f64::from(STATUS_FAILURE), |engine| {
+        engine.completed_audio_duration_ms(request_id)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn CE_GetCompletedRequestErrorSize(generation: u32, request_id: u32) -> i32 {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.completed_error_size(request_id)
     })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_CopyCompletedRequestError(
+    generation: u32,
     request_id: u32,
     buffer: *mut c_char,
     capacity: i32,
@@ -751,27 +878,30 @@ pub unsafe extern "C" fn CE_CopyCompletedRequestError(
     let Some(buffer) = mutable_u8_slice(buffer as *mut u8, capacity) else {
         return STATUS_INVALID_ARGUMENTS;
     };
-    with_current_engine(STATUS_FAILURE, |engine| {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.copy_completed_error(request_id, buffer)
     })
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn CE_GetCompletedRequestRuntimeObservability(
+    generation: u32,
     request_id: u32,
     out_metrics: *mut BrowserRuntimeMetrics,
 ) -> i32 {
     if out_metrics.is_null() {
         return STATUS_FAILURE;
     }
-    with_current_engine(STATUS_FAILURE, |engine| {
+    with_session_engine(generation, STATUS_FAILURE, |engine| {
         engine.completed_runtime_observability(request_id, &mut *out_metrics)
     })
 }
 
 #[no_mangle]
-pub extern "C" fn CE_ConsumeCompletedRequest(request_id: u32) -> i32 {
-    with_current_engine_mut(0, |engine| engine.consume_completed_request(request_id))
+pub extern "C" fn CE_ConsumeCompletedRequest(generation: u32, request_id: u32) -> i32 {
+    with_session_engine_mut(generation, STATUS_STALE_RUNTIME_SESSION, |engine| {
+        engine.consume_completed_request(request_id)
+    })
 }
 
 #[no_mangle]
@@ -788,11 +918,46 @@ fn with_current_engine<T>(fallback: T, operation: impl FnOnce(&BrowserEngine) ->
     })
 }
 
-fn with_current_engine_mut<T>(fallback: T, operation: impl FnOnce(&mut BrowserEngine) -> T) -> T {
+fn with_session_engine<T>(
+    generation: u32,
+    failure: T,
+    operation: impl FnOnce(&BrowserEngine) -> T,
+) -> T {
+    CURRENT_ENGINE.with(|current| {
+        let current = current.borrow();
+        let Some(engine) = current.as_deref() else {
+            set_last_engine_error("browser runtime session is not loaded");
+            return failure;
+        };
+        if engine.id() != generation {
+            set_last_engine_error(format!(
+                "browser runtime generation {generation} is stale; current generation is {}",
+                engine.id()
+            ));
+            return failure;
+        }
+        operation(engine)
+    })
+}
+
+fn with_session_engine_mut<T>(
+    generation: u32,
+    failure: T,
+    operation: impl FnOnce(&mut BrowserEngine) -> T,
+) -> T {
     CURRENT_ENGINE.with(|current| {
         let Some(mut engine) = current.borrow_mut().take() else {
-            return fallback;
+            set_last_engine_error("browser runtime session is not loaded");
+            return failure;
         };
+        if engine.id() != generation {
+            set_last_engine_error(format!(
+                "browser runtime generation {generation} is stale; current generation is {}",
+                engine.id()
+            ));
+            *current.borrow_mut() = Some(engine);
+            return failure;
+        }
         let result = operation(&mut engine);
         *current.borrow_mut() = Some(engine);
         result
@@ -935,7 +1100,7 @@ fn is_valid_prediction_tokens(token_count: i32) -> bool {
 }
 
 fn read_size_arg(value: f64) -> Option<u64> {
-    if value.is_finite() && value >= 0.0 && value <= MAX_EXACT_INTEGER {
+    if value.is_finite() && (0.0..=MAX_EXACT_INTEGER).contains(&value) {
         Some(value as u64)
     } else {
         None

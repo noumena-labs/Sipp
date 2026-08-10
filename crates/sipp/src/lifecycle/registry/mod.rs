@@ -2,10 +2,14 @@
 
 use std::path::PathBuf;
 
+use serde::Deserialize;
+
 use crate::collection::remove_matching_values;
 
 use super::storage::{now_unix_ms, LocalStorageBackend, StorageBackend};
-use super::util::{empty_asset_id, model_not_found, storage_corrupt};
+use super::util::{
+    empty_asset_id, model_not_found, storage_corrupt, validate_registry_manifest_version,
+};
 use super::{AssetRecord, ModelEntry, ModelError, RegistryManifest};
 
 mod refs;
@@ -16,6 +20,11 @@ use refs::{
 
 fn manifest_parse_failed(path: &std::path::Path, error: serde_json::Error) -> ModelError {
     storage_corrupt(format!("failed to parse {}: {}", path.display(), error))
+}
+
+#[derive(Deserialize)]
+struct ManifestHeader {
+    version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +51,9 @@ impl<B: StorageBackend> ModelRegistry<B> {
         let manifest_path = backend.manifest_path();
         let manifest = if manifest_path.exists() {
             let bytes = std::fs::read(&manifest_path)?;
+            let header = serde_json::from_slice::<ManifestHeader>(&bytes)
+                .map_err(|error| manifest_parse_failed(&manifest_path, error))?;
+            validate_registry_manifest_version("manifest", header.version)?;
             let manifest = serde_json::from_slice::<RegistryManifest>(&bytes)
                 .map_err(|error| manifest_parse_failed(&manifest_path, error))?;
             validate_manifest(&manifest)?;

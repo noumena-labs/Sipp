@@ -15,11 +15,15 @@ mod content;
 mod journal;
 mod metadata;
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use content::hash_file;
 use content::inspect_local_path;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use journal::AcquisitionJournal;
+#[cfg(not(target_family = "wasm"))]
+use metadata::normalize_asset_file_name;
 pub(crate) use metadata::{modified_unix_ms, now_unix_ms};
-use metadata::{normalize_asset_file_name, normalize_asset_name, unique_temp_suffix};
+use metadata::{normalize_asset_name, unique_temp_suffix};
 
 const ASSETS_DIR: &str = "assets";
 const INCOMING_DIR: &str = ".incoming";
@@ -28,6 +32,7 @@ const REGISTRY_FILE_NAME: &str = "registry.json";
 const ASSET_ID_PREFIX: &str = "asset-";
 pub(super) const COPY_BUFFER_BYTES: usize = BYTES_PER_MIB;
 
+#[cfg(not(target_family = "wasm"))]
 fn asset_integrity_error(asset_id: &str, reason: &str) -> ModelError {
     storage_corrupt(format!("asset {asset_id} has hash match but {reason}"))
 }
@@ -219,6 +224,7 @@ impl<B: StorageBackend> AssetStore<B> {
         })
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn install_remote_staged(
         &self,
         staged_path: &Path,
@@ -278,6 +284,7 @@ impl<B: StorageBackend> AssetStore<B> {
             )
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn validate_asset(&self, record: &AssetRecord) -> Result<(), ModelError> {
         let path = self.resolve_asset_path(record)?;
         if hash_file(&path)? != record.hash {
@@ -298,14 +305,17 @@ impl<B: StorageBackend> AssetStore<B> {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn incoming_storage_path(&self) -> PathBuf {
         self.backend.incoming_storage_path()
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn resolve_storage_path(&self, storage_path: &Path) -> PathBuf {
         self.backend.resolve_storage_path(storage_path)
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn acquisition_journal(
         &self,
         acquisition_id: impl Into<String>,
@@ -371,6 +381,7 @@ impl<B: StorageBackend> AssetStore<B> {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn install_managed_path(
         &self,
         path: &Path,
@@ -421,6 +432,7 @@ impl<B: StorageBackend> AssetStore<B> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn validate_existing_asset(
     path: &Path,
     expected_bytes: u64,
@@ -436,6 +448,7 @@ fn validate_existing_asset(
     Ok(())
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn publish_staged_asset(tmp_path: &Path, final_path: &Path) -> Result<(), ModelError> {
     create_parent_dir(final_path)?;
     match fs::rename(tmp_path, final_path) {
@@ -448,6 +461,7 @@ fn publish_staged_asset(tmp_path: &Path, final_path: &Path) -> Result<(), ModelE
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn create_parent_dir(path: &Path) -> Result<(), ModelError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

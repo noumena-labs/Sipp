@@ -77,12 +77,12 @@ public final class SippClient: Sendable {
         )
     }
 
-    /// Registers or replaces a named local endpoint.
-    public func add(_ id: String, model: ManagedModel) async throws {
+    /// Registers or replaces a named endpoint.
+    public func add(_ id: String, _ endpoint: Endpoint) async throws -> EndpointRef {
         try await lifecycleOperations.perform {
-            try await securityScopes.activate(modelID: model.id)
-            try await callBridge {
-                try await self.bridge.add(id: id, modelId: model.id)
+            try await securityScopes.activate(modelID: endpoint.model.id)
+            return try await callBridge {
+                EndpointRef(try await self.bridge.add(id: id, endpoint: endpoint.bridgeValue))
             }
         }
     }
@@ -99,14 +99,14 @@ public final class SippClient: Sendable {
     /// Starts raw-prompt text generation.
     public func query(
         _ prompt: String,
-        endpoint: String? = nil,
+        endpoint: EndpointRef? = nil,
         requestID: String? = nil,
         options: TextOptions = TextOptions(),
         local: LocalTextOptions = LocalTextOptions()
     ) -> TextRun {
         let request = FfiQueryRequest(
             requestId: requestID,
-            endpoint: endpoint,
+            endpoint: endpoint?.id,
             prompt: prompt,
             options: options.bridgeValue,
             local: local.bridgeValue,
@@ -121,14 +121,14 @@ public final class SippClient: Sendable {
     /// Starts chat generation from ordered conversation messages.
     public func chat(
         messages: [ChatMessage],
-        endpoint: String? = nil,
+        endpoint: EndpointRef? = nil,
         requestID: String? = nil,
         options: TextOptions = TextOptions(),
         local: LocalTextOptions = LocalTextOptions()
     ) -> TextRun {
         let request = FfiChatRequest(
             requestId: requestID,
-            endpoint: endpoint,
+            endpoint: endpoint?.id,
             messages: messages.map(\.bridgeValue),
             options: options.bridgeValue,
             local: local.bridgeValue,
@@ -143,19 +143,65 @@ public final class SippClient: Sendable {
     /// Starts single-input embedding generation.
     public func embed(
         _ input: String,
-        endpoint: String? = nil,
+        endpoint: EndpointRef? = nil,
         requestID: String? = nil,
         local: LocalEmbedOptions = LocalEmbedOptions()
     ) -> EmbeddingRun {
         let request = FfiEmbedRequest(
             requestId: requestID,
-            endpoint: endpoint,
+            endpoint: endpoint?.id,
             input: input,
             local: local.bridgeValue
         )
         let bridge = self.bridge
         return EmbeddingRun(securityScopes: securityScopes) {
             await bridge.embed(request: request)
+        }
+    }
+
+    /// Starts speech recognition from encoded WAV, MP3, or FLAC audio.
+    /// A nil `maxTokens` value uses the core transcription default.
+    public func listen(
+        _ audio: Data,
+        endpoint: EndpointRef? = nil,
+        requestID: String? = nil,
+        language: String? = nil,
+        maxTokens: UInt32? = nil
+    ) -> TextRun {
+        let request = FfiListenRequest(
+            requestId: requestID,
+            endpoint: endpoint?.id,
+            audio: audio,
+            language: language,
+            maxTokens: maxTokens
+        )
+        let bridge = self.bridge
+        return TextRun(securityScopes: securityScopes) {
+            await bridge.listen(request: request)
+        }
+    }
+
+    /// Starts speech synthesis and returns a mono PCM16 WAV response.
+    /// A nil `maxDurationMs` uses the loaded model adapter's generation default.
+    public func speak(
+        _ text: String,
+        endpoint: EndpointRef? = nil,
+        requestID: String? = nil,
+        language: String? = nil,
+        speakerAudio: Data? = nil,
+        maxDurationMs: UInt32? = nil
+    ) -> AudioRun {
+        let request = FfiSpeakRequest(
+            requestId: requestID,
+            endpoint: endpoint?.id,
+            text: text,
+            language: language,
+            speakerAudio: speakerAudio,
+            maxDurationMs: maxDurationMs
+        )
+        let bridge = self.bridge
+        return AudioRun(securityScopes: securityScopes) {
+            await bridge.speak(request: request)
         }
     }
 }

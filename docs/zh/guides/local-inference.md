@@ -8,8 +8,8 @@
 
 1. 选择一个支持所需功能的 GGUF 模型。
 2. 通过 `client.models.add` 添加模型路径、URL 或浏览器文件。
-3. 使用返回的模型 ID 注册本地端点。
-4. 在端点描述符中配置加载时的运行时选项。
+3. 使用返回的 `ManagedModel` 注册本地端点。
+4. 在端点中配置加载时的运行时选项。
 5. 在调用 `query`、`chat`、`embed` 时传入请求选项。
 6. 流式接收 Token 或等待最终结果。
 7. 页面、Worker、服务或脚本不再需要模型时，关闭客户端释放资源。
@@ -26,7 +26,7 @@
 
 保持各类参数的作用域清晰分离：
 
-- 浏览器客户端参数（`executionMode`、`wasmThreading`、运行时资源 URL、`browserCache`），必须在初始化 `new SippClient(...)` 时设置。
+- 浏览器客户端参数（`wasmThreading`、运行时资源 URL、`browserCache`），必须在初始化 `new SippClient(...)` 时设置。
 - `models.add` 的来源列表和进度、取消选项，用于模型注册阶段。
 - 本地端点加载选项（模型 ID、浏览器后端偏好、`NativeRuntimeConfig`），用于端点注册阶段。
 - 运行时配置组（`context`、`sampling`、`scheduler`、`cache`、`placement`、`multimodal`、`residency`、`observability`），定义端点稳定的运行行为。
@@ -37,12 +37,9 @@
 
 ## 线程与浏览器执行
 
-浏览器的执行环境包含两个独立选项：
+浏览器本地推理始终在专用 Worker 中运行。每次激活模型都会创建新的 Worker 和 Wasm 实例。`wasmThreading: 'pthread'` 启用多线程 WASM 运行时，需浏览器支持 `SharedArrayBuffer` 并配置跨源隔离响应头。
 
-- `executionMode: 'worker'` 或 `auto`：环境支持 Worker 时，将推理计算移出 UI 主线程。
-- `wasmThreading: 'pthread'`：启用多线程 WASM 运行时，需浏览器支持 `SharedArrayBuffer` 并配置跨源隔离响应头。
-
-内置浏览器运行时要求提供 COOP/COEP 响应头。应用无法提供这些响应头时，需要设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。`executionMode: 'main-thread'` 通常仅用于调试或受限宿主环境。
+内置浏览器运行时要求提供 COOP/COEP 响应头。应用无法提供这些响应头时，需要设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。
 
 原生 Node.js、Python 和 Rust 端点可通过 `context.n_threads` 和 `context.n_threads_batch` 手动指定 CPU 线程数。除非有确切性能数据，否则建议留空使用默认值。
 

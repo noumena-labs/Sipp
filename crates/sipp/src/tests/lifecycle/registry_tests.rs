@@ -6,6 +6,7 @@ use super::*;
 use crate::lifecycle::test_support::{gguf_name, gguf_path, TempDir};
 use crate::lifecycle::{
     AssetSource, LocalPathAnchor, ModelAssetKind, ModelModality, ModelStatus, PairingPlan,
+    REGISTRY_MANIFEST_VERSION,
 };
 use std::fs;
 
@@ -148,6 +149,27 @@ fn registry_reports_corrupt_manifest() {
 }
 
 #[test]
+fn registry_rejects_previous_manifest_version_without_migration() {
+    let root = TempDir::new("registry", "previous-version");
+    let previous_version = REGISTRY_MANIFEST_VERSION - 1;
+    fs::write(
+        root.path.join("registry.json"),
+        format!("{{\"version\":{previous_version}}}"),
+    )
+    .expect("manifest file");
+
+    let error = ModelRegistry::local(root.path.clone()).expect_err("previous manifest version");
+
+    assert!(matches!(
+        error,
+        ModelError::StorageCorrupt(message)
+            if message == format!(
+                "expected manifest version {REGISTRY_MANIFEST_VERSION}, got {previous_version}"
+            )
+    ));
+}
+
+#[test]
 fn registry_reports_refcount_mismatch() {
     let root = TempDir::new("registry", "refcount-mismatch");
     let mut manifest = RegistryManifest::default();
@@ -176,6 +198,8 @@ fn model_entry_helper_uses_pairing_plan() {
         modality: ModelModality::Text,
         status: ModelStatus::Ready,
         compatible_vision_projector_types: Vec::new(),
+        compatible_audio_projector_types: Vec::new(),
+        compatible_audio_generation_projector_types: Vec::new(),
     };
 
     let entry = model_entry_from_assets("model-a", "model-a", &plan);

@@ -179,7 +179,7 @@ pub fn build(sh: &Shell, ctx: &BuildContext, examples: bool) -> Result<()> {
 }
 
 /// Builds the host macOS slice and runs the staged Swift package unit tests.
-pub fn test(sh: &Shell, ctx: &BuildContext) -> Result<()> {
+pub fn test(sh: &Shell, ctx: &BuildContext) -> Result<PathBuf> {
     ensure_macos_host()?;
     ensure_swift_sources(ctx)?;
 
@@ -208,7 +208,7 @@ pub fn test(sh: &Shell, ctx: &BuildContext) -> Result<()> {
     )?;
 
     let _dir = sh.push_dir(&package_dir);
-    output::run_test_command(
+    let command_log = output::run_test_command(
         "Running staged Swift package tests",
         cmd!(sh, "{XCRUN_PATH} swift test"),
     )
@@ -218,7 +218,7 @@ pub fn test(sh: &Shell, ctx: &BuildContext) -> Result<()> {
         "Swift package tests complete in {}",
         output::elapsed(started_at.elapsed())
     ));
-    Ok(())
+    Ok(command_log)
 }
 
 fn macos_slice_for_architecture(architecture: &str) -> Result<AppleSlice> {

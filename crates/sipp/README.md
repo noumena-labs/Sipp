@@ -32,7 +32,7 @@ if the launcher is not active.
 
 ```rust
 use sipp::{
-    LocalDescriptor, LocalTextOptions, SippClient, SippQueryRequest,
+    endpoint, LocalTextOptions, SippClient, SippQueryRequest,
     SippTextOptions,
 };
 use sipp::engine::{
@@ -45,9 +45,8 @@ async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = SippClient::new()?;
     let model = client.models().add([model_path]).await?;
-    let mut descriptor = LocalDescriptor::new(model.id);
-    descriptor.runtime = runtime_config();
-    let endpoint = client.add("default", descriptor).await?;
+    let local = endpoint::Local::new(&model).runtime(runtime_config());
+    let endpoint = client.add("default", local).await?;
 
     let response = client
         .query(SippQueryRequest {
@@ -93,7 +92,7 @@ fn runtime_config() -> NativeRuntimeConfig {
 }
 ```
 
-Register endpoints with `add(id, descriptor)`, keep the returned `EndpointRef`,
+Register endpoints with `add(id, endpoint)`, keep the returned `EndpointRef`,
 and pass that reference on each request when routing must be explicit.
 
 Gateway clients pass a `GatewayDescriptor` when a Rust application

@@ -5,7 +5,9 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use sipp::backend::set_llama_log_quiet;
 use sipp_gateway_server::{
-    config::GatewayServerConfig, http::GatewayHttpService, metrics::GatewayMetrics,
+    config::GatewayServerConfig,
+    http::{GatewayHttpOptions, GatewayHttpService},
+    metrics::GatewayMetrics,
 };
 use tokio::sync::oneshot;
 
@@ -57,15 +59,17 @@ async fn serve(path: PathBuf) -> anyhow::Result<()> {
     let metrics = Arc::new(GatewayMetrics::new());
     let service = GatewayHttpService::new(
         runtime,
-        config.routes.clone(),
         tokens,
         admin_password,
         metrics,
-        config.max_request_bytes,
-        &config.allowed_origins,
-        config.max_concurrent_requests,
-        config.security.clone(),
-        admin_assets_dir()?,
+        GatewayHttpOptions {
+            routes: config.routes.clone(),
+            max_request_bytes: config.max_request_bytes,
+            allowed_origins: config.allowed_origins.clone(),
+            max_concurrent_requests: config.max_concurrent_requests,
+            security: config.security.clone(),
+            admin_assets_dir: admin_assets_dir()?,
+        },
     )?;
 
     let management_listener = tokio::net::TcpListener::bind(config.management_bind)

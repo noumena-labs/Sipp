@@ -48,7 +48,7 @@ impl GatewayEndpoint {
         )?;
         Ok(Self {
             endpoint,
-            capabilities: EndpointCapabilities::unknown(),
+            capabilities: EndpointCapabilities::remote_text(),
             target: descriptor.target,
             routes: descriptor.routes,
             protocol_options: descriptor.protocol_options,
@@ -353,7 +353,7 @@ impl GatewayTransport {
             .and_then(serde_json::Value::as_str)
             .map(|value| redact(value, &self.secrets));
         error.raw = Some(Box::new(redact_value(raw, &self.secrets)));
-        SippError::Endpoint(error)
+        error.into()
     }
 
     fn transport_error(&self, error: reqwest::Error) -> SippError {
@@ -431,10 +431,7 @@ impl SseParser {
             ));
         }
         let mut events = Vec::new();
-        loop {
-            let Some((index, length)) = find_boundary(&self.buffer) else {
-                break;
-            };
+        while let Some((index, length)) = find_boundary(&self.buffer) {
             let raw = self.buffer.drain(..index + length).collect::<Vec<_>>();
             if let Some(event) = parse_event(&raw[..index])? {
                 events.push(event);
@@ -814,7 +811,7 @@ fn validate_routes(routes: &crate::client::GatewayRoutes) -> SippResult<()> {
 }
 
 fn endpoint_error(kind: impl Into<String>, message: impl Into<String>) -> SippError {
-    SippError::Endpoint(EndpointError::new(kind, message))
+    EndpointError::new(kind, message).into()
 }
 
 fn redact(value: &str, secrets: &[String]) -> String {

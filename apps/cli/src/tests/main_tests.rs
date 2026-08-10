@@ -99,6 +99,110 @@ fn runtime_config_omits_default_sentinel_seed() {
 }
 
 #[test]
+fn speech_modes_accept_projector_language_and_optional_prompt() {
+    let listen = Args::parse_from([
+        "sipp",
+        "asr.gguf",
+        "--listen",
+        "sample.mp3",
+        "--projector",
+        "asr-mmproj.gguf",
+        "--language",
+        "en",
+    ]);
+    assert!(listen.prompt.is_none());
+    assert_eq!(listen.listen, Some(PathBuf::from("sample.mp3")));
+    assert_eq!(listen.language.as_deref(), Some("en"));
+    assert_eq!(listen.max_tokens, None);
+    assert_eq!(
+        runtime_config_from_args(&listen).multimodal.projector_path,
+        Some("asr-mmproj.gguf".to_string())
+    );
+
+    let speak = Args::parse_from([
+        "sipp",
+        "tts.gguf",
+        "Hello",
+        "--speak",
+        "output.wav",
+        "--projector",
+        "tts-mmproj.gguf",
+        "--speaker",
+        "voice.wav",
+        "--max-duration-ms",
+        "2000",
+    ]);
+    assert_eq!(speak.prompt.as_deref(), Some("Hello"));
+    assert_eq!(speak.speak, Some(PathBuf::from("output.wav")));
+    assert_eq!(speak.speaker, Some(PathBuf::from("voice.wav")));
+    assert_eq!(speak.max_duration_ms.map(NonZeroU32::get), Some(2_000));
+}
+
+#[test]
+fn speech_duration_must_be_positive_and_requires_speak() {
+    assert!(Args::try_parse_from([
+        "sipp",
+        "tts.gguf",
+        "Hello",
+        "--speak",
+        "output.wav",
+        "--max-duration-ms",
+        "0",
+    ])
+    .is_err());
+    assert!(
+        Args::try_parse_from(["sipp", "model.gguf", "prompt", "--max-duration-ms", "2000",])
+            .is_err()
+    );
+}
+
+#[test]
+fn max_tokens_preserves_omission_and_rejects_zero() {
+    let omitted = Args::parse_from(["sipp", "model.gguf", "prompt"]);
+    assert_eq!(omitted.max_tokens, None);
+
+    let explicit = Args::parse_from(["sipp", "model.gguf", "prompt", "--max-tokens", "96"]);
+    assert_eq!(explicit.max_tokens.map(NonZeroU32::get), Some(96));
+
+    assert!(Args::try_parse_from(["sipp", "model.gguf", "prompt", "--max-tokens", "0",]).is_err());
+}
+
+#[test]
+fn listen_and_speak_are_mutually_exclusive() {
+    assert!(Args::try_parse_from([
+        "sipp",
+        "model.gguf",
+        "--listen",
+        "input.wav",
+        "--speak",
+        "output.wav",
+    ])
+    .is_err());
+}
+
+#[test]
+fn speech_validation_fails_before_loading_models() {
+    let missing_projector = Args::parse_from(["sipp", "asr.gguf", "--listen", "input.wav"]);
+    assert!(validate_args(&missing_projector)
+        .expect_err("missing projector")
+        .to_string()
+        .contains("--projector"));
+
+    let missing_text = Args::parse_from([
+        "sipp",
+        "tts.gguf",
+        "--speak",
+        "output.wav",
+        "--projector",
+        "tts-mmproj.gguf",
+    ]);
+    assert!(validate_args(&missing_text)
+        .expect_err("missing synthesis text")
+        .to_string()
+        .contains("prompt"));
+}
+
+#[test]
 fn stats_formatting_respects_off_basic_and_profile_modes() {
     let stats = RuntimeObservabilityMetrics {
         input_tokens: 3,

@@ -27,6 +27,7 @@ final class SippViewModel: ObservableObject {
     private var operationTask: Task<Void, Never>?
     private var activeTextRun: TextRun?
     private var activeEmbeddingRun: EmbeddingRun?
+    private var endpoint: EndpointRef?
 
     init() {
         do {
@@ -51,7 +52,7 @@ final class SippViewModel: ObservableObject {
                 do {
                     let client = try clientState.get()
                     let model = try await client.models.add([url])
-                    try await client.add(Self.endpointID, model: model)
+                    endpoint = try await client.add(Self.endpointID, .local(model))
                     hasModel = true
                     modelName = model.name
                     finish("Model ready")
@@ -67,6 +68,10 @@ final class SippViewModel: ObservableObject {
     }
 
     func run() {
+        guard let endpoint else {
+            fail("Select a model before running inference")
+            return
+        }
         begin("Running \(operation.rawValue)")
         operationTask = Task {
             do {
@@ -76,7 +81,7 @@ final class SippViewModel: ObservableObject {
                     try await consume(
                         client.query(
                             input,
-                            endpoint: Self.endpointID,
+                            endpoint: endpoint,
                             options: TextOptions(maxTokens: 256, temperature: 0.7)
                         )
                     )
@@ -87,12 +92,12 @@ final class SippViewModel: ObservableObject {
                                 ChatMessage(role: .system, content: "Answer concisely."),
                                 ChatMessage(role: .user, content: input),
                             ],
-                            endpoint: Self.endpointID,
+                            endpoint: endpoint,
                             options: TextOptions(maxTokens: 256, temperature: 0.7)
                         )
                     )
                 case .embed:
-                    try await runEmbedding(client)
+                    try await runEmbedding(client, endpoint: endpoint)
                 }
                 finish("Completed \(operation.rawValue)")
             } catch let SippError.cancelled(reason) {
@@ -126,10 +131,10 @@ final class SippViewModel: ObservableObject {
         activeTextRun = nil
     }
 
-    private func runEmbedding(_ client: SippClient) async throws {
+    private func runEmbedding(_ client: SippClient, endpoint: EndpointRef) async throws {
         let run = client.embed(
             input,
-            endpoint: Self.endpointID,
+            endpoint: endpoint,
             local: LocalEmbedOptions(normalize: true)
         )
         activeEmbeddingRun = run

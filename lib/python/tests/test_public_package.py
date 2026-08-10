@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import json
 import os
 import subprocess
 import sys
@@ -19,13 +21,17 @@ class ModelStore: pass
 class SippClient:
     add = object()
     models = object()
+    listen = object()
+    speak = object()
+class SippAudioRun:
+    cancel = object()
 class SippEmbeddingRun: pass
 class SippTextOptions: pass
 class SippTextRun: pass
 class SippTokenIterator: pass
 class ContextRuntimeConfig: pass
 class EndpointRef: pass
-class EndpointDescriptor:
+class Endpoint:
     local = object()
     gateway = object()
     provider = object()
@@ -61,14 +67,19 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert hasattr(sipp.SippClient, "add")
     assert hasattr(sipp.SippClient, "remove")
     assert hasattr(sipp.SippClient, "models")
-    assert hasattr(sipp, "EndpointDescriptor")
-    assert hasattr(sipp.EndpointDescriptor, "local")
-    assert hasattr(sipp.EndpointDescriptor, "gateway")
-    assert hasattr(sipp.EndpointDescriptor, "provider")
-    assert not hasattr(sipp.EndpointDescriptor, "installed")
-    assert not hasattr(sipp, "LocalEndpointDescriptor")
-    assert not hasattr(sipp, "GatewayEndpointDescriptor")
-    assert not hasattr(sipp, "ProviderEndpointDescriptor")
+    assert hasattr(sipp.SippClient, "listen")
+    assert "max_tokens" in inspect.signature(sipp.SippClient.listen).parameters
+    assert hasattr(sipp.SippClient, "speak")
+    assert "max_duration_ms" in inspect.signature(sipp.SippClient.speak).parameters
+    assert hasattr(sipp, "SippAudioRun")
+    assert hasattr(sipp.SippAudioRun, "cancel")
+    assert hasattr(sipp, "Endpoint")
+    assert hasattr(sipp.Endpoint, "local")
+    assert hasattr(sipp.Endpoint, "gateway")
+    assert hasattr(sipp.Endpoint, "provider")
+    assert not hasattr(sipp.Endpoint, "installed")
+    assert not hasattr(sipp, "EndpointDescriptor")
+    assert not hasattr(sipp, "LocalDescriptor")
     assert not hasattr(sipp, "ModelSource")
     assert hasattr(sipp.ModelStore, "add")
     assert not hasattr(sipp.ModelStore, "install_files")
@@ -78,16 +89,63 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     assert issubclass(sipp.ModelLifecycleError, Exception)
     assert sipp.SamplingRuntimeOverride is sipp.SamplingRuntimeConfig
 
-    gateway = sipp.EndpointDescriptor.gateway(
+    gateway = sipp.Endpoint.gateway(
         "model-a", "http://127.0.0.1:8080"
     )
-    provider = sipp.EndpointDescriptor.provider(
+    provider = sipp.Endpoint.provider(
         "openai", "model-a", api_key="test-key"
     )
-    assert type(gateway) is sipp.EndpointDescriptor
-    assert type(provider) is sipp.EndpointDescriptor
+    assert type(gateway) is sipp.Endpoint
+    assert type(provider) is sipp.Endpoint
+    with pytest.raises(ValueError, match="version is not valid for the OpenAI provider"):
+        sipp.Endpoint.provider(
+            "openai", "model-a", api_key="test-key", version="2023-06-01"
+        )
     with pytest.raises(TypeError):
-        sipp.EndpointDescriptor()
+        sipp.Endpoint()
+
+
+def test_same_id_endpoint_replacement_is_owned_by_the_native_client(
+    tmp_path: Path,
+) -> None:
+    import sipp
+
+    class GatewayHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers["Content-Length"])
+            request = json.loads(self.rfile.read(length))
+            response = json.dumps(
+                {"text": request["model"], "finish_reason": "stop"}
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        client = sipp.SippClient(storage_root=tmp_path / "client")
+        original = client.add(
+            "active", sipp.Endpoint.gateway("first", f"http://{host}:{port}")
+        )
+        client.add(
+            "active", sipp.Endpoint.gateway("second", f"http://{host}:{port}")
+        )
+
+        response = client.query("route", endpoint=original).result()
+        assert response["text"] == "second"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(

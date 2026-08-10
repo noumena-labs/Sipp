@@ -1,5 +1,5 @@
 import {
-  EndpointDescriptor,
+  Endpoint,
   type SippClient,
   type ModelLoadOptions,
   type TokenBatch,
@@ -455,7 +455,7 @@ export async function runScenarioBenchmark(
       const model = await addModel(targetClient, modelLocation);
       return await targetClient.add(
         'playground-local',
-        EndpointDescriptor.local(model.id, {
+        Endpoint.local(model, {
           runtime,
           observability: 'profile',
         })
@@ -589,7 +589,7 @@ export async function runMixedLoadBenchmark(
       const model = await addModel(targetClient, modelLocation);
       return await targetClient.add(
         'playground-local',
-        EndpointDescriptor.local(model.id, {
+        Endpoint.local(model, {
           runtime,
           observability: 'profile',
         })

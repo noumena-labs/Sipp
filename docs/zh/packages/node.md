@@ -23,14 +23,14 @@ npm install @sipphq/sipp-server
 ## 本地推理 (Query)
 
 ```ts
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { Endpoint, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 const modelPath = process.argv[2] ?? 'model.gguf';
 const model = await client.models.add([modelPath]);
 const endpoint = await client.add(
   'default',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     runtime: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
@@ -74,7 +74,7 @@ arm64 包。
 ## 网关推理
 
 ```ts
-import { EndpointDescriptor } from '@sipphq/sipp-server';
+import { Endpoint } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -84,7 +84,7 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
+const endpoint = await client.add('gateway', Endpoint.gateway({
   target: requiredEnv('SIPP_GATEWAY_TARGET'),
   baseUrl: requiredEnv('SIPP_GATEWAY_URL'),
   authentication: {
@@ -111,7 +111,7 @@ console.log((await run.response).text);
 仅在受信任的服务端代码中使用提供商端点。将提供商的 API 密钥存储在服务器环境变量中；以下示例中的 `OPENAI_API_KEY="<mock-openai-key>"` 仅为演示。
 
 ```ts
-import { EndpointDescriptor } from '@sipphq/sipp-server';
+import { Endpoint } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -121,7 +121,7 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-const endpoint = await client.add('provider', EndpointDescriptor.provider({
+const endpoint = await client.add('provider', Endpoint.provider({
   provider: 'openai',
   model: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
   apiKey: requiredEnv('OPENAI_API_KEY'),
@@ -146,7 +146,7 @@ Node 路由需要向浏览器网关客户端提供类似原生网关端点的接
 
 ```ts
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -166,7 +166,7 @@ export async function handleQuery(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('provider', EndpointDescriptor.provider({
+    const endpoint = await client.add('provider', Endpoint.provider({
       provider: 'openai',
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),

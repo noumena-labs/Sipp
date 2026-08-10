@@ -1,5 +1,6 @@
 use crate::engine::protocol::PoolingType;
 use crate::runtime::metrics::RuntimeObservabilityMetrics;
+use crate::runtime::SynthesizedAudio;
 
 use super::GenerateRequestId;
 
@@ -35,10 +36,9 @@ impl GenerateResponseStatus {
     }
 }
 
-/// Internal terminal payload. `query()`/`chat()` finalize with `Text`,
-/// `embed()` finalizes with `Embedding`. Public binding mappers enforce the
-/// "right command produces the right variant" invariant; the enum itself is
-/// never re-exported from `engine::mod`.
+/// Internal terminal payload. Public binding mappers enforce the "right
+/// command produces the right variant" invariant; the enum itself is never
+/// re-exported from `engine::mod`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResponseOutput {
     Text(String),
@@ -49,6 +49,7 @@ pub enum ResponseOutput {
         /// pooling outputs are never normalized (raw classifier scores).
         normalized: bool,
     },
+    Audio(SynthesizedAudio),
 }
 
 impl Default for ResponseOutput {

@@ -6,9 +6,8 @@
 
 #[allow(clippy::module_inception)]
 mod client;
-mod descriptor;
 mod dispatch;
-mod endpoint;
+pub mod endpoint;
 mod error;
 mod gateway;
 #[cfg(not(target_family = "wasm"))]
@@ -27,11 +26,10 @@ mod run;
 mod validate;
 
 pub use client::SippClient;
-pub use descriptor::{EndpointDescriptor, LocalDescriptor, DEFAULT_STORAGE_ROOT};
-pub use endpoint::{EndpointCapabilities, EndpointRef};
-pub use error::{EndpointError, SippError, SippResult};
-#[cfg(feature = "providers")]
-pub use error::{ProviderEndpointError, ProviderEndpointErrorKind};
+pub use endpoint::{Endpoint, EndpointCapabilities, EndpointRef};
+pub use error::{
+    EndpointError, ProviderEndpointError, ProviderEndpointErrorKind, SippError, SippResult,
+};
 pub use gateway::{
     GatewayAuthentication, GatewayDescriptor, GatewayRoutes, GatewaySecret, GatewayTimeoutPolicy,
 };
@@ -42,10 +40,17 @@ pub use provider::{
 };
 pub use request::{
     LocalEmbedOptions, LocalTextOptions, RequestExtra, SippChatRequest, SippEmbedRequest,
-    SippQueryRequest, SippRequestContext, SippTextOptions,
+    SippListenRequest, SippQueryRequest, SippRequestContext, SippSpeakRequest, SippTextOptions,
+    DEFAULT_TRANSCRIPTION_MAX_TOKENS,
 };
-pub use response::{SippEmbeddingResponse, SippResponseMetadata, SippTextResponse};
+pub use response::{
+    SippAudioResponse, SippEmbeddingResponse, SippResponseMetadata, SippTextResponse,
+};
 pub use run::{
-    SippCancellationHandle, SippCancellationReason, SippEmbeddingResponseFuture, SippEmbeddingRun,
-    SippTextResponseFuture, SippTextRun, SippTokenBatches,
+    SippAudioResponseFuture, SippAudioRun, SippCancellationHandle, SippCancellationReason,
+    SippEmbeddingResponseFuture, SippEmbeddingRun, SippTextResponseFuture, SippTextRun,
+    SippTokenBatches,
 };
+
+/// Default native registry and managed-asset root for a client.
+pub const DEFAULT_STORAGE_ROOT: &str = ".sipp-models";

@@ -41,8 +41,6 @@ function tokenBatch(text: string): TokenBatch {
       framesSent: 1,
       bytesSent: new TextEncoder().encode(text).byteLength,
       batchesSent: 1,
-      drainMs: 0,
-      drainCalls: 0,
     },
   };
 }

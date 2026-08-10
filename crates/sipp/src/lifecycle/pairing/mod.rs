@@ -1,7 +1,8 @@
 //! Pairing of model assets (weights + projector) into a runnable ModelEntry.
 
 use super::types::{
-    AssetRole, ClassifiedAsset, ModelError, ModelModality, ModelStatus, PairingPlan,
+    AssetInspection, AssetRole, ClassifiedAsset, ModelError, ModelModality, ModelStatus,
+    PairingPlan,
 };
 use crate::collection::sorted_unique_strings;
 use crate::lifecycle::util::{invalid_pairing, invalid_source};
@@ -18,8 +19,11 @@ struct AssetSelection<'a> {
 #[derive(Debug)]
 struct BaseModelResolution {
     compatible_vision_projector_types: Vec<String>,
+    compatible_audio_projector_types: Vec<String>,
+    compatible_audio_generation_projector_types: Vec<String>,
     name: String,
     vision_capable: bool,
+    audio_capable: bool,
 }
 
 const PROJECTOR_NOT_RUNNABLE_MODEL: &str = "projector assets are not runnable models";
@@ -74,26 +78,45 @@ fn pairing_plan(
     base: BaseModelResolution,
 ) -> PairingPlan {
     let has_projector = projector.is_some();
+    let vision_capable = base.vision_capable
+        || projector.is_some_and(|asset| {
+            asset.inspection.vision_capable
+                || asset.inspection.provided_vision_projector_type.is_some()
+        });
+    let audio_capable = base.audio_capable
+        || projector.is_some_and(|asset| {
+            asset.inspection.audio_capable
+                || asset.inspection.provided_audio_projector_type.is_some()
+                || asset.inspection.audio_generation_capable
+                || asset
+                    .inspection
+                    .provided_audio_generation_projector_type
+                    .is_some()
+        });
     PairingPlan {
         model_asset_ids: model_asset_ids(model_files),
         projector_asset_id: projector.map(|asset| asset.asset_id.clone()),
         name: base.name,
-        modality: pairing_modality(has_projector, base.vision_capable),
-        status: pairing_status(has_projector, base.vision_capable),
+        modality: pairing_modality(vision_capable, audio_capable),
+        status: pairing_status(has_projector, base.vision_capable || base.audio_capable),
         compatible_vision_projector_types: base.compatible_vision_projector_types,
+        compatible_audio_projector_types: base.compatible_audio_projector_types,
+        compatible_audio_generation_projector_types: base
+            .compatible_audio_generation_projector_types,
     }
 }
 
-fn pairing_modality(has_projector: bool, vision_capable: bool) -> ModelModality {
-    if has_projector || vision_capable {
-        ModelModality::Vision
-    } else {
-        ModelModality::Text
+fn pairing_modality(vision_capable: bool, audio_capable: bool) -> ModelModality {
+    match (vision_capable, audio_capable) {
+        (false, false) => ModelModality::Text,
+        (true, false) => ModelModality::Vision,
+        (false, true) => ModelModality::Audio,
+        (true, true) => ModelModality::Multimodal,
     }
 }
 
-fn pairing_status(has_projector: bool, vision_capable: bool) -> ModelStatus {
-    if has_projector || !vision_capable {
+fn pairing_status(has_projector: bool, media_capable: bool) -> ModelStatus {
+    if has_projector || !media_capable {
         ModelStatus::Ready
     } else {
         ModelStatus::NeedsProjector
@@ -123,18 +146,58 @@ fn resolve_base_model(files: &[&ClassifiedAsset]) -> Result<BaseModelResolution,
         .copied()
         .filter(|file| file.inspection.vision_capable)
         .collect();
+    let media_candidates: Vec<_> = model_candidates
+        .iter()
+        .copied()
+        .filter(|file| {
+            file.inspection.vision_capable
+                || file.inspection.audio_capable
+                || file.inspection.audio_generation_capable
+        })
+        .collect();
     let compatibility_sources: Vec<_> = vision_candidates
         .iter()
         .copied()
         .filter(|file| !file.inspection.compatible_vision_projector_types.is_empty())
         .collect();
-    if !compatible_vision_types_agree(&compatibility_sources) {
+    let audio_compatibility_sources: Vec<_> = model_candidates
+        .iter()
+        .copied()
+        .filter(|file| !file.inspection.compatible_audio_projector_types.is_empty())
+        .collect();
+    let audio_generation_compatibility_sources: Vec<_> = model_candidates
+        .iter()
+        .copied()
+        .filter(|file| {
+            !file
+                .inspection
+                .compatible_audio_generation_projector_types
+                .is_empty()
+        })
+        .collect();
+    if !compatible_types_agree(&compatibility_sources, |inspection| {
+        &inspection.compatible_vision_projector_types
+    }) {
         return Err(invalid_source(
             "model assets disagree on compatible vision projector types",
         ));
     }
+    if !compatible_types_agree(&audio_compatibility_sources, |inspection| {
+        &inspection.compatible_audio_projector_types
+    }) {
+        return Err(invalid_source(
+            "model assets disagree on compatible audio projector types",
+        ));
+    }
+    if !compatible_types_agree(&audio_generation_compatibility_sources, |inspection| {
+        &inspection.compatible_audio_generation_projector_types
+    }) {
+        return Err(invalid_source(
+            "model assets disagree on compatible audio-generation projector types",
+        ));
+    }
 
-    let base = vision_candidates
+    let base = media_candidates
         .first()
         .copied()
         .unwrap_or(model_candidates[0]);
@@ -143,8 +206,21 @@ fn resolve_base_model(files: &[&ClassifiedAsset]) -> Result<BaseModelResolution,
             .first()
             .map(|file| stable_type_list_vec(&file.inspection.compatible_vision_projector_types))
             .unwrap_or_default(),
+        compatible_audio_projector_types: audio_compatibility_sources
+            .first()
+            .map(|file| stable_type_list_vec(&file.inspection.compatible_audio_projector_types))
+            .unwrap_or_default(),
+        compatible_audio_generation_projector_types: audio_generation_compatibility_sources
+            .first()
+            .map(|file| {
+                stable_type_list_vec(&file.inspection.compatible_audio_generation_projector_types)
+            })
+            .unwrap_or_default(),
         name: base.name.clone(),
         vision_capable: !vision_candidates.is_empty(),
+        audio_capable: model_candidates
+            .iter()
+            .any(|file| file.inspection.audio_capable || file.inspection.audio_generation_capable),
     })
 }
 
@@ -152,36 +228,75 @@ fn validate_projector_compatibility(
     base: &BaseModelResolution,
     projector: &ClassifiedAsset,
 ) -> Result<(), ModelError> {
-    let Some(provided_type) = projector
-        .inspection
-        .provided_vision_projector_type
-        .as_deref()
-    else {
-        return Ok(());
-    };
-    if !base.compatible_vision_projector_types.is_empty()
-        && !base
-            .compatible_vision_projector_types
-            .iter()
-            .any(|expected| expected == provided_type)
-    {
-        return Err(invalid_pairing(format!(
-            "projector type \"{}\" is not compatible with this model; expected one of: {}",
-            provided_type,
-            base.compatible_vision_projector_types.join(", ")
-        )));
-    }
-    Ok(())
+    validate_projector_type(
+        "vision",
+        &base.compatible_vision_projector_types,
+        projector
+            .inspection
+            .provided_vision_projector_type
+            .as_deref(),
+    )?;
+    validate_projector_type(
+        "audio",
+        &base.compatible_audio_projector_types,
+        projector
+            .inspection
+            .provided_audio_projector_type
+            .as_deref(),
+    )?;
+    validate_projector_type(
+        "audio-generation",
+        &base.compatible_audio_generation_projector_types,
+        projector
+            .inspection
+            .provided_audio_generation_projector_type
+            .as_deref(),
+    )
 }
 
-fn compatible_vision_types_agree(files: &[&ClassifiedAsset]) -> bool {
+fn validate_projector_type(
+    modality: &str,
+    compatible_types: &[String],
+    provided_type: Option<&str>,
+) -> Result<(), ModelError> {
+    if compatible_types.is_empty() {
+        return Ok(());
+    }
+    let Some(provided_type) = provided_type else {
+        return Err(invalid_pairing(format!(
+            "projector does not declare its {modality} projector type; expected one of: {}",
+            compatible_types.join(", ")
+        )));
+    };
+    if compatible_types
+        .iter()
+        .any(|expected| expected == provided_type)
+    {
+        return Ok(());
+    }
+    Err(invalid_pairing(format!(
+        concat!(
+            "{} projector type \"{}\" is not compatible with this model; ",
+            "expected one of: {}"
+        ),
+        modality,
+        provided_type,
+        compatible_types.join(", ")
+    )))
+}
+
+fn compatible_types_agree<F>(files: &[&ClassifiedAsset], field: F) -> bool
+where
+    F: for<'a> Fn(&'a AssetInspection) -> &'a [String],
+{
     if files.len() < 2 {
         return true;
     }
-    let expected = stable_type_list_vec(&files[0].inspection.compatible_vision_projector_types);
-    files.iter().skip(1).all(|file| {
-        stable_type_list_vec(&file.inspection.compatible_vision_projector_types) == expected
-    })
+    let expected = stable_type_list_vec(field(&files[0].inspection));
+    files
+        .iter()
+        .skip(1)
+        .all(|file| stable_type_list_vec(field(&file.inspection)) == expected)
 }
 
 fn stable_type_list_vec(values: &[String]) -> Vec<String> {

@@ -1,8 +1,9 @@
 //! Tests the `inspection` module in `sipp::shard`.
 //!
 //! Covers deterministic GGUF metadata inspection, model/projector detection,
-//! prefix truncation boundaries, value skipping, and vision architecture
-//! compatibility without native/model execution.
+//! prefix truncation boundaries, trained context capacity, value skipping,
+//! audio flags, and vision architecture compatibility without native/model
+//! execution.
 
 use super::*;
 use crate::shard::support::{
@@ -52,26 +53,43 @@ fn inspects_target_keys_and_normalizes_optional_strings() {
     let metadata = inspect_gguf_metadata(&metadata_gguf(&[
         ("general.type", FixtureValue::String("  MODEL  ")),
         ("general.architecture", FixtureValue::String(" Qwen2VL ")),
+        ("qwen2vl.context_length", FixtureValue::Uint32(2048)),
+        (
+            "general.tags",
+            FixtureValue::ArrayString(&[" Vision ", "Audio"]),
+        ),
         ("general.pooling_type", FixtureValue::Uint32(2)),
         ("clip.projector_type", FixtureValue::String(" Resampler ")),
         (
             "clip.vision.projector_type",
             FixtureValue::String(" Qwen2VL_Merger "),
         ),
+        (
+            "clip.audio.projector_type",
+            FixtureValue::String(" Qwen3A "),
+        ),
         ("clip.has_vision_encoder", FixtureValue::Bool(true)),
+        ("clip.has_audio_encoder", FixtureValue::Bool(true)),
     ]))
     .expect("inspection")
     .expect("metadata");
 
     assert_eq!(metadata.general_type.as_deref(), Some("model"));
     assert_eq!(metadata.general_architecture.as_deref(), Some("qwen2vl"));
+    assert_eq!(metadata.trained_context_size, Some(2048));
+    assert_eq!(metadata.general_tags, vec!["vision", "audio"]);
     assert_eq!(metadata.pooling_type, Some(2));
     assert_eq!(metadata.clip_projector_type.as_deref(), Some("resampler"));
     assert_eq!(
         metadata.clip_vision_projector_type.as_deref(),
         Some("qwen2vl_merger")
     );
+    assert_eq!(
+        metadata.clip_audio_projector_type.as_deref(),
+        Some("qwen3a")
+    );
     assert_eq!(metadata.clip_has_vision_encoder, Some(true));
+    assert_eq!(metadata.clip_has_audio_encoder, Some(true));
 }
 
 #[test]
@@ -104,6 +122,7 @@ fn scans_suffix_pooling_keys() {
 fn stops_early_after_useful_metadata_before_large_tokenizer_payload() {
     let metadata = inspect_gguf_metadata(&metadata_gguf(&[
         ("general.architecture", FixtureValue::String("llama")),
+        ("llama.context_length", FixtureValue::Uint32(2048)),
         (
             "tokenizer.ggml.tokens",
             FixtureValue::ArrayString(&["token-a", "token-b"]),
@@ -114,8 +133,9 @@ fn stops_early_after_useful_metadata_before_large_tokenizer_payload() {
     .expect("metadata");
 
     assert_eq!(metadata.general_architecture.as_deref(), Some("llama"));
+    assert_eq!(metadata.trained_context_size, Some(2048));
     assert_eq!(metadata.general_type, None);
-    assert_eq!(metadata.scanned_key_count, 2);
+    assert_eq!(metadata.scanned_key_count, 3);
     assert_eq!(
         metadata.stopped_early_at_key.as_deref(),
         Some("tokenizer.ggml.tokens")
@@ -160,6 +180,7 @@ fn target_keys_with_mismatched_types_are_skipped() {
         ("general.type", FixtureValue::Uint64(42)),
         ("general.architecture", FixtureValue::ArrayU32(&[1, 2])),
         ("clip.has_vision_encoder", FixtureValue::String("true")),
+        ("clip.has_audio_encoder", FixtureValue::String("true")),
         ("general.pooling_type", FixtureValue::String("1")),
     ]))
     .expect("inspection")
@@ -168,6 +189,7 @@ fn target_keys_with_mismatched_types_are_skipped() {
     assert_eq!(metadata.general_type, None);
     assert_eq!(metadata.general_architecture, None);
     assert_eq!(metadata.clip_has_vision_encoder, None);
+    assert_eq!(metadata.clip_has_audio_encoder, None);
     assert_eq!(metadata.pooling_type, None);
 }
 
@@ -313,10 +335,52 @@ fn model_type_without_architecture_detects_non_vision_model() {
     );
     assert_eq!(detection.inspection.role, AssetRole::Model);
     assert!(!detection.inspection.vision_capable);
+    assert!(!detection.inspection.audio_capable);
+    assert_eq!(detection.inspection.version, AssetInspection::VERSION);
     assert!(detection
         .inspection
         .compatible_vision_projector_types
         .is_empty());
+    assert!(detection
+        .inspection
+        .compatible_audio_projector_types
+        .is_empty());
+}
+
+#[test]
+fn detection_persists_positive_trained_context_capacity() {
+    let detection = detect_model_from_gguf_bytes(
+        "base.gguf",
+        &metadata_gguf(&[
+            ("general.architecture", FixtureValue::String("llama")),
+            ("llama.context_length", FixtureValue::Uint32(2048)),
+        ]),
+    )
+    .expect("detection");
+
+    assert_eq!(detection.inspection.trained_context_size, Some(2048));
+
+    let zero = detect_model_from_gguf_bytes(
+        "invalid.gguf",
+        &metadata_gguf(&[
+            ("general.architecture", FixtureValue::String("llama")),
+            ("llama.context_length", FixtureValue::Uint32(0)),
+        ]),
+    )
+    .expect("zero context detection");
+    assert_eq!(zero.inspection.trained_context_size, None);
+}
+
+#[test]
+fn context_capacity_detection_does_not_depend_on_metadata_key_order() {
+    let metadata = inspect_gguf_metadata(&metadata_gguf(&[
+        ("llama.context_length", FixtureValue::Uint32(2048)),
+        ("general.architecture", FixtureValue::String("llama")),
+    ]))
+    .expect("inspection")
+    .expect("metadata");
+
+    assert_eq!(metadata.trained_context_size, Some(2048));
 }
 
 #[test]
@@ -329,6 +393,150 @@ fn clip_encoder_flag_alone_detects_vision_model() {
 
     assert_eq!(detection.inspection.role, AssetRole::Model);
     assert!(detection.inspection.vision_capable);
+}
+
+#[test]
+fn detects_audio_and_combined_projector_metadata() {
+    let audio = detect_model_from_gguf_bytes(
+        "audio.gguf",
+        &metadata_gguf(&[
+            ("general.type", FixtureValue::String("mmproj")),
+            ("clip.audio.projector_type", FixtureValue::String("qwen3a")),
+            ("clip.has_audio_encoder", FixtureValue::Bool(true)),
+        ]),
+    )
+    .expect("audio detection");
+    assert_eq!(audio.inspection.role, AssetRole::Projector);
+    assert!(audio.inspection.audio_capable);
+    assert!(!audio.inspection.vision_capable);
+    assert_eq!(audio.inspection.provided_vision_projector_type, None);
+    assert_eq!(
+        audio.inspection.provided_audio_projector_type.as_deref(),
+        Some("qwen3a")
+    );
+
+    let combined = detect_model_from_gguf_bytes(
+        "combined.gguf",
+        &metadata_gguf(&[
+            ("general.type", FixtureValue::String("mmproj")),
+            ("clip.has_vision_encoder", FixtureValue::Bool(true)),
+            ("clip.has_audio_encoder", FixtureValue::Bool(true)),
+            (
+                "clip.vision.projector_type",
+                FixtureValue::String("qwen3vl_merger"),
+            ),
+        ]),
+    )
+    .expect("combined detection");
+    assert!(combined.inspection.vision_capable);
+    assert!(combined.inspection.audio_capable);
+    assert_eq!(
+        combined
+            .inspection
+            .provided_vision_projector_type
+            .as_deref(),
+        Some("qwen3vl_merger")
+    );
+
+    let generic = detect_model_from_gguf_bytes(
+        "generic.gguf",
+        &metadata_gguf(&[
+            ("general.type", FixtureValue::String("mmproj")),
+            ("clip.projector_type", FixtureValue::String("qwen3a")),
+            ("clip.has_audio_encoder", FixtureValue::Bool(true)),
+        ]),
+    )
+    .expect("generic detection");
+    assert_eq!(
+        generic.inspection.provided_audio_projector_type.as_deref(),
+        Some("qwen3a")
+    );
+}
+
+#[test]
+fn qwen3_tts_requires_both_updated_audio_projector_roles() {
+    let backbone = detect_model_from_gguf_bytes(
+        "Qwen3-TTS.gguf",
+        &metadata_gguf(&[
+            ("general.type", FixtureValue::String("model")),
+            ("general.architecture", FixtureValue::String("qwen3tts")),
+        ]),
+    )
+    .expect("Qwen3-TTS backbone detection");
+    assert!(backbone.inspection.audio_capable);
+    assert!(backbone.inspection.audio_generation_capable);
+    assert_eq!(
+        backbone.inspection.compatible_audio_projector_types,
+        vec!["qwen3tts_spkenc"]
+    );
+    assert_eq!(
+        backbone
+            .inspection
+            .compatible_audio_generation_projector_types,
+        vec!["qwen3tts_gen"]
+    );
+
+    let projector = detect_model_from_gguf_bytes(
+        "Qwen3-TTS-mmproj.gguf",
+        &metadata_gguf(&[
+            ("general.type", FixtureValue::String("mmproj")),
+            (
+                "clip.audio.projector_type",
+                FixtureValue::String("qwen3tts_spkenc"),
+            ),
+            (
+                "clip.gen.audio.projector_type",
+                FixtureValue::String("qwen3tts_gen"),
+            ),
+            ("clip.has_audio_encoder", FixtureValue::Bool(true)),
+            ("clip.has_gen_audio_encoder", FixtureValue::Bool(true)),
+        ]),
+    )
+    .expect("Qwen3-TTS projector detection");
+    assert!(projector.inspection.audio_capable);
+    assert!(projector.inspection.audio_generation_capable);
+    assert_eq!(
+        projector
+            .inspection
+            .provided_audio_projector_type
+            .as_deref(),
+        Some("qwen3tts_spkenc")
+    );
+    assert_eq!(
+        projector
+            .inspection
+            .provided_audio_generation_projector_type
+            .as_deref(),
+        Some("qwen3tts_gen")
+    );
+}
+
+#[test]
+fn qwen3_asr_tags_select_audio_pairing_without_vision_leakage() {
+    let detection = detect_model_from_gguf_bytes(
+        "Qwen3-ASR.gguf",
+        &metadata_gguf(&[
+            ("general.type", FixtureValue::String("model")),
+            ("general.architecture", FixtureValue::String("qwen3vl")),
+            (
+                "general.tags",
+                FixtureValue::ArrayString(&["automatic-speech-recognition"]),
+            ),
+        ]),
+    )
+    .expect("Qwen3-ASR detection");
+
+    assert_eq!(detection.inspection.role, AssetRole::Model);
+    assert!(!detection.inspection.vision_capable);
+    assert!(detection.inspection.audio_capable);
+    assert!(detection
+        .inspection
+        .compatible_vision_projector_types
+        .is_empty());
+    assert_eq!(
+        detection.inspection.compatible_audio_projector_types,
+        vec!["qwen3a"]
+    );
 }
 
 #[test]
@@ -358,17 +566,18 @@ fn projector_detection_uses_mmproj_clip_architecture_and_projector_type() {
     assert_eq!(projector_type.inspection.role, AssetRole::Projector);
     assert_eq!(
         projector_type.inspection.provided_vision_projector_type,
-        Some("lfm2".to_string())
+        None
     );
 }
 
 #[test]
-fn vision_projector_type_takes_precedence_over_legacy_projector_type() {
+fn generic_projector_type_matches_llama_default_key_precedence() {
     let detection = detect_model_from_gguf_bytes(
         "projector.gguf",
         &metadata_gguf(&[
-            ("clip.projector_type", FixtureValue::String("legacy")),
-            ("clip.vision.projector_type", FixtureValue::String("modern")),
+            ("clip.has_vision_encoder", FixtureValue::Bool(true)),
+            ("clip.projector_type", FixtureValue::String("generic")),
+            ("clip.vision.projector_type", FixtureValue::String("vision")),
         ]),
     )
     .expect("detection");
@@ -376,7 +585,7 @@ fn vision_projector_type_takes_precedence_over_legacy_projector_type() {
     assert_eq!(detection.inspection.role, AssetRole::Projector);
     assert_eq!(
         detection.inspection.provided_vision_projector_type,
-        Some("modern".to_string())
+        Some("generic".to_string())
     );
 }
 
@@ -449,51 +658,70 @@ fn unknown_architecture_is_model_without_vision_projector_types() {
 
 #[test]
 fn helper_predicates_cover_each_target_and_useful_metadata_branch() {
-    assert!(has_useful_metadata(
-        Some(&"model".to_string()),
-        None,
-        None,
-        None,
-        None,
-        None
-    ));
-    assert!(has_useful_metadata(
-        None,
-        Some(&"llama".to_string()),
-        None,
-        None,
-        None,
-        None
-    ));
-    assert!(has_useful_metadata(None, None, Some(1), None, None, None));
-    assert!(has_useful_metadata(
-        None,
-        None,
-        None,
-        Some(&"legacy".to_string()),
-        None,
-        None
-    ));
-    assert!(has_useful_metadata(
-        None,
-        None,
-        None,
-        None,
-        Some(&"modern".to_string()),
-        None
-    ));
-    assert!(has_useful_metadata(
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(false)
-    ));
-    assert!(!has_useful_metadata(None, None, None, None, None, None));
+    let cases = [
+        GgufMetadataInspection {
+            general_type: Some("model".to_string()),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            general_architecture: Some("llama".to_string()),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            trained_context_size: Some(4096),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            general_tags: vec!["audio".to_string()],
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            pooling_type: Some(1),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            clip_projector_type: Some("generic".to_string()),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            clip_vision_projector_type: Some("vision".to_string()),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            clip_audio_projector_type: Some("audio".to_string()),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            clip_audio_generation_projector_type: Some("audio-gen".to_string()),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            clip_has_vision_encoder: Some(false),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            clip_has_audio_encoder: Some(false),
+            ..GgufMetadataInspection::default()
+        },
+        GgufMetadataInspection {
+            clip_has_audio_generation_encoder: Some(false),
+            ..GgufMetadataInspection::default()
+        },
+    ];
+    assert!(cases.iter().all(has_useful_metadata));
+    assert!(!has_useful_metadata(&GgufMetadataInspection::default()));
 
     assert!(is_target_key("general.type"));
     assert!(is_target_key("bert.pooling_type"));
+    assert!(is_target_key("clip.has_audio_encoder"));
+    assert!(is_target_key("clip.has_gen_audio_encoder"));
+    assert!(is_target_key("clip.audio.projector_type"));
+    assert!(is_target_key("clip.gen.audio.projector_type"));
+    assert_eq!(
+        context_length_architecture("llama.context_length"),
+        Some("llama")
+    );
+    assert_eq!(context_length_architecture("context_length"), None);
     assert!(is_pooling_key("general.pooling_type"));
     assert!(!is_target_key("tokenizer.ggml.tokens"));
 }

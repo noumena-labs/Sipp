@@ -4,11 +4,11 @@ use crate::client::{
     EndpointRef, SippChatRequest, SippEmbedRequest, SippEmbeddingResponse, SippEmbeddingRun,
     SippQueryRequest, SippResponseMetadata, SippTextResponse, SippTextRun, SippTokenBatches,
 };
-use crate::core::{FinishReason, TokenBatch, TokenEmissionStats};
+use crate::core::{FinishReason, Operation, TokenBatch, TokenEmissionStats};
 use futures_util::{stream, StreamExt};
 
 use super::{
-    AdmissionController, AdmissionPermit, Authorizer, GatewayExecutor, GatewayPipeline, Operation,
+    AdmissionController, AdmissionPermit, Authorizer, GatewayExecutor, GatewayPipeline,
     TargetResolver,
 };
 use crate::gateway_core::{

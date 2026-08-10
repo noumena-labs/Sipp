@@ -11,7 +11,7 @@ use crate::lifecycle::{
     ModelAssetKind, ModelModality, PairingPlan,
 };
 use futures::executor::block_on;
-use std::{fs, path::PathBuf};
+use std::fs;
 
 fn vision_plan() -> PairingPlan {
     PairingPlan {
@@ -21,6 +21,8 @@ fn vision_plan() -> PairingPlan {
         modality: ModelModality::Vision,
         status: ModelStatus::NeedsProjector,
         compatible_vision_projector_types: strings(&["lfm2"]),
+        compatible_audio_projector_types: Vec::new(),
+        compatible_audio_generation_projector_types: Vec::new(),
     }
 }
 
@@ -33,6 +35,8 @@ fn model_id_is_stable_for_asset_order() {
         modality: ModelModality::Vision,
         status: ModelStatus::Ready,
         compatible_vision_projector_types: Vec::new(),
+        compatible_audio_projector_types: Vec::new(),
+        compatible_audio_generation_projector_types: Vec::new(),
     };
     let right = PairingPlan {
         model_asset_ids: strings(&["asset-a", "asset-b"]),
@@ -41,20 +45,6 @@ fn model_id_is_stable_for_asset_order() {
     };
 
     assert_eq!(model_id_from_plan(&left), model_id_from_plan(&right));
-}
-
-#[test]
-#[ignore = "requires repo-root t5-small-f16.gguf fixture; run model-backed checks through xtask test run --suite model-smoke"]
-fn t5_encoder_decoder_fixture_is_available() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("t5-small-f16.gguf");
-    let metadata = crate::shard::inspect_gguf_metadata_path(&path)
-        .expect("repo-root t5-small-f16.gguf metadata")
-        .expect("repo-root t5-small-f16.gguf is GGUF");
-
-    assert_eq!(metadata.general_architecture.as_deref(), Some("t5"));
 }
 
 #[test]
@@ -130,8 +120,9 @@ fn service_defers_external_model_probe_until_load() {
         block_on(reopened.list()).expect("list"),
         vec![added.clone()]
     );
-    let error = match block_on(reopened.load_engine(&added.id, ModelLoadOptions::default())) {
-        Ok(_) => panic!("missing external model loaded"),
+    let error = match block_on(reopened.prepare_activation(&added.id, ModelLoadOptions::default()))
+    {
+        Ok(_) => panic!("missing external model prepared"),
         Err(error) => error,
     };
     assert!(matches!(error, ModelError::AssetMissing(_)));
@@ -153,6 +144,33 @@ fn model_registration_reports_only_new_model_ids_as_created() {
 }
 
 #[test]
+fn preparing_activation_does_not_mark_the_model_loaded() {
+    let root = TempDir::new("service", "prepare-activation");
+    let model_path = root.path.join("model.gguf");
+    fs::write(&model_path, b"not a gguf").expect("model");
+
+    let store = ModelStore::local(root.path.join("store")).expect("store");
+    let model = block_on(store.add([&model_path])).expect("added");
+    let activation = block_on(store.prepare_activation(&model.id, ModelLoadOptions::default()))
+        .expect("activation plan");
+    let state = block_on(store.state.lock());
+    let entry = state
+        .registry
+        .manifest
+        .models
+        .get(&model.id)
+        .expect("model entry");
+
+    assert_eq!(activation.model_id, model.id);
+    assert_eq!(
+        activation.model_path,
+        fs::canonicalize(model_path).expect("path")
+    );
+    assert_eq!(entry.last_loaded_at_unix_ms, None);
+    assert_eq!(entry.runtime_fingerprint, None);
+}
+
+#[test]
 fn store_rejects_removing_a_model_in_use() {
     let root = TempDir::new("service", "remove-in-use");
     let model_path = root.path.join("model.gguf");
@@ -160,12 +178,12 @@ fn store_rejects_removing_a_model_in_use() {
 
     let store = ModelStore::local(root.path.join("store")).expect("store");
     let model = block_on(store.add([&model_path])).expect("added");
-    block_on(store.replace_usage(None, Some(&model.id)));
+    block_on(store.mark_used(&model.id));
 
     let error = block_on(store.remove(&model.id)).expect_err("model is in use");
     assert!(matches!(error, ModelError::ModelInUse(id) if id == model.id));
 
-    block_on(store.replace_usage(Some(&model.id), None));
+    block_on(store.mark_unused(&model.id));
     block_on(store.remove(&model.id)).expect("removed");
     assert!(model_path.exists());
 }
@@ -242,12 +260,19 @@ fn service_rejects_unresolved_vision_model_on_load() {
         ref_count: 0,
         created_at_unix_ms: now_unix_ms(),
         inspection: Some(AssetInspection {
-            version: 1,
+            version: AssetInspection::VERSION,
             role: AssetRole::Model,
             architecture: Some("lfm2".to_string()),
+            trained_context_size: Some(4096),
             vision_capable: true,
+            audio_capable: false,
+            audio_generation_capable: false,
             compatible_vision_projector_types: strings(&["lfm2"]),
+            compatible_audio_projector_types: Vec::new(),
+            compatible_audio_generation_projector_types: Vec::new(),
             provided_vision_projector_type: None,
+            provided_audio_projector_type: None,
+            provided_audio_generation_projector_type: None,
         }),
     };
     let entry_id = model_id_from_plan(&plan);
@@ -258,8 +283,8 @@ fn service_rejects_unresolved_vision_model_on_load() {
         state.registry.insert_model(entry).expect("model");
     }
 
-    let error = match block_on(store.load_engine(&entry_id, ModelLoadOptions::default())) {
-        Ok(_) => panic!("unresolved vision model loaded"),
+    let error = match block_on(store.prepare_activation(&entry_id, ModelLoadOptions::default())) {
+        Ok(_) => panic!("unresolved vision model prepared"),
         Err(error) => error,
     };
 

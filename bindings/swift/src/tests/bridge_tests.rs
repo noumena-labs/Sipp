@@ -34,6 +34,37 @@ fn managed_model_conversion_preserves_lifecycle_values() {
 }
 
 #[test]
+fn endpoint_conversion_preserves_the_selected_managed_model() {
+    let model = ManagedModel {
+        id: "model-id".to_owned(),
+        name: "Model".to_owned(),
+        bytes: 42,
+        modality: ModelModality::Audio,
+        status: ModelStatus::Ready,
+    };
+    let endpoint = FfiEndpoint {
+        model: FfiManagedModel::from(model.clone()),
+    };
+
+    assert_eq!(
+        CoreEndpoint::from(endpoint),
+        CoreLocalEndpoint::new(&model).into()
+    );
+}
+
+#[test]
+fn model_modality_conversion_preserves_audio_categories() {
+    assert_eq!(
+        FfiModelModality::from(ModelModality::Audio),
+        FfiModelModality::Audio
+    );
+    assert_eq!(
+        FfiModelModality::from(ModelModality::Multimodal),
+        FfiModelModality::Multimodal
+    );
+}
+
+#[test]
 fn lifecycle_error_conversion_preserves_stable_metadata() {
     let converted = FfiError::from(ModelError::RemoteMetadataUnavailable {
         url: "https://example.com/model.gguf".to_owned(),
@@ -58,7 +89,7 @@ fn lifecycle_error_conversion_preserves_stable_metadata() {
 
 #[test]
 fn endpoint_error_conversion_preserves_structured_metadata() {
-    let converted = FfiError::from(SippError::Endpoint(EndpointError {
+    let converted = FfiError::from(SippError::from(EndpointError {
         kind: "rate_limited".to_owned(),
         status: Some(429),
         code: Some("RATE_LIMITED".to_owned()),

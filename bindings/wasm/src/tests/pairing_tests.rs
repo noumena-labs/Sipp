@@ -6,24 +6,36 @@ fn classified_json() -> &'static str {
                 "assetId":"asset-model",
                 "name":"base.gguf",
                 "inspection":{
-                    "version":1,
+                    "version":3,
                     "role":"model",
                     "architecture":"lfm2",
                     "visionCapable":true,
+                    "audioCapable":false,
+                    "audioGenerationCapable":false,
                     "compatibleVisionProjectorTypes":["lfm2"],
-                    "providedVisionProjectorType":null
+                    "compatibleAudioProjectorTypes":[],
+                    "compatibleAudioGenerationProjectorTypes":[],
+                    "providedVisionProjectorType":null,
+                    "providedAudioProjectorType":null,
+                    "providedAudioGenerationProjectorType":null
                 }
             },
             {
                 "assetId":"asset-projector",
                 "name":"mmproj.gguf",
                 "inspection":{
-                    "version":1,
+                    "version":3,
                     "role":"projector",
                     "architecture":"clip",
                     "visionCapable":false,
+                    "audioCapable":false,
+                    "audioGenerationCapable":false,
                     "compatibleVisionProjectorTypes":[],
-                    "providedVisionProjectorType":"lfm2"
+                    "compatibleAudioProjectorTypes":[],
+                    "compatibleAudioGenerationProjectorTypes":[],
+                    "providedVisionProjectorType":"lfm2",
+                    "providedAudioProjectorType":null,
+                    "providedAudioGenerationProjectorType":null
                 }
             }
         ]"#

@@ -1,14 +1,15 @@
 //! Tests the `toolchains::emsdk` module in `xtask`.
 //!
-//! Covers Emscripten install marker parsing, active-state checks, and Windows
-//! patch idempotence with fixture files instead of cloning or installing emsdk.
+//! Covers Emscripten install marker parsing, active-state checks, managed
+//! Python command construction, and Windows patch idempotence with fixture
+//! files instead of cloning or installing emsdk.
 
 use crate::test_support::TempDir;
 
 use super::{
     emdawnwebgpu_is_installed, emdawnwebgpu_package_dir, emsdk_is_active, emsdk_is_installed,
-    expected_emsdk_tool_id, patch_emsdk_windows, rust_target_list_contains, EMDAWNWEBGPU_VERSION,
-    EMSDK_VERSION,
+    emsdk_python_command, expected_emsdk_tool_id, patch_emsdk_windows, rust_target_list_contains,
+    EMDAWNWEBGPU_VERSION, EMSDK_VERSION,
 };
 
 #[test]
@@ -96,6 +97,37 @@ fn rust_target_list_matching_requires_exact_line() {
         "wasm32-unknown-emscripten"
     ));
     assert!(!rust_target_list_contains(installed, "wasm32-unknown"));
+}
+
+#[test]
+fn emsdk_python_command_uses_the_managed_interpreter_directly() {
+    use std::ffi::{OsStr, OsString};
+
+    let temp = TempDir::new("emsdk-managed-python");
+    let python_exe = temp.join("managed-python/python.exe");
+    let sh = xshell::Shell::new().unwrap();
+    let command: std::process::Command =
+        emsdk_python_command(&sh, &python_exe, temp.path(), "install").into();
+    let args = command
+        .get_args()
+        .map(OsStr::to_os_string)
+        .collect::<Vec<_>>();
+
+    assert_eq!(command.get_program(), python_exe.as_os_str());
+    assert_eq!(
+        args,
+        vec![
+            temp.join("emsdk.py").into_os_string(),
+            OsString::from("install"),
+            OsString::from(EMSDK_VERSION),
+        ]
+    );
+    assert!(command
+        .get_envs()
+        .any(|(key, value)| key == "PYTHONHOME" && value.is_none()));
+    assert!(command
+        .get_envs()
+        .any(|(key, value)| key == "PYTHONPATH" && value.is_none()));
 }
 
 #[test]

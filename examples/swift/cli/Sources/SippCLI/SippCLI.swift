@@ -8,19 +8,26 @@ private enum Operation: String {
     case query
     case chat
     case embed
+    case listen
+    case speak
     case cancel
 }
 
 private enum CLIError: Error, LocalizedError {
     case usage
     case cancellationWasNotObserved
+    case invalidEnvironment(name: String, value: String)
 
     var errorDescription: String? {
         switch self {
         case .usage:
-            "Usage: SippCLI <query|chat|embed|cancel> <model.gguf> <input>"
+            "Usage: SippCLI <query|chat|embed|cancel> <model.gguf> <input>\n" +
+                "       SippCLI listen <model.gguf> <projector.gguf> <audio>\n" +
+                "       SippCLI speak <model.gguf> <projector.gguf> <output.wav> [text]"
         case .cancellationWasNotObserved:
             "The cancellation example completed without a cancellation error"
+        case let .invalidEnvironment(name, value):
+            "\(name) must be a positive 32-bit integer; received \(value)"
         }
     }
 }
@@ -46,16 +53,26 @@ private struct SippCLI {
         }
 
         let modelURL = URL(fileURLWithPath: arguments[1]).standardizedFileURL
-        let input = arguments.dropFirst(2).joined(separator: " ")
+        let isSpeech = operation == .listen || operation == .speak
+        guard !isSpeech || arguments.count >= 4 else {
+            throw CLIError.usage
+        }
+        let modelSources = isSpeech
+            ? [
+                modelURL,
+                URL(fileURLWithPath: arguments[2]).standardizedFileURL,
+            ]
+            : [modelURL]
+        let input = arguments.dropFirst(isSpeech ? 3 : 2).joined(separator: " ")
         let client = try SippClient()
-        let model = try await client.models.add([modelURL])
-        try await client.add(endpointID, model: model)
+        let model = try await client.models.add(modelSources)
+        let endpoint = try await client.add(endpointID, .local(model))
 
         switch operation {
         case .query:
             let response = try await client.query(
                 input,
-                endpoint: endpointID,
+                endpoint: endpoint,
                 options: TextOptions(maxTokens: 256, temperature: 0.7)
             ).response
             print(response.text)
@@ -66,7 +83,7 @@ private struct SippCLI {
                     ChatMessage(role: .system, content: "Answer concisely."),
                     ChatMessage(role: .user, content: input),
                 ],
-                endpoint: endpointID,
+                endpoint: endpoint,
                 options: TextOptions(maxTokens: 256, temperature: 0.7)
             )
             for await batch in run.tokens {
@@ -77,19 +94,42 @@ private struct SippCLI {
         case .embed:
             let response = try await client.embed(
                 input,
-                endpoint: endpointID,
+                endpoint: endpoint,
                 local: LocalEmbedOptions(normalize: true)
             ).response
             let preview = response.values.prefix(8).map {
                 String(format: "%.6f", $0)
             }
-            print("endpoint=\(response.endpoint)")
+            print("endpoint=\(response.endpoint.id)")
             print("dimensions=\(response.values.count)")
             print("preview=[\(preview.joined(separator: ", "))]")
+        case .listen:
+            let audio = try Data(contentsOf: URL(fileURLWithPath: arguments[3]))
+            let response = try await client.listen(
+                audio,
+                endpoint: endpoint,
+                language: ProcessInfo.processInfo.environment["SIPP_LANGUAGE"]
+            ).response
+            print(response.text)
+        case .speak:
+            let text = arguments.dropFirst(4).joined(separator: " ")
+            let speakerAudio = try ProcessInfo.processInfo.environment["SIPP_SPEAKER_AUDIO"]
+                .map { try Data(contentsOf: URL(fileURLWithPath: $0)) }
+            let maxDurationMs = try positiveUInt32Environment("SIPP_MAX_DURATION_MS")
+            let response = try await client.speak(
+                text.isEmpty ? "Hello from Sipp." : text,
+                endpoint: endpoint,
+                language: ProcessInfo.processInfo.environment["SIPP_LANGUAGE"],
+                speakerAudio: speakerAudio,
+                maxDurationMs: maxDurationMs
+            ).response
+            let outputURL = URL(fileURLWithPath: arguments[3])
+            try response.audio.write(to: outputURL)
+            print("wrote \(response.durationMs) ms at \(response.sampleRateHz) Hz to \(outputURL.path)")
         case .cancel:
             let run = client.chat(
                 messages: [ChatMessage(role: .user, content: input)],
-                endpoint: endpointID,
+                endpoint: endpoint,
                 options: TextOptions(maxTokens: 2048, temperature: 0.7)
             )
             run.cancel()
@@ -106,7 +146,7 @@ private struct SippCLI {
     }
 
     private static func printTextSummary(_ response: TextResponse) {
-        print("endpoint=\(response.endpoint)")
+        print("endpoint=\(response.endpoint.id)")
         print("finishReason=\(response.finishReason)")
         if let stats = response.localStats {
             print("outputTokens=\(stats.outputTokens)")
@@ -114,5 +154,15 @@ private struct SippCLI {
                 print("decodeTokensPerSecond=\(rate)")
             }
         }
+    }
+
+    private static func positiveUInt32Environment(_ name: String) throws -> UInt32? {
+        guard let value = ProcessInfo.processInfo.environment[name] else {
+            return nil
+        }
+        guard let parsed = UInt32(value), parsed > 0 else {
+            throw CLIError.invalidEnvironment(name: name, value: value)
+        }
+        return parsed
     }
 }

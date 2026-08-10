@@ -1,10 +1,20 @@
+#[allow(
+    clippy::too_many_arguments,
+    reason = "CXX bridge signatures mirror the native ABI"
+)]
 #[cxx::bridge(namespace = "sipp::sys")]
 pub mod ffi {
+    extern "Rust" {
+        fn extend_bytes(output: &mut Vec<u8>, data: &[u8]);
+        fn extend_floats(output: &mut Vec<f32>, data: &[f32]);
+    }
+
     unsafe extern "C++" {
         include!("sipp_cxx.h");
 
         type NativeRuntime;
         type NativeBatch;
+        type NativeAudio;
         type CommonSampler;
 
         fn backend_init();
@@ -59,6 +69,22 @@ pub mod ffi {
             messages_json: &str,
             add_assistant: bool,
         ) -> Result<String>;
+        fn apply_asr_chat_template(self: &NativeRuntime, language: &str) -> Result<String>;
+        fn parse_asr_output(self: &NativeRuntime, language: &str, output: &str) -> Result<String>;
+        fn begin_speech(
+            self: Pin<&mut NativeRuntime>,
+            text: &str,
+            language: &str,
+            voice: &[u8],
+            has_max_duration: bool,
+            max_duration_ms: u32,
+        ) -> Result<()>;
+        fn step_speech(self: Pin<&mut NativeRuntime>) -> Result<bool>;
+        fn finish_speech(self: Pin<&mut NativeRuntime>) -> Result<UniquePtr<NativeAudio>>;
+        fn cancel_speech(self: Pin<&mut NativeRuntime>) -> Result<()>;
+        fn take_data(self: Pin<&mut NativeAudio>) -> Vec<u8>;
+        fn sample_count(self: &NativeAudio) -> u64;
+        fn sample_rate_hz(self: &NativeAudio) -> u32;
         fn decode(self: Pin<&mut NativeRuntime>, batch: &NativeBatch) -> Result<i32>;
         fn encode(self: Pin<&mut NativeRuntime>, batch: &NativeBatch) -> Result<i32>;
         fn synchronize(self: Pin<&mut NativeRuntime>) -> bool;
@@ -80,11 +106,13 @@ pub mod ffi {
             n_threads: i32,
         ) -> bool;
         fn mtmd_support_vision(self: &NativeRuntime) -> bool;
-        fn mtmd_eval_images(
+        fn mtmd_audio_sample_rate(self: &NativeRuntime) -> i32;
+        fn mtmd_generated_audio_sample_rate(self: &NativeRuntime) -> i32;
+        fn mtmd_eval_media(
             self: Pin<&mut NativeRuntime>,
             prompt: &str,
-            image_bytes: &[u8],
-            image_sizes: &[i32],
+            media_bytes: &[u8],
+            media_sizes: &[i32],
             add_special: bool,
             parse_special: bool,
             n_past: i32,
@@ -136,6 +164,14 @@ pub mod ffi {
         ) -> bool;
         fn sampler_detach(runtime: Pin<&mut NativeRuntime>, seq_id: i32) -> bool;
     }
+}
+
+fn extend_bytes(output: &mut Vec<u8>, data: &[u8]) {
+    output.extend_from_slice(data);
+}
+
+fn extend_floats(output: &mut Vec<f32>, data: &[f32]) {
+    output.extend_from_slice(data);
 }
 
 pub use ffi::*;

@@ -7,8 +7,7 @@ use sha2::{Digest, Sha256};
 use crate::collection::sorted_unique_strings_with_optional;
 
 use super::{
-    AssetInspection, ClassifiedAsset, ModelError, ModelModality, ModelSourceKind,
-    DEFAULT_MEDIA_MARKER, REGISTRY_MANIFEST_VERSION,
+    AssetInspection, ClassifiedAsset, ModelError, ModelSourceKind, REGISTRY_MANIFEST_VERSION,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,10 +31,6 @@ pub(super) fn asset_summary(assets: impl IntoIterator<Item = (u64, bool)>) -> As
     }
 
     summary
-}
-
-pub(super) fn media_marker_for_modality(modality: ModelModality) -> Option<String> {
-    (modality == ModelModality::Vision).then(|| DEFAULT_MEDIA_MARKER.to_string())
 }
 
 pub(super) fn classified_asset(
@@ -98,6 +93,18 @@ pub(super) fn validate_registry_manifest_version(
     Err(manifest_version_mismatch(
         label,
         REGISTRY_MANIFEST_VERSION,
+        actual,
+    ))
+}
+
+pub(super) fn validate_asset_inspection_version(actual: u32) -> Result<(), ModelError> {
+    if actual == AssetInspection::VERSION {
+        return Ok(());
+    }
+
+    Err(manifest_version_mismatch(
+        "asset inspection",
+        AssetInspection::VERSION,
         actual,
     ))
 }

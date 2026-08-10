@@ -1,14 +1,15 @@
 import type { SippClientOptions } from '../engine/browser-client.js';
-import {
-  resolveOptimizedPackageAssetUrl,
-  resolveRuntimeBackendOverride,
-  resolveRuntimeThreadingMode,
-  resolveRuntimeUrls,
-} from '../engine/runtime-assets.js';
+import { resolveOptimizedPackageAssetUrl } from '../engine/runtime-assets.js';
 import { ObservabilityController } from '../models/observability-controller.js';
 import { observabilitySnapshotToEngineState } from '../models/observability-controller.js';
 import { SharedTokenRingReader } from '../runtime/shared-token-ring.js';
 import { createAbortError } from '../utils/abort.js';
+import { AsyncSerialQueue } from '../utils/async-queue.js';
+import {
+  hostTaskScheduler,
+  type ScheduledTask,
+  type TaskScheduler,
+} from '../utils/task-scheduler.js';
 import {
   WorkerRequestMessage,
   WorkerResponseMessage,
@@ -27,20 +28,48 @@ import {
   type ModelLifecycleService,
   type ModelLoadOptions,
   type EmbedOptions,
+  type AudioResult,
   type EmbeddingResult,
   type GenerationResult,
+  type ListenOptions,
   type ChatInput,
   type InternalTextRequestOptions,
   type QueryInput,
   type QueryOptions,
+  type SpeakOptions,
   type TokenBatch,
+  type TokenEmissionStats,
 } from '../models/types.js';
 
 interface PendingWorkerCall {
+  readonly incarnation: number;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
   onProgress?: ModelLoadOptions['onProgress'];
   tokenBatchSink?: (batch: TokenBatch) => void;
+  /** Set once the Worker claims a native request ID for this call's stream. */
+  nativeRequestId?: number;
+  /** First failure thrown by the caller's token sink, surfaced on settle. */
+  tokenSinkError: unknown;
+  tokenSinkFailed: boolean;
+  /** Allows the shutdown acknowledgement to settle after presentation stops. */
+  allowDuringRetirement: boolean;
+}
+
+interface PendingCallFinalization {
+  readonly failed: boolean;
+  readonly error: unknown;
+}
+
+interface WorkerInstance {
+  readonly worker: Worker;
+  readonly incarnation: number;
+  acceptPresentation: boolean;
+}
+
+/** @internal Test seams. Not part of the public client surface. */
+export interface WorkerModelServiceClientInternals {
+  readonly tasks?: TaskScheduler;
 }
 
 interface WorkerCallOptions {
@@ -48,6 +77,7 @@ interface WorkerCallOptions {
   onProgress?: ModelLoadOptions['onProgress'];
   tokenBatchSink?: (batch: TokenBatch) => void;
   emitTokens?: boolean;
+  allowDuringRetirement?: boolean;
 }
 
 interface PendingTokenRecord {
@@ -56,11 +86,15 @@ interface PendingTokenRecord {
   readonly frameCount: number;
   readonly byteCount: number;
   readonly text: string;
-  readonly drainMs: number;
 }
 
-type RequestWithCallId = Extract<WorkerRequestMessage, { callId: number }>;
-type WithoutCallId<T> = T extends { callId: number } ? Omit<T, 'callId'> : never;
+// Distributes over the union so each variant keeps its own shape; a plain
+// Omit over the union would collapse it to the shared members only.
+type WithoutCallId<T> = T extends unknown ? Omit<T, 'callId'> : never;
+
+/** Any operational request, minus the callId the client assigns. */
+type WorkerCallRequest = WithoutCallId<Extract<WorkerRequestMessage, { callId: number }>>;
+const WORKER_SHUTDOWN_BUDGET_MS = 1_000;
 
 export function getOptimizedDefaultWorkerUrl(importerUrl: string = import.meta.url): string | null {
   return resolveOptimizedPackageAssetUrl('dist/esm/worker/model-service-entry.js', importerUrl);
@@ -84,26 +118,10 @@ function toWorkerRuntimeConfig(config: SippClientOptions): WorkerRuntimeConfig {
     }
   }
 
-  const hasRuntimeUrlOverride =
-    config.moduleUrl != null ||
-    config.wasmUrl != null ||
-    config.pthreadModuleUrl != null ||
-    config.pthreadWasmUrl != null;
-  const runtimeUrls =
-    !hasRuntimeUrlOverride
-      ? null
-      : resolveRuntimeUrls(config);
-  const wasmThreading = runtimeUrls?.threading ?? resolveRuntimeThreadingMode(config);
-  const defaultBackendOverride = resolveRuntimeBackendOverride({
-    ...config,
-    wasmThreading,
-  });
-
   return {
-    moduleUrl: runtimeUrls?.moduleUrl,
-    wasmUrl: runtimeUrls?.wasmUrl,
-    wasmThreading,
-    defaultBackendOverride,
+    moduleUrl: config.moduleUrl,
+    wasmUrl: config.wasmUrl,
+    wasmThreading: config.wasmThreading,
     moduleOptions: config.moduleOptions,
     maxModelBytes: config.maxModelBytes,
     storageRoot: config.storageRoot,
@@ -129,32 +147,31 @@ function toWorkerQueryOptions(
 }
 
 export class WorkerModelServiceClient implements ModelLifecycleService {
-  private worker: Worker | null = null;
+  private worker: WorkerInstance | null = null;
+  private nextWorkerIncarnation = 1;
+  private activeRuntimeIncarnation: number | null = null;
   private nextCallId = 1;
   private closed = false;
+  private readonly lifecycleOperations = new AsyncSerialQueue();
   private currentSnapshot: ModelInfo | null = null;
   private readonly observability = new ObservabilityController();
   private readonly engineEventListeners = new Set<(event: EngineEvent) => void>();
   private readonly pendingCalls = new Map<number, PendingWorkerCall>();
-  private readonly workerConfig: WorkerRuntimeConfig;
+  private workerConfig: WorkerRuntimeConfig | null = null;
   private tokenRingReader: SharedTokenRingReader | null = null;
-  private tokenRingDrainScheduled = false;
+  private tokenRingDrainTask: ScheduledTask | null = null;
   private activeTokenCallCount = 0;
   private readonly callIdByNativeRequestId = new Map<number, number>();
   private readonly pendingTokenRecordsByNativeRequestId = new Map<number, PendingTokenRecord[]>();
-  private readonly streamStatsByCallId = new Map<
-    number,
-    {
-      framesSent: number;
-      bytesSent: number;
-      batchesSent: number;
-      drainMs: number;
-      drainCalls: number;
-    }
-  >();
+  private readonly streamStatsByCallId = new Map<number, TokenEmissionStats>();
 
-  constructor(private readonly config: SippClientOptions = {}) {
-    this.workerConfig = toWorkerRuntimeConfig(config);
+  private readonly tasks: TaskScheduler;
+
+  constructor(
+    private readonly config: SippClientOptions = {},
+    internals: WorkerModelServiceClientInternals = {}
+  ) {
+    this.tasks = internals.tasks ?? hostTaskScheduler;
   }
 
   public async add(
@@ -162,39 +179,50 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     options: ModelAddOptions = {}
   ): Promise<ModelInfo> {
     this.assertOpen();
-    return (await this.callWorker(
-      {
-        kind: 'models-install',
-        config: this.workerConfig,
-        source,
-      },
-      {
-        signal: options.signal,
-        onProgress: options.onProgress,
-      }
-    )) as ModelInfo;
+    return await this.lifecycleOperations.run(async () =>
+      (await this.callWorker(
+        {
+          kind: 'models-install',
+          source,
+        },
+        {
+          signal: options.signal,
+          onProgress: options.onProgress,
+        }
+      )) as ModelInfo
+    );
   }
 
   public async load(modelId: string, options: ModelLoadOptions = {}): Promise<ModelInfo> {
     this.assertOpen();
-    const result = (await this.callWorker(
-      {
-        kind: 'models-load',
-        config: this.workerConfig,
-        modelId,
-        options: {
-          backend: options.backend,
-          observability: options.observability,
-          runtime: options.runtime,
-        },
-      },
-      {
-        signal: options.signal,
-        onProgress: options.onProgress,
+    return await this.lifecycleOperations.run(async () => {
+      await this.retireWorker();
+      const instance = this.ensureWorker();
+      try {
+        const result = (await this.callWorkerOn(
+          instance,
+          {
+            kind: 'models-load',
+            modelId,
+            options: {
+              backend: options.backend,
+              observability: options.observability,
+              runtime: options.runtime,
+            },
+          },
+          {
+            signal: options.signal,
+            onProgress: options.onProgress,
+          }
+        )) as ModelInfo;
+        this.activeRuntimeIncarnation = instance.incarnation;
+        this.currentSnapshot = result;
+        return result;
+      } catch (error) {
+        this.destroyWorker(instance, error);
+        throw error;
       }
-    )) as ModelInfo;
-    this.currentSnapshot = result.loaded ? result : null;
-    return result;
+    });
   }
 
   public current(): ModelInfo | null {
@@ -204,31 +232,35 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
   public async list(): Promise<ModelInfo[]> {
     this.assertOpen();
-    const models = (await this.callWorker({
-      kind: 'models-list',
-      config: this.workerConfig,
-    })) as ModelInfo[];
-    this.currentSnapshot = models.find((model) => model.loaded) ?? null;
-    return models;
+    return await this.lifecycleOperations.run(async () => {
+      const models = (await this.callWorker({
+        kind: 'models-list',
+      })) as ModelInfo[];
+      if (this.activeRuntimeIncarnation === this.worker?.incarnation) {
+        this.currentSnapshot = models.find((model) => model.loaded) ?? null;
+      }
+      return models;
+    });
   }
 
   public async remove(id: string): Promise<void> {
     this.assertOpen();
-    const current = (await this.callWorker({
-      kind: 'models-remove',
-      config: this.workerConfig,
-      id,
-    })) as ModelInfo | null;
-    this.currentSnapshot = current;
+    await this.lifecycleOperations.run(async () => {
+      const current = (await this.callWorker({
+        kind: 'models-remove',
+        id,
+      })) as ModelInfo | null;
+      if (this.activeRuntimeIncarnation === this.worker?.incarnation) {
+        this.currentSnapshot = current;
+      }
+    });
   }
 
   public async unload(): Promise<void> {
     this.assertOpen();
-    await this.callWorker({
-      kind: 'models-unload',
-      config: this.workerConfig,
+    await this.lifecycleOperations.run(async () => {
+      await this.retireWorker();
     });
-    this.currentSnapshot = null;
   }
 
   public async runQuery(
@@ -237,10 +269,9 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   ): Promise<GenerationResult> {
     this.assertOpen();
     const emitTokens = options.tokenBatchSink != null;
-    return (await this.callWorker(
+    return (await this.callRuntimeWorker(
       {
         kind: 'query',
-        config: this.workerConfig,
         input,
         options: toWorkerQueryOptions(options, emitTokens),
       },
@@ -258,10 +289,9 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
   ): Promise<GenerationResult> {
     this.assertOpen();
     const emitTokens = options.tokenBatchSink != null;
-    return (await this.callWorker(
+    return (await this.callRuntimeWorker(
       {
         kind: 'chat',
-        config: this.workerConfig,
         input,
         options: toWorkerQueryOptions(options, emitTokens),
       },
@@ -278,10 +308,9 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     options: EmbedOptions
   ): Promise<EmbeddingResult> {
     this.assertOpen();
-    return (await this.callWorker(
+    return (await this.callRuntimeWorker(
       {
         kind: 'embed',
-        config: this.workerConfig,
         input,
         options: {
           normalize: options.normalize,
@@ -292,6 +321,40 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
         signal: options.signal,
       }
     )) as EmbeddingResult;
+  }
+
+  public async runListen(
+    audio: Uint8Array,
+    options: ListenOptions
+  ): Promise<GenerationResult> {
+    this.assertOpen();
+    return (await this.callRuntimeWorker(
+      {
+        kind: 'listen',
+        audio,
+        options: {
+          language: options.language,
+          maxTokens: options.maxTokens,
+        },
+      },
+      { signal: options.signal }
+    )) as GenerationResult;
+  }
+
+  public async runSpeak(text: string, options: SpeakOptions): Promise<AudioResult> {
+    this.assertOpen();
+    return (await this.callRuntimeWorker(
+      {
+        kind: 'speak',
+        text,
+        options: {
+          language: options.language,
+          speakerAudio: options.speakerAudio,
+          maxDurationMs: options.maxDurationMs,
+        },
+      },
+      { signal: options.signal }
+    )) as AudioResult;
   }
 
   public currentObservability(): ObservabilitySnapshot {
@@ -317,34 +380,20 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     };
   }
 
-  public close(): void {
+  public async close(): Promise<void> {
     if (this.closed) {
       return;
     }
     this.closed = true;
-    this.tokenRingReader = null;
-    this.tokenRingDrainScheduled = false;
-    this.activeTokenCallCount = 0;
-    this.callIdByNativeRequestId.clear();
-    this.pendingTokenRecordsByNativeRequestId.clear();
-    this.streamStatsByCallId.clear();
-    for (const pending of this.pendingCalls.values()) {
-      pending.reject(new QueryError('ENGINE_CLOSED', 'SippClient is closed.'));
-    }
-    this.pendingCalls.clear();
-
-    if (this.worker == null) {
-      this.currentSnapshot = null;
+    try {
+      await this.lifecycleOperations.run(async () => {
+        await this.retireWorker();
+      });
+    } finally {
+      this.clearRuntimeProjection();
       this.observability.markClosed();
       this.emitEngineEvent({ type: 'closed' });
-      return;
     }
-
-    this.worker.terminate();
-    this.worker = null;
-    this.currentSnapshot = null;
-    this.observability.markClosed();
-    this.emitEngineEvent({ type: 'closed' });
   }
 
   private assertOpen(): void {
@@ -353,25 +402,27 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     }
   }
 
+  private getWorkerConfig(): WorkerRuntimeConfig {
+    this.workerConfig ??= toWorkerRuntimeConfig(this.config);
+    return this.workerConfig;
+  }
+
   private scheduleTokenRingDrain(): void {
     if (
-      this.tokenRingDrainScheduled ||
+      this.tokenRingDrainTask != null ||
       this.activeTokenCallCount === 0 ||
       this.tokenRingReader == null
     ) {
       return;
     }
-    this.tokenRingDrainScheduled = true;
-    const drain = () => {
-      this.tokenRingDrainScheduled = false;
-      this.drainTokenRing();
-      this.scheduleTokenRingDrain();
-    };
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(drain);
-      return;
-    }
-    setTimeout(drain, 16);
+    this.tokenRingDrainTask = this.tasks.frame(() => {
+      this.tokenRingDrainTask = null;
+      try {
+        this.drainTokenRing();
+      } finally {
+        this.scheduleTokenRingDrain();
+      }
+    });
   }
 
   private drainTokenRing(): void {
@@ -380,29 +431,19 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       return;
     }
     reader.drain((streamId, sequenceStart, frameCount, byteCount, text) => {
-      const callId = this.callIdByNativeRequestId.get(streamId);
-      const recordDrainStart = performance.now();
-      const drainMs = performance.now() - recordDrainStart;
-      if (callId == null) {
-        this.bufferPendingTokenRecord({
-          streamId,
-          sequenceStart,
-          frameCount,
-          byteCount,
-          text,
-          drainMs,
-        });
-        return;
-      }
-      this.deliverTokenBatch(
-        callId,
+      const record: PendingTokenRecord = {
         streamId,
         sequenceStart,
         frameCount,
         byteCount,
         text,
-        drainMs
-      );
+      };
+      const callId = this.callIdByNativeRequestId.get(streamId);
+      if (callId == null) {
+        this.bufferPendingTokenRecord(record);
+        return;
+      }
+      this.deliverTokenBatch(callId, record);
     });
   }
 
@@ -422,32 +463,12 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     }
     this.pendingTokenRecordsByNativeRequestId.delete(nativeRequestId);
     for (const record of records) {
-      this.deliverTokenRecord(callId, record);
+      this.deliverTokenBatch(callId, record);
     }
   }
 
-  private deliverTokenRecord(callId: number, record: PendingTokenRecord): void {
-    this.deliverTokenBatch(
-      callId,
-      record.streamId,
-      record.sequenceStart,
-      record.frameCount,
-      record.byteCount,
-      record.text,
-      record.drainMs
-    );
-  }
-
-  private deliverTokenBatch(
-    callId: number,
-    streamId: number,
-    sequenceStart: number,
-    frameCount: number,
-    byteCount: number,
-    text: string,
-    drainMs: number
-  ): void {
-    if (text.length === 0) {
+  private deliverTokenBatch(callId: number, record: PendingTokenRecord): void {
+    if (record.text.length === 0) {
       return;
     }
     const pending = this.pendingCalls.get(callId);
@@ -458,78 +479,122 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       framesSent: 0,
       bytesSent: 0,
       batchesSent: 0,
-      drainMs: 0,
-      drainCalls: 0,
     };
-    stats.framesSent += frameCount;
-    stats.bytesSent += byteCount;
+    stats.framesSent += record.frameCount;
+    stats.bytesSent += record.byteCount;
     stats.batchesSent += 1;
-    stats.drainMs += drainMs;
-    stats.drainCalls += 1;
     this.streamStatsByCallId.set(callId, stats);
-    pending.tokenBatchSink({
-      requestId: String(streamId),
-      streamId,
-      sequenceStart,
-      text,
-      frameCount,
-      byteCount,
-      stats: { ...stats },
-    });
+    try {
+      pending.tokenBatchSink({
+        requestId: String(record.streamId),
+        streamId: record.streamId,
+        sequenceStart: record.sequenceStart,
+        text: record.text,
+        frameCount: record.frameCount,
+        byteCount: record.byteCount,
+        stats: { ...stats },
+      });
+    } catch (error) {
+      this.failTokenSink(callId, pending, error);
+    }
+  }
+
+  /**
+   * Records a caller token-sink failure and cancels the request that produced
+   * it. The failure is reported when the call settles: letting it escape the
+   * drain loop would skip rescheduling and strand the caller's promise.
+   */
+  private failTokenSink(
+    callId: number,
+    pending: PendingWorkerCall,
+    error: unknown
+  ): void {
+    if (!pending.tokenSinkFailed) {
+      pending.tokenSinkFailed = true;
+      pending.tokenSinkError = error;
+    }
+    pending.tokenBatchSink = undefined;
+    const instance = this.worker;
+    if (instance != null && instance.incarnation === pending.incarnation) {
+      this.postWorkerCancellation(instance, callId);
+    }
+  }
+
+  /** Posts a best-effort cancellation without letting a retired Worker throw. */
+  private postWorkerCancellation(instance: WorkerInstance, callId: number): void {
+    if (this.worker !== instance) {
+      return;
+    }
+    try {
+      instance.worker.postMessage({
+        kind: 'cancel',
+        targetCallId: callId,
+      } satisfies WorkerRequestMessage);
+    } catch {
+      // The request will still settle through the Worker response or retirement.
+    }
   }
 
   private forgetStreamingCall(callId: number): void {
-    for (const [nativeRequestId, mappedCallId] of this.callIdByNativeRequestId) {
-      if (mappedCallId === callId) {
-        this.callIdByNativeRequestId.delete(nativeRequestId);
-        this.pendingTokenRecordsByNativeRequestId.delete(nativeRequestId);
-      }
+    const nativeRequestId = this.pendingCalls.get(callId)?.nativeRequestId;
+    if (nativeRequestId != null) {
+      this.callIdByNativeRequestId.delete(nativeRequestId);
+      this.pendingTokenRecordsByNativeRequestId.delete(nativeRequestId);
     }
     this.streamStatsByCallId.delete(callId);
   }
 
-  private ensureWorker(): Worker {
+  private ensureWorker(): WorkerInstance {
     if (this.worker != null) {
       return this.worker;
     }
+    // Resolve the config before spawning, so an invalid config fails the
+    // caller instead of leaving an unconfigurable Worker behind.
+    const config = this.getWorkerConfig();
     const optimizedWorkerUrl = getOptimizedDefaultWorkerUrl();
-    this.worker =
+    const worker =
       this.config.workerUrl == null
         ? optimizedWorkerUrl == null
           ? new Worker(new URL('./model-service-entry.js', import.meta.url), { type: 'module' })
           : new Worker(optimizedWorkerUrl, { type: 'module' })
         : new Worker(this.config.workerUrl, { type: 'module' });
-    this.worker.onmessage = (event: MessageEvent<WorkerResponseMessage>) => {
-      this.handleWorkerMessage(event.data);
+    const instance: WorkerInstance = {
+      worker,
+      incarnation: this.nextWorkerIncarnation++,
+      acceptPresentation: true,
     };
-    this.worker.onerror = (event: ErrorEvent) => {
-      this.failWorker(new Error(event.message || 'Worker runtime crashed.'));
+    this.worker = instance;
+    worker.onmessage = (event: MessageEvent<WorkerResponseMessage>) => {
+      this.handleWorkerMessage(instance, event.data);
     };
-    this.worker.onmessageerror = () => {
-      this.failWorker(new Error('Worker runtime failed to deserialize a message.'));
+    worker.onerror = (event: ErrorEvent) => {
+      this.failWorker(
+        instance,
+        event.error instanceof Error
+          ? event.error
+          : new Error(event.message || 'Worker runtime crashed.')
+      );
     };
-    return this.worker;
+    worker.onmessageerror = () => {
+      this.failWorker(instance, new Error('Worker runtime failed to deserialize a message.'));
+    };
+    // Configure the Worker before any operational request. Messages are
+    // delivered in order, so every later request observes this service.
+    try {
+      worker.postMessage({ kind: 'initialize', config } satisfies WorkerRequestMessage);
+    } catch (error) {
+      // An unconfigurable Worker must not stay installed.
+      this.destroyWorker(instance, error);
+      throw error;
+    }
+    return instance;
   }
 
-  private failWorker(error: unknown): void {
-    if (this.worker != null) {
-      this.worker.onmessage = null;
-      this.worker.onerror = null;
-      this.worker.onmessageerror = null;
-      this.worker.terminate();
-      this.worker = null;
+  private failWorker(instance: WorkerInstance, error: unknown): void {
+    if (this.worker !== instance) {
+      return;
     }
-    this.tokenRingReader = null;
-    this.tokenRingDrainScheduled = false;
-    this.activeTokenCallCount = 0;
-    this.callIdByNativeRequestId.clear();
-    this.pendingTokenRecordsByNativeRequestId.clear();
-    this.streamStatsByCallId.clear();
-    for (const pending of this.pendingCalls.values()) {
-      pending.reject(error);
-    }
-    this.pendingCalls.clear();
-    this.currentSnapshot = null;
+    this.destroyWorker(instance, error);
     this.observability.emit('error', {
       state: 'error',
       model: null,
@@ -538,31 +603,130 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.emitEngineEvent({ type: 'state', state: this.snapshotState() });
   }
 
-  private postWorkerMessage(message: WorkerRequestMessage): void {
-    this.ensureWorker().postMessage(message);
+  private destroyWorker(instance: WorkerInstance, error: unknown): void {
+    instance.worker.onmessage = null;
+    instance.worker.onerror = null;
+    instance.worker.onmessageerror = null;
+    instance.worker.terminate();
+    if (this.worker === instance) {
+      this.worker = null;
+      this.clearRuntimeProjection();
+    }
+    for (const [callId, pending] of this.pendingCalls) {
+      if (pending.incarnation === instance.incarnation) {
+        // reject() finalizes, which removes the entry.
+        pending.reject(error);
+      }
+    }
   }
 
-  private callWorker<T extends RequestWithCallId>(
-    message: WithoutCallId<T>,
+  /**
+   * Stops delivering tokens from the current Worker. Called as soon as
+   * retirement begins so nothing is presented during the shutdown budget,
+   * which can be a full second before the Worker is destroyed.
+   */
+  private stopPresentation(): void {
+    this.tokenRingDrainTask?.cancel();
+    this.tokenRingDrainTask = null;
+    this.tokenRingReader = null;
+    this.callIdByNativeRequestId.clear();
+    this.pendingTokenRecordsByNativeRequestId.clear();
+  }
+
+  private clearRuntimeProjection(): void {
+    this.stopPresentation();
+    this.activeTokenCallCount = 0;
+    this.streamStatsByCallId.clear();
+    this.activeRuntimeIncarnation = null;
+    this.currentSnapshot = null;
+    this.observability.update({
+      state: 'idle',
+      model: null,
+      query: null,
+      runtime: null,
+      profile: null,
+    });
+  }
+
+  private async retireWorker(): Promise<void> {
+    const instance = this.worker;
+    this.activeRuntimeIncarnation = null;
+    this.currentSnapshot = null;
+    if (instance == null) {
+      this.clearRuntimeProjection();
+      return;
+    }
+
+    instance.acceptPresentation = false;
+    this.stopPresentation();
+    const retirementError = new QueryError('ENGINE_CLOSED', 'Worker runtime was retired.');
+    try {
+      await this.awaitWorkerShutdown(instance);
+    } finally {
+      this.destroyWorker(instance, retirementError);
+    }
+  }
+
+  private async awaitWorkerShutdown(instance: WorkerInstance): Promise<void> {
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        budget.cancel();
+        resolve();
+      };
+      const budget = this.tasks.delay(finish, WORKER_SHUTDOWN_BUDGET_MS);
+      void this.callWorkerOn(
+        instance,
+        { kind: 'shutdown' },
+        { allowDuringRetirement: true }
+      ).then(finish, finish);
+    });
+  }
+
+  private callWorker(
+    message: WorkerCallRequest,
+    options: WorkerCallOptions = {}
+  ): Promise<unknown> {
+    return this.callWorkerOn(this.ensureWorker(), message, options);
+  }
+
+  private callRuntimeWorker(
+    message: WorkerCallRequest,
+    options: WorkerCallOptions = {}
+  ): Promise<unknown> {
+    const instance = this.worker;
+    if (
+      instance == null ||
+      this.activeRuntimeIncarnation !== instance.incarnation
+    ) {
+      throw new QueryError('MODEL_NOT_READY', 'No local model is active.');
+    }
+    return this.callWorkerOn(instance, message, options);
+  }
+
+  private callWorkerOn(
+    instance: WorkerInstance,
+    message: WorkerCallRequest,
     options: WorkerCallOptions = {}
   ): Promise<unknown> {
     if (options.signal?.aborted) {
       throw createAbortError('Operation aborted.');
     }
+    if (this.worker !== instance) {
+      throw new QueryError('ENGINE_CLOSED', 'Worker runtime was retired.');
+    }
 
     const callId = this.nextCallId++;
-    const request = {
-      ...message,
-      callId,
-    } as T;
+    const request = { ...message, callId } as WorkerRequestMessage;
 
     let cleanup = (): void => {};
     if (options.signal != null) {
       const abortListener = () => {
-        this.postWorkerMessage({
-          kind: 'cancel',
-          targetCallId: callId,
-        });
+        this.postWorkerCancellation(instance, callId);
       };
       options.signal.addEventListener('abort', abortListener, { once: true });
       cleanup = () => {
@@ -576,9 +740,19 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     }
 
     return new Promise<unknown>((resolve, reject) => {
-      const finalize = () => {
+      // Must never throw: the caller's promise is settled immediately after.
+      const finalize = (): PendingCallFinalization => {
+        let drainFailed = false;
+        let drainError: unknown;
         if (options.emitTokens === true) {
-          this.drainTokenRing();
+          try {
+            this.drainTokenRing();
+          } catch (error) {
+            // A transport failure must reject the call without preventing the
+            // remaining bookkeeping from running.
+            drainFailed = true;
+            drainError = error;
+          }
           this.forgetStreamingCall(callId);
           this.activeTokenCallCount = Math.max(0, this.activeTokenCallCount - 1);
           if (this.activeTokenCallCount === 0) {
@@ -586,68 +760,113 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
           }
         }
         cleanup();
+        const pending = this.pendingCalls.get(callId);
         this.pendingCalls.delete(callId);
+        if (pending?.tokenSinkFailed === true) {
+          return { failed: true, error: pending.tokenSinkError };
+        }
+        return { failed: drainFailed, error: drainError };
       };
       this.pendingCalls.set(callId, {
+        incarnation: instance.incarnation,
         resolve: (value) => {
-          finalize();
+          const finalization = finalize();
+          if (finalization.failed) {
+            reject(finalization.error);
+            return;
+          }
           resolve(value);
         },
         reject: (error) => {
-          finalize();
-          reject(error);
+          // A sink failure is the caller's own error and outranks the
+          // cancellation it triggered.
+          const finalization = finalize();
+          reject(finalization.failed ? finalization.error : error);
         },
         onProgress: options.onProgress,
         tokenBatchSink: options.tokenBatchSink,
+        tokenSinkError: undefined,
+        tokenSinkFailed: false,
+        allowDuringRetirement: options.allowDuringRetirement === true,
       });
       try {
-        this.postWorkerMessage(request);
+        instance.worker.postMessage(request);
       } catch (error) {
         finalize();
-        this.pendingCalls.delete(callId);
         reject(error);
       }
     });
   }
 
-  private handleWorkerMessage(message: WorkerResponseMessage): void {
+  private handleWorkerMessage(instance: WorkerInstance, message: WorkerResponseMessage): void {
+    if (this.worker !== instance) {
+      return;
+    }
     if (message.kind === 'load-progress') {
-      this.pendingCalls.get(message.callId)?.onProgress?.(message.progress);
+      const pending = this.pendingCalls.get(message.callId);
+      if (instance.acceptPresentation && pending?.incarnation === instance.incarnation) {
+        pending.onProgress?.(message.progress);
+      }
       return;
     }
 
     if (message.kind === 'token-ring-ready') {
+      if (!instance.acceptPresentation) {
+        return;
+      }
       this.tokenRingReader = new SharedTokenRingReader(message.descriptor);
       this.scheduleTokenRingDrain();
       return;
     }
 
     if (message.kind === 'token-ring-claim') {
+      if (!instance.acceptPresentation) {
+        return;
+      }
       this.callIdByNativeRequestId.set(message.nativeRequestId, message.callId);
+      const claiming = this.pendingCalls.get(message.callId);
+      if (claiming != null) {
+        claiming.nativeRequestId = message.nativeRequestId;
+      }
       this.flushPendingTokenRecords(message.nativeRequestId, message.callId);
       this.scheduleTokenRingDrain();
       return;
     }
 
     if (message.kind === 'token-batch') {
-      this.pendingCalls.get(message.callId)?.tokenBatchSink?.(message.batch);
+      const pending = this.pendingCalls.get(message.callId);
+      if (instance.acceptPresentation && pending?.incarnation === instance.incarnation) {
+        try {
+          pending.tokenBatchSink?.(message.batch);
+        } catch (error) {
+          this.failTokenSink(message.callId, pending, error);
+        }
+      }
       return;
     }
 
     if (message.kind === 'observability-event') {
+      if (!instance.acceptPresentation) {
+        return;
+      }
       this.observability.ingest(message.event);
-      this.currentSnapshot =
-        message.event.snapshot.state === 'closed' ? null : message.event.snapshot.model;
+      const model = message.event.snapshot.model;
+      this.currentSnapshot = model?.loaded === true ? model : null;
       return;
     }
 
     if (message.kind === 'engine-event') {
-      this.emitEngineEvent(message.event);
+      if (instance.acceptPresentation) {
+        this.emitEngineEvent(message.event);
+      }
       return;
     }
 
     const pending = this.pendingCalls.get(message.callId);
-    if (pending == null) {
+    if (pending == null || pending.incarnation !== instance.incarnation) {
+      return;
+    }
+    if (!instance.acceptPresentation && !pending.allowDuringRetirement) {
       return;
     }
 
@@ -659,12 +878,32 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     pending.reject(this.deserializeError(message));
   }
 
-  private deserializeError(message: Extract<WorkerResponseMessage, { kind: 'reject' }>): unknown {
+  private deserializeError(
+    message: Extract<WorkerResponseMessage, { kind: 'reject' }>
+  ): unknown {
+    const error = this.reviveWorkerError(message);
+    error.stack = message.errorStack ?? error.stack;
+    if (message.cleanupFailures != null && message.cleanupFailures.length > 0) {
+      Object.defineProperty(error, 'cleanupFailures', {
+        configurable: true,
+        enumerable: false,
+        value: new AggregateError(
+          message.cleanupFailures.map((failure) => new Error(failure)),
+          'Cleanup failed after the primary operation error.'
+        ),
+      });
+    }
+    return error;
+  }
+
+  private reviveWorkerError(
+    message: Extract<WorkerResponseMessage, { kind: 'reject' }>
+  ): Error {
     if (message.queryErrorCode != null) {
       return new QueryError(message.queryErrorCode, message.message);
     }
     if (message.errorName === 'AbortError') {
-      return new DOMException(message.message, 'AbortError');
+      return new DOMException(message.message, 'AbortError') as unknown as Error;
     }
     return Object.assign(new Error(message.message), {
       name: message.errorName ?? 'Error',

@@ -12,14 +12,14 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai
 const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash';
 const OPENAI_DEFAULT_MODEL = 'gpt-5-mini';
 
-const { EndpointDescriptor, SippClient } = native;
+const { Endpoint, SippClient } = native;
 const input =
   process.argv.slice(2).join(' ') || 'Say hello from a direct provider.';
 
 // Direct providers belong in trusted Node processes. Browser code should call a
 // gateway or application route instead of holding provider credentials.
 const client = new SippClient();
-const endpoint = await client.add('provider', providerDescriptor());
+const endpoint = await client.add('provider', providerEndpoint());
 const result = await client.chat({
   endpoint,
   messages: [{ role: 'user', content: input }],
@@ -27,11 +27,11 @@ const result = await client.chat({
 }).response;
 printText(result);
 
-function providerDescriptor() {
+function providerEndpoint() {
   const provider = providerName();
   switch (provider) {
     case 'gemini': {
-      return EndpointDescriptor.provider({
+      return Endpoint.provider({
         provider: 'openai_compatible',
         model: envAny(
           ['SIPP_PROVIDER_MODEL', 'GEMINI_MODEL'],
@@ -44,7 +44,7 @@ function providerDescriptor() {
     }
     case 'openai': {
       const baseUrl = envAny(['SIPP_PROVIDER_BASE_URL', 'OPENAI_BASE_URL']);
-      return EndpointDescriptor.provider({
+      return Endpoint.provider({
         provider: 'openai',
         model: envAny(
           ['SIPP_PROVIDER_MODEL', 'OPENAI_MODEL'],
@@ -58,7 +58,7 @@ function providerDescriptor() {
     case 'anthropic': {
       const baseUrl = envAny(['SIPP_PROVIDER_BASE_URL', 'ANTHROPIC_BASE_URL']);
       const version = env('ANTHROPIC_VERSION');
-      return EndpointDescriptor.provider({
+      return Endpoint.provider({
         provider: 'anthropic',
         model: requiredEnvAny(['SIPP_PROVIDER_MODEL', 'ANTHROPIC_MODEL']),
         apiKey: requiredEnvAny(['SIPP_PROVIDER_API_KEY', 'ANTHROPIC_API_KEY']),
@@ -68,7 +68,7 @@ function providerDescriptor() {
       });
     }
     case 'openai_compatible':
-      return EndpointDescriptor.provider({
+      return Endpoint.provider({
         provider: 'openai_compatible',
         model: requiredEnvAny(['SIPP_PROVIDER_MODEL']),
         baseUrl: requiredEnvAny(['SIPP_PROVIDER_BASE_URL']),

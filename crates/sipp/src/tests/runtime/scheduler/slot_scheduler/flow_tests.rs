@@ -120,7 +120,7 @@ fn admit_pending_request_moves_heavy_payloads_into_slot() {
     request.stop = vec!["</s>".to_string()];
     request.prompt_tokens = vec![1, 2, 3, 4];
     request.multimodal = Some(MultimodalPayload {
-        image_buffers: vec![vec![9; 1024]],
+        media_buffers: vec![vec![9; 1024]],
     });
     request.is_multimodal_turn = true;
     assert!(queue.push(request));
@@ -140,7 +140,7 @@ fn admit_pending_request_moves_heavy_payloads_into_slot() {
         slot_request
             .multimodal
             .as_ref()
-            .map(|payload| payload.image_buffers[0].len()),
+            .map(|payload| payload.media_buffers[0].len()),
         Some(1024)
     );
 }
@@ -156,6 +156,7 @@ fn finalize_completed_slot_writes_response_and_keeps_live_residency() {
 
     let slot = &mut scheduler.slots[0];
     slot.phase = SlotPhase::Completed;
+    slot.generated_tokens = vec![101, 202];
     slot.output_text = "done".to_string();
     slot.mirror.current_kv_tokens = vec![1, 2, 3, 4];
     slot.mirror.n_past = 4;
@@ -165,6 +166,7 @@ fn finalize_completed_slot_writes_response_and_keeps_live_residency() {
     let response = queue.completed_responses.get(&1).expect("response");
     assert_eq!(response.status, GenerateResponseStatus::Completed);
     assert_eq!(response.output, ResponseOutput::Text("done".to_string()));
+    assert_eq!(response.runtime_observability.output_tokens, 2);
     assert_eq!(scheduler.slots[0].phase, SlotPhase::Idle);
 
     let warm = kv_cache

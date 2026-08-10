@@ -437,9 +437,34 @@ pub(crate) fn run_build_command(label: impl Into<String>, command: Cmd<'_>) -> R
     run_command_with_display(label, command, CommandDisplay::Build)
 }
 
-/// Runs a test subprocess without exposing raw runner output by default.
-pub(crate) fn run_test_command(label: impl Into<String>, command: Cmd<'_>) -> Result<()> {
-    run_command_with_display(label, command, CommandDisplay::Test)
+/// Runs a test subprocess and returns the log containing its runner output.
+pub(crate) fn run_test_command(label: impl Into<String>, command: Cmd<'_>) -> Result<PathBuf> {
+    let label = label.into();
+    if inline_active() {
+        return run_command_inline(label, command, CommandDisplay::Test);
+    }
+
+    let step = TimedStep::start(label.clone(), !verbose());
+    let output = command
+        .quiet()
+        .ignore_status()
+        .output()
+        .with_context(|| format!("{label} failed to start"))?;
+    let log_path = write_command_log(&label, &output)?;
+
+    if verbose() {
+        let _ = std::io::stdout().write_all(&output.stdout);
+        let _ = std::io::stderr().write_all(&output.stderr);
+    }
+
+    if output.status.success() {
+        step.finish_success();
+        return Ok(log_path);
+    }
+
+    step.finish_error();
+    print_command_failure(&label, &output, &log_path);
+    Err(CommandFailure::new(label, command_status_label(&output), log_path).into())
 }
 
 fn run_command_with_display(
@@ -453,7 +478,7 @@ fn run_command_with_display(
     }
 
     if inline_active() {
-        return run_command_inline(label, command, display);
+        return run_command_inline(label, command, display).map(|_| ());
     }
 
     let step = TimedStep::start(label.clone(), true);
@@ -481,7 +506,7 @@ pub(crate) fn run_long_command(label: impl Into<String>, command: Cmd<'_>) -> Re
         return run_command_verbose(label, command);
     }
 
-    run_command_inline(label, command, CommandDisplay::General)
+    run_command_inline(label, command, CommandDisplay::General).map(|_| ())
 }
 
 /// Formats a list of backends for summaries.
@@ -502,7 +527,7 @@ pub(crate) fn elapsed(duration: Duration) -> String {
     humantime::format_duration(duration).to_string()
 }
 
-fn run_command_inline(label: String, command: Cmd<'_>, display: CommandDisplay) -> Result<()> {
+fn run_command_inline(label: String, command: Cmd<'_>, display: CommandDisplay) -> Result<PathBuf> {
     let started_at = Instant::now();
     let (log_path, log_file) = open_command_log(&label)?;
     let log_file = Arc::new(Mutex::new(log_file));
@@ -524,7 +549,7 @@ fn run_command_piped(
     log_path: PathBuf,
     log_file: Arc<Mutex<File>>,
     display: CommandDisplay,
-) -> Result<()> {
+) -> Result<PathBuf> {
     process
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -580,7 +605,7 @@ fn run_command_piped(
 
     if status.success() {
         finish_inline_step(&label, started_at, true);
-        return Ok(());
+        return Ok(log_path);
     }
 
     finish_inline_step(&label, started_at, false);
@@ -595,7 +620,7 @@ fn run_command_pty(
     log_path: PathBuf,
     log_file: Arc<Mutex<File>>,
     display: CommandDisplay,
-) -> Result<()> {
+) -> Result<PathBuf> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(inline_pty_size())
@@ -652,7 +677,7 @@ fn run_command_pty(
 
     if status.success() {
         finish_inline_step(&label, started_at, true);
-        return Ok(());
+        return Ok(log_path);
     }
 
     finish_inline_step(&label, started_at, false);

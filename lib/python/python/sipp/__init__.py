@@ -269,6 +269,7 @@ _native = _load_native_module()
 CacheRuntimeConfig = _native.CacheRuntimeConfig
 ChatMessage = _native.ChatMessage
 SippClient = _native.SippClient
+SippAudioRun = _native.SippAudioRun
 SippEmbeddingRun = _native.SippEmbeddingRun
 SippTextOptions = _native.SippTextOptions
 SippTextRun = _native.SippTextRun
@@ -277,7 +278,7 @@ ContextRuntimeConfig = _native.ContextRuntimeConfig
 DEFAULT_CONTEXT_KEY = _native.DEFAULT_CONTEXT_KEY
 DEFAULT_MAX_TOKENS = _native.DEFAULT_MAX_TOKENS
 EndpointRef = _native.EndpointRef
-EndpointDescriptor = _native.EndpointDescriptor
+Endpoint = _native.Endpoint
 LocalEmbedOptions = _native.LocalEmbedOptions
 ManagedModel = _native.ManagedModel
 ModelStore = _native.ModelStore
@@ -302,6 +303,7 @@ __all__ = [
     "CacheRuntimeConfig",
     "ChatMessage",
     "SippClient",
+    "SippAudioRun",
     "SippEmbeddingRun",
     "SippTextOptions",
     "SippTextRun",
@@ -309,7 +311,7 @@ __all__ = [
     "ContextRuntimeConfig",
     "DEFAULT_CONTEXT_KEY",
     "DEFAULT_MAX_TOKENS",
-    "EndpointDescriptor",
+    "Endpoint",
     "EndpointRef",
     "LocalEmbedOptions",
     "ManagedModel",

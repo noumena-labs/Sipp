@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use futures::lock::Mutex;
 
-use crate::engine::SippEngine;
+use crate::engine::NativeRuntimeConfig;
+#[cfg(not(target_family = "wasm"))]
 use crate::lifecycle::acquisition::RemoteAcquisitionIds;
 
 use super::backend_policy::BackendPolicy;
@@ -30,9 +31,18 @@ pub struct ModelStore {
     state: Arc<Mutex<ModelStoreState<LocalStorageBackend>>>,
 }
 
+/// Fully resolved native activation input that owns no runtime resources.
+pub(crate) struct ModelActivationPlan {
+    pub(crate) model_id: String,
+    pub(crate) model_path: PathBuf,
+    pub(crate) runtime: NativeRuntimeConfig,
+    runtime_fingerprint: String,
+}
+
 struct ModelStoreState<B: StorageBackend> {
     registry: ModelRegistry<B>,
     assets: AssetStore<B>,
+    #[cfg(not(target_family = "wasm"))]
     acquisition_ids: RemoteAcquisitionIds,
     usage: BTreeMap<String, usize>,
 }
@@ -59,6 +69,7 @@ impl ModelStore {
         let mut state = ModelStoreState {
             registry,
             assets,
+            #[cfg(not(target_family = "wasm"))]
             acquisition_ids: RemoteAcquisitionIds::default(),
             usage: BTreeMap::new(),
         };
@@ -126,16 +137,41 @@ impl ModelStore {
         self.state.lock().await.remove(model_id)
     }
 
-    pub(crate) async fn load_engine(
+    pub(crate) async fn prepare_activation(
         &self,
         model_id: &str,
         options: ModelLoadOptions,
-    ) -> Result<SippEngine, ModelError> {
-        self.state.lock().await.load_engine(model_id, options).await
+    ) -> Result<ModelActivationPlan, ModelError> {
+        let (entry, load_assets) = self.state.lock().await.resolve_activation(model_id)?;
+        let mut backend_plan = BackendPolicy::select(&options)?;
+        if let Some(path) = &load_assets.projector_path {
+            backend_plan.config.multimodal.projector_path = Some(path.display().to_string());
+        }
+        let runtime_fingerprint = runtime_fingerprint(&entry, &backend_plan)?;
+
+        Ok(ModelActivationPlan {
+            model_id: entry.id,
+            model_path: load_assets.model_path,
+            runtime: backend_plan.config,
+            runtime_fingerprint,
+        })
     }
 
-    pub(crate) async fn replace_usage(&self, previous: Option<&str>, next: Option<&str>) {
-        self.state.lock().await.replace_usage(previous, next);
+    pub(crate) async fn commit_activation(
+        &self,
+        activation: &ModelActivationPlan,
+    ) -> Result<(), ModelError> {
+        self.state.lock().await.commit_activation(activation)
+    }
+
+    /// Records that an endpoint now holds `model_id`.
+    pub(crate) async fn mark_used(&self, model_id: &str) {
+        self.state.lock().await.mark_used(model_id);
+    }
+
+    /// Records that an endpoint no longer holds `model_id`.
+    pub(crate) async fn mark_unused(&self, model_id: &str) {
+        self.state.lock().await.mark_unused(model_id);
     }
 }
 
@@ -188,11 +224,10 @@ impl<B: StorageBackend> ModelStoreState<B> {
         Ok(())
     }
 
-    async fn load_engine(
+    fn resolve_activation(
         &mut self,
         model_id: &str,
-        options: ModelLoadOptions,
-    ) -> Result<SippEngine, ModelError> {
+    ) -> Result<(ModelEntry, load_assets::LoadAssetPaths), ModelError> {
         self.prune_stale_local_models()?;
         let entry = self
             .registry
@@ -209,20 +244,16 @@ impl<B: StorageBackend> ModelStoreState<B> {
         }
 
         let load_assets = self.resolve_load_asset_paths(&entry)?;
-        let mut backend_plan = BackendPolicy::select(&options)?;
-        if let Some(path) = &load_assets.projector_path {
-            backend_plan.config.multimodal.projector_path = Some(path.display().to_string());
-        }
-        let runtime_fingerprint = runtime_fingerprint(&entry, &backend_plan)?;
-        let engine = SippEngine::load(&load_assets.model_path, backend_plan.config)
-            .await
-            .map_err(ModelError::from)?;
-        self.registry.update_model(&entry.id, |model| {
+        Ok((entry, load_assets))
+    }
+
+    fn commit_activation(&mut self, activation: &ModelActivationPlan) -> Result<(), ModelError> {
+        self.registry.update_model(&activation.model_id, |model| {
             model.last_loaded_at_unix_ms = Some(now_unix_ms());
-            model.runtime_fingerprint = Some(runtime_fingerprint);
+            model.runtime_fingerprint = Some(activation.runtime_fingerprint.clone());
         })?;
         self.registry.save()?;
-        Ok(engine)
+        Ok(())
     }
 
     fn prune_stale_local_models(&mut self) -> Result<(), ModelError> {
@@ -289,16 +320,11 @@ impl<B: StorageBackend> ModelStoreState<B> {
         Ok(false)
     }
 
-    fn replace_usage(&mut self, previous: Option<&str>, next: Option<&str>) {
-        if let Some(model_id) = previous {
-            self.release(model_id);
-        }
-        if let Some(model_id) = next {
-            *self.usage.entry(model_id.to_string()).or_default() += 1;
-        }
+    fn mark_used(&mut self, model_id: &str) {
+        *self.usage.entry(model_id.to_string()).or_default() += 1;
     }
 
-    fn release(&mut self, model_id: &str) {
+    fn mark_unused(&mut self, model_id: &str) {
         let Some(count) = self.usage.get_mut(model_id) else {
             return;
         };

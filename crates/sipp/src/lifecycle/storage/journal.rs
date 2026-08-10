@@ -20,6 +20,7 @@ struct AcquisitionJournalFile {
 }
 
 impl AcquisitionJournalFile {
+    #[cfg(not(target_family = "wasm"))]
     fn empty(acquisition_id: String) -> Self {
         Self {
             version: JOURNAL_VERSION,
@@ -47,11 +48,13 @@ impl AcquisitionJournalFile {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(not(target_family = "wasm"))]
 pub(crate) struct AcquisitionJournal<B: StorageBackend> {
     backend: B,
     acquisition_id: String,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl<B: StorageBackend> AcquisitionJournal<B> {
     pub(crate) fn new(backend: B, acquisition_id: String) -> Self {
         Self {

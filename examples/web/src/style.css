@@ -12,6 +12,7 @@ body {
 
 button,
 input,
+select,
 textarea,
 a {
   font: inherit;
@@ -102,6 +103,7 @@ label {
 }
 
 input,
+select,
 textarea,
 pre {
   width: 100%;
@@ -112,6 +114,7 @@ pre {
 }
 
 input,
+select,
 textarea {
   padding: 10px 12px;
 }

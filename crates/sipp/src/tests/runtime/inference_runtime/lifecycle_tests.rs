@@ -7,12 +7,20 @@ use crate::engine::protocol::ModelClass;
 use crate::error::Error;
 use crate::native_bridge::NativeRuntimeHandle;
 use crate::runtime::config::{NativeRuntimeConfig, ResolvedRuntimeLimits};
+use crate::shard::GgufMetadataInspection;
+
+fn profile(class: ModelClass) -> ModelProfile {
+    ModelProfile {
+        class,
+        generates_audio: false,
+    }
+}
 
 #[test]
 fn encoder_only_enables_embedding_context_before_common_params() {
     let mut config = NativeRuntimeConfig::default();
 
-    apply_model_class_defaults(&mut config, ModelClass::EncoderOnly).expect("defaults");
+    apply_model_requirements(&mut config, profile(ModelClass::EncoderOnly)).expect("defaults");
 
     assert_eq!(config.context.embeddings, Some(true));
     assert_eq!(config.context.n_batch, Some(DEFAULT_ENCODER_BATCH_SIZE));
@@ -22,12 +30,16 @@ fn encoder_only_enables_embedding_context_before_common_params() {
 #[test]
 fn decoder_only_and_encoder_decoder_defaults_preserve_supported_configs() {
     let mut decoder_config = NativeRuntimeConfig::default();
-    apply_model_class_defaults(&mut decoder_config, ModelClass::DecoderOnly).expect("decoder");
+    apply_model_requirements(&mut decoder_config, profile(ModelClass::DecoderOnly))
+        .expect("decoder");
     assert_eq!(decoder_config.context.embeddings, None);
 
     let mut encoder_decoder_config = NativeRuntimeConfig::default();
-    apply_model_class_defaults(&mut encoder_decoder_config, ModelClass::EncoderDecoder)
-        .expect("encoder-decoder defaults");
+    apply_model_requirements(
+        &mut encoder_decoder_config,
+        profile(ModelClass::EncoderDecoder),
+    )
+    .expect("encoder-decoder defaults");
     assert_eq!(encoder_decoder_config.context.embeddings, None);
     assert_eq!(
         encoder_decoder_config.context.n_batch,
@@ -45,7 +57,8 @@ fn encoder_batch_defaults_follow_n_batch_and_preserve_explicit_n_ubatch() {
     let mut config = NativeRuntimeConfig::default();
     config.context.n_batch = Some(1024);
 
-    apply_model_class_defaults(&mut config, ModelClass::EncoderOnly).expect("encoder defaults");
+    apply_model_requirements(&mut config, profile(ModelClass::EncoderOnly))
+        .expect("encoder defaults");
 
     assert_eq!(config.context.n_ubatch, Some(1024));
 
@@ -53,7 +66,7 @@ fn encoder_batch_defaults_follow_n_batch_and_preserve_explicit_n_ubatch() {
     explicit_config.context.n_batch = Some(1024);
     explicit_config.context.n_ubatch = Some(256);
 
-    apply_model_class_defaults(&mut explicit_config, ModelClass::EncoderOnly)
+    apply_model_requirements(&mut explicit_config, profile(ModelClass::EncoderOnly))
         .expect("explicit encoder defaults");
 
     assert_eq!(explicit_config.context.n_batch, Some(1024));
@@ -65,7 +78,7 @@ fn encoder_decoder_rejects_embedding_context_before_common_params() {
     let mut config = NativeRuntimeConfig::default();
     config.context.embeddings = Some(true);
 
-    let error = apply_model_class_defaults(&mut config, ModelClass::EncoderDecoder)
+    let error = apply_model_requirements(&mut config, profile(ModelClass::EncoderDecoder))
         .expect_err("encoder-decoder embeddings");
 
     assert!(
@@ -120,11 +133,57 @@ fn encoder_decoder_rejects_parallel_contexts_before_common_params() {
     let mut config = NativeRuntimeConfig::default();
     config.context.n_parallel = Some(2);
 
-    let error = apply_model_class_defaults(&mut config, ModelClass::EncoderDecoder)
+    let error = apply_model_requirements(&mut config, profile(ModelClass::EncoderDecoder))
         .expect_err("encoder-decoder parallelism");
 
     assert!(
         matches!(error, Error::UnsupportedOperation { operation: "load", reason }
             if reason.contains("n_parallel=1"))
     );
+}
+
+#[test]
+fn audio_generation_requires_embeddings_and_one_sequence() {
+    let mut config = NativeRuntimeConfig::default();
+    apply_model_requirements(
+        &mut config,
+        ModelProfile {
+            class: ModelClass::DecoderOnly,
+            generates_audio: true,
+        },
+    )
+    .expect("audio-generation requirements");
+
+    assert_eq!(config.context.embeddings, Some(true));
+    assert_eq!(config.context.n_parallel, Some(1));
+
+    config.context.n_parallel = Some(2);
+    let error = apply_model_requirements(
+        &mut config,
+        ModelProfile {
+            class: ModelClass::DecoderOnly,
+            generates_audio: true,
+        },
+    )
+    .expect_err("parallel audio generation");
+    assert!(matches!(
+        error,
+        Error::UnsupportedOperation {
+            operation: "load",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn audio_generation_requirement_comes_from_projector_capability_metadata() {
+    let mut metadata = GgufMetadataInspection::default();
+    assert!(!metadata_generates_audio(&metadata));
+
+    metadata.clip_has_audio_generation_encoder = Some(true);
+    assert!(metadata_generates_audio(&metadata));
+
+    metadata.clip_has_audio_generation_encoder = Some(false);
+    metadata.clip_audio_generation_projector_type = Some("future_audio_generator".to_string());
+    assert!(metadata_generates_audio(&metadata));
 }

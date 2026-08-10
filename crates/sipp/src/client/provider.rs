@@ -180,7 +180,7 @@ fn build_openai_provider(
         timeout: config.timeout,
     })
     .map_err(|error| {
-        SippError::Provider(ProviderEndpointError::from_provider_error(error, &secrets))
+        SippError::from(ProviderEndpointError::from_provider_error(error, &secrets))
     })?;
     Ok((model, transport, secrets))
 }
@@ -197,7 +197,7 @@ fn build_anthropic_provider(
         timeout: config.timeout,
     })
     .map_err(|error| {
-        SippError::Provider(ProviderEndpointError::from_provider_error(error, &secrets))
+        SippError::from(ProviderEndpointError::from_provider_error(error, &secrets))
     })?;
     Ok((model, transport, secrets))
 }
@@ -227,7 +227,7 @@ fn build_openai_compatible_provider(
         timeout: config.timeout,
     })
     .map_err(|error| {
-        SippError::Provider(ProviderEndpointError::from_provider_error(error, &secrets))
+        SippError::from(ProviderEndpointError::from_provider_error(error, &secrets))
     })?;
     Ok((model, transport, secrets))
 }

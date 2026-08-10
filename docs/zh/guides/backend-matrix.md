@@ -25,7 +25,7 @@ ggml 运算级别的兼容矩阵参考上游的 [llama.cpp GGML 运算表](https
 
 | 环境 | 支持的后端 | 选择方式 |
 | --- | --- | --- |
-| 浏览器 | `auto`, `cpu`, `webgpu` | `EndpointDescriptor.local(model.id, { backend: 'webgpu' })` |
+| 浏览器 | `auto`, `cpu`, `webgpu` | `Endpoint.local(model, { backend: 'webgpu' })` |
 | Node.js | `cpu`, `vulkan`, `cuda`, `metal` | `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` |
 | Python | `cpu`, `vulkan`, `cuda`, `metal` | `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` |
 | CLI | `auto`, `cpu`, `cuda`, `metal`, `vulkan` | `sipp ... --backend <backend>` |
@@ -94,12 +94,12 @@ backend = "cpu"
 const model = await client.models.add(['./models/model.gguf']);
 await client.add(
   'local-webgpu',
-  EndpointDescriptor.local(model.id, { backend: 'webgpu' })
+  Endpoint.local(model, { backend: 'webgpu' })
 );
 
 await client.add(
   'local-cpu',
-  EndpointDescriptor.local(model.id, { backend: 'cpu' })
+  Endpoint.local(model, { backend: 'cpu' })
 );
 ```
 

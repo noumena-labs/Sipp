@@ -20,7 +20,7 @@ npm install @sipphq/sipp
 ```
 
 ```ts
-import { EndpointDescriptor, SippClient, type ChatMessage } from '@sipphq/sipp';
+import { Endpoint, SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
 const messages: readonly ChatMessage[] = [
@@ -38,7 +38,7 @@ const queryPrompt = [
 const textModel = await client.models.add(['/models/chat.gguf']);
 const textEndpoint = await client.add(
   'text',
-  EndpointDescriptor.local(textModel.id, {
+  Endpoint.local(textModel, {
     backend: 'webgpu',
     runtime: { context: { n_ctx: 2048 } },
   })
@@ -61,7 +61,7 @@ const chat = await client.chat(messages, {
 const embedModel = await client.models.add(['/models/embed.gguf']);
 const embedEndpoint = await client.add(
   'embed',
-  EndpointDescriptor.local(embedModel.id, {
+  Endpoint.local(embedModel, {
     backend: 'webgpu',
     runtime: { context: { n_ctx: 2048, embeddings: true, pooling: 'mean' } },
   })
@@ -85,7 +85,7 @@ npm install @sipphq/sipp-server
 ```
 
 ```ts
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { Endpoint, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient();
 const messages = [
@@ -106,7 +106,7 @@ const embedModelPath = process.argv[3] ?? 'embed.gguf';
 const textModel = await client.models.add([textModelPath]);
 const textEndpoint = await client.add(
   'text',
-  EndpointDescriptor.local(textModel.id, {
+  Endpoint.local(textModel, {
     runtime: { context: { n_ctx: 2048 } },
   })
 );
@@ -130,7 +130,7 @@ const chat = await client.chat({
 const embedModel = await client.models.add([embedModelPath]);
 const embedEndpoint = await client.add(
   'embed',
-  EndpointDescriptor.local(embedModel.id, {
+  Endpoint.local(embedModel, {
     runtime: { context: { n_ctx: 2048, embeddings: true, pooling: 'mean' } },
   })
 );
@@ -165,7 +165,7 @@ from sipp import (
     ContextRuntimeConfig,
     LocalEmbedOptions,
     LocalTextOptions,
-    EndpointDescriptor,
+    Endpoint,
     NativeRuntimeConfig,
 )
 
@@ -188,7 +188,7 @@ text_options = SippTextOptions(max_tokens=64)
 text_model = client.models.add(["chat.gguf"])
 text_endpoint = client.add(
     "text",
-    EndpointDescriptor.local(text_model.id),
+    Endpoint.local(text_model),
 )
 
 # query: raw prompt; replace markers with the target model's template.
@@ -210,7 +210,7 @@ chat = client.chat(
 embed_model = client.models.add(["embed.gguf"])
 embed_endpoint = client.add(
     "embed",
-    EndpointDescriptor.local(
+    Endpoint.local(
         embed_model.id,
         runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(
@@ -243,8 +243,8 @@ use sipp::engine::{
     ChatMessage, ChatRole, ContextRuntimeConfig, NativeRuntimeConfig, PoolingType,
 };
 use sipp::{
-    SippChatRequest, SippClient, SippEmbedRequest, SippQueryRequest,
-    SippTextOptions, LocalDescriptor, LocalEmbedOptions, LocalTextOptions,
+    endpoint::Local, LocalEmbedOptions, LocalTextOptions, SippChatRequest,
+    SippClient, SippEmbedRequest, SippQueryRequest, SippTextOptions,
 };
 
 let mut client = SippClient::new()?;
@@ -267,7 +267,7 @@ let text_options = SippTextOptions {
 
 let text_model = client.models().add(["chat.gguf"]).await?;
 let text_endpoint = client
-    .add("text", LocalDescriptor::new(text_model.id))
+    .add("text", Local::new(&text_model))
     .await?;
 
 // query: raw prompt; replace markers with the target model's template.
@@ -299,10 +299,8 @@ let chat = client
     .await?;
 
 let embed_model = client.models().add(["embed.gguf"]).await?;
-let mut embed_descriptor = LocalDescriptor::new(embed_model.id);
-embed_descriptor.runtime = embed_config();
 let embed_endpoint = client
-    .add("embed", embed_descriptor)
+    .add("embed", Local::new(&embed_model).runtime(embed_config()))
     .await?;
 
 // embed: vector output; local endpoint must be embedding-capable.
@@ -340,10 +338,10 @@ metrics in the gateway process. The example uses the browser package shape;
 Node.js uses the same request-object shape shown above.
 
 ```ts
-import { EndpointDescriptor, SippClient, type ChatMessage } from '@sipphq/sipp';
+import { Endpoint, SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
-const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
+const endpoint = await client.add('gateway', Endpoint.gateway({
   target: 'local',
   baseUrl: 'https://gateway.example.com',
   authentication: { kind: 'bearer', value: await getGatewayToken() },
@@ -389,7 +387,7 @@ model-specific: `query` needs a completion-compatible provider or model,
 `chat` needs a chat model, and `embed` needs an embedding model.
 
 ```ts
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { Endpoint, SippClient } from '@sipphq/sipp-server';
 
 function env(name: string): string {
   const value = process.env[name];
@@ -405,18 +403,18 @@ const chatMessages = [
   { role: 'user', content: 'Explain provider inference.' },
 ];
 
-const completionEndpoint = await client.add('completion', EndpointDescriptor.provider({
+const completionEndpoint = await client.add('completion', Endpoint.provider({
   provider: 'openai_compatible',
   model: env('COMPLETION_MODEL'),
   baseUrl: env('COMPLETION_BASE_URL'),
   apiKey: env('COMPLETION_API_KEY'),
 }));
-const chatEndpoint = await client.add('chat', EndpointDescriptor.provider({
+const chatEndpoint = await client.add('chat', Endpoint.provider({
   provider: 'openai',
   model: env('OPENAI_CHAT_MODEL'),
   apiKey: env('OPENAI_API_KEY'),
 }));
-const embedEndpoint = await client.add('embed', EndpointDescriptor.provider({
+const embedEndpoint = await client.add('embed', Endpoint.provider({
   provider: 'openai',
   model: env('OPENAI_EMBED_MODEL'),
   apiKey: env('OPENAI_API_KEY'),

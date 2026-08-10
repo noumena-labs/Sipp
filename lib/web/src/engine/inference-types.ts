@@ -1,6 +1,5 @@
 export type FlashAttentionMode = 'auto' | 'enabled' | 'disabled';
 export type SchedulerPolicyMode = 'latency_first' | 'balanced' | 'throughput_first';
-export type EngineExecutionMode = 'main-thread' | 'worker';
 export type BackendDeviceType = 'cpu' | 'gpu' | 'igpu' | 'accel' | 'unknown';
 
 export type GpuLayerConfig = 'auto' | 'all' | { count: number };
@@ -198,8 +197,6 @@ export interface TokenEmissionStats {
   framesSent: number;
   bytesSent: number;
   batchesSent: number;
-  drainMs: number;
-  drainCalls: number;
 }
 
 export interface TokenBatch {
@@ -213,6 +210,12 @@ export interface TokenBatch {
 }
 
 export type GenerateRequestId = number;
+
+/** Browser request identity scoped to one authoritative native runtime session. */
+export interface GenerateRequestHandle {
+  readonly generation: number;
+  readonly requestId: GenerateRequestId;
+}
 
 export interface GenerateRequest {
   contextKey: string;
@@ -229,6 +232,13 @@ export interface EmbeddingOutput {
   values: number[];
   pooling: PoolingType;
   normalized: boolean;
+}
+
+export interface AudioOutput {
+  data: Uint8Array;
+  sampleRateHz: number;
+  channels: number;
+  durationMs: number;
 }
 
 export interface RequestObservabilityMetrics {
@@ -320,9 +330,11 @@ export interface BackendObservability {
 }
 
 export interface TransportObservability {
-  executionMode: EngineExecutionMode;
+  executionMode: 'worker';
   workerBacked: boolean;
   enabled: boolean;
+  wasmRunLoopCalls: number;
+  wasmRunLoopMs: number;
   activeTokenTransport?: 'none' | 'token-stream';
   activeTokenEmission?: boolean;
   tokenDrainCalls?: number;
@@ -366,11 +378,22 @@ interface BaseGenerateResponse {
 export interface TextGenerateResponse extends BaseGenerateResponse {
   outputText: string;
   embedding?: undefined;
+  audio?: undefined;
 }
 
 export interface EmbeddingGenerateResponse extends BaseGenerateResponse {
   embedding: EmbeddingOutput;
   outputText?: undefined;
+  audio?: undefined;
 }
 
-export type GenerateResponse = TextGenerateResponse | EmbeddingGenerateResponse;
+export interface AudioGenerateResponse extends BaseGenerateResponse {
+  audio: AudioOutput;
+  outputText?: undefined;
+  embedding?: undefined;
+}
+
+export type GenerateResponse =
+  | TextGenerateResponse
+  | EmbeddingGenerateResponse
+  | AudioGenerateResponse;

@@ -48,9 +48,10 @@ fn env_scripts_prepend_launcher_directory_once() {
     assert!(powershell.contains("$SippBun"));
     assert!(powershell.contains("$SippNinja"));
     assert!(powershell.contains("$SippCmakeBin"));
-    assert!(powershell.contains(".build/toolchain/bun"));
-    assert!(powershell.contains(".build/toolchain/ninja"));
-    assert!(powershell.contains(".build/toolchain/cmake"));
+    let normalized_powershell = powershell.replace('\\', "/");
+    assert!(normalized_powershell.contains(".build/toolchain/bun"));
+    assert!(normalized_powershell.contains(".build/toolchain/ninja"));
+    assert!(normalized_powershell.contains(".build/toolchain/cmake"));
     assert!(powershell.contains("[System.IO.Path]::PathSeparator"));
 
     let cmd = cmd_env_script(Path::new("C:\\100%\\bin")).unwrap();

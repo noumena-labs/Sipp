@@ -23,13 +23,13 @@ npm install @sipphq/sipp
 ## 本地推理
 
 ```ts
-import { EndpointDescriptor, SippClient, type ChatMessage } from '@sipphq/sipp';
+import { Endpoint, SippClient, type ChatMessage } from '@sipphq/sipp';
 
 const client = new SippClient();
 const model = await client.models.add(['/models/model.gguf']);
 const endpoint = await client.add(
   'default',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     backend: 'webgpu',
     runtime: {
       context: { n_ctx: 2048 },
@@ -65,9 +65,9 @@ await client.close();
 当需要由独立服务器统一管理模型路径、提供商凭证、访问策略和监控指标时，使用网关端点。
 
 ```ts
-import { EndpointDescriptor } from '@sipphq/sipp';
+import { Endpoint } from '@sipphq/sipp';
 
-const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
+const endpoint = await client.add('gateway', Endpoint.gateway({
   target: 'local',
   baseUrl: 'https://gateway.example.com',
   authentication: {
@@ -92,11 +92,17 @@ const run = client.chat(messages, {
 
 浏览器运行时通过 Emscripten 将 Sipp 的 Rust WASM ABI 与 llama.cpp 及 ggml 连接起来。浏览器暴露所需适配器时，引擎使用 WebGPU 运行 GGUF 文本和视觉模型；选择 CPU 后端时则使用 CPU 执行。首次获取 URL 或导入 `File` 后，模型会保留在 OPFS 中，并可通过模型 ID 再次加载。
 
-该包在运行时自动解析其打包的 JavaScript 和 WASM 资源，通常无需手动覆盖资源 URL。只有应用需要精细控制浏览器的执行、存储或本地运行时行为时，才需要配置 `executionMode`、`wasmThreading`、`browserCache` 以及本地端点的 `options.runtime`。
+浏览器本地运行时始终在 Worker 中执行。激活另一个模型时，当前 Worker 会先终止，然后再创建新的运行时。请始终使用 `await client.close()`，确保 Worker 终止和浏览器资源清理全部完成。
+
+`client.models` 返回的模型元数据是只读的。`assetFingerprint` 标识已安装资源的版本。模型未激活时，`capabilities` 为 `null`；对于当前激活的模型，请通过 `capabilities.operations` 检查是否支持 `query`、`chat`、`embed`、`listen` 和 `speak`。不可用的可选能力值以 `null` 表示。
+
+`TokenBatch` 值通过 `stats` 报告 `framesSent`、`bytesSent` 和 `batchesSent`。该统计不再提供逐批次的排空耗时；如需观察传输成本，请使用可观测性数据中的 `jsTokenDrainMs` 和 `jsTokenDrainCalls`。
+
+该包在运行时自动解析其打包的 JavaScript 和 WASM 资源，通常无需手动覆盖资源 URL。只有应用需要精细控制浏览器的执行、存储或本地运行时行为时，才需要配置 `wasmThreading`、`browserCache` 以及本地端点的 `options.runtime`。
 
 打包提供的浏览器运行时使用 pthread，因此浏览器本地推理需要 `SharedArrayBuffer` 与跨源隔离响应头。无法提供这些响应头的宿主必须设置 `wasmThreading: 'single-thread'`，并提供自定义单线程 `moduleUrl` 和 `wasmUrl` 资源。
 
-`SippClient` 选项、WebGPU 和后端选择、Worker 模式、pthread 要求及本地运行时配置组的详情，见[运行时选项](../reference/runtime-options.md)。
+`SippClient` 选项、WebGPU 和后端选择、Worker 生命周期、pthread 要求及本地运行时配置组的详情，见[运行时选项](../reference/runtime-options.md)。
 
 ## 相关文档
 

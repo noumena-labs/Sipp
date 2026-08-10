@@ -13,9 +13,8 @@ use sipp::lifecycle::{
     BackendPlan, BackendPolicy, BackendPreference, BackendSelection, ModelLoadOptions, StatsMode,
 };
 use sipp::{
-    AnthropicProviderConfig, EndpointDescriptor, EndpointRef, LocalDescriptor,
-    OpenAiCompatibleProviderConfig, OpenAiProviderConfig, ProviderAuthConfig, ProviderDescriptor,
-    ProviderSecret, SippClient,
+    endpoint, AnthropicProviderConfig, Endpoint, EndpointRef, OpenAiCompatibleProviderConfig,
+    OpenAiProviderConfig, ProviderAuthConfig, ProviderDescriptor, ProviderSecret, SippClient,
 };
 use sipp_gateway::GatewayRoutes;
 
@@ -145,12 +144,12 @@ impl GatewayServerConfig {
         let mut targets = BTreeMap::new();
         let mut summaries = Vec::new();
         for target in &self.targets {
-            let (descriptor, summary) = target
+            let (endpoint, summary) = target
                 .endpoint
-                .descriptor_and_summary(&target.name, &client)
+                .endpoint_and_summary(&target.name, &client)
                 .await?;
             let endpoint = client
-                .add(target.name.clone(), descriptor)
+                .add(target.name.clone(), endpoint)
                 .await
                 .with_context(|| format!("failed to load target {}", target.name))?;
             targets.insert(target.name.clone(), endpoint);
@@ -471,7 +470,7 @@ pub enum EndpointConfig {
         #[serde(default)]
         stats: StatsMode,
         #[serde(default)]
-        runtime: NativeRuntimeConfig,
+        runtime: Box<NativeRuntimeConfig>,
     },
     Openai {
         model: String,
@@ -538,11 +537,11 @@ impl EndpointConfig {
         Ok(())
     }
 
-    async fn descriptor_and_summary(
+    async fn endpoint_and_summary(
         &self,
         target_name: &str,
         client: &SippClient,
-    ) -> anyhow::Result<(EndpointDescriptor, TargetSummary)> {
+    ) -> anyhow::Result<(Endpoint, TargetSummary)> {
         match self {
             Self::Local {
                 model,
@@ -550,16 +549,15 @@ impl EndpointConfig {
                 stats,
                 runtime,
             } => {
-                let plan = local_backend_plan(*backend, *stats, runtime.clone())?;
+                let plan = local_backend_plan(*backend, *stats, runtime.as_ref().clone())?;
                 let managed_model = client
                     .models()
                     .add([model.clone()])
                     .await
                     .with_context(|| format!("failed to add {}", model.display()))?;
-                let mut descriptor = LocalDescriptor::new(managed_model.id);
-                descriptor.runtime = plan.config;
+                let local = endpoint::Local::new(&managed_model).runtime(plan.config);
                 Ok((
-                    EndpointDescriptor::Local(descriptor),
+                    local.into(),
                     TargetSummary {
                         name: target_name.to_string(),
                         kind: TargetKind::Local,
@@ -575,12 +573,13 @@ impl EndpointConfig {
                 base_url,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::Provider(ProviderDescriptor::OpenAi(OpenAiProviderConfig {
+                ProviderDescriptor::OpenAi(OpenAiProviderConfig {
                     model: model.clone(),
                     api_key: ProviderSecret::new(required_env(api_key_env)?),
                     base_url: base_url.clone(),
                     timeout: timeout(*timeout_seconds),
-                })),
+                })
+                .into(),
                 TargetSummary {
                     name: target_name.to_string(),
                     kind: TargetKind::OpenAi,
@@ -596,18 +595,15 @@ impl EndpointConfig {
                 correlation_header,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::Provider(ProviderDescriptor::OpenAiCompatible(
-                    OpenAiCompatibleProviderConfig {
-                        model: model.clone(),
-                        base_url: base_url.clone(),
-                        auth: ProviderAuthConfig::Bearer(ProviderSecret::new(required_env(
-                            token_env,
-                        )?)),
-                        static_headers: Vec::new(),
-                        correlation_header: correlation_header.clone(),
-                        timeout: timeout(*timeout_seconds),
-                    },
-                )),
+                ProviderDescriptor::OpenAiCompatible(OpenAiCompatibleProviderConfig {
+                    model: model.clone(),
+                    base_url: base_url.clone(),
+                    auth: ProviderAuthConfig::Bearer(ProviderSecret::new(required_env(token_env)?)),
+                    static_headers: Vec::new(),
+                    correlation_header: correlation_header.clone(),
+                    timeout: timeout(*timeout_seconds),
+                })
+                .into(),
                 TargetSummary {
                     name: target_name.to_string(),
                     kind: TargetKind::OpenAiCompatible,
@@ -623,15 +619,14 @@ impl EndpointConfig {
                 version,
                 timeout_seconds,
             } => Ok((
-                EndpointDescriptor::Provider(ProviderDescriptor::Anthropic(
-                    AnthropicProviderConfig {
-                        model: model.clone(),
-                        api_key: ProviderSecret::new(required_env(api_key_env)?),
-                        base_url: base_url.clone(),
-                        version: version.clone(),
-                        timeout: timeout(*timeout_seconds),
-                    },
-                )),
+                ProviderDescriptor::Anthropic(AnthropicProviderConfig {
+                    model: model.clone(),
+                    api_key: ProviderSecret::new(required_env(api_key_env)?),
+                    base_url: base_url.clone(),
+                    version: version.clone(),
+                    timeout: timeout(*timeout_seconds),
+                })
+                .into(),
                 TargetSummary {
                     name: target_name.to_string(),
                     kind: TargetKind::Anthropic,

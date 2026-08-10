@@ -35,7 +35,7 @@ first-party Sipp backend names at this time.
 
 | Surface | Supported backend selectors | How to select |
 | --- | --- | --- |
-| Browser local | `auto`, `cpu`, `webgpu` | `EndpointDescriptor.local(model.id, { backend: 'webgpu' })` |
+| Browser local | `auto`, `cpu`, `webgpu` | `Endpoint.local(model, { backend: 'webgpu' })` |
 | Node.js local | `cpu`, `vulkan`, `cuda`, `metal` | `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` |
 | Python local | `cpu`, `vulkan`, `cuda`, `metal` | `SIPP_PYTHON_BACKEND=cpu|vulkan|cuda|metal` |
 | CLI | `auto`, `cpu`, `cuda`, `metal`, `vulkan` | `sipp ... --backend <backend>` |
@@ -60,8 +60,8 @@ Keep build artifact selection separate from engine backend selection.
 - Explicit GPU selections such as `cuda`, `metal`, `vulkan`, and `webgpu` must
   be both compiled into the active artifact and available on the host.
 - Node.js and Python choose the native binding at process load with
-  `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND`. Their local model
-  descriptors do not carry a separate per-engine backend field, so use a
+  `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND`. Their local endpoint inputs do
+  not carry a separate per-engine backend field, so use a
   different process or artifact when you need a different GPU backend.
 - Gateway, CLI, browser, and lower-level Rust lifecycle paths expose backend
   selectors at the target/load/run layer. They can select only from the backend
@@ -117,12 +117,12 @@ Browser examples:
 const model = await client.models.add(['./models/model.gguf']);
 await client.add(
   'local-webgpu',
-  EndpointDescriptor.local(model.id, { backend: 'webgpu' })
+  Endpoint.local(model, { backend: 'webgpu' })
 );
 
 await client.add(
   'local-cpu',
-  EndpointDescriptor.local(model.id, { backend: 'cpu' })
+  Endpoint.local(model, { backend: 'cpu' })
 );
 ```
 

@@ -11,8 +11,6 @@ pub(crate) mod test_support;
 mod types;
 mod util;
 
-pub(super) const DEFAULT_MEDIA_MARKER: &str = "<image>";
-
 pub use backend_policy::{
     read_backend_capabilities, BackendCapabilities, BackendPlan, BackendPolicy,
 };
@@ -26,11 +24,13 @@ pub use browser::{
     BrowserModelEntry, BrowserModelInfo, BrowserObservabilityEvent, BrowserObservabilityEventType,
     BrowserObservabilityMode, BrowserObservabilitySnapshot, BrowserPlannedAsset,
     BrowserPrepareLoadResponse, BrowserQueryObservation, BrowserRegistryManifest,
-    BrowserRemoteCommand, BrowserRemoteCommandResponse, BrowserRemoveResponse,
+    BrowserRemoteCommand, BrowserRemoteCommandResponse, BrowserRemoveRequest,
+    BrowserRemoveResponse,
 };
 pub use gguf::detect_model_from_gguf_bytes;
 pub use pairing::PairingResolver;
 pub use registry::{model_entry_from_assets, ModelRegistry, RemovedModel};
+pub(crate) use service::ModelActivationPlan;
 pub use service::ModelStore;
 pub use storage::{AssetInstallResult, AssetStore, LocalStorageBackend, StorageBackend};
 pub use types::{

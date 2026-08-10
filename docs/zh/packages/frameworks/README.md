@@ -24,7 +24,7 @@
 框架服务端负责管理凭证时，Next.js 和 TanStack 的服务端路由应直接调用提供商端点。在仅限服务端的代码中注册提供商：
 
 ```ts
-const endpoint = await client.add('provider', EndpointDescriptor.provider({
+const endpoint = await client.add('provider', Endpoint.provider({
   provider: 'openai',
   model: requiredEnv('OPENAI_MODEL'),
   apiKey: requiredEnv('OPENAI_API_KEY'),

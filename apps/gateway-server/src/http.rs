@@ -15,8 +15,9 @@ use axum::Router;
 use bytes::Bytes;
 use futures_util::future::{select, Either};
 use futures_util::{stream, Stream, StreamExt};
+use sipp::core::Operation;
 use sipp::core::TokenUsage;
-use sipp::gateway_core::{GatewayStreamEvent, Operation};
+use sipp::gateway_core::GatewayStreamEvent;
 use sipp::{SippRequestContext, SippTextResponseFuture, SippTokenBatches};
 use sipp_gateway::{
     request_context, request_id, AuthenticatedRequest, Authenticator, GatewayCodec,
@@ -38,23 +39,42 @@ pub struct GatewayHttpService {
     management: Router,
 }
 
+/// Application-owned HTTP composition options.
+pub struct GatewayHttpOptions {
+    /// Public and management route paths.
+    pub routes: RouteConfig,
+    /// Maximum accepted request body size.
+    pub max_request_bytes: usize,
+    /// Browser origins accepted by the public listener.
+    pub allowed_origins: Vec<String>,
+    /// Application-wide concurrent request limit.
+    pub max_concurrent_requests: Option<usize>,
+    /// Client identification and rate-limit policy.
+    pub security: SecurityConfig,
+    /// Prebuilt admin dashboard asset directory.
+    pub admin_assets_dir: PathBuf,
+}
+
 impl GatewayHttpService {
     /// Compose public and management routers from application-owned handlers.
     pub fn new(
         runtime: GatewayServerRuntime,
-        routes: RouteConfig,
         tokens: Vec<LoadedToken>,
         admin_password: String,
         metrics: Arc<GatewayMetrics>,
-        max_request_bytes: usize,
-        allowed_origins: &[String],
-        max_concurrent_requests: Option<usize>,
-        security_config: SecurityConfig,
-        admin_assets_dir: PathBuf,
+        options: GatewayHttpOptions,
     ) -> anyhow::Result<Self> {
+        let GatewayHttpOptions {
+            routes,
+            max_request_bytes,
+            allowed_origins,
+            max_concurrent_requests,
+            security,
+            admin_assets_dir,
+        } = options;
         let gateway_routes: GatewayRoutes = routes.clone().into();
         let controls = Arc::new(GatewayControls::new(max_concurrent_requests));
-        let security = Arc::new(GatewaySecurity::new(&security_config)?);
+        let security = Arc::new(GatewaySecurity::new(&security)?);
         let state = PublicState {
             runtime: runtime.clone(),
             authenticator: Arc::new(BearerAuthenticator { tokens }),
@@ -386,7 +406,9 @@ async fn text_handler(
                 }
             }
         }
-        Operation::Embed => unreachable!("embed uses its dedicated handler"),
+        Operation::Embed | Operation::Listen | Operation::Speak => {
+            unreachable!("operation uses a dedicated handler")
+        }
     }
 }
 

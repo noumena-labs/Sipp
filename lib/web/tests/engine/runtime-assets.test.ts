@@ -1,21 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  getDefaultRuntimeUrls,
+  memoizeWasmJspiProbe,
   resolveOptimizedPackageAssetUrl,
-  resolveRuntimeBackendOverride,
+  resolveRuntimeAssetSelection,
   resolveRuntimeThreadingMode,
   resolveRuntimeUrls,
   supportsWasmPthreads,
 } from '../../src/engine/runtime-assets.js';
-import {
-  withNavigatorUserAgent,
-  withoutWasmJspiSupport,
-  withWasmPthreadSupport,
-} from '../support/browser-env.js';
-
-const SAFARI_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15';
+import { withWasmPthreadSupport } from '../support/browser-env.js';
 
 interface LocationStub {
   href: string;
@@ -38,21 +31,33 @@ function withLocation<T>(href: string | undefined, callback: () => T): T {
     });
   }
 
-  try {
-    return callback();
-  } finally {
+  const restore = () => {
     if (descriptor == null) {
       Reflect.deleteProperty(globalThis, 'location');
     } else {
       Object.defineProperty(globalThis, 'location', descriptor);
     }
+  };
+  try {
+    const result = callback();
+    if (result instanceof Promise) {
+      return result.finally(restore) as T;
+    }
+    restore();
+    return result;
+  } catch (error) {
+    restore();
+    throw error;
   }
 }
 
-test('resolveRuntimeUrls uses bundled runtime assets when no overrides are provided', () => {
-  withWasmPthreadSupport(() => {
-    const resolved = withLocation(undefined, () => resolveRuntimeUrls({}));
-    assert.deepEqual(resolved, getDefaultRuntimeUrls());
+test('resolveRuntimeAssetSelection uses bundled runtime assets after probing', async () => {
+  await withWasmPthreadSupport(async () => {
+    const resolved = await withLocation(undefined, () =>
+      resolveRuntimeAssetSelection({}, { probeWasmJspi: async () => true })
+    );
+    assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
+    assert.equal(resolved.backendConstraint, null);
   });
 });
 
@@ -79,27 +84,35 @@ test('resolveRuntimeUrls accepts root-relative bundled runtime assets', () => {
   });
 });
 
-test('getDefaultRuntimeUrls maps Vite optimized deps back to package wasm assets', () => {
-  withWasmPthreadSupport(() => {
+test('bundled selection maps Vite optimized deps back to package wasm assets', async () => {
+  await withWasmPthreadSupport(async () => {
     assert.deepEqual(
-      getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@noumena-labs_sipp.js?v=123'),
+      await resolveRuntimeAssetSelection({}, {
+        importerUrl: 'https://app.test/node_modules/.vite/deps/@noumena-labs_sipp.js?v=123',
+        probeWasmJspi: async () => true,
+      }),
       {
         moduleUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm-pthread.js',
         wasmUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm-pthread.wasm',
         threading: 'pthread',
+        backendConstraint: null,
       }
     );
   });
 });
 
-test('getDefaultRuntimeUrls maps public Vite optimized deps back to package wasm assets', () => {
-  withWasmPthreadSupport(() => {
+test('bundled selection maps public Vite optimized deps back to package wasm assets', async () => {
+  await withWasmPthreadSupport(async () => {
     assert.deepEqual(
-      getDefaultRuntimeUrls('https://app.test/node_modules/.vite/deps/@sipphq_sipp.js?v=123'),
+      await resolveRuntimeAssetSelection({}, {
+        importerUrl: 'https://app.test/node_modules/.vite/deps/@sipphq_sipp.js?v=123',
+        probeWasmJspi: async () => true,
+      }),
       {
         moduleUrl: 'https://app.test/node_modules/@sipphq/sipp/dist/wasm/sipp-wasm-pthread.js',
         wasmUrl: 'https://app.test/node_modules/@sipphq/sipp/dist/wasm/sipp-wasm-pthread.wasm',
         threading: 'pthread',
+        backendConstraint: null,
       }
     );
   });
@@ -135,97 +148,91 @@ test('resolveOptimizedPackageAssetUrl preserves a Vite dev base path', () => {
   );
 });
 
-test('resolveRuntimeUrls defaults to the pthread artifact when wasm pthreads are available', () => {
-  withWasmPthreadSupport(() => {
+test('resolveRuntimeAssetSelection defaults to the pthread artifact when JSPI works', async () => {
+  await withWasmPthreadSupport(async () => {
     assert.equal(supportsWasmPthreads(), true);
     assert.equal(resolveRuntimeThreadingMode({}), 'pthread');
-    const resolved = resolveRuntimeUrls({});
+    const resolved = await resolveRuntimeAssetSelection(
+      {},
+      { probeWasmJspi: async () => true }
+    );
     assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
     assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
     assert.equal(resolved.threading, 'pthread');
   });
 });
 
-test('resolveRuntimeUrls rejects bundled runtimes without wasm pthread support', () => {
-  assert.throws(
-    () => resolveRuntimeUrls({}),
+test('resolveRuntimeAssetSelection rejects bundled runtimes without wasm pthread support', async () => {
+  await assert.rejects(
+    resolveRuntimeAssetSelection({}, { probeWasmJspi: async () => true }),
     /requires SharedArrayBuffer and cross-origin isolation/
   );
 });
 
-test('resolveRuntimeUrls selects the pthread artifact when explicitly requested', () => {
-  withWasmPthreadSupport(() => {
+test('resolveRuntimeAssetSelection selects the pthread artifact when explicitly requested', async () => {
+  await withWasmPthreadSupport(async () => {
     assert.equal(resolveRuntimeThreadingMode({ wasmThreading: 'pthread' }), 'pthread');
-    const resolved = resolveRuntimeUrls({ wasmThreading: 'pthread' });
+    const resolved = await resolveRuntimeAssetSelection(
+      { wasmThreading: 'pthread' },
+      { probeWasmJspi: async () => true }
+    );
     assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
     assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
     assert.equal(resolved.threading, 'pthread');
   });
 });
 
-test('resolveRuntimeUrls auto-selects CPU non-JSPI on Firefox', () => {
-  withNavigatorUserAgent('Mozilla/5.0 Firefox/127.0', () => {
-    withWasmPthreadSupport(() => {
-      assert.equal(resolveRuntimeThreadingMode({}), 'pthread');
-      const resolved = resolveRuntimeUrls({});
-      assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
-      assert.match(resolved.wasmUrl, /sipp-wasm-pthread-cpu-nojspi\.wasm$/);
-      assert.equal(resolved.threading, 'pthread');
-    });
+test('resolveRuntimeAssetSelection falls back to CPU when functional JSPI fails', async () => {
+  await withWasmPthreadSupport(async () => {
+    const resolved = await resolveRuntimeAssetSelection(
+      {},
+      { probeWasmJspi: async () => false }
+    );
+    assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
+    assert.match(resolved.wasmUrl, /sipp-wasm-pthread-cpu-nojspi\.wasm$/);
+    assert.equal(resolved.threading, 'pthread');
+    assert.equal(resolved.backendConstraint, 'cpu-only');
   });
 });
 
-test('resolveRuntimeBackendOverride forces CPU for bundled Firefox pthread runtime', () => {
-  withNavigatorUserAgent('Mozilla/5.0 Firefox/152.0.2', () => {
-    withWasmPthreadSupport(() => {
-      assert.equal(resolveRuntimeBackendOverride({ wasmThreading: 'pthread' }), 'cpu');
-    });
+test('resolveRuntimeAssetSelection treats a throwing JSPI probe as unsupported', async () => {
+  await withWasmPthreadSupport(async () => {
+    const resolved = await resolveRuntimeAssetSelection(
+      {},
+      { probeWasmJspi: async () => { throw new Error('probe failed'); } }
+    );
+
+    assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
+    assert.equal(resolved.backendConstraint, 'cpu-only');
   });
 });
 
-test('resolveRuntimeUrls auto-selects CPU non-JSPI when JSPI is unavailable (e.g. Safari)', () => {
-  withNavigatorUserAgent(SAFARI_USER_AGENT, () => {
-    withoutWasmJspiSupport(() => {
-      withWasmPthreadSupport(() => {
-        const resolved = resolveRuntimeUrls({});
-        assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
-        assert.match(resolved.wasmUrl, /sipp-wasm-pthread-cpu-nojspi\.wasm$/);
-        assert.equal(resolved.threading, 'pthread');
-      });
-    });
+test('memoizeWasmJspiProbe executes its functional probe once', async () => {
+  let calls = 0;
+  const probe = memoizeWasmJspiProbe(async () => {
+    calls += 1;
+    return true;
   });
+
+  assert.deepEqual(await Promise.all([probe(), probe(), probe()]), [true, true, true]);
+  assert.equal(calls, 1);
 });
 
-test('resolveRuntimeUrls keeps the WebGPU+JSPI artifact on Safari once JSPI is exposed', () => {
-  withNavigatorUserAgent(SAFARI_USER_AGENT, () => {
-    withWasmPthreadSupport(() => {
-      const resolved = resolveRuntimeUrls({});
-      assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
-      assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
-    });
-  });
-});
-
-test('resolveRuntimeBackendOverride forces CPU when JSPI is unavailable', () => {
-  withoutWasmJspiSupport(() => {
-    withWasmPthreadSupport(() => {
-      assert.equal(resolveRuntimeBackendOverride({ wasmThreading: 'pthread' }), 'cpu');
-    });
-  });
-});
-
-test('resolveRuntimeBackendOverride does not force CPU for custom runtime URLs', () => {
-  withNavigatorUserAgent('Mozilla/5.0 Firefox/152.0.2', () => {
-    withWasmPthreadSupport(() => {
-      assert.equal(
-        resolveRuntimeBackendOverride({
+test('resolveRuntimeAssetSelection does not force CPU for custom runtime URLs', async () => {
+  await withWasmPthreadSupport(async () => {
+    assert.deepEqual(
+      await resolveRuntimeAssetSelection({
           wasmThreading: 'pthread',
-          moduleUrl: '/custom.js',
-          wasmUrl: '/custom.wasm',
+          moduleUrl: 'https://app.test/custom.js',
+          wasmUrl: 'https://app.test/custom.wasm',
         }),
-        null
-      );
-    });
+        {
+          moduleUrl: 'https://app.test/custom.js',
+          wasmUrl: 'https://app.test/custom.wasm',
+          threading: 'pthread',
+          backendConstraint: null,
+        }
+    );
   });
 });
 
@@ -285,23 +292,6 @@ test('resolveRuntimeUrls uses moduleUrl and wasmUrl for custom single-thread run
     moduleUrl: 'https://app.test/ui/assets/runtime.js',
     wasmUrl: 'https://app.test/ui/assets/runtime.wasm',
     threading: 'single-thread',
-  });
-});
-
-test('resolveRuntimeUrls accepts legacy pthread runtime aliases', () => {
-  withWasmPthreadSupport(() => {
-    const resolved = withLocation('https://app.test/ui/index.html', () =>
-      resolveRuntimeUrls({
-        pthreadModuleUrl: './assets/runtime.js',
-        pthreadWasmUrl: './assets/runtime.wasm',
-      })
-    );
-
-    assert.deepEqual(resolved, {
-      moduleUrl: 'https://app.test/ui/assets/runtime.js',
-      wasmUrl: 'https://app.test/ui/assets/runtime.wasm',
-      threading: 'pthread',
-    });
   });
 });
 

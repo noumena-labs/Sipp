@@ -24,14 +24,14 @@ The first-party gateway can be deployed in three shapes:
 
 ## Endpoint Model
 
-The client does not route implicitly. Every application registers descriptors
+The client does not route implicitly. Every application registers endpoints
 and selects an endpoint reference:
 
-- Local descriptor: a GGUF model loaded by the current runtime.
-- Gateway descriptor: a base URL, target name, routes, and authentication.
-- Provider descriptor: direct provider adapter where the package supports it.
+- Local endpoint: a GGUF model loaded by the current runtime.
+- Gateway endpoint: a base URL, target name, routes, and authentication.
+- Provider endpoint: direct provider adapter where the package supports it.
 
-Gateway descriptors send the target as the first-party profile `model` field.
+Gateway endpoints send the target as the first-party profile `model` field.
 The gateway process resolves that public target name to a local or provider
 endpoint.
 

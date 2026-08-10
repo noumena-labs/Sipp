@@ -24,7 +24,7 @@ real deployment, keep the key in your server environment or secret manager.
 ```ts
 // app/api/sipp/query/route.ts
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -46,7 +46,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('provider', EndpointDescriptor.provider({
+    const endpoint = await client.add('provider', Endpoint.provider({
       provider: 'openai',
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),
@@ -69,7 +69,7 @@ export async function POST(request: Request): Promise<Response> {
 ```
 
 Do not return an app-specific shape such as `{ text }` from a route registered
-with `EndpointDescriptor.gateway(...)`. That route is an HTTP gateway endpoint
+with `Endpoint.gateway(...)`. That route is an HTTP gateway endpoint
 from the browser client's perspective, even when it is implemented inside the
 Next application. The server-side implementation can resolve the request to a
 provider, a local endpoint, or a separate gateway.
@@ -85,7 +85,7 @@ server should keep the provider credential.
 
 ```ts
 // app/api/sipp/stream/route.ts
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { Endpoint, SippClient } from '@sipphq/sipp-server';
 
 export const runtime = 'nodejs';
 
@@ -106,7 +106,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const client = new SippClient();
-  const endpoint = await client.add('provider', EndpointDescriptor.provider({
+  const endpoint = await client.add('provider', Endpoint.provider({
     provider: 'openai',
     model: requiredEnv('OPENAI_MODEL'),
     apiKey: requiredEnv('OPENAI_API_KEY'),
@@ -151,7 +151,7 @@ Component boundary.
 'use client';
 
 import { useState } from 'react';
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp';
+import { Endpoint, SippClient } from '@sipphq/sipp';
 
 export function LocalChat(): JSX.Element {
   const [text, setText] = useState('');
@@ -164,7 +164,7 @@ export function LocalChat(): JSX.Element {
       ]);
       const endpoint = await client.add(
         'default',
-        EndpointDescriptor.local(model.id)
+        Endpoint.local(model)
       );
       const response = await client.query(prompt, {
         endpoint,
@@ -202,7 +202,7 @@ reference at request time; the `query` call stays the same.
 'use client';
 
 import { useState } from 'react';
-import { EndpointDescriptor, SippClient, type EndpointRef } from '@sipphq/sipp';
+import { Endpoint, SippClient, type EndpointRef } from '@sipphq/sipp';
 
 type InferenceMode = 'local' | 'providerRoute';
 
@@ -218,11 +218,11 @@ export function HybridChat(): JSX.Element {
       ]);
       const localEndpoint = await client.add(
         'browser-local',
-        EndpointDescriptor.local(model.id)
+        Endpoint.local(model)
       );
       const providerRouteEndpoint = await client.add(
         'app-route',
-        EndpointDescriptor.gateway({
+        Endpoint.gateway({
           target: 'gpt-5-mini',
           baseUrl: window.location.origin,
           routes: { query: '/api/sipp/query' },
@@ -258,7 +258,7 @@ export function HybridChat(): JSX.Element {
 }
 ```
 
-Browser gateway descriptors require an absolute `http` or `https` `baseUrl`.
+Browser gateway endpoints require an absolute `http` or `https` `baseUrl`.
 For same-origin Next routes, use `window.location.origin` and set route
 overrides such as `routes: { query: '/api/sipp/query' }`. The `target`
 value becomes the provider model in the server route above.
@@ -272,9 +272,9 @@ long-lived gateway token in the client bundle. Have a Next route issue a
 short-lived app token, then use a browser `valueProvider`:
 
 ```ts
-import { EndpointDescriptor } from '@sipphq/sipp';
+import { Endpoint } from '@sipphq/sipp';
 
-const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
+const endpoint = await client.add('gateway', Endpoint.gateway({
   target: 'local',
   baseUrl: 'https://gateway.example.com',
   authentication: {

@@ -35,12 +35,13 @@ impl InferenceRuntime {
         }
 
         let mut config = config.normalize();
-        let model_class = probe_model_class(model_path, model_path_string.as_str())?;
-        apply_model_class_defaults(&mut config, model_class)?;
-        let residency_lease = match admit_runtime_residency(&config) {
-            Ok(lease) => lease,
-            Err(error) => return Err(error),
-        };
+        let model_profile = probe_model_profile(
+            model_path,
+            config.multimodal.projector_path.as_deref(),
+            model_path_string.as_str(),
+        )?;
+        apply_model_requirements(&mut config, model_profile)?;
+        let residency_lease = admit_runtime_residency(&config)?;
 
         let mut native_runtime = load_native_runtime(&model_path_string, &config)?;
         let resolved_limits = native_runtime.resolved_limits();
@@ -53,6 +54,7 @@ impl InferenceRuntime {
             resolved_limits,
             capabilities,
             native_runtime,
+            active_speech: None,
             _residency_lease: residency_lease,
             last_runtime_observability: RuntimeObservabilityMetrics::default(),
             has_last_runtime_observability: false,
@@ -166,22 +168,71 @@ fn init_runtime_extensions(
     Ok(())
 }
 
-fn probe_model_class(model_path: &std::path::Path, model_path_string: &str) -> Result<ModelClass> {
+#[derive(Clone, Copy)]
+struct ModelProfile {
+    class: ModelClass,
+    generates_audio: bool,
+}
+
+fn probe_model_profile(
+    model_path: &std::path::Path,
+    projector_path: Option<&str>,
+    model_path_string: &str,
+) -> Result<ModelProfile> {
     let metadata = inspect_gguf_metadata_path(model_path).map_err(|_| Error::ModelLoad {
         path: model_path_string.to_string(),
     })?;
-    Ok(metadata
+    let architecture = metadata
         .as_ref()
-        .and_then(|metadata| metadata.general_architecture.as_deref())
-        .map(ModelClass::from_architecture)
-        .unwrap_or(ModelClass::DecoderOnly))
+        .and_then(|metadata| metadata.general_architecture.as_deref());
+    Ok(ModelProfile {
+        class: architecture
+            .map(ModelClass::from_architecture)
+            .unwrap_or(ModelClass::DecoderOnly),
+        generates_audio: projector_path
+            .map(probe_audio_generation_projector)
+            .transpose()?
+            .unwrap_or(false),
+    })
+}
+
+fn probe_audio_generation_projector(projector_path: &str) -> Result<bool> {
+    let metadata =
+        inspect_gguf_metadata_path(std::path::Path::new(projector_path)).map_err(|_| {
+            Error::ModelLoad {
+                path: projector_path.to_string(),
+            }
+        })?;
+    Ok(metadata.as_ref().is_some_and(metadata_generates_audio))
+}
+
+fn metadata_generates_audio(metadata: &crate::shard::GgufMetadataInspection) -> bool {
+    metadata.clip_has_audio_generation_encoder == Some(true)
+        || metadata.clip_audio_generation_projector_type.is_some()
 }
 
 /// Apply class-specific defaults to the runtime config and reject
 /// combinations llama.cpp cannot satisfy. Runs before `parse_common_params`
 /// so the resulting `--embedding` / `--parallel` flags are emitted correctly.
-fn apply_model_class_defaults(config: &mut NativeRuntimeConfig, class: ModelClass) -> Result<()> {
-    match class {
+fn apply_model_requirements(config: &mut NativeRuntimeConfig, profile: ModelProfile) -> Result<()> {
+    if profile.generates_audio {
+        if config.context.embeddings == Some(false) {
+            return Err(Error::UnsupportedOperation {
+                operation: "load",
+                reason: "audio-generation models require embedding output".to_string(),
+            });
+        }
+        if config.context.n_parallel.unwrap_or(1) != 1 {
+            return Err(Error::UnsupportedOperation {
+                operation: "load",
+                reason: "audio-generation models require n_parallel=1".to_string(),
+            });
+        }
+        config.context.embeddings = Some(true);
+        config.context.n_parallel = Some(1);
+    }
+
+    match profile.class {
         ModelClass::DecoderOnly => {}
         ModelClass::EncoderOnly => {
             if config.context.embeddings.is_none() {
@@ -239,6 +290,8 @@ fn build_capabilities(
     };
     let n_embd_out = native_runtime.n_embd_out();
     let n_cls_out = native_runtime.n_cls_out();
+    let audio_sample_rate_hz = native_runtime.mtmd_audio_sample_rate()?;
+    let generated_audio_sample_rate_hz = native_runtime.mtmd_generated_audio_sample_rate()?;
     Ok(RuntimeModelCapabilities {
         class: model_class_from_init(native_runtime)?,
         embedding_dimensions: embedding_dimensions(pooling_type, n_embd_out, n_cls_out),
@@ -246,6 +299,9 @@ fn build_capabilities(
         decoder_start_token,
         has_chat_template,
         embedding_context: config.context.embeddings == Some(true),
+        supports_vision: native_runtime.mtmd_support_vision(),
+        audio_sample_rate_hz,
+        generated_audio_sample_rate_hz,
     })
 }
 
@@ -285,7 +341,12 @@ fn init_multimodal_context(
         use_gpu,
         config.context.n_threads.unwrap_or(0),
     );
-    if !init_ok || !native_runtime.mtmd_support_vision() {
+    if !init_ok {
+        return Err(Error::NullPointer("sipp_mtmd_init_from_file"));
+    }
+    let accepts_audio = native_runtime.mtmd_audio_sample_rate()?.is_some();
+    let generates_audio = native_runtime.mtmd_generated_audio_sample_rate()?.is_some();
+    if !(native_runtime.mtmd_support_vision() || accepts_audio || generates_audio) {
         return Err(Error::NullPointer("sipp_mtmd_init_from_file"));
     }
     Ok(())

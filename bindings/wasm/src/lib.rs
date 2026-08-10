@@ -2,15 +2,15 @@
 
 mod abi;
 pub mod engine;
-#[cfg(target_family = "wasm")]
+#[cfg(any(test, target_family = "wasm"))]
 mod exports;
 mod ffi;
 pub mod gguf;
 pub mod hash;
 pub mod ingest;
-#[cfg(target_family = "wasm")]
+#[cfg(any(test, target_family = "wasm"))]
 pub mod lifecycle;
-#[cfg(target_family = "wasm")]
+#[cfg(any(test, target_family = "wasm"))]
 pub mod pairing;
 
 pub use abi::{BrowserRuntimeMetrics, BrowserSchedulerLoopResult};

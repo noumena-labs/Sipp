@@ -6,19 +6,26 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
 use serde::Serialize;
+use sipp::core::Operation;
 use sipp::core::TokenUsage;
-use sipp::gateway_core::Operation;
 
 const TIMESERIES_BUCKET_SECONDS: u64 = 10;
 const MAX_TIMESERIES_BUCKETS: usize = 180;
 const MAX_RECENT_EVENTS: usize = 96;
 const MAX_LATENCY_SAMPLES: usize = 512;
 const MAX_CLIENTS: usize = 512;
+const OPERATIONS: [Operation; 5] = [
+    Operation::Query,
+    Operation::Chat,
+    Operation::Embed,
+    Operation::Listen,
+    Operation::Speak,
+];
 
 /// Application-owned low-cardinality gateway metrics.
 pub struct GatewayMetrics {
-    requests: [AtomicU64; 3],
-    errors: [AtomicU64; 3],
+    requests: [AtomicU64; OPERATIONS.len()],
+    errors: [AtomicU64; OPERATIONS.len()],
     active_requests: AtomicU64,
     state: Mutex<DashboardMetrics>,
 }
@@ -92,7 +99,7 @@ impl GatewayMetrics {
     /// Render Prometheus text exposition.
     pub fn render(&self) -> Result<String, &'static str> {
         let mut output = String::new();
-        for operation in [Operation::Query, Operation::Chat, Operation::Embed] {
+        for operation in OPERATIONS {
             let index = operation_index(operation);
             let name = operation_name(operation);
             let _ = writeln!(
@@ -145,8 +152,8 @@ impl GatewayMetrics {
     }
 
     /// Return low-cardinality metric counters for dashboard rendering.
-    pub fn snapshot(&self) -> [OperationMetricSnapshot; 3] {
-        [Operation::Query, Operation::Chat, Operation::Embed].map(|operation| {
+    pub fn snapshot(&self) -> [OperationMetricSnapshot; OPERATIONS.len()] {
+        OPERATIONS.map(|operation| {
             let index = operation_index(operation);
             OperationMetricSnapshot {
                 operation: operation_name(operation),
@@ -327,7 +334,7 @@ impl DashboardMetrics {
 
     fn snapshot(
         &self,
-        counters: [OperationMetricSnapshot; 3],
+        counters: [OperationMetricSnapshot; OPERATIONS.len()],
         active_requests: u64,
     ) -> GatewayDashboardSnapshot {
         let mut latency = self.latency_samples.iter().copied().collect::<Vec<_>>();
@@ -673,11 +680,7 @@ fn percentile(samples: &[u64], percentile: usize) -> u64 {
 }
 
 fn average(total: u64, count: u64) -> u64 {
-    if count == 0 {
-        0
-    } else {
-        total / count
-    }
+    total.checked_div(count).unwrap_or_default()
 }
 
 fn millis(duration: Duration) -> u64 {
@@ -696,6 +699,8 @@ const fn operation_index(operation: Operation) -> usize {
         Operation::Query => 0,
         Operation::Chat => 1,
         Operation::Embed => 2,
+        Operation::Listen => 3,
+        Operation::Speak => 4,
     }
 }
 
@@ -704,6 +709,8 @@ const fn operation_name(operation: Operation) -> &'static str {
         Operation::Query => "query",
         Operation::Chat => "chat",
         Operation::Embed => "embed",
+        Operation::Listen => "listen",
+        Operation::Speak => "speak",
     }
 }
 

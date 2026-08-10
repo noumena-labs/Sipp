@@ -2,7 +2,7 @@
 
 `lib/node` is the Node.js package source for the public `@sipphq/sipp-server`
 package. It exposes Sipp's native client API to Node server processes for
-local GGUF inference, gateway-backed inference, provider descriptors, and token
+local GGUF inference, gateway-backed inference, provider endpoints, and token
 streaming.
 
 Source builds use the workspace manifest in this directory. Public docs use the
@@ -25,13 +25,13 @@ Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
 ## Local GGUF Query
 
 ```ts
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { Endpoint, SippClient } from '@sipphq/sipp-server';
 
 const client = new SippClient({ storageRoot: '.sipp-models' });
 const model = await client.models.add([process.argv[2]]);
 await client.add(
   'default',
-  EndpointDescriptor.local(model.id, {
+  Endpoint.local(model, {
     runtime: {
       context: { n_ctx: 2048 },
       scheduler: { continuous_batching: true, prefill_chunk_size: 0 },
@@ -57,7 +57,7 @@ console.log(streamed || response.text);
 await client.close();
 ```
 
-Gateway clients use `EndpointDescriptor.gateway(...)` when a Node process
+Gateway clients use `Endpoint.gateway(...)` when a Node process
 calls a separate Sipp gateway.
 
 ## Gateway Profile Helpers
@@ -67,7 +67,7 @@ first-party gateway endpoint for browser gateway clients:
 
 ```ts
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   decodeGatewayQueryBody,
   gatewayErrorResponse,
@@ -79,7 +79,7 @@ export async function handleQuery(request: Request): Promise<Response> {
   try {
     const decoded = decodeGatewayQueryBody(await request.json());
     const client = new SippClient();
-    const endpoint = await client.add('gateway', EndpointDescriptor.gateway({
+    const endpoint = await client.add('gateway', Endpoint.gateway({
       target: decoded.target,
       baseUrl: process.env.SIPP_GATEWAY_URL!,
       authentication: {

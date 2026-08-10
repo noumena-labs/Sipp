@@ -4,6 +4,10 @@
 //! exposes the high-level client API together with the native engine config
 //! and shared value types needed to run local, gateway, or direct
 //! provider inference.
+#![allow(
+    clippy::empty_line_after_doc_comments,
+    reason = "test and source section banners follow repository style"
+)]
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS

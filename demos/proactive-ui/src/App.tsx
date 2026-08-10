@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   type RuntimeObservation,
 } from '@noumena-labs/sipp';
@@ -319,7 +319,7 @@ export default function App() {
       );
       await nextClient.add(
         'local',
-        EndpointDescriptor.local(model.id, {
+        Endpoint.local(model, {
           observability: 'runtime',
           onProgress,
           runtime: {

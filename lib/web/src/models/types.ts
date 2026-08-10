@@ -11,16 +11,10 @@ import type {
 } from '../engine/inference-types.js';
 import type { OpfsSyncAccessHandle } from '../engine/file-system-storage.js';
 
-export type ModelModality = 'text' | 'vision';
+export type ModelModality = 'text' | 'vision' | 'audio' | 'multimodal';
 export type ModelStatus = 'ready' | 'needs_projector' | 'broken';
 export type ModelSourceKind = 'remote' | 'local';
 export type BrowserBackendPreference = 'auto' | 'cpu' | 'webgpu';
-export type ModelBundleSourceKind = 'managed';
-export type ModelBundleProjectorStatus =
-  | 'not-required'
-  | 'explicit'
-  | 'paired'
-  | 'missing';
 export type ModelDetectionMethod = 'gguf-metadata' | 'none';
 export type AssetRole = 'model' | 'projector' | 'unknown';
 
@@ -67,22 +61,28 @@ export type ModelAddSource =
     readonly urls: readonly string[];
   };
 
-export interface ModelInfo {
-  /** Model id persisted in OPFS. Pass this to a local `client.add(...)` descriptor. */
-  id: string;
-  name: string;
-  modality: ModelModality;
-  status: ModelStatus;
-  source: ModelSourceKind;
-  bytes: number;
-  loaded: boolean;
-  chatTemplate: string | null;
-  bosText: string;
-  eosText: string;
-  mediaMarker: string | null;
-  createdAt: string;
-  updatedAt: string;
-  capabilities?: ModelCapabilities;
+/** Catalog metadata for one installed browser model. */
+export interface CatalogModelInfo {
+  /** Model id persisted in OPFS. */
+  readonly id: string;
+  readonly name: string;
+  readonly modality: ModelModality;
+  readonly status: ModelStatus;
+  readonly source: ModelSourceKind;
+  readonly bytes: number;
+  readonly assetFingerprint: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** Catalog metadata enriched from the authoritative live runtime session. */
+export interface ModelInfo extends CatalogModelInfo {
+  readonly loaded: boolean;
+  readonly chatTemplate: string | null;
+  readonly bosText: string;
+  readonly eosText: string;
+  readonly mediaMarker: string | null;
+  readonly capabilities: ModelCapabilities | null;
 }
 
 export interface ManagedModel {
@@ -96,23 +96,56 @@ export interface ManagedModel {
 export type ModelClass = 'decoder_only' | 'encoder_decoder' | 'encoder_only';
 
 export interface ModelCapabilities {
-  modelClass: ModelClass;
-  supportsTextGeneration: boolean;
-  supportsEmbeddings: boolean;
-  hasChatTemplate: boolean;
-  embedding?: {
-    dimensions: number;
-    pooling: PoolingType;
+  readonly modelClass: ModelClass;
+  readonly supportsTextGeneration: boolean;
+  readonly supportsEmbeddings: boolean;
+  readonly supportsVision: boolean;
+  readonly audioSampleRateHz: number | null;
+  readonly generatedAudioSampleRateHz: number | null;
+  readonly hasChatTemplate: boolean;
+  readonly embedding: {
+    readonly dimensions: number;
+    readonly pooling: PoolingType;
+  } | null;
+  readonly operations: {
+    readonly query: boolean;
+    readonly chat: boolean;
+    readonly embed: boolean;
+    readonly listen: boolean;
+    readonly speak: boolean;
   };
 }
 
+/** Identity passed to Rust when activating a prepared browser runtime. */
+export interface RuntimeSessionDescriptor {
+  readonly model: CatalogModelInfo;
+  readonly runtimeFingerprint: string;
+}
+
+/** Authoritative snapshot of the currently loaded browser runtime. */
+export interface RuntimeSessionSnapshot extends RuntimeSessionDescriptor {
+  readonly generation: number;
+  readonly capabilities: ModelCapabilities;
+  readonly chatTemplate: string | null;
+  readonly bosText: string;
+  readonly eosText: string;
+  readonly mediaMarker: string | null;
+}
+
 export interface AssetInspection {
-  version: 1;
+  version: 4;
   role: AssetRole;
   architecture: string | null;
+  trainedContextSize: number | null;
   visionCapable: boolean;
+  audioCapable: boolean;
+  audioGenerationCapable: boolean;
   compatibleVisionProjectorTypes: string[];
+  compatibleAudioProjectorTypes: string[];
+  compatibleAudioGenerationProjectorTypes: string[];
   providedVisionProjectorType: string | null;
+  providedAudioProjectorType: string | null;
+  providedAudioGenerationProjectorType: string | null;
 }
 
 export interface ClassifiedAsset {
@@ -147,45 +180,26 @@ export interface PairingPlan {
   modality: ModelModality;
   status: ModelStatus;
   compatibleVisionProjectorTypes: string[];
+  compatibleAudioProjectorTypes: string[];
+  compatibleAudioGenerationProjectorTypes: string[];
 }
 
-export interface ModelBundleFileProjectorDescriptor {
-  file: File;
-  destFileName?: string;
+export interface RuntimeBundleFile {
+  readonly name: string;
+  readonly handle: OpfsSyncAccessHandle;
+  readonly size: number;
 }
 
-export interface ModelBundleShard {
-  name: string;
-  handle: OpfsSyncAccessHandle;
-  size: number;
-}
-
-export interface InternalBundleDescriptor {
-  shards: ModelBundleShard[];
-  projector?: ModelBundleFileProjectorDescriptor;
-  detection: ModelDetectionResult;
-}
-
-export interface StageModelBundleOptions {
-  signal?: AbortSignal;
+/** OPFS handles transferred to the runtime replacement transaction. */
+export interface RuntimeBundleDescriptor {
+  readonly modelFiles: readonly RuntimeBundleFile[];
+  readonly projector?: RuntimeBundleFile;
 }
 
 export interface ModelDetectionResult {
   inspection: AssetInspection;
   detectionMethod: ModelDetectionMethod;
   modelName: string;
-  modelType: string | null;
-  modelArchitecture: string | null;
-}
-
-export interface StagedModelBundle {
-  sourceKind: ModelBundleSourceKind;
-  modelPath: string;
-  projectorPath: string | null;
-  isVisionModel: boolean;
-  projectorStatus: ModelBundleProjectorStatus;
-  modelName: string;
-  detectionMethod: ModelDetectionMethod;
   modelType: string | null;
   modelArchitecture: string | null;
 }
@@ -269,7 +283,7 @@ export interface RuntimeObservation {
 
   // JS Side & Transport Metadata
   execution: {
-    mode: 'main-thread' | 'worker';
+    mode: 'worker';
     workerBacked: boolean;
     tokenPath?: 'none' | 'token-stream';
   };
@@ -277,6 +291,10 @@ export interface RuntimeObservation {
   /** Request-local ms spent draining native token records into JS token batches. */
   jsTokenDrainMs?: number;
   jsTokenDrainCalls?: number;
+
+  /** Request-window wall time spent inside browser-to-WASM inference loop calls. */
+  wasmRunLoopMs: number;
+  wasmRunLoopCalls: number;
 }
 
 export interface BackendProfileObservation {
@@ -412,6 +430,35 @@ export interface EmbeddingResult {
   stats: RequestStats;
 }
 
+/** Options for local speech recognition. */
+export interface ListenOptions {
+  endpoint?: EndpointRef;
+  language?: string;
+  /** Maximum transcript tokens. Omitted requests use 512. */
+  maxTokens?: number;
+  signal?: AbortSignal;
+}
+
+/** Options for local speech synthesis. */
+export interface SpeakOptions {
+  endpoint?: EndpointRef;
+  language?: string;
+  speakerAudio?: Uint8Array;
+  /** Hard duration limit. Reaching it before end of generation fails. */
+  maxDurationMs?: number;
+  signal?: AbortSignal;
+}
+
+/** Terminal mono PCM16 WAV value returned by speech synthesis. */
+export interface AudioResult {
+  id: string;
+  audio: Uint8Array;
+  sampleRateHz: number;
+  channels: number;
+  durationMs: number;
+  stats: RequestStats;
+}
+
 export type BrowserTokenBatches = AsyncIterable<TokenBatch>;
 
 export interface BrowserTextRun {
@@ -422,6 +469,12 @@ export interface BrowserTextRun {
 
 export interface BrowserEmbeddingRun {
   readonly response: Promise<EmbeddingResult>;
+  cancel(reason?: unknown): void;
+}
+
+/** Cancellable browser speech-synthesis run. */
+export interface BrowserAudioRun {
+  readonly response: Promise<AudioResult>;
   cancel(reason?: unknown): void;
 }
 
@@ -500,9 +553,9 @@ export interface ProviderEndpointOptions {
 export type LocalEndpointOptions = ModelLoadOptions;
 
 /** @internal */
-export const ENDPOINT_DESCRIPTOR_PAYLOAD: unique symbol = Symbol('EndpointDescriptor.payload');
+export const ENDPOINT_PAYLOAD: unique symbol = Symbol('Endpoint.payload');
 
-type EndpointDescriptorPayload =
+type EndpointPayload =
   | {
       readonly kind: 'local';
       readonly modelId: string;
@@ -517,32 +570,32 @@ type EndpointDescriptorPayload =
       readonly options: ProviderEndpointOptions;
     };
 
-/** Opaque endpoint descriptor accepted by the browser client. */
-export interface EndpointDescriptor {
-  readonly [ENDPOINT_DESCRIPTOR_PAYLOAD]: EndpointDescriptorPayload;
+/** Opaque unregistered endpoint configuration accepted by the browser client. */
+export interface Endpoint {
+  readonly [ENDPOINT_PAYLOAD]: EndpointPayload;
 }
 
-/** Construct endpoint descriptors from explicit endpoint configuration. */
-export const EndpointDescriptor = {
-  local(modelId: string, options: LocalEndpointOptions = {}): EndpointDescriptor {
+/** Construct endpoint configurations from typed values. */
+export const Endpoint = {
+  local(model: ManagedModel, options: LocalEndpointOptions = {}): Endpoint {
     return {
-      [ENDPOINT_DESCRIPTOR_PAYLOAD]: {
+      [ENDPOINT_PAYLOAD]: {
         kind: 'local',
-        modelId,
+        modelId: model.id,
         options,
       },
     };
   },
 
-  gateway(options: GatewayEndpointOptions): EndpointDescriptor {
+  gateway(options: GatewayEndpointOptions): Endpoint {
     return {
-      [ENDPOINT_DESCRIPTOR_PAYLOAD]: { kind: 'gateway', options },
+      [ENDPOINT_PAYLOAD]: { kind: 'gateway', options },
     };
   },
 
-  provider(options: ProviderEndpointOptions): EndpointDescriptor {
+  provider(options: ProviderEndpointOptions): Endpoint {
     return {
-      [ENDPOINT_DESCRIPTOR_PAYLOAD]: { kind: 'provider', options },
+      [ENDPOINT_PAYLOAD]: { kind: 'provider', options },
     };
   },
 };
@@ -567,9 +620,19 @@ export interface ObservabilitySnapshot {
   profile?: BackendProfileObservation;
 }
 
+/** @internal Catalog lifecycle observation before live runtime enrichment. */
+export interface CatalogObservabilitySnapshot extends Omit<ObservabilitySnapshot, 'model'> {
+  model: CatalogModelInfo | null;
+}
+
 export interface ObservabilityEvent {
   type: ObservabilityEventType;
   snapshot: ObservabilitySnapshot;
+}
+
+/** @internal Catalog lifecycle event before live runtime enrichment. */
+export interface CatalogObservabilityEvent extends Omit<ObservabilityEvent, 'snapshot'> {
+  snapshot: CatalogObservabilitySnapshot;
 }
 
 export interface EngineObservability {
@@ -593,6 +656,8 @@ export interface ModelLifecycleService {
     options: InternalTextRequestOptions
   ): Promise<GenerationResult>;
   runEmbedding(input: string, options: EmbedOptions): Promise<EmbeddingResult>;
+  runListen(audio: Uint8Array, options: ListenOptions): Promise<GenerationResult>;
+  runSpeak(text: string, options: SpeakOptions): Promise<AudioResult>;
   state(): EngineState;
   subscribeEvents(listener: (event: EngineEvent) => void): () => void;
   currentObservability(): ObservabilitySnapshot;
@@ -616,12 +681,14 @@ export interface SippClient {
   readonly observability: EngineObservability;
   readonly models: ModelStore;
   /** Register or replace a local, gateway, or direct provider endpoint. */
-  add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef>;
+  add(id: string, endpoint: Endpoint): Promise<EndpointRef>;
   /** Remove a registered endpoint. */
   remove(id: string): Promise<void>;
   query(input: QueryInput, options?: QueryOptions): BrowserTextRun;
   chat(input: ChatInput, options?: ChatOptions): BrowserTextRun;
   embed(input: string, options?: EmbedOptions): BrowserEmbeddingRun;
+  listen(audio: Uint8Array, options?: ListenOptions): BrowserTextRun;
+  speak(text: string, options?: SpeakOptions): BrowserAudioRun;
   state(): EngineState;
   subscribeEvents(listener: (event: EngineEvent) => void): () => void;
   close(): Promise<void>;
@@ -724,14 +791,8 @@ export interface ModelEntry {
 }
 
 export interface RegistryManifest {
-  version: 4;
+  version: 7;
   projectorIndexRevision: number;
   assets: Record<string, AssetRecord>;
   models: Record<string, ModelEntry>;
-}
-
-export interface LoadedModelState {
-  id: string;
-  assetFingerprint: string;
-  runtimeFingerprint: string;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   type ManagedModel,
   type ModelAddOptions,
@@ -10,6 +10,7 @@ import {
 } from '@noumena-labs/sipp';
 import {
   Activity,
+  AudioLines,
   Cpu,
   Database,
   Download,
@@ -57,9 +58,11 @@ import {
   getEmbeddingModels,
   getDefaultVariant,
   getModelById,
+  getSpeechModels,
   getVariantPrimaryUrl,
   getVisionModels,
   isEmbeddingModel,
+  isSpeechModel,
   isVisionModel,
   MODEL_REGISTRY,
   type ModelCapability,
@@ -121,6 +124,7 @@ interface ImageSelectionMeta {
 }
 
 const FORCE_SPLIT_BYTES = 256 * 1024 * 1024;
+const SUPPORTED_LISTEN_AUDIO_FILE = /\.(?:wav|mp3|flac)$/i;
 
 function getDefaultRuntimeOptions() {
   return {
@@ -270,6 +274,7 @@ type PlaygroundView =
   | 'requests'
   | 'vision'
   | 'embeddings'
+  | 'speech'
   | 'benchmarks'
   | 'observability'
   | 'reports';
@@ -277,8 +282,10 @@ type TextOperation = Extract<BenchmarkOperation, 'chat' | 'query'>;
 type EmbeddingUseCase = 'semanticSearch' | 'ragDocument' | 'classification' | 'clustering';
 
 const CAPABILITY_LABELS: Record<ModelCapability, string> = {
+  asr: 'Speech to Text',
   embedding: 'Embed',
   text: 'Text',
+  tts: 'Text to Speech',
   vision: 'Vision',
 };
 
@@ -348,16 +355,6 @@ function isManagedPrompt(value: string): boolean {
   ].includes(value);
 }
 
-function registryModelSupportsOperation(
-  model: ModelRegistryEntry,
-  operation: BenchmarkOperation
-): boolean {
-  if (operation === 'embed') {
-    return isEmbeddingModel(model);
-  }
-  return model.capability !== 'embedding';
-}
-
 function defaultOperationForRegistryEntry(model: ModelRegistryEntry): BenchmarkOperation {
   if (isEmbeddingModel(model)) {
     return 'embed';
@@ -412,37 +409,28 @@ const VIEW_OPTIONS: readonly {
   { icon: TerminalSquare, label: 'Requests', title: 'Chat and query requests', value: 'requests' },
   { icon: Cpu, label: 'Vision', title: 'Image and prompt requests', value: 'vision' },
   { icon: Database, label: 'Embeddings', title: 'Vector embedding requests', value: 'embeddings' },
+  { icon: AudioLines, label: 'Speech', title: 'Speech recognition and synthesis', value: 'speech' },
   { icon: Gauge, label: 'Benchmarks', title: 'Benchmark suite and traces', value: 'benchmarks' },
   { icon: Activity, label: 'Observability', title: 'Runtime and request observability', value: 'observability' },
   { icon: FileJson, label: 'Reports', title: 'Benchmark report output', value: 'reports' },
 ];
 
-function defaultOperationForModel(model: ModelInfo): BenchmarkOperation {
-  const capabilities = model.capabilities;
-  if (capabilities == null) {
-    return model.chatTemplate == null ? 'query' : 'chat';
+function defaultOperationForModel(model: ModelInfo): BenchmarkOperation | null {
+  const operations = model.capabilities?.operations;
+  if (operations?.chat) {
+    return 'chat';
   }
-  if (capabilities.supportsEmbeddings && !capabilities.supportsTextGeneration) {
-    return 'embed';
-  }
-  if (capabilities.modelClass === 'encoder_decoder') {
+  if (operations?.query) {
     return 'query';
   }
-  return capabilities.hasChatTemplate ? 'chat' : 'query';
+  if (operations?.embed) {
+    return 'embed';
+  }
+  return null;
 }
 
 function modelSupportsOperation(model: ModelInfo, operation: BenchmarkOperation): boolean {
-  const capabilities = model.capabilities;
-  if (capabilities == null) {
-    return true;
-  }
-  if (operation === 'embed') {
-    return capabilities.supportsEmbeddings;
-  }
-  if (operation === 'chat') {
-    return capabilities.supportsTextGeneration && capabilities.hasChatTemplate;
-  }
-  return capabilities.supportsTextGeneration;
+  return model.capabilities?.operations[operation] === true;
 }
 
 function yesNo(value: boolean | undefined): string {
@@ -490,7 +478,9 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [activeView, setActiveView] = useState<PlaygroundView>('requests');
   const [selectionMode, setSelectionMode] = useState<ModelSelectionMode>('registry');
-  const [selectedRegistryId, setSelectedRegistryId] = useState(MODEL_REGISTRY[0].id);
+  const [selectedRegistryId, setSelectedRegistryId] = useState(
+    MODEL_REGISTRY.find((model) => model.capability === 'text')?.id ?? MODEL_REGISTRY[0].id
+  );
   const selectedModel = getModelById(selectedRegistryId) ?? MODEL_REGISTRY[0];
   const selectedVariant = getDefaultVariant(selectedModel);
   const [modelUrl, setModelUrl] = useState(getVariantPrimaryUrl(selectedVariant));
@@ -499,6 +489,13 @@ export default function App() {
   const [prompt, setPrompt] = useState(DEFAULT_QUERY_PROMPT);
   const [embeddingUseCase, setEmbeddingUseCase] =
     useState<EmbeddingUseCase>('semanticSearch');
+  const [speechMode, setSpeechMode] = useState<'listen' | 'speak'>('listen');
+  const [speechLanguage, setSpeechLanguage] = useState('en');
+  const [speechText, setSpeechText] = useState('Hello from Sipp.');
+  const [speechMaxDurationMs, setSpeechMaxDurationMs] = useState('');
+  const [speechAudio, setSpeechAudio] = useState<File | null>(null);
+  const [speakerAudio, setSpeakerAudio] = useState<File | null>(null);
+  const [speechOutputUrl, setSpeechOutputUrl] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState(DEFAULT_TOKEN_COUNT);
   const [warmupRuns, setWarmupRuns] = useState(1);
   const [measuredRuns, setMeasuredRuns] = useState(3);
@@ -535,6 +532,14 @@ export default function App() {
   const projectorFileInputRef = useRef<HTMLInputElement>(null);
   const loadedLocationKeyRef = useRef<string | null>(null);
   const responseElementRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    return () => {
+      if (speechOutputUrl != null) {
+        URL.revokeObjectURL(speechOutputUrl);
+      }
+    };
+  }, [speechOutputUrl]);
 
   const createResponseRenderer = (maxStreams = 1, flushMode: 'frame' | 'immediate' = 'frame') => {
     let frame = 0;
@@ -723,6 +728,16 @@ export default function App() {
       return;
     }
 
+    if (isSpeechModel(entry)) {
+      setActiveView('speech');
+      setSpeechMode(entry.capability === 'asr' ? 'listen' : 'speak');
+      if (entry.capability === 'asr') {
+        setTokenCount(4096);
+      }
+      setImageEnabled(false);
+      return;
+    }
+
     setActiveView('requests');
     setOperation(defaultOperationForRegistryEntry(entry));
     setImageEnabled(false);
@@ -757,7 +772,7 @@ export default function App() {
     const model = await addModel(targetClient, location, { onProgress });
     await targetClient.add(
       'playground-local',
-      EndpointDescriptor.local(model.id, {
+      Endpoint.local(model, {
         observability: 'profile',
         runtime: getDefaultRuntimeOptions(),
         onProgress,
@@ -771,7 +786,10 @@ export default function App() {
     setSourceInfo({ label: locationLabel(location), bytes: info.bytes });
     loadedLocationKeyRef.current = locationKey(location);
     if (!modelSupportsOperation(info, operation)) {
-      setOperation(defaultOperationForModel(info));
+      const supportedOperation = defaultOperationForModel(info);
+      if (supportedOperation != null) {
+        setOperation(supportedOperation);
+      }
     }
     const modelPrompt = effectivePromptForModel(info, prompt);
     if (modelPrompt !== prompt) {
@@ -933,7 +951,13 @@ export default function App() {
     let benchmarkPrompt = prompt;
     let benchmarkTokenCount = tokenCount;
     if (loadedModel != null && !modelSupportsOperation(loadedModel, benchmarkOperation)) {
-      benchmarkOperation = defaultOperationForModel(loadedModel);
+      const supportedOperation = defaultOperationForModel(loadedModel);
+      if (supportedOperation == null) {
+        setStatus(`${loadedModel.name} does not support a benchmark operation.`);
+        setIsBusy(false);
+        return;
+      }
+      benchmarkOperation = supportedOperation;
       setOperation(benchmarkOperation);
     }
     let benchmarkEmitTokens = false;
@@ -943,7 +967,11 @@ export default function App() {
     try {
       const info = await activateModel(client, location);
       if (!modelSupportsOperation(info, benchmarkOperation)) {
-        benchmarkOperation = defaultOperationForModel(info);
+        const supportedOperation = defaultOperationForModel(info);
+        if (supportedOperation == null) {
+          throw new Error(`${info.name} does not support a benchmark operation.`);
+        }
+        benchmarkOperation = supportedOperation;
       }
       benchmarkPrompt = effectivePromptForModel(info, benchmarkPrompt);
       benchmarkTokenCount = effectiveTokenCountForModel(info, benchmarkTokenCount);
@@ -1147,18 +1175,6 @@ export default function App() {
     selectedLocationKey != null &&
     loadedLocationKeyRef.current === selectedLocationKey;
 
-  const selectedRegistryOperationReason = (
-    requestedOperation: BenchmarkOperation
-  ): string | null => {
-    if (selectionMode !== 'registry') {
-      return null;
-    }
-    if (registryModelSupportsOperation(selectedModel, requestedOperation)) {
-      return null;
-    }
-    return `${selectedModel.name} is a ${capabilityLabel(selectedModel.capability)} model.`;
-  };
-
   const loadedModelOperationReason = (
     requestedOperation: BenchmarkOperation
   ): string | null => {
@@ -1173,26 +1189,26 @@ export default function App() {
 
   const operationDisabledReason = (
     requestedOperation: BenchmarkOperation
-  ): string | null =>
-    selectedRegistryOperationReason(requestedOperation) ??
-    loadedModelOperationReason(requestedOperation);
+  ): string | null => loadedModelOperationReason(requestedOperation);
 
   const textOperation: TextOperation = operation === 'query' ? 'query' : 'chat';
   const textRequestDisabledReason = operationDisabledReason(textOperation);
   const visionDisabledReason =
-    selectionMode === 'registry' && !isVisionModel(selectedModel)
-      ? `${selectedModel.name} is a ${capabilityLabel(selectedModel.capability)} model. Select a Vision model to enable image inputs.`
-      : isLoadedSelectedSource && currentModel != null && currentModel.modality !== 'vision'
-        ? `${currentModel.name} is loaded as a ${currentModel.modality} model. Load a Vision model to enable image inputs.`
-        : null;
+    isLoadedSelectedSource && currentModel != null && currentModel.mediaMarker == null
+      ? `${currentModel.name} does not accept image input.`
+      : null;
   const embeddingDisabledReason =
-    selectionMode === 'registry' && !isEmbeddingModel(selectedModel)
-      ? `${selectedModel.name} is a ${capabilityLabel(selectedModel.capability)} model. Select an Embed model to generate vectors.`
-      : isLoadedSelectedSource &&
-          currentModel?.capabilities != null &&
-          !currentModel.capabilities.supportsEmbeddings
-        ? `${currentModel.name} does not support embeddings. Load an Embed model to generate vectors.`
-        : null;
+    isLoadedSelectedSource &&
+    currentModel?.capabilities != null &&
+    !currentModel.capabilities.operations.embed
+      ? `${currentModel.name} does not support embeddings. Load an Embed model to generate vectors.`
+      : null;
+  const speechDisabledReason =
+    isLoadedSelectedSource &&
+    currentModel?.capabilities != null &&
+    !currentModel.capabilities.operations[speechMode]
+      ? `${currentModel.name} does not support ${speechMode}. Load the matching speech model.`
+      : null;
   const projectorConfigured =
     projectorUrl.trim().length > 0 ||
     (projectorFileInputRef.current?.files?.length ?? 0) > 0;
@@ -1285,6 +1301,92 @@ export default function App() {
     await runQuery('embed', 'embeddings', false);
   };
 
+  const runSpeechRequest = async () => {
+    if (client == null || speechDisabledReason != null) {
+      setStatus(speechDisabledReason ?? 'Sipp client is not ready.');
+      return;
+    }
+    const language = speechLanguage.trim();
+    if (language !== speechLanguage) {
+      setStatus('Language must not contain surrounding whitespace.');
+      return;
+    }
+    setIsBusy(true);
+    setResponse('');
+    try {
+      if (speechMode === 'listen') {
+        if (speechAudio == null) {
+          throw new Error('Choose a WAV, MP3, or FLAC file to transcribe.');
+        }
+        if (!SUPPORTED_LISTEN_AUDIO_FILE.test(speechAudio.name)) {
+          throw new Error(
+            'Unsupported listen audio format. llama.cpp accepts WAV, MP3, or FLAC input.'
+          );
+        }
+        const audio = new Uint8Array(await speechAudio.arrayBuffer());
+        const startedAt = performance.now();
+        const result = await client.listen(audio, {
+          language: language || undefined,
+          maxTokens: tokenCount,
+        }).response;
+        const elapsedMs = performance.now() - startedAt;
+        const runtime = client.observability.current().runtime;
+        if (runtime == null) {
+          throw new Error('Speech recognition completed without runtime observability.');
+        }
+        const browserHostMs = elapsedMs - runtime.wasmRunLoopMs;
+        setResponse(result.text);
+        setStatus(
+          [
+            `speech recognition complete in ${(elapsedMs / 1000).toFixed(2)} s`,
+            `WASM inference loop ${(runtime.wasmRunLoopMs / 1000).toFixed(2)} s ` +
+              `across ${runtime.wasmRunLoopCalls} call(s)`,
+            `browser host ${(browserHostMs / 1000).toFixed(2)} s`,
+          ].join('; ')
+        );
+      } else {
+        const speaker = speakerAudio == null
+          ? undefined
+          : new Uint8Array(await speakerAudio.arrayBuffer());
+        const maxDurationMs = speechMaxDurationMs.trim().length === 0
+          ? undefined
+          : Number(speechMaxDurationMs);
+        const startedAt = performance.now();
+        const result = await client.speak(speechText, {
+          language: language || undefined,
+          speakerAudio: speaker,
+          maxDurationMs,
+        }).response;
+        const outputUrl = URL.createObjectURL(
+          new Blob([Uint8Array.from(result.audio)], { type: 'audio/wav' })
+        );
+        setSpeechOutputUrl(outputUrl);
+        const elapsedMs = performance.now() - startedAt;
+        const runtime = client.observability.current().runtime;
+        if (runtime == null) {
+          throw new Error('Speech synthesis completed without runtime observability.');
+        }
+        const browserHostMs = elapsedMs - runtime.wasmRunLoopMs;
+        const realTimeFactor = elapsedMs / result.durationMs;
+        setResponse(
+          [
+            `Generated ${result.durationMs} ms of ${result.channels}-channel audio at ` +
+              `${result.sampleRateHz} Hz in ${(elapsedMs / 1000).toFixed(2)} s ` +
+              `(${realTimeFactor.toFixed(2)}x real time).`,
+            `WASM inference loop ${(runtime.wasmRunLoopMs / 1000).toFixed(2)} s ` +
+              `across ${runtime.wasmRunLoopCalls} call(s);`,
+            `browser host ${(browserHostMs / 1000).toFixed(2)} s.`,
+          ].join(' ')
+        );
+        setStatus('speech synthesis complete');
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const renderRequestObservability = () => {
     const metrics = lastRun?.observability;
     if (metrics == null) {
@@ -1314,6 +1416,8 @@ export default function App() {
           { label: 'Execution', value: metrics.execution.mode },
           { label: 'Worker', value: yesNo(metrics.execution.workerBacked) },
           { label: 'Token Path', value: metrics.execution.tokenPath ?? 'none' },
+          { label: 'WASM Loop', value: formatMs(metrics.wasmRunLoopMs) },
+          { label: 'WASM Calls', value: metrics.wasmRunLoopCalls },
           { label: 'JS Drain', value: metrics.jsTokenDrainMs == null ? 'n/a' : formatMs(metrics.jsTokenDrainMs) },
         ])}
       </div>
@@ -1855,6 +1959,133 @@ export default function App() {
               </Panel>
 
               {renderFeatureOutputPanel('Embedding Result', 'Ready for an embedding request.')}
+            </div>
+          ) : null}
+
+          {activeView === 'speech' ? (
+            <div className="workspace-view">
+              <Panel
+                title="Speech Request"
+                actions={
+                  <button
+                    className="button button-primary"
+                    disabled={isBusy || client == null || speechDisabledReason != null}
+                    onClick={() => void runSpeechRequest()}
+                    title={speechDisabledReason ?? undefined}
+                    type="button"
+                  >
+                    <Play size={16} aria-hidden="true" />
+                    Run {speechMode === 'listen' ? 'Listen' : 'Speak'}
+                  </button>
+                }
+              >
+                <div className="form-stack">
+                  {selectionMode === 'registry' ? (
+                    <div className="field">
+                      <label>Speech Model</label>
+                      <select
+                        value={isSpeechModel(selectedModel) ? selectedRegistryId : ''}
+                        onChange={(event) => {
+                          const entry = getModelById(event.target.value);
+                          if (entry == null) return;
+                          configureRegistryEntry(entry);
+                        }}
+                      >
+                        <option value="" disabled>Select a speech model</option>
+                        {getSpeechModels().map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {formatModelOption(model)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
+                  <div className="form-grid request-grid">
+                    <div className="field">
+                      <label>Mode</label>
+                      <SegmentedControl
+                        ariaLabel="Speech operation"
+                        onChange={setSpeechMode}
+                        options={[
+                          { label: 'Speech to Text', value: 'listen' },
+                          { label: 'Text to Speech', value: 'speak' },
+                        ]}
+                        value={speechMode}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Language Hint</label>
+                      <input
+                        value={speechLanguage}
+                        onChange={(event) => setSpeechLanguage(event.target.value)}
+                        placeholder="en"
+                      />
+                    </div>
+                  </div>
+                  {speechMode === 'listen' ? (
+                    <>
+                      <div className="field">
+                        <label>Input Audio</label>
+                        <input
+                          accept="audio/wav,audio/mpeg,audio/flac,.wav,.mp3,.flac"
+                          type="file"
+                          onChange={(event) => setSpeechAudio(event.target.files?.[0] ?? null)}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Max Transcript Tokens</label>
+                        <input
+                          type="number"
+                          value={tokenCount}
+                          onChange={(event) =>
+                            setTokenCount(Number.parseInt(event.target.value, 10) || 0)
+                          }
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="field">
+                        <label>Text</label>
+                        <textarea
+                          value={speechText}
+                          onChange={(event) => setSpeechText(event.target.value)}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Speaker Reference (optional)</label>
+                        <input
+                          accept="audio/wav,audio/mpeg,audio/flac,.wav,.mp3,.flac"
+                          type="file"
+                          onChange={(event) => setSpeakerAudio(event.target.files?.[0] ?? null)}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Maximum Duration in Milliseconds (optional)</label>
+                        <input
+                          min="1"
+                          placeholder="Adapter default"
+                          step="1"
+                          type="number"
+                          value={speechMaxDurationMs}
+                          onChange={(event) => setSpeechMaxDurationMs(event.target.value)}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </Panel>
+
+              <Panel title={speechMode === 'listen' ? 'Transcript' : 'Generated Audio'}>
+                {speechMode === 'speak' && speechOutputUrl != null ? (
+                  <audio controls src={speechOutputUrl} />
+                ) : null}
+                {renderLiveOutput(
+                  speechMode === 'listen'
+                    ? 'Ready to transcribe an audio file.'
+                    : 'Ready to synthesize speech.'
+                )}
+              </Panel>
             </div>
           ) : null}
 

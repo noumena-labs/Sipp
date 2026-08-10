@@ -1,8 +1,8 @@
 //! Chat/query request types accepted by [`SippEngine`](super::SippEngine).
 //!
-//! All types here are public API: builders for one-shot prompts and chat
-//! conversations, the `QueryOptions` knobs shared by both, and the internal
-//! runtime enqueue path for those requests.
+//! Public builders describe one-shot prompts and chat conversations. Private
+//! functions prepare those inputs and transcription audio for the shared
+//! runtime scheduler.
 
 use serde_json::json;
 
@@ -23,6 +23,21 @@ use super::{runtime_command, EngineEventSubscribers};
 const MAX_TOKENS_POSITIVE: &str = "max_tokens must be positive";
 const CHAT_MESSAGES_REQUIRED: &str = "chat messages must not be empty";
 const EMPTY_CHAT_TEMPLATE_PROMPT: &str = "model chat template did not produce a prompt";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListenRequest {
+    pub audio: Vec<u8>,
+    pub language: Option<String>,
+    pub max_tokens: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpeakRequest {
+    pub text: String,
+    pub language: Option<String>,
+    pub speaker_audio: Option<Vec<u8>>,
+    pub max_duration_ms: Option<u32>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct QueryOptions {
@@ -141,14 +156,17 @@ pub(super) fn start_chat(
                 .to_string(),
         });
     }
-    let prompt = render_chat_prompt(runtime, &request.messages)?;
-    start_query(
+    let ChatRequest {
+        messages,
+        options,
+        emit_tokens,
+    } = request;
+    let prompt = render_chat_prompt(runtime, &messages)?;
+    start_text_generation(
         runtime,
-        QueryRequest {
-            prompt,
-            options: request.options,
-            emit_tokens: request.emit_tokens,
-        },
+        prompt,
+        options,
+        emit_tokens,
         token_tx,
         event_subscribers,
     )
@@ -165,13 +183,65 @@ pub(super) fn start_query(
         options,
         emit_tokens,
     } = request;
+    start_text_generation(
+        runtime,
+        prompt,
+        options,
+        emit_tokens,
+        token_tx,
+        event_subscribers,
+    )
+}
 
+pub(super) fn start_listen(
+    runtime: &mut InferenceRuntime,
+    request: ListenRequest,
+    event_subscribers: &EngineEventSubscribers,
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
+    let prompt =
+        runtime.apply_asr_chat_template(request.language.as_deref().unwrap_or_default())?;
+    start_text_generation(
+        runtime,
+        prompt,
+        QueryOptions {
+            max_tokens: request.max_tokens,
+            media: vec![request.audio],
+            ..QueryOptions::default()
+        },
+        false,
+        None,
+        event_subscribers,
+    )
+}
+
+pub(super) fn start_speak(
+    runtime: &mut InferenceRuntime,
+    request: SpeakRequest,
+    event_subscribers: &EngineEventSubscribers,
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
+    let request_id = runtime.enqueue_speech_request(
+        &request.text,
+        request.language.as_deref(),
+        request.speaker_audio.as_deref(),
+        request.max_duration_ms,
+    )?;
+    emit_request_started(event_subscribers, request_id);
+    Ok((request_id, None))
+}
+
+fn start_text_generation(
+    runtime: &mut InferenceRuntime,
+    prompt: String,
+    options: QueryOptions,
+    emit_tokens: bool,
+    token_tx: Option<mpsc::UnboundedSender<crate::core::TokenBatch>>,
+    event_subscribers: &EngineEventSubscribers,
+) -> Result<(u32, Option<ActiveTokenEmission>)> {
     if options.max_tokens <= 0 {
         return Err(Error::InvalidRequest(MAX_TOKENS_POSITIVE));
     }
 
     let should_emit_tokens = emit_tokens && token_tx.is_some();
-
     let request_id = if options.media.is_empty() {
         runtime.enqueue_request(
             options.context_key,
@@ -198,7 +268,6 @@ pub(super) fn start_query(
     };
 
     emit_request_started(event_subscribers, request_id);
-
     Ok((
         request_id,
         attach_token_emission(runtime, request_id, token_tx),

@@ -1,7 +1,7 @@
-//! Tests endpoint, request, and descriptor conversion to core types.
+//! Tests endpoint and request conversion to core types.
 //!
-//! Covers strict variant fields and typed request conversion with pure values
-//! and no native runtime execution.
+//! Covers structurally distinct endpoint variants and typed request conversion
+//! with pure values and no native runtime execution.
 
 use super::*;
 use serde_json::json;
@@ -47,97 +47,87 @@ fn query_request_maps_extra() {
 }
 
 #[test]
-fn gateway_descriptor_maps_through_add_shape() {
-    let descriptor_dto = EndpointDescriptor {
-        kind: "gateway".to_string(),
-        base_url: Some("https://gateway.example.test".to_string()),
-        target: Some("developer-model".to_string()),
-        authentication: Some(GatewayAuthentication {
-            kind: "bearer".to_string(),
-            value: Some("secret".to_string()),
-            header_name: None,
-        }),
+fn gateway_input_maps_through_add_shape() {
+    let input = GatewayEndpointInput {
+        base_url: "https://gateway.example.test".to_string(),
+        target: "developer-model".to_string(),
+        authentication: GatewayAuthentication::Bearer("secret".to_string()),
+        static_headers: Vec::new(),
         timeout_ms: Some(5_000),
         query_route: Some("/generate".to_string()),
         chat_route: Some("/conversation".to_string()),
         embed_route: Some("/vectorize".to_string()),
         protocol_options: Some(json!({ "profile": "custom" })),
-        ..EndpointDescriptor::default()
     };
-    let descriptor = CoreEndpointDescriptor::try_from(&descriptor_dto).expect("gateway descriptor");
 
-    match descriptor {
-        CoreEndpointDescriptor::Gateway(descriptor) => {
-            assert_eq!(descriptor.target, "developer-model");
-            assert_eq!(descriptor.routes.query, "/generate");
-            assert_eq!(
-                descriptor.protocol_options.get("profile"),
-                Some(&json!("custom"))
-            );
-            assert!(matches!(
-                descriptor.authentication,
-                CoreGatewayAuthentication::Bearer(_)
-            ));
-        }
-        _ => panic!("expected gateway descriptor"),
+    let _: CoreEndpoint = input.try_into().expect("gateway endpoint");
+}
+
+#[test]
+fn local_input_maps_managed_model() {
+    let input = LocalEndpointInput {
+        model: managed_model("model-a"),
+        runtime: NativeRuntimeConfig::default(),
+    };
+
+    let _: CoreEndpoint = input.try_into().expect("local endpoint");
+}
+
+#[test]
+fn gateway_authentication_is_typed() {
+    let authentication = CoreGatewayAuthentication::from(GatewayAuthentication::Header {
+        name: "x-api-key".to_string(),
+        value: "secret".to_string(),
+    });
+
+    assert!(matches!(
+        authentication,
+        CoreGatewayAuthentication::Header { .. }
+    ));
+}
+
+#[test]
+fn provider_input_maps_selected_variant() {
+    let input = ProviderEndpointInput::OpenAi(OpenAiProviderInput {
+        model: "model-a".to_string(),
+        api_key: "secret".to_string(),
+        base_url: None,
+        timeout_ms: None,
+    });
+
+    let _: CoreEndpoint = input.try_into().expect("provider endpoint");
+}
+
+#[test]
+fn provider_selection_rejects_fields_from_another_adapter() {
+    let input = ProviderSelectionInput {
+        provider: "openai".to_string(),
+        model: "model-a".to_string(),
+        api_key: Some("secret".to_string()),
+        base_url: None,
+        timeout_ms: None,
+        version: Some("2023-06-01".to_string()),
+        auth_header_name: None,
+        auth_header_value: None,
+        static_headers: None,
+        correlation_header: None,
+    };
+
+    let error = ProviderEndpointInput::try_from(input).expect_err("invalid provider fields");
+    assert_eq!(
+        error.to_string(),
+        "version is not valid for the OpenAI provider"
+    );
+}
+
+fn managed_model(id: &str) -> CoreManagedModel {
+    CoreManagedModel {
+        id: id.to_string(),
+        name: id.to_string(),
+        bytes: 1,
+        modality: sipp::lifecycle::ModelModality::Text,
+        status: sipp::lifecycle::ModelStatus::Ready,
     }
-}
-
-#[test]
-fn local_descriptor_maps_managed_model_id() {
-    let descriptor = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
-        kind: "local".to_string(),
-        model_id: Some("model-a".to_string()),
-        ..EndpointDescriptor::default()
-    })
-    .expect("local descriptor");
-
-    let CoreEndpointDescriptor::Local(local) = descriptor else {
-        panic!("expected local descriptor");
-    };
-    assert_eq!(local.model_id, "model-a");
-}
-
-#[test]
-fn local_descriptor_requires_model_id() {
-    let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
-        kind: "local".to_string(),
-        ..EndpointDescriptor::default()
-    })
-    .expect_err("missing model id");
-
-    assert!(error
-        .to_string()
-        .contains("local descriptor modelId is required"));
-}
-
-#[test]
-fn provider_descriptor_rejects_unsupported_provider_name() {
-    let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
-        kind: "provider".to_string(),
-        provider: Some("openai-compatible".to_string()),
-        model: Some("model-a".to_string()),
-        ..EndpointDescriptor::default()
-    })
-    .expect_err("unsupported provider name");
-
-    assert!(error
-        .to_string()
-        .contains("provider must be one of: openai, anthropic, openai_compatible"));
-}
-
-#[test]
-fn local_endpoint_rejects_provider_model() {
-    let error = CoreEndpointDescriptor::try_from(&EndpointDescriptor {
-        kind: "local".to_string(),
-        model_id: Some("model-a".to_string()),
-        model: Some("provider-model".to_string()),
-        ..EndpointDescriptor::default()
-    })
-    .expect_err("provider model on local endpoint");
-    assert!(error
-        .to_string()
-        .contains("model is not valid for local endpoint descriptors"));
 }
 
 #[test]

@@ -12,6 +12,7 @@ impl GatewaySecret {
         Self(value.into())
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn expose(&self) -> &str {
         &self.0
     }

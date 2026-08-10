@@ -1,13 +1,16 @@
 use crate::core::TokenUsage;
 use crate::engine::{
-    EmbedOptions, EmbedRequest, EmbeddingResult, GenerationResult, QueryOptions, QueryRequest,
-    RequestStats, SamplingRuntimeOverride, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+    EmbedOptions, EmbedRequest, EmbeddingResult, GenerationResult, ListenRequest, QueryOptions,
+    QueryRequest, RequestStats, SamplingRuntimeOverride, SpeakRequest, DEFAULT_CONTEXT_KEY,
+    DEFAULT_MAX_TOKENS,
 };
 
 use crate::client::{
-    EndpointRef, LocalEmbedOptions, LocalTextOptions, SippEmbeddingResponse, SippError,
-    SippQueryRequest, SippResponseMetadata, SippTextOptions, SippTextResponse,
+    EndpointRef, LocalEmbedOptions, LocalTextOptions, SippAudioResponse, SippEmbeddingResponse,
+    SippError, SippListenRequest, SippQueryRequest, SippResponseMetadata, SippSpeakRequest,
+    SippTextOptions, SippTextResponse, DEFAULT_TRANSCRIPTION_MAX_TOKENS,
 };
+use crate::runtime::SynthesizedAudio;
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -26,6 +29,29 @@ pub(crate) fn local_query_request(request: SippQueryRequest) -> Result<QueryRequ
     Ok(QueryRequest::new(request.prompt)
         .options(options)
         .emit_tokens(request.emit_tokens))
+}
+
+pub(crate) fn local_listen_request(request: SippListenRequest) -> Result<ListenRequest, SippError> {
+    let max_tokens = i32::try_from(
+        request
+            .max_tokens
+            .unwrap_or(DEFAULT_TRANSCRIPTION_MAX_TOKENS),
+    )
+    .map_err(|_| SippError::InvalidRequest("local max_tokens exceeds i32::MAX".to_string()))?;
+    Ok(ListenRequest {
+        audio: request.audio,
+        language: request.language,
+        max_tokens,
+    })
+}
+
+pub(crate) fn local_speak_request(request: SippSpeakRequest) -> SpeakRequest {
+    SpeakRequest {
+        text: request.text,
+        language: request.language,
+        speaker_audio: request.speaker_audio,
+        max_duration_ms: request.max_duration_ms,
+    }
 }
 
 pub(crate) fn local_chat_options(
@@ -72,6 +98,24 @@ pub(crate) fn embedding_response(
         local_stats: Some(result.stats),
         pooling: Some(result.pooling),
         normalized: Some(result.normalized),
+        metadata: local_metadata(request_id),
+    }
+}
+
+pub(crate) fn audio_response(
+    endpoint: EndpointRef,
+    request_id: Option<String>,
+    output: SynthesizedAudio,
+) -> SippAudioResponse {
+    let duration_ms = output.duration_ms();
+    let sample_rate_hz = output.sample_rate_hz();
+    let channels = output.channels();
+    SippAudioResponse {
+        endpoint,
+        audio: output.data,
+        sample_rate_hz,
+        channels,
+        duration_ms,
         metadata: local_metadata(request_id),
     }
 }

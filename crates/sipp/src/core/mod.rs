@@ -3,12 +3,14 @@
 
 mod capability;
 mod chat;
+mod operation;
 mod result;
 mod token_emission;
 mod token_usage;
 
 pub use capability::CapabilitySupport;
 pub use chat::{ChatMessage, ChatRole};
+pub use operation::Operation;
 pub use result::FinishReason;
 pub use token_emission::{TokenBatch, TokenEmissionStats};
 pub use token_usage::TokenUsage;

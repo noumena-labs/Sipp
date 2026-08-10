@@ -21,8 +21,10 @@ typedef struct sipp_common_init sipp_common_init;
 typedef struct sipp_common_sampler sipp_common_sampler;
 typedef struct sipp_common_checkpoint sipp_common_checkpoint;
 typedef struct sipp_mtmd_context sipp_mtmd_context;
+typedef struct sipp_mtmd_audio_job sipp_mtmd_audio_job;
 typedef struct sipp_mtmd_bitmap sipp_mtmd_bitmap;
 typedef struct sipp_mtmd_input_chunks sipp_mtmd_input_chunks;
+typedef void (*sipp_audio_sink)(void * user_data, const uint8_t * data, size_t size);
 
 sipp_common_params * sipp_common_params_parse_server(
     const char * model_path,
@@ -145,6 +147,18 @@ char * sipp_apply_chat_template(
     const char * messages_json,
     bool add_assistant);
 
+char * sipp_apply_asr_chat_template(
+    const sipp_chat_templates * templates,
+    const char * language,
+    size_t language_len);
+
+char * sipp_parse_asr_output(
+    const sipp_chat_templates * templates,
+    const char * language,
+    size_t language_len,
+    const char * output,
+    size_t output_len);
+
 void sipp_set_llama_log_quiet(bool quiet);
 
 void sipp_backend_load_all(void);
@@ -203,6 +217,40 @@ void sipp_mtmd_free(sipp_mtmd_context * context);
 
 bool sipp_mtmd_support_vision(const sipp_mtmd_context * context);
 
+int32_t sipp_mtmd_get_audio_sample_rate(const sipp_mtmd_context * context);
+
+int32_t sipp_mtmd_generated_audio_sample_rate(const sipp_mtmd_context * context);
+
+enum sipp_mtmd_audio_step_result {
+    SIPP_MTMD_AUDIO_STEP_FAILED = -1,
+    SIPP_MTMD_AUDIO_STEP_RUNNING = 0,
+    SIPP_MTMD_AUDIO_STEP_COMPLETE = 1,
+};
+
+sipp_mtmd_audio_job * sipp_mtmd_audio_begin(
+    sipp_common_init * init,
+    sipp_mtmd_context * context,
+    const char * text,
+    size_t text_len,
+    const char * language,
+    const uint8_t * voice,
+    size_t voice_len,
+    bool has_max_duration,
+    uint32_t max_duration_ms,
+    char ** error_out);
+
+int32_t sipp_mtmd_audio_step(sipp_mtmd_audio_job * job, char ** error_out);
+
+bool sipp_mtmd_audio_finish(
+    sipp_mtmd_audio_job * job,
+    sipp_audio_sink sink,
+    void * sink_user_data,
+    int64_t * sample_count_out,
+    int32_t * sample_rate_out,
+    char ** error_out);
+
+void sipp_mtmd_audio_free(sipp_mtmd_audio_job * job);
+
 sipp_mtmd_bitmap * sipp_mtmd_bitmap_init_from_buf(
     sipp_mtmd_context * context,
     const uint8_t * data,
@@ -218,6 +266,7 @@ bool sipp_mtmd_tokenize(
     sipp_mtmd_context * context,
     sipp_mtmd_input_chunks * chunks,
     const char * text,
+    size_t text_len,
     bool add_special,
     bool parse_special,
     const sipp_mtmd_bitmap * const * bitmaps,

@@ -1,5 +1,4 @@
 import {
-  EndpointDescriptor,
   QueryError,
   type EmbeddingResult,
   type GatewayEndpointOptions,
@@ -334,6 +333,8 @@ function header(title: string): string {
         <a href="/query.html">Query</a>
         <a href="/chat.html">Chat</a>
         <a href="/embed.html">Embed</a>
+        <a href="/speech.html">Speech</a>
+        <a href="/switching.html">Model switching</a>
         <a href="/gateway_local.html">Gateway local</a>
         <a href="/gateway_query.html">Gateway query</a>
         <a href="/gateway_chat.html">Gateway chat</a>

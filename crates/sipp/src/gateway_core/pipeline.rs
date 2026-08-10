@@ -6,22 +6,11 @@ use crate::client::{
     EndpointRef, SippChatRequest, SippClient, SippEmbedRequest, SippEmbeddingResponse,
     SippEmbeddingRun, SippQueryRequest, SippTextResponse, SippTextRun,
 };
-use crate::core::{FinishReason, TokenBatch, TokenUsage};
+use crate::core::{FinishReason, Operation, TokenBatch, TokenUsage};
 use futures_util::future::{select, Either};
 use futures_util::{stream, Stream, StreamExt};
 
 use crate::gateway_core::{GatewayError, GatewayRequestContext, GatewayResult};
-
-/// Typed inference capability executed by the pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Operation {
-    /// Raw-prompt generation.
-    Query,
-    /// Message-shaped generation.
-    Chat,
-    /// Vector embedding.
-    Embed,
-}
 
 /// Resolve an application target into a registered inference endpoint.
 pub trait TargetResolver: Send + Sync {

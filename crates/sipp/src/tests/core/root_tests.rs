@@ -1,12 +1,29 @@
 //! Tests the `sipp::core` crate root public value types.
 //!
-//! Covers exported chat roles, finish reasons, capability support, token usage,
-//! and token emission values with deterministic model-free assertions.
+//! Covers exported chat roles, operation labels, finish reasons, capability
+//! support, token usage, and token emission values with deterministic
+//! model-free assertions.
 
 use super::{
-    CapabilitySupport, ChatMessage, ChatRole, FinishReason, TokenBatch, TokenEmissionStats,
-    TokenUsage,
+    CapabilitySupport, ChatMessage, ChatRole, FinishReason, Operation, TokenBatch,
+    TokenEmissionStats, TokenUsage,
 };
+
+#[test]
+fn operation_labels_cover_every_routing_variant() {
+    let cases = [
+        (Operation::Query, "query"),
+        (Operation::Chat, "chat"),
+        (Operation::Embed, "embed"),
+        (Operation::Listen, "listen"),
+        (Operation::Speak, "speak"),
+    ];
+
+    for (operation, expected) in cases {
+        assert_eq!(operation.as_str(), expected);
+        assert_eq!(operation.to_string(), expected);
+    }
+}
 
 #[test]
 fn chat_role_as_str_and_serde_cover_all_variants() {

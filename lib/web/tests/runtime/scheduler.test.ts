@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {
-  EngineExecutionMode,
+  GenerateRequestHandle,
   GenerateResponse,
   TokenBatch,
   TransportObservability,
 } from '../../src/engine/inference-types.js';
-import { COMPLETED_REQUEST_STATUS_COMPLETED } from '../../src/wasm/wasm-bridge.js';
+import {
+  COMPLETED_REQUEST_STATUS_COMPLETED,
+  COMPLETED_REQUEST_STATUS_PENDING,
+} from '../../src/wasm/wasm-bridge.js';
 import { RequestTracker } from '../../src/runtime/request-tracker.js';
 import { QueuedRequestScheduler } from '../../src/runtime/scheduler.js';
 import type { WasmBridge } from '../../src/wasm/wasm-bridge.js';
@@ -19,13 +22,35 @@ const TOKEN_RING_CAPACITY = 2;
 const TOKEN_BATCH_RECORD_HEADER_BYTES = 16;
 const textEncoder = new TextEncoder();
 
-function createTransportObservability(
-  executionMode: EngineExecutionMode = 'main-thread'
-): TransportObservability {
+function requestHandle(requestId: number, generation = 1): GenerateRequestHandle {
+  return { generation, requestId };
+}
+
+function createDeferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitForEventLoopTurn(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+function createTransportObservability(): TransportObservability {
   return {
-    executionMode,
-    workerBacked: executionMode === 'worker',
+    executionMode: 'worker',
+    workerBacked: true,
     enabled: false,
+    wasmRunLoopCalls: 0,
+    wasmRunLoopMs: 0,
     activeTokenTransport: 'none',
     activeTokenEmission: false,
   };
@@ -102,9 +127,9 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
     getCompletedRequestStatus() {
       return COMPLETED_REQUEST_STATUS_COMPLETED;
     },
-    takeCompletedResponse(requestId: number): GenerateResponse {
+    takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
       return {
-        requestId,
+        requestId: request.requestId,
         completed: true,
         cancelled: false,
         failed: false,
@@ -116,17 +141,17 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
   const scheduler = new QueuedRequestScheduler({
     tracker,
     queuedPromptTokenBatchSinks: new Map(),
-    queuedPromptTokenBatchSinkErrors: new Map(),
     getTransportObservability: () => transport,
-    getBridge: () => bridge,
+    getRuntimeGeneration: () => 1,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
     finalizeRequest: (_bridge, requestId, options) => {
-      finalized.push(requestId);
+      finalized.push(requestId.requestId);
       tracker.finalize(requestId, options);
     },
     cancelQuery: async () => true,
   });
 
-  const tracked = scheduler.track(1);
+  const tracked = scheduler.track(requestHandle(1));
   const response = await Promise.race([
     tracked.promise,
     new Promise<GenerateResponse>((_, reject) => {
@@ -138,12 +163,100 @@ test('QueuedRequestScheduler settles completed requests reported by the inferenc
   assert.deepEqual(finalized, [1]);
 });
 
+test('QueuedRequestScheduler measures browser-to-WASM inference loop calls when observability is enabled', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const transport = createTransportObservability();
+  transport.enabled = true;
+  const bridge = {
+    async runInferenceLoop() {
+      return {
+        stepResult: 0,
+        completedResponseCount: 1,
+      };
+    },
+    getCompletedRequestStatus() {
+      return COMPLETED_REQUEST_STATUS_COMPLETED;
+    },
+    takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
+      return {
+        requestId: request.requestId,
+        completed: true,
+        cancelled: false,
+        failed: false,
+        outputText: 'done',
+      };
+    },
+  } as unknown as WasmBridge;
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptTokenBatchSinks: new Map(),
+    getTransportObservability: () => transport,
+    getRuntimeGeneration: () => 1,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
+    finalizeRequest: (_bridge, requestId, options) => {
+      tracker.finalize(requestId, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  await scheduler.track(requestHandle(1)).promise;
+
+  assert.equal(transport.wasmRunLoopCalls, 1);
+  assert.ok(transport.wasmRunLoopMs >= 0);
+});
+
+test('QueuedRequestScheduler settles direct completions outside the inference loop', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const transport = createTransportObservability();
+  const bridge = {
+    async runInferenceLoop() {
+      return {
+        stepResult: 0,
+        completedResponseCount: 0,
+      };
+    },
+    getCompletedRequestStatus() {
+      return COMPLETED_REQUEST_STATUS_COMPLETED;
+    },
+    takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
+      return {
+        requestId: request.requestId,
+        completed: true,
+        cancelled: false,
+        failed: false,
+        audio: {
+          data: new Uint8Array([1]),
+          sampleRateHz: 24_000,
+          channels: 1,
+          durationMs: 1,
+        },
+      };
+    },
+  } as unknown as WasmBridge;
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptTokenBatchSinks: new Map(),
+    getTransportObservability: () => transport,
+    getRuntimeGeneration: () => 1,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
+    finalizeRequest: (_bridge, requestId, options) => {
+      tracker.finalize(requestId, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  const response = await scheduler.track(requestHandle(7)).promise;
+
+  assert.equal(response.audio?.sampleRateHz, 24_000);
+});
+
 test('QueuedRequestScheduler batches same-turn admissions before the first native loop', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
   const maxCompletedResponses: number[] = [];
   const bridge = {
     async runInferenceLoop(
+      _generation: number,
       _maxTicks: number,
       maxCompleted: number
     ) {
@@ -156,13 +269,13 @@ test('QueuedRequestScheduler batches same-turn admissions before the first nativ
     getCompletedRequestStatus() {
       return COMPLETED_REQUEST_STATUS_COMPLETED;
     },
-    takeCompletedResponse(requestId: number): GenerateResponse {
+    takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
       return {
-        requestId,
+        requestId: request.requestId,
         completed: true,
         cancelled: false,
         failed: false,
-        outputText: `done-${requestId}`,
+        outputText: `done-${request.requestId}`,
       };
     },
   } as unknown as WasmBridge;
@@ -170,17 +283,17 @@ test('QueuedRequestScheduler batches same-turn admissions before the first nativ
   const scheduler = new QueuedRequestScheduler({
     tracker,
     queuedPromptTokenBatchSinks: new Map(),
-    queuedPromptTokenBatchSinkErrors: new Map(),
     getTransportObservability: () => transport,
-    getBridge: () => bridge,
+    getRuntimeGeneration: () => 1,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
     finalizeRequest: (_bridge, requestId, options) => {
       tracker.finalize(requestId, options);
     },
     cancelQuery: async () => true,
   });
 
-  const first = scheduler.track(1);
-  const second = scheduler.track(2);
+  const first = scheduler.track(requestHandle(1));
+  const second = scheduler.track(requestHandle(2));
   await Promise.all([first.promise, second.promise]);
 
   assert.deepEqual(maxCompletedResponses, [2]);
@@ -190,7 +303,6 @@ test('QueuedRequestScheduler drains shared token ring to TokenBatch sinks', asyn
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
   const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
-  const tokenBatchSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
   const ring = createTokenRing(128, true);
   writeTokenBatchRecord(ring, 1, 7, 2, 'hi');
@@ -208,9 +320,9 @@ test('QueuedRequestScheduler drains shared token ring to TokenBatch sinks', asyn
     getCompletedRequestStatus() {
       return COMPLETED_REQUEST_STATUS_COMPLETED;
     },
-    takeCompletedResponse(requestId: number): GenerateResponse {
+    takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
       return {
-        requestId,
+        requestId: request.requestId,
         completed: true,
         cancelled: false,
         failed: false,
@@ -222,9 +334,9 @@ test('QueuedRequestScheduler drains shared token ring to TokenBatch sinks', asyn
   const scheduler = new QueuedRequestScheduler({
     tracker,
     queuedPromptTokenBatchSinks: tokenBatchSinks,
-    queuedPromptTokenBatchSinkErrors: tokenBatchSinkErrors,
     getTransportObservability: () => transport,
-    getBridge: () => bridge,
+    getRuntimeGeneration: () => 1,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
     finalizeRequest: (_bridge, requestId, options) => {
       tracker.finalize(requestId, options);
     },
@@ -232,11 +344,11 @@ test('QueuedRequestScheduler drains shared token ring to TokenBatch sinks', asyn
   });
 
   tokenBatchSinks.set(1, (batch) => batches.push(batch));
-  const tracked = scheduler.track(1);
+  const tracked = scheduler.track(requestHandle(1));
   await tracked.promise;
 
   assert.equal(batches.length, 1);
-  assert.equal(batches[0].requestId, '1');
+  assert.equal(batches[0].requestId, '1:1');
   assert.equal(batches[0].streamId, 1);
   assert.equal(batches[0].sequenceStart, 7);
   assert.equal(batches[0].text, 'hi');
@@ -245,9 +357,6 @@ test('QueuedRequestScheduler drains shared token ring to TokenBatch sinks', asyn
   assert.equal(batches[0].stats.framesSent, 2);
   assert.equal(batches[0].stats.bytesSent, 2);
   assert.equal(batches[0].stats.batchesSent, 1);
-  assert.ok(batches[0].stats.drainMs >= 0);
-  assert.equal(batches[0].stats.drainCalls, 1);
-  assert.equal(tokenBatchSinkErrors.size, 0);
   assert.equal(transport.tokenDrainCalls, undefined);
   assert.equal(transport.tokenDrainMs, undefined);
 });
@@ -256,7 +365,6 @@ test('QueuedRequestScheduler limits native token budget while emitting tokens', 
   const tracker = new RequestTracker<GenerateResponse>();
   const transport = createTransportObservability();
   const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
-  const tokenBatchSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
   const loopTokenLimits: number[] = [];
   const ring = createTokenRing(128);
@@ -271,6 +379,7 @@ test('QueuedRequestScheduler limits native token budget while emitting tokens', 
       return ring.descriptor;
     },
     async runInferenceLoop(
+      _generation: number,
       _maxTicks: number,
       _maxCompletedResponses: number,
       maxGeneratedTokens: number
@@ -290,11 +399,13 @@ test('QueuedRequestScheduler limits native token budget while emitting tokens', 
       };
     },
     getCompletedRequestStatus() {
-      return COMPLETED_REQUEST_STATUS_COMPLETED;
+      return loopCount === 1
+        ? COMPLETED_REQUEST_STATUS_PENDING
+        : COMPLETED_REQUEST_STATUS_COMPLETED;
     },
-    takeCompletedResponse(requestId: number): GenerateResponse {
+    takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
       return {
-        requestId,
+        requestId: request.requestId,
         completed: true,
         cancelled: false,
         failed: false,
@@ -306,9 +417,9 @@ test('QueuedRequestScheduler limits native token budget while emitting tokens', 
   const scheduler = new QueuedRequestScheduler({
     tracker,
     queuedPromptTokenBatchSinks: tokenBatchSinks,
-    queuedPromptTokenBatchSinkErrors: tokenBatchSinkErrors,
     getTransportObservability: () => transport,
-    getBridge: () => bridge,
+    getRuntimeGeneration: () => 1,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
     finalizeRequest: (_bridge, requestId, options) => {
       tracker.finalize(requestId, options);
     },
@@ -316,23 +427,20 @@ test('QueuedRequestScheduler limits native token budget while emitting tokens', 
   });
 
   tokenBatchSinks.set(1, (batch) => batches.push(batch));
-  const tracked = scheduler.track(1);
+  const tracked = scheduler.track(requestHandle(1));
   await tracked.promise;
 
   assert.deepEqual(loopTokenLimits, [1, 1]);
   assert.equal(batches.length, 1);
   assert.equal(batches[0].text, 'a');
   assert.equal(batches[0].frameCount, 1);
-  assert.equal(tokenBatchSinkErrors.size, 0);
 });
 
 test('QueuedRequestScheduler drains shared token ring with streaming native loops', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
-  const transport = createTransportObservability('worker');
+  const transport = createTransportObservability();
   const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
-  const tokenBatchSinkErrors = new Map<number, unknown>();
   const batches: TokenBatch[] = [];
-  const maxDurationValues: Array<number | undefined> = [];
   const tokenLimits: number[] = [];
   const ring = createTokenRing(128);
 
@@ -341,13 +449,12 @@ test('QueuedRequestScheduler drains shared token ring with streaming native loop
       return ring.descriptor;
     },
     async runInferenceLoop(
+      _generation: number,
       _maxTicks: number,
       _maxCompletedResponses: number,
-      maxGeneratedTokens: number,
-      options?: { maxDurationUs?: number }
+      maxGeneratedTokens: number
     ) {
       tokenLimits.push(maxGeneratedTokens);
-      maxDurationValues.push(options?.maxDurationUs);
       writeTokenBatchRecord(ring, 1, 0, 1, 'w');
       return {
         stepResult: 0,
@@ -357,9 +464,9 @@ test('QueuedRequestScheduler drains shared token ring with streaming native loop
     getCompletedRequestStatus() {
       return COMPLETED_REQUEST_STATUS_COMPLETED;
     },
-    takeCompletedResponse(requestId: number): GenerateResponse {
+    takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
       return {
-        requestId,
+        requestId: request.requestId,
         completed: true,
         cancelled: false,
         failed: false,
@@ -371,9 +478,9 @@ test('QueuedRequestScheduler drains shared token ring with streaming native loop
   const scheduler = new QueuedRequestScheduler({
     tracker,
     queuedPromptTokenBatchSinks: tokenBatchSinks,
-    queuedPromptTokenBatchSinkErrors: tokenBatchSinkErrors,
     getTransportObservability: () => transport,
-    getBridge: () => bridge,
+    getRuntimeGeneration: () => 1,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
     finalizeRequest: (_bridge, requestId, options) => {
       tracker.finalize(requestId, options);
     },
@@ -381,29 +488,89 @@ test('QueuedRequestScheduler drains shared token ring with streaming native loop
   });
 
   tokenBatchSinks.set(1, (batch) => batches.push(batch));
-  const tracked = scheduler.track(1);
+  const tracked = scheduler.track(requestHandle(1));
   await tracked.promise;
 
-  assert.deepEqual(maxDurationValues, [0]);
   assert.deepEqual(tokenLimits, [1]);
   assert.equal(batches.length, 1);
   assert.equal(batches[0].text, 'w');
 });
 
-test('QueuedRequestScheduler leaves worker loops unsliced without token emission', async () => {
+test('QueuedRequestScheduler preserves the first token-sink failure and stops delivery', async () => {
   const tracker = new RequestTracker<GenerateResponse>();
-  const transport = createTransportObservability('worker');
-  const maxDurationValues: Array<number | undefined> = [];
+  const transport = createTransportObservability();
+  const tokenBatchSinks = new Map<number, (batch: TokenBatch) => void>();
+  const ring = createTokenRing(128);
+  const request = requestHandle(1);
+  let sinkCalls = 0;
+  let cancellationCalls = 0;
+  writeTokenBatchRecord(ring, request.requestId, 0, 1, 'a');
+  writeTokenBatchRecord(ring, request.requestId, 1, 1, 'b');
+
+  const bridge = {
+    getSharedTokenRingDescriptor() {
+      return ring.descriptor;
+    },
+    async runInferenceLoop() {
+      return { stepResult: 0, completedResponseCount: 1 };
+    },
+    getCompletedRequestStatus() {
+      return COMPLETED_REQUEST_STATUS_COMPLETED;
+    },
+    takeCompletedResponse(): GenerateResponse {
+      return {
+        requestId: request.requestId,
+        completed: true,
+        cancelled: false,
+        failed: false,
+        outputText: 'ab',
+      };
+    },
+  } as unknown as WasmBridge;
+
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptTokenBatchSinks: tokenBatchSinks,
+    getTransportObservability: () => transport,
+    getRuntimeGeneration: () => request.generation,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
+    finalizeRequest: (_bridge, handle, options) => {
+      tracker.finalize(handle, options);
+    },
+    cancelQuery: async () => {
+      cancellationCalls += 1;
+      return true;
+    },
+  });
+  tokenBatchSinks.set(request.requestId, () => {
+    sinkCalls += 1;
+    throw undefined;
+  });
+
+  scheduler.track(request);
+  const response = tracker.beginWait(request);
+  await response;
+
+  assert.equal(sinkCalls, 1);
+  assert.equal(cancellationCalls, 1);
+  assert.equal(tokenBatchSinks.has(request.requestId), false);
+  assert.equal(tracker.get(request)?.tokenBatchSinkFailed, true);
+  assert.equal(tracker.get(request)?.tokenBatchSinkError, undefined);
+  tracker.endWait(request);
+});
+
+test('QueuedRequestScheduler uses the continuous token budget without token emission', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const transport = createTransportObservability();
   const tokenLimits: number[] = [];
   const bridge = {
     async runInferenceLoop(
+      _generation: number,
       _maxTicks: number,
       _maxCompletedResponses: number,
-      maxGeneratedTokens: number,
-      options?: { maxDurationUs?: number }
+      maxGeneratedTokens: number
     ) {
       tokenLimits.push(maxGeneratedTokens);
-      maxDurationValues.push(options?.maxDurationUs);
       return {
         stepResult: 0,
         completedResponseCount: 1,
@@ -412,9 +579,9 @@ test('QueuedRequestScheduler leaves worker loops unsliced without token emission
     getCompletedRequestStatus() {
       return COMPLETED_REQUEST_STATUS_COMPLETED;
     },
-    takeCompletedResponse(requestId: number): GenerateResponse {
+    takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
       return {
-        requestId,
+        requestId: request.requestId,
         completed: true,
         cancelled: false,
         failed: false,
@@ -426,18 +593,88 @@ test('QueuedRequestScheduler leaves worker loops unsliced without token emission
   const scheduler = new QueuedRequestScheduler({
     tracker,
     queuedPromptTokenBatchSinks: new Map(),
-    queuedPromptTokenBatchSinkErrors: new Map(),
     getTransportObservability: () => transport,
-    getBridge: () => bridge,
+    getRuntimeGeneration: () => 1,
+    withWasmBridge: (operation) => Promise.resolve(operation(bridge)),
     finalizeRequest: (_bridge, requestId, options) => {
       tracker.finalize(requestId, options);
     },
     cancelQuery: async () => true,
   });
 
-  const tracked = scheduler.track(1);
+  const tracked = scheduler.track(requestHandle(1));
   await tracked.promise;
 
-  assert.deepEqual(maxDurationValues, [0]);
   assert.deepEqual(tokenLimits, [512]);
+});
+
+test('QueuedRequestScheduler rejects current requests when bridge acquisition fails', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const failure = new Error('bridge acquisition failed');
+  const request = requestHandle(1);
+  const finalized: GenerateRequestHandle[] = [];
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptTokenBatchSinks: new Map(),
+    getTransportObservability: createTransportObservability,
+    getRuntimeGeneration: () => request.generation,
+    withWasmBridge: async () => {
+      throw failure;
+    },
+    finalizeRequest: (bridge, handle, options) => {
+      assert.equal(bridge, null);
+      finalized.push(handle);
+      tracker.finalize(handle, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  const tracked = scheduler.track(request);
+  await assert.rejects(
+    Promise.race([
+      tracked.promise,
+      new Promise<GenerateResponse>((_, reject) => {
+        setTimeout(() => reject(new Error('scheduler did not reject request')), 100);
+      }),
+    ]),
+    (error) => error === failure
+  );
+
+  assert.deepEqual(finalized, [request]);
+  assert.equal(tracker.activeCount, 0);
+});
+
+test('QueuedRequestScheduler ignores stale bridge-acquisition failures', async () => {
+  const tracker = new RequestTracker<GenerateResponse>();
+  const bridgeStarted = createDeferred<void>();
+  const bridgeResult = createDeferred<never>();
+  const request = requestHandle(1);
+  const finalized: GenerateRequestHandle[] = [];
+  const scheduler = new QueuedRequestScheduler({
+    tracker,
+    queuedPromptTokenBatchSinks: new Map(),
+    getTransportObservability: createTransportObservability,
+    getRuntimeGeneration: () => request.generation,
+    withWasmBridge: async () => {
+      bridgeStarted.resolve();
+      return await bridgeResult.promise;
+    },
+    finalizeRequest: (_bridge, handle, options) => {
+      finalized.push(handle);
+      tracker.finalize(handle, options);
+    },
+    cancelQuery: async () => true,
+  });
+
+  scheduler.track(request);
+  await bridgeStarted.promise;
+  scheduler.reset();
+  bridgeResult.reject(new Error('stale bridge acquisition failed'));
+  await waitForEventLoopTurn();
+  await waitForEventLoopTurn();
+
+  assert.deepEqual(finalized, []);
+  assert.equal(tracker.get(request)?.settled, false);
+  assert.equal(tracker.get(request)?.active, true);
+  tracker.clear();
 });

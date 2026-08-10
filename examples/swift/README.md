@@ -24,9 +24,22 @@ The command-line example requires an operation, a local GGUF path, and input:
   /path/to/model.gguf "Explain on-device inference"
 ```
 
-Supported operations are `query`, `chat`, `embed`, and `cancel`. Query and chat
-show terminal responses, chat streams token batches, embed prints a vector
-preview, and cancel verifies the typed cancellation error.
+Supported operations are `query`, `chat`, `embed`, `listen`, `speak`, and
+`cancel`. Query and chat show terminal responses, chat streams token batches,
+embed prints a vector preview, and cancel verifies the typed cancellation
+error.
+
+```bash
+.build/artifacts/swift/examples/SippCLI listen \
+  /path/to/asr.gguf /path/to/asr-mmproj.gguf /path/to/audio.mp3
+
+.build/artifacts/swift/examples/SippCLI speak \
+  /path/to/tts.gguf /path/to/tts-mmproj.gguf output.wav "Hello from Sipp."
+```
+
+Set `SIPP_LANGUAGE` for a language hint, `SIPP_SPEAKER_AUDIO` for an optional
+speaker reference, and `SIPP_MAX_DURATION_MS` for an explicit TTS safety limit.
+Omit the duration limit to use the loaded model adapter's generation default.
 
 Embedding requires a model that supports embedding generation.
 

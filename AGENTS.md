@@ -55,7 +55,7 @@ Always use the **`test-runner`** skill when verifying changes.
 - **Verify Coverage/Structure:** `cargo xtask test verify --target whitebox`
 - **Rust Tests:** `cargo test` (or `cargo test -p <crate_name>` for narrow Rust-only checks)
 - **Rust Linting/Formatting:** `cargo clippy` and `cargo fmt`
-- **Browser Package TypeScript Tests:** `cargo xtask test unit suite browser-package`
+- **Browser Package TypeScript Tests:** `cargo xtask test unit suite browser`
 - **Demo TypeScript Tests:** `cargo xtask test unit suite demos`
 
 ---

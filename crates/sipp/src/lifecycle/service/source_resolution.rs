@@ -1,9 +1,11 @@
+#[cfg(not(target_family = "wasm"))]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use url::Url;
 
 #[cfg(not(target_family = "wasm"))]
 use crate::lifecycle::acquisition::native::NativeRemoteExecutor;
+#[cfg(not(target_family = "wasm"))]
 use crate::lifecycle::acquisition::{
     RemoteAcquisition, RemoteAcquisitionProgress, RemoteAcquisitionRequest, RemoteCacheCandidate,
     RemoteMetadata,
@@ -39,6 +41,7 @@ enum ResolvedSources {
 }
 
 #[derive(Debug)]
+#[cfg(not(target_family = "wasm"))]
 struct AcquiredAsset {
     record: AssetRecord,
     created: bool,
@@ -183,6 +186,7 @@ impl<B: StorageBackend> ModelStoreState<B> {
         })
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn commit_acquired(
         &mut self,
         acquired: Vec<AcquiredAsset>,
@@ -257,6 +261,10 @@ impl<B: StorageBackend> ModelStoreState<B> {
             },
             checked_projector_index_revision: 0,
             compatible_vision_projector_types: plan.compatible_vision_projector_types.clone(),
+            compatible_audio_projector_types: plan.compatible_audio_projector_types.clone(),
+            compatible_audio_generation_projector_types: plan
+                .compatible_audio_generation_projector_types
+                .clone(),
             reason: match plan.status {
                 ModelStatus::Ready => None,
                 ModelStatus::NeedsProjector => Some(ModelPairingReason::NoMatch),
@@ -329,6 +337,7 @@ fn local_source_key(path: &std::path::Path, anchor: LocalPathAnchor) -> String {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn remote_requests(
     assets: &BTreeMap<String, AssetRecord>,
     urls: impl IntoIterator<Item = String>,
@@ -347,6 +356,7 @@ fn remote_requests(
         .collect()
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn remote_candidates(
     assets: &BTreeMap<String, AssetRecord>,
     url: &str,
@@ -377,6 +387,7 @@ fn remote_candidates(
         .collect()
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn resolved_records(
     resolved: &[crate::lifecycle::acquisition::RemoteResolvedMember],
     downloaded: &BTreeMap<String, AssetRecord>,

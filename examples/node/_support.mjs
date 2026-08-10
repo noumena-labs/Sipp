@@ -59,7 +59,13 @@ export function requiredEnv(name) {
 }
 
 export function intEnv(name, fallback = undefined) {
-  return process.env[name] == null ? fallback : Number.parseInt(process.env[name], 10);
+  const raw = process.env[name];
+  if (raw == null) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value)) {
+    throw new Error(`${name} must be an integer; received ${raw}`);
+  }
+  return value;
 }
 
 export function numberEnv(name, fallback = undefined) {

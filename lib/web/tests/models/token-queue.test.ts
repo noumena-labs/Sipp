@@ -16,8 +16,6 @@ function tokenBatch(text: string): TokenBatch {
       framesSent: 1,
       bytesSent: new TextEncoder().encode(text).byteLength,
       batchesSent: 1,
-      drainMs: 0,
-      drainCalls: 0,
     },
   };
 }
@@ -92,8 +90,6 @@ test('BrowserTokenBatches coalesces when the queue is full', async () => {
           framesSent: index + 1,
           bytesSent: index + 1,
           batchesSent: index + 1,
-          drainMs: 0,
-          drainCalls: 0,
         },
       });
     }

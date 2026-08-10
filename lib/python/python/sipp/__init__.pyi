@@ -209,6 +209,13 @@ class SippEmbeddingResponse(TypedDict):
     pooling: Optional[str]
     normalized: Optional[bool]
 
+class SippAudioResponse(TypedDict):
+    endpoint: EndpointRefDict
+    audio: bytes
+    sample_rate_hz: int
+    channels: int
+    duration_ms: int
+
 class UnsupportedOperationError(Exception): ...
 
 class EndpointError(Exception):
@@ -228,13 +235,13 @@ class ProviderError(Exception):
     retry_after_ms: Optional[float]
     raw_body: Any
 
-class EndpointDescriptor:
+class Endpoint:
     @staticmethod
     def local(
-        model_id: str,
+        model: ManagedModel,
         *,
         runtime: Optional[NativeRuntimeConfig] = None,
-    ) -> EndpointDescriptor: ...
+    ) -> Endpoint: ...
     @staticmethod
     def gateway(
         target: str,
@@ -249,7 +256,7 @@ class EndpointDescriptor:
         chat_route: Optional[str] = None,
         embed_route: Optional[str] = None,
         protocol_options: Optional[Mapping[str, Any]] = None,
-    ) -> EndpointDescriptor: ...
+    ) -> Endpoint: ...
     @staticmethod
     def provider(
         provider: Literal["openai", "anthropic", "openai_compatible"],
@@ -262,7 +269,7 @@ class EndpointDescriptor:
         auth_header_name: Optional[str] = None,
         auth_header_value: Optional[str] = None,
         static_headers: Optional[Sequence[tuple[str, str]]] = None,
-    ) -> EndpointDescriptor: ...
+    ) -> Endpoint: ...
 class EndpointRef:
     pass
 
@@ -321,6 +328,10 @@ class SippTextRun:
 class SippEmbeddingRun:
     def result(self) -> SippEmbeddingResponse: ...
 
+class SippAudioRun:
+    def result(self) -> SippAudioResponse: ...
+    def cancel(self) -> None: ...
+
 class SippClient:
     def __init__(self, *, storage_root: Optional[PathLike] = None) -> None: ...
     @property
@@ -328,7 +339,7 @@ class SippClient:
     def add(
         self,
         id: str,
-        descriptor: EndpointDescriptor,
+        endpoint: Endpoint,
     ) -> EndpointRef: ...
     def remove(self, id: str) -> None: ...
     def query(
@@ -359,6 +370,23 @@ class SippClient:
         local: Optional[LocalEmbedOptions] = None,
         extra: Optional[RequestExtra] = None,
     ) -> SippEmbeddingRun: ...
+    def listen(
+        self,
+        audio: bytes,
+        *,
+        endpoint: Optional[EndpointRef] = None,
+        language: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> SippTextRun: ...
+    def speak(
+        self,
+        text: str,
+        *,
+        endpoint: Optional[EndpointRef] = None,
+        language: Optional[str] = None,
+        speaker_audio: Optional[bytes] = None,
+        max_duration_ms: Optional[int] = None,
+    ) -> SippAudioRun: ...
 
 def backend_observability_json(include_details: bool = True) -> str: ...
 def get_active_backend() -> ActivePythonBackend: ...

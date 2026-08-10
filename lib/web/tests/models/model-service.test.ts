@@ -12,23 +12,30 @@ import {
   type ClassifiedAssetFile,
   type PairingPlan,
   RuntimePairingValidationError,
-  type InternalBundleDescriptor,
   type ModelDetectionResult,
   type ModelAddSource,
-  type StagedModelBundle,
-  type StageModelBundleOptions,
   QueryError,
   type AssetRecord,
   type BrowserBackendPreference,
+  type CatalogModelInfo,
+  type CatalogObservabilityEvent,
+  type CatalogObservabilitySnapshot,
   type ModelEntry,
   type ModelInfo,
   type ModelLoadOptions,
   type ObservabilityEvent,
   type ObservabilitySnapshot,
   type RegistryManifest,
+  type RuntimeBundleDescriptor,
+  type RuntimeSessionDescriptor,
+  type RuntimeSessionSnapshot,
 } from '../../src/models/types.js';
-import type { EngineRuntime } from '../../src/runtime/engine-runtime.js';
-import type { RuntimeBackendOverride } from '../../src/engine/runtime-assets.js';
+import type {
+  EngineRuntime,
+  RuntimeActivation,
+  RuntimeActivationResult,
+} from '../../src/runtime/engine-runtime.js';
+import type { RuntimeBackendConstraint } from '../../src/engine/runtime-assets.js';
 import type {
   RustLifecycleBridge,
   type RustLifecycleInstallSource,
@@ -43,7 +50,7 @@ import type {
   BackendObservability,
   ChatMessage,
   EmbedRuntimeOptions,
-  EngineExecutionMode,
+  GenerateRequestHandle,
   GenerateRequestId,
   GenerateResponse,
   NativeRuntimeConfig,
@@ -149,7 +156,7 @@ function cloneManifest(manifest: RegistryManifest): RegistryManifest {
 
 class MemoryRegistryStore {
   public manifest: RegistryManifest = {
-    version: 4,
+    version: 7,
     projectorIndexRevision: 0,
     assets: {},
     models: {},
@@ -174,6 +181,10 @@ class FakeAssetStore {
   public localSplitCount = 0;
   public cleanupCount = 0;
   public forceBrowserSplit = false;
+  public syncHandleOpenCount = 0;
+  public syncHandleCloseCount = 0;
+  public readonly exclusiveLockFailureCalls = new Set<number>();
+  public readonly syncHandleFailures = new Map<number, unknown>();
   public async installFile(input: {
     kind: AssetRecord['kind'];
     file: File;
@@ -283,6 +294,15 @@ class FakeAssetStore {
   public async openSyncHandle(
     record: AssetRecord
   ): Promise<{ name: string; handle: import('../../src/engine/file-system-storage.js').OpfsSyncAccessHandle; size: number }> {
+    this.syncHandleOpenCount += 1;
+    if (this.syncHandleFailures.has(this.syncHandleOpenCount)) {
+      const failure = this.syncHandleFailures.get(this.syncHandleOpenCount);
+      this.syncHandleFailures.delete(this.syncHandleOpenCount);
+      throw failure;
+    }
+    if (this.exclusiveLockFailureCalls.delete(this.syncHandleOpenCount)) {
+      throw new DOMException('The file is exclusively locked.', 'NoModificationAllowedError');
+    }
     const stored = this.files.get(record.id);
     if (stored == null) {
       throw new QueryError('MODEL_BROKEN', `Missing fake asset ${record.id}.`);
@@ -301,7 +321,9 @@ class FakeAssetStore {
       },
       truncate: () => {},
       flush: () => {},
-      close: () => {},
+      close: () => {
+        this.syncHandleCloseCount += 1;
+      },
       getSize: () => bytes.byteLength,
     };
     return { name: record.name, handle, size: bytes.byteLength };
@@ -339,12 +361,19 @@ class FakeAssetClassifier {
       assetId,
       file: input,
       inspection: {
-        version: 1,
+        version: 4,
         role: isProjector ? 'projector' : 'model',
         architecture: visionCapable ? 'vision-test' : 'text-test',
+        trainedContextSize: isProjector ? null : 8192,
         visionCapable,
+        audioCapable: false,
+        audioGenerationCapable: false,
         compatibleVisionProjectorTypes: visionCapable ? ['vision-merger'] : [],
+        compatibleAudioProjectorTypes: [],
+        compatibleAudioGenerationProjectorTypes: [],
         providedVisionProjectorType: isProjector ? 'vision-merger' : null,
+        providedAudioProjectorType: null,
+        providedAudioGenerationProjectorType: null,
       },
       name: input.name,
     };
@@ -476,16 +505,18 @@ class FakeRuntime implements EngineRuntime {
   public closeCount = 0;
   public loadCount = 0;
   public wasmThreadingMode: 'single-thread' | 'pthread' = 'single-thread';
-  public defaultBackendOverride: RuntimeBackendOverride | null = null;
-  public nextLoadError: Error | null = null;
-  public stagedDescriptors: InternalBundleDescriptor[] = [];
+  public backendConstraint: RuntimeBackendConstraint | null = null;
   public lastPrompt: string | null = null;
+  public lastAudio: Uint8Array | null = null;
+  public lastMaxDurationMs: number | undefined;
   public lastContextKey: string | null = null;
   public mediaMarker: string | null = null;
   public nextOutputText: string | null = null;
   public streamedTokens: string[] = ['token'];
   public enqueuedOptions: Array<number | PromptOptions | EmbedRuntimeOptions | undefined> = [];
-  public stageGate: Promise<void> | null = null;
+  public wasmRunLoopCalls = 0;
+  public wasmRunLoopMs = 0;
+  private runtimeSession: RuntimeSessionSnapshot | null = null;
   private runtimeMetricsEnabled = false;
   private backendProfilingEnabled = false;
   private nextRequestId = 1;
@@ -495,27 +526,22 @@ class FakeRuntime implements EngineRuntime {
       promptText: string;
       options?: number | PromptOptions | EmbedRuntimeOptions;
       embedding?: boolean;
+      audio?: boolean;
       normalize?: boolean;
     }
   >();
-
-  public getExecutionMode(): EngineExecutionMode {
-    return 'main-thread';
-  }
 
   public getWasmThreadingMode(): 'single-thread' | 'pthread' {
     return this.wasmThreadingMode;
   }
 
-  public getDefaultBackendOverride(): RuntimeBackendOverride | null {
-    return this.defaultBackendOverride;
-  }
-
   public getTransportObservability(): TransportObservability {
     return {
-      executionMode: 'main-thread',
-      workerBacked: false,
+      executionMode: 'worker',
+      workerBacked: true,
       enabled: this.runtimeMetricsEnabled,
+      wasmRunLoopCalls: this.wasmRunLoopCalls,
+      wasmRunLoopMs: this.wasmRunLoopMs,
       activeTokenTransport: 'none',
     };
   }
@@ -527,12 +553,19 @@ class FakeRuntime implements EngineRuntime {
     const isProjector = /mmproj|projector/i.test(name);
     const visionCapable = !isProjector && /vision|llava/i.test(name);
     const inspection = {
-      version: 1 as const,
+      version: 4 as const,
       role: isProjector ? 'projector' as const : 'model' as const,
       architecture: visionCapable ? 'vision-test' : 'text-test',
+      trainedContextSize: isProjector ? null : 8192,
       visionCapable,
+      audioCapable: false,
+      audioGenerationCapable: false,
       compatibleVisionProjectorTypes: visionCapable ? ['vision-merger'] : [],
+      compatibleAudioProjectorTypes: [],
+      compatibleAudioGenerationProjectorTypes: [],
       providedVisionProjectorType: isProjector ? 'vision-merger' : null,
+      providedAudioProjectorType: null,
+      providedAudioGenerationProjectorType: null,
     };
     return {
       inspection,
@@ -547,54 +580,65 @@ class FakeRuntime implements EngineRuntime {
     return resolveFakePairing(classified);
   }
 
-  public async stageModelBundle(
-    descriptor: InternalBundleDescriptor,
-    _options?: StageModelBundleOptions
-  ): Promise<StagedModelBundle> {
-    this.stagedDescriptors.push(descriptor);
-    if (this.stageGate != null) {
-      await this.stageGate;
+  public async activateRuntime<TCommit>(
+    descriptor: RuntimeBundleDescriptor,
+    activation: RuntimeActivation<TCommit>
+  ): Promise<RuntimeActivationResult<TCommit>> {
+    if (this.runtimeSession != null) {
+      throw new Error('FakeRuntime supports one activation per Worker.');
     }
-    for (const shard of descriptor.shards) {
-      try {
-        shard.handle.close();
-      } catch {}
+    for (const file of descriptor.modelFiles) {
+      file.handle.close();
     }
-    const projector = descriptor.projector;
-    return {
-      sourceKind: 'managed',
-      modelPath: `/models/${this.stagedDescriptors.length}.gguf`,
-      projectorPath: projector == null ? null : '/models/mmproj.gguf',
-      isVisionModel: descriptor.detection.inspection.visionCapable,
-      projectorStatus: projector == null
-        ? descriptor.detection.inspection.visionCapable
-          ? 'missing'
-          : 'not-required'
-        : 'paired',
-      modelName: descriptor.detection.modelName,
-      detectionMethod: descriptor.detection.detectionMethod,
-      modelType: descriptor.detection.modelType,
-      modelArchitecture: descriptor.detection.modelArchitecture,
-    };
-  }
+    descriptor.projector?.handle.close();
 
-  public async loadRuntimeModel(
-    modelPathOrBundle: string | StagedModelBundle,
-    config?: NativeRuntimeConfig
-  ): Promise<void> {
     this.loadCount += 1;
-    this.runtimeMetricsEnabled = config?.observability?.runtime_metrics === true;
-    this.backendProfilingEnabled = config?.observability?.backend_profiling === true;
-    if (this.nextLoadError != null) {
-      const error = this.nextLoadError;
-      this.nextLoadError = null;
+    this.runtimeMetricsEnabled = activation.config.observability?.runtime_metrics === true;
+    this.backendProfilingEnabled = activation.config.observability?.backend_profiling === true;
+    this.runtimeSession = null;
+    this.mediaMarker = null;
+    this.mediaMarker = descriptor.projector == null ? null : '<image>';
+    this.runtimeSession = {
+      ...activation.session,
+      generation: this.loadCount,
+      capabilities: {
+        modelClass: 'decoder_only',
+        supportsTextGeneration: true,
+        supportsEmbeddings: true,
+        supportsVision: this.mediaMarker != null,
+        audioSampleRateHz: 16_000,
+        generatedAudioSampleRateHz: 24_000,
+        hasChatTemplate: true,
+        embedding: { dimensions: 3, pooling: 'mean' },
+        operations: {
+          query: true,
+          chat: true,
+          embed: true,
+          listen: true,
+          speak: true,
+        },
+      },
+      chatTemplate: 'fake-template',
+      bosText: '<s>',
+      eosText: '</s>',
+      mediaMarker: this.mediaMarker,
+    };
+    try {
+      const committed = await activation.commit({
+        session: this.runtimeSession,
+        runtimeObservability: this.getRuntimeObservability(),
+        backendObservability: await this.getBackendObservability(),
+      });
+      return { session: this.runtimeSession, committed };
+    } catch (error) {
+      this.runtimeSession = null;
       this.mediaMarker = null;
       throw error;
     }
-    this.mediaMarker =
-      typeof modelPathOrBundle === 'string' || modelPathOrBundle.projectorPath == null
-        ? null
-        : '<image>';
+  }
+
+  public currentRuntimeSession(): RuntimeSessionSnapshot | null {
+    return this.runtimeSession;
   }
 
   private renderNativeChatPrompt(
@@ -638,8 +682,9 @@ class FakeRuntime implements EngineRuntime {
 
   public async splitGgufStream(): Promise<void> {}
 
-  public close(): void {
+  public async close(): Promise<void> {
     this.closeCount += 1;
+    this.runtimeSession = null;
     this.mediaMarker = null;
   }
 
@@ -647,7 +692,7 @@ class FakeRuntime implements EngineRuntime {
     return this.mediaMarker;
   }
 
-  public async cancelQuery(_requestId: GenerateRequestId): Promise<boolean> {
+  public async cancelQuery(_request: GenerateRequestHandle): Promise<boolean> {
     return true;
   }
 
@@ -655,8 +700,10 @@ class FakeRuntime implements EngineRuntime {
     contextKey: string,
     promptText: string,
     options?: number | PromptOptions
-  ): Promise<GenerateRequestId> {
+  ): Promise<GenerateRequestHandle> {
     const requestId = this.nextRequestId++;
+    assert.ok(this.runtimeSession);
+    const request = { generation: this.runtimeSession.generation, requestId };
     this.lastContextKey = contextKey;
     this.lastPrompt = promptText;
     this.enqueuedOptions.push(options);
@@ -664,7 +711,7 @@ class FakeRuntime implements EngineRuntime {
     if (typeof options === 'object' && this.streamedTokens.length > 0) {
       const text = this.streamedTokens.join('');
       options.tokenBatchSink?.({
-        requestId: String(requestId),
+        requestId: `${request.generation}:${requestId}`,
         streamId: requestId,
         sequenceStart: 0,
         text,
@@ -674,19 +721,17 @@ class FakeRuntime implements EngineRuntime {
           framesSent: this.streamedTokens.length,
           bytesSent: new TextEncoder().encode(text).byteLength,
           batchesSent: 1,
-          drainMs: 0,
-          drainCalls: 0,
         },
       });
     }
-    return requestId;
+    return request;
   }
 
   public async enqueueChat(
     contextKey: string,
     messages: readonly ChatMessage[],
     options?: number | PromptOptions
-  ): Promise<GenerateRequestId> {
+  ): Promise<GenerateRequestHandle> {
     return this.enqueueQuery(contextKey, this.renderNativeChatPrompt(messages, true), options);
   }
 
@@ -694,8 +739,9 @@ class FakeRuntime implements EngineRuntime {
     contextKey: string,
     input: string,
     options?: EmbedRuntimeOptions
-  ): Promise<GenerateRequestId> {
+  ): Promise<GenerateRequestHandle> {
     const requestId = this.nextRequestId++;
+    assert.ok(this.runtimeSession);
     this.lastContextKey = contextKey;
     this.lastPrompt = input;
     this.enqueuedOptions.push(options);
@@ -705,10 +751,40 @@ class FakeRuntime implements EngineRuntime {
       embedding: true,
       normalize: options?.normalize ?? true,
     });
-    return requestId;
+    return { generation: this.runtimeSession.generation, requestId };
   }
 
-  public async awaitQuery(requestId: GenerateRequestId): Promise<GenerateResponse> {
+  public async enqueueListen(
+    audio: Uint8Array,
+    language: string,
+    options?: number | PromptOptions
+  ): Promise<GenerateRequestHandle> {
+    this.lastAudio = audio;
+    return this.enqueueQuery('listen', language, options);
+  }
+
+  public async enqueueSpeak(
+    text: string,
+    language: string,
+    speakerAudio: Uint8Array,
+    maxDurationMs: number | undefined,
+    options?: PromptOptions
+  ): Promise<GenerateRequestHandle> {
+    const requestId = this.nextRequestId++;
+    assert.ok(this.runtimeSession);
+    this.lastAudio = speakerAudio;
+    this.lastMaxDurationMs = maxDurationMs;
+    this.enqueuedOptions.push(options);
+    this.queuedRequests.set(requestId, {
+      promptText: `${language}:${text}`,
+      options,
+      audio: true,
+    });
+    return { generation: this.runtimeSession.generation, requestId };
+  }
+
+  public async awaitQuery(handle: GenerateRequestHandle): Promise<GenerateResponse> {
+    const requestId = handle.requestId;
     const request = this.queuedRequests.get(requestId);
     if (request == null) {
       return {
@@ -721,6 +797,8 @@ class FakeRuntime implements EngineRuntime {
       };
     }
     this.queuedRequests.delete(requestId);
+    this.wasmRunLoopCalls += 2;
+    this.wasmRunLoopMs += 12.5;
     if (request.embedding === true) {
       return {
         requestId,
@@ -733,6 +811,20 @@ class FakeRuntime implements EngineRuntime {
         cancelled: false,
         failed: false,
         observability: this.runtimeMetricsEnabled ? this.createMetrics() : null,
+      };
+    }
+    if (request.audio === true) {
+      return {
+        requestId,
+        completed: true,
+        audio: {
+          data: new Uint8Array([82, 73, 70, 70]),
+          sampleRateHz: 24_000,
+          channels: 1,
+          durationMs: 80,
+        },
+        cancelled: false,
+        failed: false,
       };
     }
     const outputText = this.nextOutputText ?? `answer:${request.promptText}`;
@@ -807,22 +899,20 @@ class FakeRustLifecycleBridge {
   public remoteCancelCount = 0;
   public remoteCleanupCount = 0;
   public remoteDownloadMode = false;
+  public remoteCancelError: Error | null = null;
   public lastOptions: unknown = null;
   private remoteUrl: string | null = null;
   private remoteFailure: { code: string; message: string } | null = null;
   private manifest: RegistryManifest = {
-    version: 4,
+    version: 7,
     projectorIndexRevision: 0,
     assets: {},
     models: {},
   };
-  private currentModelId: string | null = null;
   private pendingModelId: string | null = null;
 
-  public list(): ModelInfo[] {
-    return Object.values(this.manifest.models).map((entry) =>
-      this.toModelInfo(entry, this.currentModelId === entry.id)
-    );
+  public list(): CatalogModelInfo[] {
+    return Object.values(this.manifest.models).map((entry) => this.toCatalogModel(entry));
   }
 
   public remoteAcquisition(command: RustRemoteCommand): RustRemoteCommandValue {
@@ -903,6 +993,9 @@ class FakeRustLifecycleBridge {
         };
       case 'cancel':
         this.remoteCancelCount += 1;
+        if (this.remoteCancelError != null) {
+          throw this.remoteCancelError;
+        }
         return { kind: 'cancelled', snapshot: this.snapshot('idle', null, 'off') };
     }
   }
@@ -938,7 +1031,7 @@ class FakeRustLifecycleBridge {
       createdAt: now,
       updatedAt: now,
     };
-    const model = this.toModelInfo(this.manifest.models[modelId], false);
+    const model = this.toCatalogModel(this.manifest.models[modelId]);
     const snapshot = this.snapshot('idle', null, 'off');
     return {
       model,
@@ -966,7 +1059,7 @@ class FakeRustLifecycleBridge {
       return asset;
     });
     this.pendingModelId = entry.id;
-    const model = this.toModelInfo(entry, false);
+    const model = this.toCatalogModel(entry);
     const snapshot = this.snapshot('loading', null, options.observability ?? 'off');
     return {
       loadId: 'load-1',
@@ -980,7 +1073,6 @@ class FakeRustLifecycleBridge {
           backend_profiling: options.observability === 'profile',
         },
       },
-      loadRequired: true,
       assets: assets.map((asset) => ({
         assetId: asset.id,
         kind: asset.kind,
@@ -996,10 +1088,10 @@ class FakeRustLifecycleBridge {
   }
 
   public commitLoad(): {
-    model: ModelInfo;
+    model: CatalogModelInfo;
     manifest: RegistryManifest;
-    snapshot: ObservabilitySnapshot;
-    events: ObservabilityEvent[];
+    snapshot: CatalogObservabilitySnapshot;
+    events: CatalogObservabilityEvent[];
   } {
     this.commitCount += 1;
     assert.ok(this.pendingModelId);
@@ -1008,9 +1100,8 @@ class FakeRustLifecycleBridge {
     const loadedAt = new Date(1).toISOString();
     entry.updatedAt = loadedAt;
     entry.lastLoadedAt = loadedAt;
-    this.currentModelId = entry.id;
     this.pendingModelId = null;
-    const model = this.toModelInfo(entry, true);
+    const model = this.toCatalogModel(entry);
     const snapshot = this.snapshot('ready', model, 'runtime');
     return {
       model,
@@ -1020,30 +1111,16 @@ class FakeRustLifecycleBridge {
     };
   }
 
-  public abortLoad(error: { message?: string }): ObservabilitySnapshot {
-    return {
-      ...this.snapshot('error', null, 'off'),
-      query: {
-        contextKey: null,
-        status: 'failed',
-        wallMs: null,
-        ttftMs: null,
-        outputTokens: null,
-        errorMessage: error.message,
-      },
-    };
-  }
-
-  public remove(modelId: string): {
+  public remove(modelId: string, activeModelId: string | null): {
     removed: ModelEntry;
     orphanedAssets: AssetRecord[];
     manifest: RegistryManifest;
-    snapshot: ObservabilitySnapshot;
-    events: ObservabilityEvent[];
+    snapshot: CatalogObservabilitySnapshot;
+    events: CatalogObservabilityEvent[];
   } {
     this.removeCount += 1;
-    if (this.currentModelId === modelId) {
-      throw new QueryError('MODEL_IN_USE', `Model "${modelId}" is in use.`);
+    if (activeModelId === modelId) {
+      throw new QueryError('MODEL_IN_USE', `Model "${modelId}" is loaded.`);
     }
     const removed = this.manifest.models[modelId];
     assert.ok(removed);
@@ -1062,11 +1139,6 @@ class FakeRustLifecycleBridge {
       snapshot,
       events: [{ type: 'load-complete', snapshot }],
     };
-  }
-
-  public unload(): ObservabilitySnapshot {
-    this.currentModelId = null;
-    return this.snapshot('idle', null, 'off');
   }
 
   public close(): void {}
@@ -1096,7 +1168,7 @@ class FakeRustLifecycleBridge {
     };
   }
 
-  private toModelInfo(entry: ModelEntry, loaded: boolean): ModelInfo {
+  private toCatalogModel(entry: ModelEntry): CatalogModelInfo {
     const assets = entry.modelAssetIds
       .map((assetId) => this.manifest.assets[assetId])
       .filter((asset): asset is AssetRecord => asset != null);
@@ -1107,11 +1179,7 @@ class FakeRustLifecycleBridge {
       status: entry.status,
       source: assets.some((asset) => asset.sourceUrl != null) ? 'remote' : 'local',
       bytes: assets.reduce((sum, asset) => sum + asset.bytes, 0),
-      loaded,
-      chatTemplate: loaded ? 'fake-template' : null,
-      bosText: loaded ? '<s>' : '',
-      eosText: loaded ? '</s>' : '',
-      mediaMarker: null,
+      assetFingerprint: `asset-fingerprint-${entry.id}`,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
     };
@@ -1119,9 +1187,9 @@ class FakeRustLifecycleBridge {
 
   private snapshot(
     state: ObservabilitySnapshot['state'],
-    model: ModelInfo | null,
-    mode: ObservabilitySnapshot['mode']
-  ): ObservabilitySnapshot {
+    model: CatalogModelInfo | null,
+    mode: CatalogObservabilitySnapshot['mode']
+  ): CatalogObservabilitySnapshot {
     return {
       mode,
       state,
@@ -1137,6 +1205,7 @@ function createService(overrides: {
   registry?: MemoryRegistryStore;
   assets?: FakeAssetStore;
   classifier?: { classify(assetId: string, file: File, signal?: AbortSignal): Promise<ClassifiedAssetFile> };
+  sleep?: (delayMs: number) => Promise<void>;
 } = {}): {
   service: ModelService;
   runtime: FakeRuntime;
@@ -1151,7 +1220,8 @@ function createService(overrides: {
       runtime,
       registry as unknown as ModelRegistryStore,
       assets as unknown as AssetStore,
-      overrides.classifier ?? new FakeAssetClassifier()
+      overrides.classifier ?? new FakeAssetClassifier(),
+      overrides.sleep
     ),
     runtime,
     registry,
@@ -1186,7 +1256,7 @@ function createRustBackedService(
 }
 
 test('ModelService loads, lists, tracks current, and queries text models', async () => {
-  const { service, runtime } = createService();
+  const { service, runtime, assets } = createService();
   const info = await installAndLoad(service, localSource('text-model.gguf'));
 
   assert.equal(info.status, 'ready');
@@ -1206,6 +1276,7 @@ test('ModelService loads, lists, tracks current, and queries text models', async
   assert.equal(answer.text, 'answer:hello');
   assert.deepEqual(tokens, ['token']);
   assert.equal(runtime.lastPrompt, 'hello');
+  assert.equal(assets.syncHandleOpenCount, 1);
 });
 
 test('ModelService maps common generation options into local prompt options', async () => {
@@ -1232,6 +1303,72 @@ test('ModelService maps common generation options into local prompt options', as
     top_p: 0.8,
   });
   assert.deepEqual(options.stop, ['END']);
+});
+
+test('ModelService applies default and explicit transcription token limits', async () => {
+  const { service, runtime } = createService();
+  await installAndLoad(service, localSource('speech.gguf'));
+
+  await service.runListen(new Uint8Array([1, 2, 3]), {});
+  assert.equal((runtime.enqueuedOptions.at(-1) as PromptOptions).nTokens, 512);
+
+  await service.runListen(new Uint8Array([4, 5, 6]), { maxTokens: 64 });
+  assert.equal((runtime.enqueuedOptions.at(-1) as PromptOptions).nTokens, 64);
+  assert.deepEqual(runtime.lastAudio, new Uint8Array([4, 5, 6]));
+});
+
+test('ModelService rejects transcription limits outside the native integer range', async () => {
+  const { service } = createService();
+  await installAndLoad(service, localSource('speech.gguf'));
+
+  await assert.rejects(
+    () => service.runListen(new Uint8Array([1]), { maxTokens: 0x80000000 }),
+    /Listen maxTokens must be an integer between 1 and 2147483647/
+  );
+});
+
+test('ModelService forwards and validates the speech duration limit', async () => {
+  const { service, runtime } = createService();
+  await installAndLoad(service, localSource('speech.gguf'));
+
+  const result = await service.runSpeak('hello', { maxDurationMs: 2_000 });
+  assert.equal(runtime.lastMaxDurationMs, 2_000);
+  assert.equal(result.durationMs, 80);
+
+  await assert.rejects(
+    () => service.runSpeak('hello', { maxDurationMs: 0 }),
+    /Speak maxDurationMs must be an integer between 1 and 4294967295/
+  );
+});
+
+test('ModelService routes operations from the native runtime capability map', async () => {
+  const { service, runtime } = createService();
+  await installAndLoad(service, localSource('operation-routing.gguf'));
+  const session = runtime.currentRuntimeSession();
+  assert.ok(session);
+  (session.capabilities.operations as { speak: boolean }).speak = false;
+
+  await assert.rejects(
+    service.runSpeak('hello', {}),
+    (error) =>
+      error instanceof QueryError &&
+      error.code === 'UNSUPPORTED_OPERATION' &&
+      error.message.includes('does not support speak')
+  );
+  assert.equal(runtime.lastAudio, null);
+});
+
+test('ModelService reports request-window browser-to-WASM inference loop time for speech', async () => {
+  const { service } = createService();
+  await installAndLoad(service, localSource('speech.gguf'), {
+    observability: 'runtime',
+  });
+
+  await service.runSpeak('hello', {});
+
+  const runtime = service.currentObservability().runtime;
+  assert.equal(runtime?.wasmRunLoopCalls, 2);
+  assert.equal(runtime?.wasmRunLoopMs, 12.5);
 });
 
 test('ModelService uses contextKey as the preferred local text context key', async () => {
@@ -1289,10 +1426,26 @@ test('ModelService routes browser lifecycle through the Rust bridge when availab
   assert.equal(info.loaded, true);
   assert.equal(runtime.loadCount, 1);
   assert.equal((await service.list())[0]?.id, info.id);
-  await service.unload();
-  await service.remove(info.id);
-  assert.equal(rust.removeCount, 1);
-  assert.deepEqual(assets.deleted, ['asset-model-rust-lifecycle.gguf-19']);
+  assert.deepEqual(assets.deleted, []);
+});
+
+test('ModelService keeps a committed runtime when final progress reporting fails', async () => {
+  const { service, rust } = createRustBackedService();
+  const model = await service.add(localSource('published-runtime.gguf'));
+
+  await assert.rejects(
+    service.load(model.id, {
+      onProgress: (progress) => {
+        if (progress.percent === 100) {
+          throw new Error('progress listener failed');
+        }
+      },
+    }),
+    /progress listener failed/
+  );
+
+  assert.equal(rust.commitCount, 1);
+  assert.equal(service.current()?.id, model.id);
 });
 
 test('ModelService preserves terminal remote acquisition errors', async () => {
@@ -1392,6 +1545,59 @@ test('ModelService cleans browser remote downloads when classification is aborte
   );
 });
 
+test('ModelService preserves an aborted install when remote cancellation cleanup fails', async () => {
+  const remoteBytes = 'remote model bytes';
+  await withGlobalFetch(
+    async (_input, init) => {
+      if (init?.method === 'HEAD') {
+        return new Response(null, {
+          status: 200,
+          headers: {
+            'Content-Length': String(remoteBytes.length),
+            ETag: '"remote"',
+          },
+        });
+      }
+      return new Response(remoteBytes, { status: 200 });
+    },
+    async () => {
+      const controller = new AbortController();
+      const { service, rust, assets } = createRustBackedService(
+        new FakeRuntime(),
+        { classifier: new AbortingAssetClassifier(controller) }
+      );
+      rust.remoteDownloadMode = true;
+      rust.remoteCancelError = new Error('cancel failed');
+
+      await assert.rejects(
+        service.add(
+          { kind: 'remote', urls: ['https://example.test/model.gguf'] },
+          { signal: controller.signal }
+        ),
+        (error) => {
+          if (!(error instanceof DOMException) || error.name !== 'AbortError') {
+            return false;
+          }
+          const cleanupFailures = (error as DOMException & {
+            readonly cleanupFailures?: AggregateError;
+          }).cleanupFailures;
+          assert.ok(cleanupFailures instanceof AggregateError);
+          assert.equal(cleanupFailures.errors.length, 1);
+          assert.match(
+            String(cleanupFailures.errors[0]),
+            /cancel remote acquisition: cancel failed/
+          );
+          return true;
+        }
+      );
+
+      assert.equal(rust.remoteCancelCount, 1);
+      assert.deepEqual(assets.deleted, ['asset-model-model.gguf-18']);
+      assert.equal(assets.files.size, 0);
+    }
+  );
+});
+
 test('ModelService skips browser split cleanup for direct local loads', async () => {
   const { service, assets } = createService();
 
@@ -1407,6 +1613,95 @@ test('ModelService cleans browser split artifacts before split-capable local loa
   await service.add(localSource('split-capable.gguf'));
 
   assert.equal(assets.cleanupCount, 1);
+});
+
+test('ModelService opens each OPFS model handle once on the graceful path', async () => {
+  const { service, assets, registry } = createService();
+  assets.forceBrowserSplit = true;
+  const model = await service.add(localSource('graceful-split.gguf'));
+  const manifest = await registry.read();
+  const modelFiles = manifest.models[model.id]?.modelAssetIds ?? [];
+
+  await service.load(model.id);
+
+  assert.equal(modelFiles.length, 2);
+  assert.equal(assets.syncHandleOpenCount, modelFiles.length);
+  assert.equal(assets.syncHandleCloseCount, modelFiles.length);
+});
+
+test('ModelService preserves nullish OPFS handle failures', async () => {
+  for (const failure of [null, undefined]) {
+    const { service, assets } = createService();
+    const model = await service.add(localSource('nullish-failure.gguf'));
+    assets.syncHandleFailures.set(1, failure);
+    const notCaught = Symbol('not caught');
+    let caught: unknown = notCaught;
+
+    try {
+      await service.load(model.id);
+    } catch (error) {
+      caught = error;
+    }
+
+    assert.notEqual(caught, notCaught);
+    assert.equal(caught, failure);
+  }
+});
+
+test('ModelService retries the whole bundle after a transient OPFS lock', async () => {
+  const delays: number[] = [];
+  const { service, assets } = createService({
+    sleep: async (delayMs) => {
+      delays.push(delayMs);
+    },
+  });
+  assets.forceBrowserSplit = true;
+  const model = await service.add(localSource('locked-split.gguf'));
+  assets.exclusiveLockFailureCalls.add(2);
+
+  await service.load(model.id);
+
+  assert.equal(assets.syncHandleOpenCount, 4);
+  assert.equal(assets.syncHandleCloseCount, 3);
+  assert.deepEqual(delays, [25]);
+});
+
+test('ModelService backs off across repeated OPFS lock failures', async () => {
+  const delays: number[] = [];
+  const { service, assets } = createService({
+    sleep: async (delayMs) => {
+      delays.push(delayMs);
+    },
+  });
+  assets.forceBrowserSplit = true;
+  const model = await service.add(localSource('locked-twice.gguf'));
+  assets.exclusiveLockFailureCalls.add(2);
+  assets.exclusiveLockFailureCalls.add(4);
+
+  await service.load(model.id);
+
+  // The production delay table is asserted directly; the injected sleep only
+  // removes the waiting, not the policy.
+  assert.deepEqual(delays, [25, 50]);
+  assert.equal(assets.syncHandleOpenCount, 6);
+});
+
+test('ModelService stops retrying an OPFS lock once the delay table is exhausted', async () => {
+  const delays: number[] = [];
+  const { service, assets } = createService({
+    sleep: async (delayMs) => {
+      delays.push(delayMs);
+    },
+  });
+  assets.forceBrowserSplit = true;
+  const model = await service.add(localSource('locked-forever.gguf'));
+  for (let call = 2; call <= 24; call += 2) {
+    assets.exclusiveLockFailureCalls.add(call);
+  }
+
+  await assert.rejects(service.load(model.id), /exclusively locked/);
+
+  assert.deepEqual(delays, [25, 50, 100, 200, 400]);
 });
 
 test('ModelService defaults browser pthread runtime thread counts before Rust prepare', async () => {
@@ -1444,13 +1739,17 @@ test('ModelService auto-selects WebGPU when the browser has a shader-f16 adapter
       (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
       'webgpu'
     );
+    assert.equal(
+      (rust.lastOptions as { runtime?: NativeRuntimeConfig }).runtime?.context?.n_ctx,
+      undefined
+    );
   });
 });
 
-test('ModelService honors the runtime CPU backend override before WebGPU auto-selection', async () => {
+test('ModelService makes the CPU-only runtime constraint dominant over auto-selection', async () => {
   await withNavigatorGpu(async () => ({ features: { has: () => true } }), async () => {
     const runtime = new FakeRuntime();
-    runtime.defaultBackendOverride = 'cpu';
+    runtime.backendConstraint = 'cpu-only';
     const { service, rust } = createRustBackedService(runtime);
 
     await installAndLoad(service, localSource('cpu-runtime-override.gguf'));
@@ -1462,22 +1761,28 @@ test('ModelService honors the runtime CPU backend override before WebGPU auto-se
   });
 });
 
-test('ModelService keeps an explicit WebGPU backend when the runtime has a CPU override', async () => {
-  await withNavigatorGpu(async () => ({ features: { has: () => true } }), async () => {
+test('ModelService rejects an explicit WebGPU backend on the CPU-only runtime', async () => {
+  let adapterRequests = 0;
+  await withNavigatorGpu(async () => {
+    adapterRequests += 1;
+    return { features: { has: () => true } };
+  }, async () => {
     const runtime = new FakeRuntime();
-    runtime.defaultBackendOverride = 'cpu';
-    const { service, rust } = createRustBackedService(runtime);
+    runtime.backendConstraint = 'cpu-only';
+    const { service } = createRustBackedService(runtime);
 
-    await installAndLoad(service, localSource('explicit-webgpu.gguf'), { backend: 'webgpu' });
-
-    assert.equal(
-      (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
-      'webgpu'
+    await assert.rejects(
+      installAndLoad(service, localSource('explicit-webgpu.gguf'), { backend: 'webgpu' }),
+      (error) =>
+        error instanceof QueryError &&
+        error.code === 'UNSUPPORTED_OPERATION' &&
+        error.message.includes('did not pass the JSPI suspend/resume probe')
     );
+    assert.equal(adapterRequests, 0);
   });
 });
 
-test('ModelService auto-selects CPU when the adapter lacks shader-f16', async () => {
+test('ModelService leaves omitted CPU context sizing to Rust lifecycle', async () => {
   await withNavigatorGpu(async () => ({ features: { has: () => false } }), async () => {
     const { service, rust } = createRustBackedService();
 
@@ -1486,6 +1791,10 @@ test('ModelService auto-selects CPU when the adapter lacks shader-f16', async ()
     assert.equal(
       (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
       'cpu'
+    );
+    assert.equal(
+      (rust.lastOptions as { runtime?: NativeRuntimeConfig }).runtime?.context?.n_ctx,
+      undefined
     );
   });
 });
@@ -1547,48 +1856,17 @@ test('ModelService passes token sinks to the runtime when token emission is requ
   assert.equal(typeof (options as PromptOptions).tokenBatchSink, 'function');
 });
 
-test('ModelService rejects removal while a model is loaded', async () => {
-  const { service, runtime, assets } = createService();
-  const info = await installAndLoad(service, localSource('remove-me.gguf'));
+test('ModelService supplies the active model fact to the Rust removal policy', async () => {
+  const { service, rust } = createRustBackedService();
+  const model = await installAndLoad(service, localSource('active-model.gguf'));
 
   await assert.rejects(
-    service.remove(info.id),
+    service.remove(model.id),
     (error) => error instanceof QueryError && error.code === 'MODEL_IN_USE'
   );
-  await service.unload();
-  await service.remove(info.id);
-  assert.equal(service.current(), null);
-  assert.equal(runtime.closeCount, 1);
-  assert.equal(assets.deleted.length, 1);
-  assert.deepEqual(await service.list(), []);
-});
 
-test('ModelService rejects queries during lifecycle transitions and serializes concurrent loads', async () => {
-  const runtime = new FakeRuntime();
-  const { service } = createService({ runtime });
-  const slow = await service.add(localSource('slow.gguf'));
-  const next = await service.add(localSource('next.gguf'));
-  let releaseStage!: () => void;
-  runtime.stageGate = new Promise<void>((resolve) => {
-    releaseStage = resolve;
-  });
-
-  const firstLoad = service.load(slow.id);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await assert.rejects(
-    () => service.runQuery('too early', {}),
-    (error) => error instanceof QueryError && error.code === 'MODEL_NOT_READY'
-  );
-
-  const secondLoad = service.load(next.id);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(runtime.stagedDescriptors.length, 1);
-
-  runtime.stageGate = null;
-  releaseStage();
-  await firstLoad;
-  await secondLoad;
-  assert.equal(runtime.stagedDescriptors.length, 2);
+  assert.equal(rust.removeCount, 1);
+  assert.equal(service.current()?.id, model.id);
 });
 
 test('ModelService surfaces OPFS unavailable as a storage error', async () => {

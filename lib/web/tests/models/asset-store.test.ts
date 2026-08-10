@@ -148,7 +148,7 @@ const metadata: RemoteAssetMetadata = {
 };
 
 const emptyManifest = {
-  version: 4,
+  version: 7,
   projectorIndexRevision: 0,
   assets: {},
   models: {},
@@ -235,7 +235,7 @@ test('Browser acquisition journal recovery preserves registered assets', async (
   );
 
   await recoverBrowserAcquisitionJournals(storage as unknown as FileSystemStorage, {
-    version: 4,
+    version: 7,
     projectorIndexRevision: 0,
     models: {},
     assets: {
@@ -346,7 +346,7 @@ test('AssetStore cleans browser split temp files and unregistered shards', async
     const store = createTestAssetStore(storage);
 
     await store.cleanupBrowserSplitArtifacts({
-      version: 4,
+      version: 7,
       projectorIndexRevision: 0,
       models: {},
       assets: {

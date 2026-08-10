@@ -35,7 +35,7 @@ endpoints when the framework server owns the credential. Register a provider in
 server-only code:
 
 ```ts
-const endpoint = await client.add('provider', EndpointDescriptor.provider({
+const endpoint = await client.add('provider', Endpoint.provider({
   provider: 'openai',
   model: requiredEnv('OPENAI_MODEL'),
   apiKey: requiredEnv('OPENAI_API_KEY'),
@@ -47,9 +47,9 @@ examples. Do not expose real provider keys in browser bundles.
 
 ## Gateway Route Field Names
 
-Browser gateway descriptors require an absolute `http` or `https` `baseUrl`
+Browser gateway endpoints require an absolute `http` or `https` `baseUrl`
 and use `routes: { query, chat, embed }` for route overrides. Node gateway
-descriptors use `queryRoute`, `chatRoute`, and `embedRoute` when server code
+endpoints use `queryRoute`, `chatRoute`, and `embedRoute` when server code
 calls a gateway through `@sipphq/sipp-server`.
 
 Keep provider credentials and long-lived gateway tokens out of browser bundles.

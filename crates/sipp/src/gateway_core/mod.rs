@@ -12,6 +12,6 @@ pub use context::{GatewayCancellation, GatewayCancellationReason, GatewayRequest
 pub use error::{GatewayError, GatewayErrorKind, GatewayResult};
 pub use pipeline::{
     AdmissionController, AdmissionPermit, AllowAllAuthorizer, Authorizer, GatewayExecutor,
-    GatewayPipeline, GatewayStream, GatewayStreamEvent, Operation, SippClientExecutor,
-    TargetResolver, UnlimitedAdmissionController,
+    GatewayPipeline, GatewayStream, GatewayStreamEvent, SippClientExecutor, TargetResolver,
+    UnlimitedAdmissionController,
 };

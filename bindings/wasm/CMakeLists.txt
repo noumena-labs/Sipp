@@ -117,7 +117,7 @@ foreach(_ggml_target ggml ggml-base ggml-cpu ggml-webgpu)
 endforeach()
 
 # Wasm build flag application (JSPI, Exported functions, modularize, etc.)
-set(CE_WASM_EXPORTED_FUNCTIONS "['_CE_RustBrowserEngineAbiVersion','_CE_BrowserCacheLayout','_CE_GgufPlanSplitCount','_CE_GgufSplitStream','_CE_DetectModelFromGgufBytes','_CE_Sha256Create','_CE_Sha256Update','_CE_Sha256Finalize','_CE_Sha256Close','_CE_ModelServiceCreate','_CE_ModelServiceClose','_CE_ModelServiceList','_CE_ModelServiceCurrent','_CE_ModelServiceManifest','_CE_ModelServiceInstall','_CE_ModelServicePrepareLoad','_CE_ModelServiceRemoteAcquisitionCommand','_CE_ModelServiceCommitLoad','_CE_ModelServiceAbortLoad','_CE_ModelServiceRemove','_CE_ModelServiceUnload','_CE_ModelServiceSnapshot','_CE_ModelServiceDrainEvents','_CE_ModelServiceRecordEvent','_CE_Init','_CE_GetLastEngineErrorSize','_CE_CopyLastEngineError','_CE_Close','_CE_StartTextRequest','_CE_StartMediaRequest','_CE_StartChatRequest','_CE_StartEmbeddingRequest','_CE_CancelRequest','_CE_RunSchedulerLoop','_CE_GetCompletedRequestStatus','_CE_GetCompletedRequestOutputKind','_CE_GetTokenRingHeaderAddress','_CE_GetTokenRingBodyAddress','_CE_GetTokenRingCapacity','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestEmbeddingLength','_CE_CopyCompletedRequestEmbedding','_CE_GetCompletedRequestEmbeddingPooling','_CE_GetCompletedRequestEmbeddingNormalized','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ProbeChatBoundaryInfo','_CE_PairingValidate','_malloc','_free']")
+set(CE_WASM_EXPORTED_FUNCTIONS "['_CE_RustBrowserEngineAbiVersion','_CE_BrowserCacheLayout','_CE_GgufPlanSplitCount','_CE_GgufSplitStream','_CE_DetectModelFromGgufBytes','_CE_Sha256Create','_CE_Sha256Update','_CE_Sha256Finalize','_CE_Sha256Close','_CE_ModelServiceCreate','_CE_ModelServiceClose','_CE_ModelServiceList','_CE_ModelServiceManifest','_CE_ModelServiceInstall','_CE_ModelServicePrepareLoad','_CE_ModelServiceRemoteAcquisitionCommand','_CE_ModelServiceCommitLoad','_CE_ModelServiceRemove','_CE_ModelServiceSnapshot','_CE_ModelServiceDrainEvents','_CE_ModelServiceRecordEvent','_CE_Init','_CE_GetLastEngineErrorSize','_CE_CopyLastEngineError','_CE_Close','_CE_GetRuntimeSessionJson','_CE_StartTextRequest','_CE_StartMediaRequest','_CE_StartChatRequest','_CE_StartEmbeddingRequest','_CE_StartListenRequest','_CE_StartSpeakRequest','_CE_CancelRequest','_CE_RunSchedulerLoop','_CE_GetCompletedRequestStatus','_CE_GetCompletedRequestOutputKind','_CE_GetTokenRingHeaderAddress','_CE_GetTokenRingBodyAddress','_CE_GetTokenRingCapacity','_CE_GetCompletedRequestOutputSize','_CE_CopyCompletedRequestOutput','_CE_GetCompletedRequestEmbeddingLength','_CE_CopyCompletedRequestEmbedding','_CE_GetCompletedRequestEmbeddingPooling','_CE_GetCompletedRequestEmbeddingNormalized','_CE_GetCompletedRequestAudioLength','_CE_CopyCompletedRequestAudio','_CE_GetCompletedRequestAudioSampleRate','_CE_GetCompletedRequestAudioChannels','_CE_GetCompletedRequestAudioDurationMs','_CE_GetCompletedRequestErrorSize','_CE_CopyCompletedRequestError','_CE_GetCompletedRequestRuntimeObservability','_CE_ConsumeCompletedRequest','_CE_FreeString','_CE_GetRuntimeObservability','_CE_GetBackendObservabilityJson','_CE_GetMediaMarker','_CE_GetChatTemplate','_CE_GetBosText','_CE_GetEosText','_CE_ProbeChatBoundaryInfo','_CE_PairingValidate','_malloc','_free']")
 set(CE_WASM_RUNTIME_METHODS "['ccall','FS','UTF8ToString','HEAP32','HEAPF32','HEAPF64','HEAPU8','addFunction','removeFunction']")
 
 set(CE_WASM_RUST_EXPORT_ROOTS
@@ -133,15 +133,12 @@ set(CE_WASM_RUST_EXPORT_ROOTS
     -uCE_ModelServiceCreate
     -uCE_ModelServiceClose
     -uCE_ModelServiceList
-    -uCE_ModelServiceCurrent
     -uCE_ModelServiceManifest
     -uCE_ModelServiceInstall
     -uCE_ModelServicePrepareLoad
     -uCE_ModelServiceRemoteAcquisitionCommand
     -uCE_ModelServiceCommitLoad
-    -uCE_ModelServiceAbortLoad
     -uCE_ModelServiceRemove
-    -uCE_ModelServiceUnload
     -uCE_ModelServiceSnapshot
     -uCE_ModelServiceDrainEvents
     -uCE_ModelServiceRecordEvent
@@ -149,10 +146,13 @@ set(CE_WASM_RUST_EXPORT_ROOTS
     -uCE_GetLastEngineErrorSize
     -uCE_CopyLastEngineError
     -uCE_Close
+    -uCE_GetRuntimeSessionJson
     -uCE_StartTextRequest
     -uCE_StartMediaRequest
     -uCE_StartChatRequest
     -uCE_StartEmbeddingRequest
+    -uCE_StartListenRequest
+    -uCE_StartSpeakRequest
     -uCE_CancelRequest
     -uCE_RunSchedulerLoop
     -uCE_GetCompletedRequestStatus
@@ -166,6 +166,11 @@ set(CE_WASM_RUST_EXPORT_ROOTS
     -uCE_CopyCompletedRequestEmbedding
     -uCE_GetCompletedRequestEmbeddingPooling
     -uCE_GetCompletedRequestEmbeddingNormalized
+    -uCE_GetCompletedRequestAudioLength
+    -uCE_CopyCompletedRequestAudio
+    -uCE_GetCompletedRequestAudioSampleRate
+    -uCE_GetCompletedRequestAudioChannels
+    -uCE_GetCompletedRequestAudioDurationMs
     -uCE_GetCompletedRequestErrorSize
     -uCE_CopyCompletedRequestError
     -uCE_GetCompletedRequestRuntimeObservability
@@ -197,7 +202,7 @@ set(CE_WASM_TARGET_LINK_OPTIONS
 if(CE_WASM_USE_JSPI)
     list(APPEND CE_WASM_TARGET_LINK_OPTIONS
         -sJSPI=1
-        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_RunSchedulerLoop','CE_GetBackendObservabilityJson']"
+        "-sJSPI_EXPORTS=['_main_thread','CE_Init','CE_Close','CE_StartListenRequest','CE_StartSpeakRequest','CE_RunSchedulerLoop','CE_GetBackendObservabilityJson']"
     )
 endif()
 

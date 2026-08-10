@@ -2,7 +2,7 @@
 
 Sipp can call external providers directly from trusted server-side
 processes or indirectly through a Sipp gateway. Both paths use the same
-endpoint model: register a descriptor with `SippClient.add`, keep the
+endpoint model: register an endpoint with `SippClient.add`, keep the
 endpoint reference, and pass it to `query`, `chat`, or `embed`.
 
 Provider credentials must stay in trusted code. Do not ship long-lived provider
@@ -15,7 +15,7 @@ credential lifecycle and application policy. This is the recommended framework
 route pattern for Next.js and TanStack server code.
 
 ```ts
-import { EndpointDescriptor, SippClient } from '@sipphq/sipp-server';
+import { Endpoint, SippClient } from '@sipphq/sipp-server';
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -26,7 +26,7 @@ function requiredEnv(name: string): string {
 }
 
 const client = new SippClient();
-const endpoint = await client.add('provider', EndpointDescriptor.provider({
+const endpoint = await client.add('provider', Endpoint.provider({
   provider: 'openai',
   model: process.env.OPENAI_MODEL ?? 'gpt-5-mini',
   apiKey: requiredEnv('OPENAI_API_KEY'),
@@ -60,7 +60,7 @@ const run = client.chat({
 ```
 
 The selected provider interprets `extra`. Gateway endpoints use the same field,
-but interpretation belongs to the gateway implementation. Descriptor-level
+but interpretation belongs to the gateway implementation. Endpoint-level
 `protocolOptions` apply to every request sent through that gateway endpoint.
 
 ## Provider-Backed Gateway Targets
@@ -108,7 +108,7 @@ authentication value. Provider credentials stay in the gateway process.
 
 Browser applications should usually call an application route or gateway, not a
 provider directly. If a BYOK browser flow is required, use short-lived provider
-keys supplied at runtime through the browser provider descriptor and keep the
+keys supplied at runtime through the browser provider endpoint and keep the
 user-facing risks explicit.
 
 ## Related Docs

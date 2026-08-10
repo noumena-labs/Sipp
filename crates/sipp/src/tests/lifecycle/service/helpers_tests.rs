@@ -18,6 +18,8 @@ fn plan(projector_asset_id: Option<&str>) -> PairingPlan {
         modality: ModelModality::Vision,
         status: ModelStatus::Ready,
         compatible_vision_projector_types: Vec::new(),
+        compatible_audio_projector_types: Vec::new(),
+        compatible_audio_generation_projector_types: Vec::new(),
     }
 }
 
@@ -55,10 +57,12 @@ fn model_id_from_plan_sorts_assets_and_includes_projector() {
 fn runtime_fingerprint_changes_with_runtime_backend_or_assets() {
     let entry = crate::lifecycle::model_entry_from_assets("model-a", "model", &plan(None));
     let cpu = backend_plan("cpu", NativeRuntimeConfig::default());
-    let mut gpu_config = NativeRuntimeConfig::default();
-    gpu_config.placement = ModelPlacementConfig {
-        gpu_layers: GpuLayerConfig::Auto,
-        ..ModelPlacementConfig::default()
+    let gpu_config = NativeRuntimeConfig {
+        placement: ModelPlacementConfig {
+            gpu_layers: GpuLayerConfig::Auto,
+            ..ModelPlacementConfig::default()
+        },
+        ..NativeRuntimeConfig::default()
     };
     let gpu = backend_plan("cuda", gpu_config);
     let mut changed_entry = entry.clone();

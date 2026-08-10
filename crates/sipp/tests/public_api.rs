@@ -1,18 +1,20 @@
 //! Integration tests for the `sipp` crate-level public API.
 //!
 //! Covers the root client re-exports, nested native config modules, and the
-//! explicit local model descriptors, and the `shard` and `providers` public
+//! explicit local endpoint inputs, and the `shard` and `providers` public
 //! surfaces without loading local models or calling gateway endpoints.
 
 use sipp::{
-    engine::ContextRuntimeConfig, lifecycle::BackendPreference,
-    runtime::request::GenerateResponseStatus, EndpointDescriptor, LocalDescriptor,
-    NativeRuntimeConfig, SippClient,
+    endpoint,
+    engine::ContextRuntimeConfig,
+    lifecycle::{BackendPreference, ModelModality, ModelStatus},
+    runtime::request::GenerateResponseStatus,
+    Endpoint, ManagedModel, NativeRuntimeConfig, SippClient, SippListenRequest, SippSpeakRequest,
 };
 
 #[test]
 fn facade_reexports_client_and_native_runtime_config() {
-    let client = SippClient::new().expect("client");
+    let _constructor = SippClient::new;
     let config = NativeRuntimeConfig {
         context: ContextRuntimeConfig {
             n_ctx: Some(128),
@@ -22,7 +24,6 @@ fn facade_reexports_client_and_native_runtime_config() {
     };
 
     assert_eq!(config.context.n_ctx, Some(128));
-    drop(client);
 }
 
 #[test]
@@ -32,34 +33,55 @@ fn facade_reexports_lifecycle_and_runtime_modules() {
 }
 
 #[test]
-fn local_descriptor_accepts_a_managed_model_id_and_runtime_config() {
-    let descriptor: EndpointDescriptor = LocalDescriptor::new("model-a").into();
+fn local_endpoint_accepts_a_managed_model_and_runtime_config() {
+    let model = managed_model("model-a");
+    let _: Endpoint = endpoint::Local::new(&model).into();
 
-    let EndpointDescriptor::Local(local) = descriptor else {
-        panic!("expected local descriptor");
-    };
-    assert_eq!(local.model_id, "model-a");
-    assert_eq!(local.runtime, NativeRuntimeConfig::default());
-
-    let mut configured = LocalDescriptor::new("model-b");
-    configured.runtime = NativeRuntimeConfig {
+    let configured = endpoint::Local::new(&model).runtime(NativeRuntimeConfig {
         context: ContextRuntimeConfig {
             n_ctx: Some(256),
             ..Default::default()
         },
         ..Default::default()
-    };
+    });
+    let _: Endpoint = configured.into();
+}
 
-    assert_eq!(configured.model_id, "model-b");
-    assert_eq!(configured.runtime.context.n_ctx, Some(256));
+fn managed_model(id: &str) -> ManagedModel {
+    ManagedModel {
+        id: id.to_string(),
+        name: id.to_string(),
+        bytes: 1,
+        modality: ModelModality::Text,
+        status: ModelStatus::Ready,
+    }
+}
+
+#[test]
+fn speech_requests_have_short_required_constructors() {
+    let listen = SippListenRequest::new([1, 2, 3]).max_tokens(64);
+    assert_eq!(listen.audio, vec![1, 2, 3]);
+    assert_eq!(listen.max_tokens, Some(64));
+
+    let speak = SippSpeakRequest::new("hello")
+        .language("en")
+        .speaker([4, 5, 6])
+        .max_duration_ms(1_500);
+    assert_eq!(speak.text, "hello");
+    assert_eq!(speak.language.as_deref(), Some("en"));
+    assert_eq!(speak.speaker_audio, Some(vec![4, 5, 6]));
+    assert_eq!(speak.max_duration_ms, Some(1_500));
 }
 
 mod client_api {
-    use sipp::{EndpointCapabilities, EndpointDescriptor, GatewayDescriptor};
+    use sipp::{
+        Endpoint, EndpointCapabilities, GatewayDescriptor, SippAudioRun, SippClient,
+        SippListenRequest, SippSpeakRequest, SippTextRun,
+    };
 
     #[test]
-    fn gateway_descriptor_is_registered_through_add_contract() {
-        let descriptor: EndpointDescriptor = GatewayDescriptor {
+    fn gateway_input_uses_the_common_add_contract() {
+        let endpoint: Endpoint = GatewayDescriptor {
             target: "local".to_string(),
             base_url: "http://127.0.0.1:8080".to_string(),
             routes: Default::default(),
@@ -69,11 +91,21 @@ mod client_api {
             protocol_options: Default::default(),
         }
         .into();
-        assert!(matches!(descriptor, EndpointDescriptor::Gateway(_)));
+        let _ = endpoint;
         assert_eq!(
-            EndpointCapabilities::unknown().query,
+            EndpointCapabilities::remote_text().query,
             sipp::core::CapabilitySupport::Unknown
         );
+    }
+
+    #[test]
+    fn speech_methods_accept_concise_and_configured_inputs() {
+        let _: fn(&SippClient, Vec<u8>) -> SippTextRun = |client, audio| client.listen(audio);
+        let _: fn(&SippClient, SippListenRequest) -> SippTextRun =
+            |client, request| client.listen(request);
+        let _: fn(&SippClient, String) -> SippAudioRun = |client, text| client.speak(text);
+        let _: fn(&SippClient, SippSpeakRequest) -> SippAudioRun =
+            |client, request| client.speak(request);
     }
 }
 

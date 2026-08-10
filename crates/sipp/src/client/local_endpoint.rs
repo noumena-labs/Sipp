@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
 use crate::engine::{
-    ChatRequest, EmbedRequest, EngineEmbeddingResponseFuture, EngineTextResponseFuture,
-    EngineTokenBatches, QueryRequest, SippEngine,
+    ChatRequest, EmbedRequest, EngineAudioRun, EngineEmbeddingResponseFuture,
+    EngineTextResponseFuture, EngineTokenBatches, ListenRequest, QueryRequest, SippEngine,
+    SpeakRequest,
 };
 
 use crate::client::dispatch::{EndpointCloseFuture, InferenceEndpoint};
 use crate::client::{
-    map, validate, EndpointCapabilities, EndpointRef, SippChatRequest, SippEmbedRequest,
-    SippEmbeddingRun, SippError, SippQueryRequest, SippRequestContext, SippTextRun,
-    SippTokenBatches,
+    map, validate, EndpointCapabilities, EndpointRef, SippAudioRun, SippChatRequest,
+    SippEmbedRequest, SippEmbeddingRun, SippError, SippListenRequest, SippQueryRequest,
+    SippRequestContext, SippSpeakRequest, SippTextRun, SippTokenBatches,
 };
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -38,6 +39,8 @@ struct LocalTextRun {
 trait LocalRuntime: Send + Sync {
     fn close(&self) -> EndpointCloseFuture<'_>;
     fn query(&self, request: QueryRequest) -> LocalTextRun;
+    fn listen(&self, request: ListenRequest) -> LocalTextRun;
+    fn speak(&self, request: SpeakRequest) -> EngineAudioRun;
     fn chat(&self, request: ChatRequest) -> LocalTextRun;
     fn embed(&self, request: EmbedRequest) -> EngineEmbeddingResponseFuture;
 }
@@ -50,6 +53,15 @@ impl LocalRuntime for SippEngine {
     fn query(&self, request: QueryRequest) -> LocalTextRun {
         let (tokens, response) = SippEngine::query(self, request).into_parts();
         LocalTextRun { tokens, response }
+    }
+
+    fn listen(&self, request: ListenRequest) -> LocalTextRun {
+        let (tokens, response) = SippEngine::listen(self, request).into_parts();
+        LocalTextRun { tokens, response }
+    }
+
+    fn speak(&self, request: SpeakRequest) -> EngineAudioRun {
+        SippEngine::speak(self, request)
     }
 
     fn chat(&self, request: ChatRequest) -> LocalTextRun {
@@ -82,6 +94,19 @@ impl LocalEndpoint {
             runtime,
         }
     }
+
+    fn text_run(&self, context: SippRequestContext, run: LocalTextRun) -> SippTextRun {
+        let endpoint = self.endpoint.clone();
+        SippTextRun::new(
+            Box::pin(async move {
+                run.response
+                    .await
+                    .map(|result| map::text_response(endpoint, context.request_id, result))
+                    .map_err(SippError::Local)
+            }),
+            SippTokenBatches::from_engine(run.tokens),
+        )
+    }
 }
 
 impl InferenceEndpoint for LocalEndpoint {
@@ -105,19 +130,42 @@ impl InferenceEndpoint for LocalEndpoint {
         if let Err(error) = validate::local_query(&request) {
             return SippTextRun::ready_err(error);
         }
-        let endpoint = self.endpoint.clone();
         let run = match map::local_query_request(request) {
             Ok(request) => self.runtime.query(request),
             Err(error) => return SippTextRun::ready_err(error),
         };
-        SippTextRun::new(
+        self.text_run(context, run)
+    }
+
+    fn listen_with_context(
+        &self,
+        context: SippRequestContext,
+        request: SippListenRequest,
+    ) -> SippTextRun {
+        let request = match map::local_listen_request(request) {
+            Ok(request) => request,
+            Err(error) => return SippTextRun::ready_err(error),
+        };
+        let run = self.runtime.listen(request);
+        self.text_run(context, run)
+    }
+
+    fn speak_with_context(
+        &self,
+        context: SippRequestContext,
+        request: SippSpeakRequest,
+    ) -> SippAudioRun {
+        let endpoint = self.endpoint.clone();
+        let run = self.runtime.speak(map::local_speak_request(request));
+        let (response, cancellation) = run.into_parts();
+        SippAudioRun::new_with_engine_cancellation(
             Box::pin(async move {
-                run.response
+                response
                     .await
-                    .map(|result| map::text_response(endpoint, context.request_id, result))
+                    .map(|output| map::audio_response(endpoint, context.request_id, output))
                     .map_err(SippError::Local)
             }),
-            SippTokenBatches::from_engine(run.tokens),
+            cancellation,
         )
     }
 
@@ -129,7 +177,6 @@ impl InferenceEndpoint for LocalEndpoint {
         if let Err(error) = validate::local_chat(&request) {
             return SippTextRun::ready_err(error);
         }
-        let endpoint = self.endpoint.clone();
         let options = match map::local_chat_options(request.options, request.local) {
             Ok(options) => options,
             Err(error) => return SippTextRun::ready_err(error),
@@ -139,15 +186,7 @@ impl InferenceEndpoint for LocalEndpoint {
                 .options(options)
                 .emit_tokens(request.emit_tokens),
         );
-        SippTextRun::new(
-            Box::pin(async move {
-                run.response
-                    .await
-                    .map(|result| map::text_response(endpoint, context.request_id, result))
-                    .map_err(SippError::Local)
-            }),
-            SippTokenBatches::from_engine(run.tokens),
-        )
+        self.text_run(context, run)
     }
 
     fn embed_with_context(

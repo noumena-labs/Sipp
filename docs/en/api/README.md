@@ -29,7 +29,7 @@ gateway, through a provider, or across a hybrid setup.
 ## `add()` — Register an Endpoint
 
 ```text
-add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
+add(id: string, endpoint: Endpoint) -> EndpointRef
 ```
 
 `add` registers an endpoint with the current client instance.
@@ -46,11 +46,12 @@ the operation runs.
 A local endpoint loads a registered GGUF model into the current process. The
 application selects the model; the client owns storage and runtime lifecycle.
 
-Add a path, browser `File`, or URL through `client.models`, then construct a local descriptor
-with `EndpointDescriptor.local(modelId, options)`. The descriptor selects an
-existing model ID; it does not own acquisition or storage.
+Add a path, browser `File`, or URL through `client.models`, then pass the
+returned `ManagedModel` to `Endpoint.local(model, options)`. The endpoint
+retains the model identity and load options; it does not own acquisition or
+storage.
 
-All packages name the native runtime field `runtime`. Browser descriptors also
+All packages name the native runtime field `runtime`. Browser endpoints also
 accept browser backend and observability options plus
 `runtime: NativeRuntimeConfig`. See [Runtime Options](../reference/runtime-options.md)
 for the complete package-specific shapes.
@@ -212,7 +213,7 @@ HTTP routes to `query`, `chat`, or `embed`.
 ```text
 Server client:
   model = models.add(files)
-  add("local-model", EndpointDescriptor.local(model.id, options))
+  add("local-model", Endpoint.local(model, options))
   -> route handler decodes HTTP request
   -> route handler calls client.query/chat/embed
   -> route handler encodes HTTP response
@@ -228,7 +229,7 @@ calls `query`, `chat`, or `embed` the same way it would call a local endpoint.
 
 ```text
 Client client:
-  add("remote", EndpointDescriptor.gateway(options))
+  add("remote", Endpoint.gateway(options))
   -> client.query/chat/embed({ endpoint: ref, ... })
   -> request is sent to the gateway over HTTP
 ```
@@ -240,8 +241,8 @@ where an operation runs by passing a different endpoint reference.
 
 ```text
 model = client.models.add(files)
-localRef = client.add("local", EndpointDescriptor.local(model.id, options))
-gatewayRef = client.add("gateway", EndpointDescriptor.gateway(options))
+localRef = client.add("local", Endpoint.local(model, options))
+gatewayRef = client.add("gateway", Endpoint.gateway(options))
 
 client.query({ endpoint: localRef, prompt, ... })
 client.query({ endpoint: gatewayRef, prompt, ... })
@@ -257,7 +258,7 @@ shapes.
 | Benefit                     | Description                                                                                                                       |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | Stable operation code       | `query`, `chat`, and `embed` are called the same way for local, gateway, provider, and hybrid setups.                             |
-| Swappable execution targets | Move inference between local models, gateway targets, and direct providers by changing endpoint descriptors.                      |
+| Swappable execution targets | Move inference between local models, gateway targets, and direct providers by changing endpoint configurations.                   |
 | Clear ownership boundaries  | Local endpoints keep lifecycle in-process; gateway endpoints move access, credentials, policy, and metrics to a service boundary. |
 | Language symmetry           | Patterns learned in one language package transfer directly to the others.                                                         |
 | Extensible endpoint kinds   | New endpoint kinds can be added without changing the operation call pattern.                                                      |

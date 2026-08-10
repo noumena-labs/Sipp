@@ -5,7 +5,7 @@ use crate::lifecycle::util::{
     asset_refcount_mismatch, bump_projector_index_revision, decrement_asset_refcount,
     increment_asset_refcount, increment_expected_asset_refcount, manifest_key_mismatch,
     missing_model_asset, model_missing_asset, sorted_model_asset_ids,
-    validate_registry_manifest_version,
+    validate_asset_inspection_version, validate_registry_manifest_version,
 };
 use crate::lifecycle::{ModelEntry, ModelError, RegistryManifest};
 
@@ -27,6 +27,9 @@ pub(super) fn validate_manifest(manifest: &RegistryManifest) -> Result<(), Model
     for (id, asset) in &manifest.assets {
         if id != &asset.id {
             return Err(manifest_key_mismatch("asset", id, &asset.id));
+        }
+        if let Some(inspection) = &asset.inspection {
+            validate_asset_inspection_version(inspection.version)?;
         }
     }
     for (id, model) in &manifest.models {

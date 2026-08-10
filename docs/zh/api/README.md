@@ -27,7 +27,7 @@ Sipp 各语言包（Rust、Node.js、Python、浏览器）使用同一套面向�
 ## `add()` — 注册端点
 
 ```text
-add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
+add(id: string, endpoint: Endpoint) -> EndpointRef
 ```
 
 `add` 将端点注册到当前客户端实例上。`id` 由调用方指定，在当前客户端内唯一。重复使用相同的 `id` 会覆盖之前的端点。返回的 `EndpointRef` 是不透明的路由句柄；应用应保存它，而不是自行构造或检查端点类型。
@@ -38,10 +38,10 @@ add(id: string, descriptor: EndpointDescriptor) -> EndpointRef
 
 本地端点将已注册的 GGUF 模型加载到当前进程中。应用选择模型，客户端负责存储和运行时生命周期。
 
-先通过 `client.models` 添加路径、浏览器 `File` 或 URL，再使用
-`EndpointDescriptor.local(modelId, options)` 构造本地端点描述符。描述符只选择已有模型 ID，不负责下载或存储。
+先通过 `client.models` 添加路径、浏览器 `File` 或 URL，再将返回的
+`ManagedModel` 传给 `Endpoint.local(model, options)`。端点只保留模型标识和加载配置，不负责下载或存储。
 
-所有语言包都使用 `runtime` 表示原生运行时配置。浏览器描述符还支持浏览器后端和可观测性选项。完整配置见[运行时选项](../reference/runtime-options.md)。
+所有语言包都使用 `runtime` 表示原生运行时配置。浏览器端点还支持浏览器后端和可观测性选项。完整配置见[运行时选项](../reference/runtime-options.md)。
 
 当前进程需要自行管理模型执行时使用本地端点。
 
@@ -187,7 +187,7 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 ```text
 服务端：
   model = models.add(files)
-  add("local-model", EndpointDescriptor.local(model.id, options))
+  add("local-model", Endpoint.local(model, options))
   -> 路由处理器解析 HTTP 请求
   -> 路由处理器调 client.query / chat / embed
   -> 路由处理器编码 HTTP 响应
@@ -201,7 +201,7 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 
 ```text
 客户端：
-  add("remote", EndpointDescriptor.gateway(options))
+  add("remote", Endpoint.gateway(options))
   -> client.query / chat / embed({ endpoint: ref, ... })
    -> 请求通过 HTTP 发送至网关
 ```
@@ -212,8 +212,8 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 
 ```text
 model = client.models.add(files)
-localRef = client.add("local", EndpointDescriptor.local(model.id, options))
-gatewayRef = client.add("gateway", EndpointDescriptor.gateway(options))
+localRef = client.add("local", Endpoint.local(model, options))
+gatewayRef = client.add("gateway", Endpoint.gateway(options))
 
 client.query({ endpoint: localRef, prompt, ... })
 client.query({ endpoint: gatewayRef, prompt, ... })
@@ -228,7 +228,7 @@ client.query({ endpoint: gatewayRef, prompt, ... })
 | 优势 | 说明 |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | 操作代码不变 | `query`、`chat`、`embed` 在本地、网关、服务商、混合模式下调用方式完全一致。 |
-| 执行目标灵活切换 | 修改端点描述符即可在本地模型、网关目标和服务商之间切换。 |
+| 执行目标灵活切换 | 修改端点配置即可在本地模型、网关目标和服务商之间切换。 |
 | 职责边界清晰 | 本地端点生命周期在进程内；网关端点将访问控制、凭证、策略、指标隔离至服务边界之外。 |
 | 跨语言一致 | 掌握一种语言包即可直接使用其他语言。 |
 | 扩展性好 | 添加新端点类型无需修改调用方式。 |

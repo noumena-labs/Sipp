@@ -1,4 +1,4 @@
-import type { GenerateRequestId } from '../engine/inference-types.js';
+import type { GenerateRequestHandle } from '../engine/inference-types.js';
 
 function createDeferred<T>(): {
   promise: Promise<T>;
@@ -14,275 +14,318 @@ function createDeferred<T>(): {
   return { promise, resolve, reject };
 }
 
-/**
- * Tracks the lifecycle of a pending request: its promise, settlement state,
- * abort signal, and cleanup. Generic over the result type so both native
- * completions and worker call responses can share the same bookkeeping.
- */
-
 export interface RequestHandle<TResult> {
   readonly promise: Promise<TResult>;
 }
 
-interface TrackedRequest<TResult> extends RequestHandle<TResult> {
+/**
+ * Read-only bookkeeping for one tracked request. All mutations stay inside the
+ * tracker; `finalize` is the only operation that clears `active`.
+ */
+export interface TrackedRequest<TResult> extends RequestHandle<TResult> {
+  readonly request: GenerateRequestHandle;
+  readonly active: boolean;
+  readonly settled: boolean;
+  readonly consumed: boolean;
+  readonly waiterCount: number;
+  readonly tokenBatchSinkError: unknown;
+  readonly tokenBatchSinkFailed: boolean;
+  readonly cancelRequested: boolean;
+}
+
+interface TrackerRecord<TResult> {
+  readonly request: GenerateRequestHandle;
+  readonly promise: Promise<TResult>;
   readonly resolve: (value: TResult) => void;
   readonly reject: (error: unknown) => void;
+  active: boolean;
   settled: boolean;
   consumed: boolean;
   waiterCount: number;
   tokenBatchSinkError: unknown;
+  tokenBatchSinkFailed: boolean;
   cancelRequested: boolean;
 }
 
-interface AbortRegistration {
-  signal: AbortSignal;
-  listener: () => void;
+function requestKey(request: GenerateRequestHandle): string {
+  return `${request.generation}:${request.requestId}`;
 }
 
-export class RequestTracker<TResult> {
-  private readonly completions = new Map<GenerateRequestId, TrackedRequest<TResult>>();
-  private readonly abortRegistrations = new Map<GenerateRequestId, Set<AbortRegistration>>();
-  private readonly activeRuns = new Set<GenerateRequestId>();
+interface AbortRegistration {
+  readonly listener: () => void;
+  referenceCount: number;
+  fired: boolean;
+}
 
-  // ── Query ──────────────────────────────────────────────────────────
+/**
+ * Tracks pending requests: their promise, settlement state, abort signal, and
+ * cleanup. Generic over the result type so both native completions and worker
+ * call responses can share the same bookkeeping.
+ *
+ * There is exactly one record per `generation:requestId`. A record is active
+ * from `track` until `finalize`, and it can only leave the tracker once it is
+ * inactive, so the active set can never outlive the record it points at.
+ */
+export class RequestTracker<TResult> {
+  private readonly requests = new Map<string, TrackerRecord<TResult>>();
+  private readonly abortRegistrations = new Map<
+    string,
+    Map<AbortSignal, AbortRegistration>
+  >();
+  private activeRequestCount = 0;
 
   get activeCount(): number {
-    return this.activeRuns.size;
+    return this.activeRequestCount;
   }
 
-  hasActive(requestId: GenerateRequestId): boolean {
-    return this.activeRuns.has(requestId);
+  /** The record for `request`, or undefined when it is not tracked. */
+  get(request: GenerateRequestHandle): TrackedRequest<TResult> | undefined {
+    return this.requests.get(requestKey(request));
   }
-
-  has(requestId: GenerateRequestId): boolean {
-    return this.completions.has(requestId);
-  }
-
-  isSettled(requestId: GenerateRequestId): boolean {
-    return this.completions.get(requestId)?.settled === true;
-  }
-
-  isConsumed(requestId: GenerateRequestId): boolean {
-    return this.completions.get(requestId)?.consumed === true;
-  }
-
-  isCancelRequested(requestId: GenerateRequestId): boolean {
-    return this.completions.get(requestId)?.cancelRequested === true;
-  }
-
-  requestCancel(requestId: GenerateRequestId): void {
-    const tracked = this.completions.get(requestId);
-    if (tracked != null) {
-      tracked.cancelRequested = true;
-    }
-  }
-
-  setTokenBatchSinkError(requestId: GenerateRequestId, error: unknown): void {
-    const tracked = this.completions.get(requestId);
-    if (tracked != null) {
-      tracked.tokenBatchSinkError = error;
-    }
-  }
-
-  tokenBatchSinkError(requestId: GenerateRequestId): unknown {
-    return this.completions.get(requestId)?.tokenBatchSinkError;
-  }
-
-  /** All request IDs that appear in any internal collection. */
-  allTrackedIds(): GenerateRequestId[] {
-    const ids = new Set<GenerateRequestId>();
-    for (const id of this.completions.keys()) ids.add(id);
-    for (const id of this.abortRegistrations.keys()) ids.add(id);
-    for (const id of this.activeRuns) ids.add(id);
-    return Array.from(ids);
-  }
-
-  // ── Lifecycle ──────────────────────────────────────────────────────
 
   /**
-   * Start tracking a request. Returns the existing tracker if already tracked,
-   * or creates a new one. Marks the request as active.
+   * A snapshot of every tracked record. Snapshotting lets callers settle or
+   * finalize requests while iterating.
    */
-  track(requestId: GenerateRequestId): RequestHandle<TResult> {
-    const existing = this.completions.get(requestId);
+  records(): TrackedRequest<TResult>[] {
+    return Array.from(this.requests.values());
+  }
+
+  /**
+   * Starts tracking a request and marks it active. An already-tracked request
+   * is returned unchanged: re-tracking never reactivates a finalized request,
+   * because the scheduler would then pump a request that already settled.
+   */
+  track(request: GenerateRequestHandle): RequestHandle<TResult> {
+    const key = requestKey(request);
+    const existing = this.requests.get(key);
     if (existing != null) {
       return existing;
     }
 
     const deferred = createDeferred<TResult>();
-    const tracked: TrackedRequest<TResult> = {
+    const record: TrackerRecord<TResult> = {
+      request,
       promise: deferred.promise,
       resolve: deferred.resolve,
       reject: deferred.reject,
+      active: true,
       settled: false,
       consumed: false,
       waiterCount: 0,
       tokenBatchSinkError: undefined,
+      tokenBatchSinkFailed: false,
       cancelRequested: false,
     };
     // Prevent unhandled rejection warnings for unconsumed requests.
-    void tracked.promise.catch(() => {});
-    this.completions.set(requestId, tracked);
-    this.activeRuns.add(requestId);
-    return tracked;
+    void record.promise.catch(() => {});
+    this.requests.set(key, record);
+    this.activeRequestCount += 1;
+    return record;
   }
 
-  beginWait(requestId: GenerateRequestId): Promise<TResult> {
-    const tracked = this.completions.get(requestId);
-    if (tracked == null) {
-      throw new Error(`request ${requestId} is not tracked.`);
+  beginWait(request: GenerateRequestHandle): Promise<TResult> {
+    const record = this.requests.get(requestKey(request));
+    if (record == null) {
+      throw new Error(`request ${requestKey(request)} is not tracked.`);
     }
-    tracked.consumed = true;
-    tracked.waiterCount += 1;
-    return tracked.promise;
+    record.consumed = true;
+    record.waiterCount += 1;
+    return record.promise;
   }
 
-  endWait(requestId: GenerateRequestId): void {
-    const tracked = this.completions.get(requestId);
-    if (tracked == null) {
+  endWait(request: GenerateRequestHandle): void {
+    const key = requestKey(request);
+    const record = this.requests.get(key);
+    if (record == null) {
       return;
     }
-    tracked.waiterCount = Math.max(0, tracked.waiterCount - 1);
-    this.cleanupIfConsumed(requestId);
+    record.waiterCount = Math.max(0, record.waiterCount - 1);
+    this.removeIfFullyConsumed(key, record);
   }
 
-  /**
-   * Resolve a tracked request with a result.
-   * No-op if already settled.
-   */
-  resolve(requestId: GenerateRequestId, result: TResult): void {
-    const tracked = this.completions.get(requestId);
-    if (tracked == null || tracked.settled) {
+  /** Resolves a tracked request. No-op if already settled. */
+  resolve(request: GenerateRequestHandle, result: TResult): void {
+    const record = this.requests.get(requestKey(request));
+    if (record == null || record.settled) {
       return;
     }
-    tracked.settled = true;
-    tracked.resolve(result);
+    record.settled = true;
+    record.resolve(result);
   }
 
-  /**
-   * Reject a tracked request with an error.
-   * No-op if already settled.
-   */
-  reject(requestId: GenerateRequestId, error: unknown): void {
-    const tracked = this.completions.get(requestId);
-    if (tracked == null || tracked.settled) {
+  /** Rejects a tracked request. No-op if already settled. */
+  reject(request: GenerateRequestHandle, error: unknown): void {
+    const record = this.requests.get(requestKey(request));
+    if (record == null || record.settled) {
       return;
     }
-    tracked.settled = true;
-    tracked.reject(error);
+    record.settled = true;
+    record.reject(error);
   }
 
-  /** Reject all unsettled requests and clear everything. */
+  /** Marks a tracked request as cancel-requested. No-op if it is not tracked. */
+  requestCancel(request: GenerateRequestHandle): void {
+    const record = this.requests.get(requestKey(request));
+    if (record != null) {
+      record.cancelRequested = true;
+    }
+  }
+
+  /** Records a token-sink failure. No-op if the request is not tracked. */
+  setTokenBatchSinkError(request: GenerateRequestHandle, error: unknown): void {
+    const record = this.requests.get(requestKey(request));
+    if (record != null && !record.tokenBatchSinkFailed) {
+      record.tokenBatchSinkFailed = true;
+      record.tokenBatchSinkError = error;
+    }
+  }
+
+  /** Rejects every unsettled request and clears all tracker state. */
   rejectAll(error: unknown): void {
-    for (const requestId of this.allTrackedIds()) {
-      const tracked = this.completions.get(requestId);
-      if (tracked != null && !tracked.settled) {
-        tracked.settled = true;
-        tracked.reject(error);
+    for (const record of this.requests.values()) {
+      if (!record.settled) {
+        record.settled = true;
+        record.reject(error);
       }
-      this.releaseSignal(requestId);
     }
-    this.completions.clear();
-    this.activeRuns.clear();
+    this.clear();
   }
 
-  // ── Signal management ──────────────────────────────────────────────
-
   /**
-   * Attach an AbortSignal to a request. When the signal fires, `onAbort`
-   * is called (typically to issue a cancellation to the engine).
+   * Attaches an AbortSignal to a request. When the signal fires, `onAbort` is
+   * called (typically to issue a cancellation to the engine).
    */
   attachSignal(
-    requestId: GenerateRequestId,
+    request: GenerateRequestHandle,
     signal: AbortSignal,
     onAbort: () => void
   ): () => void {
-    if (signal.aborted) {
-      onAbort();
-      return () => {};
-    }
-
-    const listener = () => onAbort();
-    const registration = { signal, listener };
-    let registrations = this.abortRegistrations.get(requestId);
+    const key = requestKey(request);
+    let registrations = this.abortRegistrations.get(key);
     if (registrations == null) {
-      registrations = new Set();
-      this.abortRegistrations.set(requestId, registrations);
+      registrations = new Map();
+      this.abortRegistrations.set(key, registrations);
     }
-    registrations.add(registration);
-    signal.addEventListener('abort', listener, { once: true });
+    const existing = registrations.get(signal);
+    if (existing != null) {
+      existing.referenceCount += 1;
+      return () => {
+        this.releaseAbortRegistration(request, signal, existing);
+      };
+    }
+    // Enqueue and awaitQuery can share one signal. Keep one listener and count
+    // both owners so either owner may detach without disabling the other.
+    const registration: AbortRegistration = {
+      listener: () => {
+        if (registration.fired) {
+          return;
+        }
+        registration.fired = true;
+        onAbort();
+      },
+      referenceCount: 1,
+      fired: false,
+    };
+    registrations.set(signal, registration);
+    if (signal.aborted) {
+      registration.listener();
+      return () => {
+        this.releaseAbortRegistration(request, signal, registration);
+      };
+    }
+    signal.addEventListener('abort', registration.listener, { once: true });
     return () => {
-      this.releaseAbortRegistration(requestId, registration);
+      this.releaseAbortRegistration(request, signal, registration);
     };
   }
 
-  /** Detach and clean up the AbortSignal listener for a request. */
-  releaseSignal(requestId: GenerateRequestId): void {
-    const registrations = this.abortRegistrations.get(requestId);
+  /** Detaches every AbortSignal listener for a request. */
+  releaseSignal(request: GenerateRequestHandle): void {
+    const key = requestKey(request);
+    const registrations = this.abortRegistrations.get(key);
     if (registrations == null) {
       return;
     }
-    for (const registration of registrations) {
-      registration.signal.removeEventListener('abort', registration.listener);
+    for (const [signal, registration] of registrations) {
+      signal.removeEventListener('abort', registration.listener);
     }
-    this.abortRegistrations.delete(requestId);
+    this.abortRegistrations.delete(key);
   }
 
   private releaseAbortRegistration(
-    requestId: GenerateRequestId,
+    request: GenerateRequestHandle,
+    signal: AbortSignal,
     registration: AbortRegistration
   ): void {
-    const registrations = this.abortRegistrations.get(requestId);
-    if (registrations == null || !registrations.delete(registration)) {
+    const key = requestKey(request);
+    const registrations = this.abortRegistrations.get(key);
+    if (registrations?.get(signal) !== registration) {
       return;
     }
-    registration.signal.removeEventListener('abort', registration.listener);
+    registration.referenceCount = Math.max(0, registration.referenceCount - 1);
+    if (registration.referenceCount > 0 || registration.fired) {
+      return;
+    }
+    signal.removeEventListener('abort', registration.listener);
+    registrations.delete(signal);
     if (registrations.size === 0) {
-      this.abortRegistrations.delete(requestId);
+      this.abortRegistrations.delete(key);
     }
   }
 
-  // ── Cleanup ────────────────────────────────────────────────────────
-
   /**
-   * Full cleanup for a finished request: release signal, remove from active,
-   * and optionally delete its completion entry entirely.
+   * Retires a finished request: releases its signal, drops it from the active
+   * set, and either deletes its record outright or leaves it for a waiter to
+   * consume. This is the only operation that clears `active`.
    */
   finalize(
-    requestId: GenerateRequestId,
+    request: GenerateRequestHandle,
     options: { deleteCompletion?: boolean } = {}
   ): void {
-    this.releaseSignal(requestId);
-    this.activeRuns.delete(requestId);
-    if (options.deleteCompletion) {
-      this.completions.delete(requestId);
+    this.releaseSignal(request);
+    const key = requestKey(request);
+    const record = this.requests.get(key);
+    if (record == null) {
       return;
     }
-    this.cleanupIfConsumed(requestId);
+    if (record.active) {
+      record.active = false;
+      this.activeRequestCount -= 1;
+    }
+    if (options.deleteCompletion) {
+      this.requests.delete(key);
+      return;
+    }
+    this.removeIfFullyConsumed(key, record);
+  }
+
+  /** Clears all state, dropping every record and abort listener. */
+  clear(): void {
+    for (const registrations of this.abortRegistrations.values()) {
+      for (const [signal, registration] of registrations) {
+        signal.removeEventListener('abort', registration.listener);
+      }
+    }
+    this.abortRegistrations.clear();
+    this.requests.clear();
+    this.activeRequestCount = 0;
   }
 
   /**
-   * If a request is settled, consumed, and has no active waiters,
-   * delete it from the map to free memory.
+   * Drops a record that has settled, been consumed, has no waiter left, and is
+   * no longer active. The `active` term is what keeps the active count and the
+   * record map from disagreeing.
    */
-  cleanupIfConsumed(requestId: GenerateRequestId): void {
-    const tracked = this.completions.get(requestId);
+  private removeIfFullyConsumed(key: string, record: TrackerRecord<TResult>): void {
     if (
-      tracked != null &&
-      tracked.settled &&
-      tracked.consumed &&
-      tracked.waiterCount === 0
+      record.active ||
+      !record.settled ||
+      !record.consumed ||
+      record.waiterCount > 0
     ) {
-      this.completions.delete(requestId);
+      return;
     }
-  }
-
-  /** Clear all state (used during runtime reset). */
-  clear(): void {
-    for (const requestId of Array.from(this.abortRegistrations.keys())) {
-      this.releaseSignal(requestId);
-    }
-    this.completions.clear();
-    this.activeRuns.clear();
+    this.requests.delete(key);
   }
 }

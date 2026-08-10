@@ -1,5 +1,5 @@
 import {
-  EndpointDescriptor,
+  Endpoint,
   SippClient,
   type BrowserTextRun,
   type EndpointRef,
@@ -38,7 +38,7 @@ elements.loadForm.addEventListener('submit', async (event) => {
     }
     localEndpoint = await localClient.add(
       EXAMPLE_LOCAL_ENDPOINT_ID,
-      EndpointDescriptor.local(model.id, { runtime: runtimeConfig() })
+      Endpoint.local(model, { runtime: runtimeConfig() })
     );
     write(elements.localOutput, `Loaded ${model.name}.`);
   } catch (error) {
@@ -61,7 +61,7 @@ elements.runForm.addEventListener('submit', async (event) => {
   try {
     const gatewayEndpoint = await gatewayClient.add(
       'gateway',
-      EndpointDescriptor.gateway(gateway)
+      Endpoint.gateway(gateway)
     );
     const maxTokens = readMaxTokens(elements.maxTokensInput);
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sipp::core::TokenUsage as CoreTokenUsage;
+use sipp::endpoint::Local as CoreLocalEndpoint;
 use sipp::engine::protocol::{CacheSource as CoreCacheSource, RequestStats as CoreRequestStats};
 use sipp::engine::{
     ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode, GpuLayerConfig,
@@ -23,12 +24,12 @@ use sipp::runtime::config::{
     SchedulerPolicyConfig as CoreSchedulerPolicyConfig, SchedulerPolicyMode,
 };
 use sipp::{
-    AnthropicProviderConfig as CoreAnthropicProviderConfig,
-    EndpointDescriptor as CoreEndpointDescriptor, EndpointRef as CoreEndpointRef,
-    GatewayAuthentication as CoreGatewayAuthentication, GatewayDescriptor as CoreGatewayDescriptor,
-    GatewayRoutes as CoreGatewayRoutes, GatewaySecret as CoreGatewaySecret,
-    GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy, LocalDescriptor as CoreLocalDescriptor,
+    AnthropicProviderConfig as CoreAnthropicProviderConfig, Endpoint as CoreEndpoint,
+    EndpointRef as CoreEndpointRef, GatewayAuthentication as CoreGatewayAuthentication,
+    GatewayDescriptor as CoreGatewayDescriptor, GatewayRoutes as CoreGatewayRoutes,
+    GatewaySecret as CoreGatewaySecret, GatewayTimeoutPolicy as CoreGatewayTimeoutPolicy,
     LocalEmbedOptions as CoreLocalEmbedOptions, LocalTextOptions as CoreLocalTextOptions,
+    ManagedModel as CoreManagedModel,
     OpenAiCompatibleProviderConfig as CoreOpenAiCompatibleProviderConfig,
     OpenAiProviderConfig as CoreOpenAiProviderConfig, ProviderAuthConfig as CoreProviderAuthConfig,
     ProviderDescriptor as CoreProviderDescriptor, ProviderSecret as CoreProviderSecret,
@@ -580,10 +581,7 @@ impl TryFrom<&EndpointRef> for CoreEndpointRef {
     type Error = ConvertError;
 
     fn try_from(value: &EndpointRef) -> Result<Self> {
-        Ok(Self::from_id(required_descriptor_string(
-            Some(&value.id),
-            "endpoint id",
-        )?))
+        Ok(Self::from_id(value.id.clone()))
     }
 }
 
@@ -652,7 +650,7 @@ impl TryFrom<LocalTextOptions> for CoreLocalTextOptions {
             sampling: value
                 .sampling
                 .as_ref()
-                .map(|value| CoreSamplingRuntimeOverride::try_from(value))
+                .map(CoreSamplingRuntimeOverride::try_from)
                 .transpose()?,
             media: value.media,
         })
@@ -824,249 +822,335 @@ impl TryFrom<&SippEmbedRequest> for CoreEmbedRequest {
     }
 }
 
-/// Authentication configuration for a gateway endpoint.
+/// Static header entry for a remote endpoint.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct GatewayAuthentication {
-    pub kind: String,
-    pub value: Option<String>,
-    #[serde(alias = "headerName")]
-    pub header_name: Option<String>,
-}
-
-/// Static header entry for an OpenAI-compatible provider descriptor.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ProviderStaticHeader {
+pub struct StaticHeader {
     pub name: String,
     pub value: String,
 }
 
-/// Local or direct provider endpoint descriptor accepted by add.
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EndpointDescriptor {
-    pub kind: String,
-    pub model_id: Option<String>,
-    pub runtime: Option<NativeRuntimeConfig>,
-    #[serde(alias = "baseUrl")]
-    pub base_url: Option<String>,
-    pub target: Option<String>,
-    pub authentication: Option<GatewayAuthentication>,
-    pub provider: Option<String>,
-    pub model: Option<String>,
-    #[serde(alias = "apiKey")]
-    pub api_key: Option<String>,
-    #[serde(alias = "timeoutMs")]
-    pub timeout_ms: Option<u64>,
-    pub version: Option<String>,
-    #[serde(alias = "authHeaderName")]
-    pub auth_header_name: Option<String>,
-    #[serde(alias = "authHeaderValue")]
-    pub auth_header_value: Option<String>,
-    #[serde(alias = "staticHeaders")]
-    pub static_headers: Option<Vec<ProviderStaticHeader>>,
-    #[serde(alias = "correlationHeader")]
-    pub correlation_header: Option<String>,
-    #[serde(alias = "queryRoute")]
-    pub query_route: Option<String>,
-    #[serde(alias = "chatRoute")]
-    pub chat_route: Option<String>,
-    #[serde(alias = "embedRoute")]
-    pub embed_route: Option<String>,
-    #[serde(alias = "protocolOptions")]
-    pub protocol_options: Option<serde_json::Value>,
+/// Local endpoint input from a managed model.
+#[derive(Debug, Clone)]
+pub struct LocalEndpointInput {
+    pub model: CoreManagedModel,
+    pub runtime: NativeRuntimeConfig,
 }
 
-impl TryFrom<&EndpointDescriptor> for CoreEndpointDescriptor {
+/// Authentication for a gateway endpoint.
+#[derive(Debug, Clone)]
+pub enum GatewayAuthentication {
+    None,
+    Bearer(String),
+    Header { name: String, value: String },
+}
+
+/// Gateway authentication values accepted by native language factories.
+#[derive(Debug, Clone)]
+pub struct GatewayAuthenticationInput {
+    pub kind: String,
+    pub value: Option<String>,
+    pub header_name: Option<String>,
+}
+
+impl TryFrom<GatewayAuthenticationInput> for GatewayAuthentication {
     type Error = ConvertError;
 
-    fn try_from(value: &EndpointDescriptor) -> Result<Self> {
+    fn try_from(value: GatewayAuthenticationInput) -> Result<Self> {
         match value.kind.as_str() {
-            "local" => value.local_to_core(),
-            "gateway" => value.gateway_to_core(),
-            "provider" => value.provider_to_core(),
+            "none" => Ok(Self::None),
+            "bearer" => Ok(Self::Bearer(required_value(
+                value.value,
+                "authentication value",
+            )?)),
+            "header" => Ok(Self::Header {
+                name: required_value(value.header_name, "authentication headerName")?,
+                value: required_value(value.value, "authentication value")?,
+            }),
             _ => Err(invalid_arg(
-                "endpoint descriptor kind must be local, gateway, or provider",
+                "authentication kind must be none, bearer, or header",
             )),
         }
     }
 }
 
-impl EndpointDescriptor {
-    fn local_to_core(&self) -> Result<CoreEndpointDescriptor> {
-        reject_endpoint_descriptor_fields(
-            &[
-                ("baseUrl", self.base_url.is_some()),
-                ("target", self.target.is_some()),
-                ("authentication", self.authentication.is_some()),
-                ("provider", self.provider.is_some()),
-                ("model", self.model.is_some()),
-                ("apiKey", self.api_key.is_some()),
-                ("timeoutMs", self.timeout_ms.is_some()),
-                ("version", self.version.is_some()),
-                ("authHeaderName", self.auth_header_name.is_some()),
-                ("authHeaderValue", self.auth_header_value.is_some()),
-                ("staticHeaders", self.static_headers.is_some()),
-                ("correlationHeader", self.correlation_header.is_some()),
-                ("queryRoute", self.query_route.is_some()),
-                ("chatRoute", self.chat_route.is_some()),
-                ("embedRoute", self.embed_route.is_some()),
-                ("protocolOptions", self.protocol_options.is_some()),
-            ],
-            "local",
-        )?;
-        let runtime = self
-            .runtime
-            .as_ref()
-            .map(CoreNativeRuntimeConfig::try_from)
-            .transpose()?
-            .unwrap_or_default();
-        let mut descriptor = CoreLocalDescriptor::new(required_descriptor_string(
-            self.model_id.as_ref(),
-            "local descriptor modelId",
-        )?);
-        descriptor.runtime = runtime;
-        Ok(CoreEndpointDescriptor::Local(descriptor))
-    }
+/// Gateway endpoint input.
+#[derive(Debug, Clone)]
+pub struct GatewayEndpointInput {
+    pub target: String,
+    pub base_url: String,
+    pub authentication: GatewayAuthentication,
+    pub static_headers: Vec<StaticHeader>,
+    pub timeout_ms: Option<u64>,
+    pub query_route: Option<String>,
+    pub chat_route: Option<String>,
+    pub embed_route: Option<String>,
+    pub protocol_options: Option<serde_json::Value>,
+}
 
-    fn gateway_to_core(&self) -> Result<CoreEndpointDescriptor> {
-        reject_endpoint_descriptor_fields(
-            &[
-                ("modelId", self.model_id.is_some()),
-                ("runtime", self.runtime.is_some()),
-                ("provider", self.provider.is_some()),
-                ("model", self.model.is_some()),
-                ("apiKey", self.api_key.is_some()),
-                ("version", self.version.is_some()),
-                ("authHeaderName", self.auth_header_name.is_some()),
-                ("authHeaderValue", self.auth_header_value.is_some()),
-                ("correlationHeader", self.correlation_header.is_some()),
-            ],
-            "gateway",
-        )?;
-        let timeout = endpoint_timeout(self.timeout_ms)?.unwrap_or(Duration::from_secs(60));
+/// Direct provider endpoint input.
+#[derive(Debug, Clone)]
+pub enum ProviderEndpointInput {
+    OpenAi(OpenAiProviderInput),
+    Anthropic(AnthropicProviderInput),
+    OpenAiCompatible(OpenAiCompatibleProviderInput),
+}
+
+/// Provider selection values accepted by native language factories.
+#[derive(Debug, Clone)]
+pub struct ProviderSelectionInput {
+    pub provider: String,
+    pub model: String,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub version: Option<String>,
+    pub auth_header_name: Option<String>,
+    pub auth_header_value: Option<String>,
+    pub static_headers: Option<Vec<StaticHeader>>,
+    pub correlation_header: Option<String>,
+}
+
+/// OpenAI provider input.
+#[derive(Debug, Clone)]
+pub struct OpenAiProviderInput {
+    pub model: String,
+    pub api_key: String,
+    pub base_url: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+/// Anthropic provider input.
+#[derive(Debug, Clone)]
+pub struct AnthropicProviderInput {
+    pub model: String,
+    pub api_key: String,
+    pub base_url: Option<String>,
+    pub version: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+/// Authentication for an OpenAI-compatible provider.
+#[derive(Debug, Clone)]
+pub enum ProviderAuthentication {
+    Bearer(String),
+    Header { name: String, value: String },
+}
+
+/// OpenAI-compatible provider input.
+#[derive(Debug, Clone)]
+pub struct OpenAiCompatibleProviderInput {
+    pub model: String,
+    pub base_url: String,
+    pub authentication: ProviderAuthentication,
+    pub static_headers: Vec<StaticHeader>,
+    pub correlation_header: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+impl TryFrom<ProviderSelectionInput> for ProviderEndpointInput {
+    type Error = ConvertError;
+
+    fn try_from(value: ProviderSelectionInput) -> Result<Self> {
+        let ProviderSelectionInput {
+            provider,
+            model,
+            api_key,
+            base_url,
+            timeout_ms,
+            version,
+            auth_header_name,
+            auth_header_value,
+            static_headers,
+            correlation_header,
+        } = value;
+        match provider.as_str() {
+            "openai" => {
+                reject_provider_fields(
+                    &[
+                        ("version", version.is_some()),
+                        ("authHeaderName", auth_header_name.is_some()),
+                        ("authHeaderValue", auth_header_value.is_some()),
+                        ("staticHeaders", static_headers.is_some()),
+                        ("correlationHeader", correlation_header.is_some()),
+                    ],
+                    "OpenAI",
+                )?;
+                Ok(Self::OpenAi(OpenAiProviderInput {
+                    model,
+                    api_key: required_value(api_key, "provider apiKey")?,
+                    base_url,
+                    timeout_ms,
+                }))
+            }
+            "anthropic" => {
+                reject_provider_fields(
+                    &[
+                        ("authHeaderName", auth_header_name.is_some()),
+                        ("authHeaderValue", auth_header_value.is_some()),
+                        ("staticHeaders", static_headers.is_some()),
+                        ("correlationHeader", correlation_header.is_some()),
+                    ],
+                    "Anthropic",
+                )?;
+                Ok(Self::Anthropic(AnthropicProviderInput {
+                    model,
+                    api_key: required_value(api_key, "provider apiKey")?,
+                    base_url,
+                    version,
+                    timeout_ms,
+                }))
+            }
+            "openai_compatible" => {
+                reject_provider_fields(&[("version", version.is_some())], "OpenAI-compatible")?;
+                Ok(Self::OpenAiCompatible(OpenAiCompatibleProviderInput {
+                    model,
+                    base_url: required_value(base_url, "provider baseUrl")?,
+                    authentication: provider_authentication(
+                        api_key,
+                        auth_header_name,
+                        auth_header_value,
+                    )?,
+                    static_headers: static_headers.unwrap_or_default(),
+                    correlation_header,
+                    timeout_ms,
+                }))
+            }
+            _ => Err(invalid_arg(
+                "provider must be one of: openai, anthropic, openai_compatible",
+            )),
+        }
+    }
+}
+
+fn reject_provider_fields(fields: &[(&'static str, bool)], provider: &'static str) -> Result<()> {
+    if let Some((field, _)) = fields.iter().find(|(_, present)| *present) {
+        return Err(invalid_arg(format!(
+            "{field} is not valid for the {provider} provider"
+        )));
+    }
+    Ok(())
+}
+
+fn provider_authentication(
+    api_key: Option<String>,
+    header_name: Option<String>,
+    header_value: Option<String>,
+) -> Result<ProviderAuthentication> {
+    match (api_key, header_name, header_value) {
+        (Some(value), None, None) => Ok(ProviderAuthentication::Bearer(value)),
+        (None, Some(name), Some(value)) => Ok(ProviderAuthentication::Header { name, value }),
+        _ => Err(invalid_arg(
+            "OpenAI-compatible provider requires either apiKey or authHeaderName/authHeaderValue",
+        )),
+    }
+}
+
+fn required_value(value: Option<String>, name: &'static str) -> Result<String> {
+    value.ok_or_else(|| invalid_arg(format!("{name} is required")))
+}
+
+impl TryFrom<LocalEndpointInput> for CoreEndpoint {
+    type Error = ConvertError;
+
+    fn try_from(value: LocalEndpointInput) -> Result<Self> {
+        let runtime = CoreNativeRuntimeConfig::try_from(&value.runtime)?;
+        Ok(CoreLocalEndpoint::new(&value.model).runtime(runtime).into())
+    }
+}
+
+impl TryFrom<GatewayEndpointInput> for CoreEndpoint {
+    type Error = ConvertError;
+
+    fn try_from(value: GatewayEndpointInput) -> Result<Self> {
+        let timeout = endpoint_timeout(value.timeout_ms)?.unwrap_or(Duration::from_secs(60));
         let mut routes = CoreGatewayRoutes::default();
-        assign_if_some(&mut routes.query, self.query_route.clone());
-        assign_if_some(&mut routes.chat, self.chat_route.clone());
-        assign_if_some(&mut routes.embed, self.embed_route.clone());
-        Ok(CoreEndpointDescriptor::Gateway(CoreGatewayDescriptor {
-            target: required_descriptor_string(self.target.as_ref(), "gateway target")?,
-            base_url: required_descriptor_string(self.base_url.as_ref(), "gateway baseUrl")?,
+        assign_if_some(&mut routes.query, value.query_route);
+        assign_if_some(&mut routes.chat, value.chat_route);
+        assign_if_some(&mut routes.embed, value.embed_route);
+        Ok(CoreGatewayDescriptor {
+            target: value.target,
+            base_url: value.base_url,
             routes,
-            authentication: gateway_authentication(self.authentication.as_ref())?,
-            static_headers: self
+            authentication: value.authentication.into(),
+            static_headers: value
                 .static_headers
-                .as_ref()
-                .map(|headers| {
-                    headers
-                        .iter()
-                        .map(|header| (header.name.clone(), header.value.clone()))
-                        .collect()
-                })
-                .unwrap_or_default(),
+                .into_iter()
+                .map(|header| (header.name, header.value))
+                .collect(),
             timeouts: CoreGatewayTimeoutPolicy {
                 connect: timeout,
                 request: timeout,
                 read: timeout,
             },
-            protocol_options: json_object_or_empty(
-                self.protocol_options.clone(),
-                "protocolOptions",
-            )?,
-        }))
+            protocol_options: json_object_or_empty(value.protocol_options, "protocolOptions")?,
+        }
+        .into())
     }
+}
 
-    fn provider_to_core(&self) -> Result<CoreEndpointDescriptor> {
-        reject_endpoint_descriptor_fields(
-            &[
-                ("modelId", self.model_id.is_some()),
-                ("runtime", self.runtime.is_some()),
-                ("target", self.target.is_some()),
-                ("authentication", self.authentication.is_some()),
-                ("queryRoute", self.query_route.is_some()),
-                ("chatRoute", self.chat_route.is_some()),
-                ("embedRoute", self.embed_route.is_some()),
-                ("protocolOptions", self.protocol_options.is_some()),
-            ],
-            "provider",
-        )?;
-        let model = required_descriptor_string(self.model.as_ref(), "provider model")?;
-        let provider = required_descriptor_string(self.provider.as_ref(), "provider")?;
-        let timeout = endpoint_timeout(self.timeout_ms)?;
-        let descriptor = match provider.as_str() {
-            "openai" => {
-                reject_endpoint_descriptor_fields(
-                    &[
-                        ("version", self.version.is_some()),
-                        ("authHeaderName", self.auth_header_name.is_some()),
-                        ("authHeaderValue", self.auth_header_value.is_some()),
-                        ("staticHeaders", self.static_headers.is_some()),
-                        ("correlationHeader", self.correlation_header.is_some()),
-                    ],
-                    "OpenAI provider",
-                )?;
+impl From<GatewayAuthentication> for CoreGatewayAuthentication {
+    fn from(value: GatewayAuthentication) -> Self {
+        match value {
+            GatewayAuthentication::None => Self::None,
+            GatewayAuthentication::Bearer(value) => Self::Bearer(CoreGatewaySecret::new(value)),
+            GatewayAuthentication::Header { name, value } => Self::Header {
+                name,
+                value: CoreGatewaySecret::new(value),
+            },
+        }
+    }
+}
+
+impl TryFrom<ProviderEndpointInput> for CoreEndpoint {
+    type Error = ConvertError;
+
+    fn try_from(value: ProviderEndpointInput) -> Result<Self> {
+        let provider = match value {
+            ProviderEndpointInput::OpenAi(input) => {
                 CoreProviderDescriptor::OpenAi(CoreOpenAiProviderConfig {
-                    model,
-                    api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
-                    base_url: self.base_url.clone(),
-                    timeout,
+                    model: input.model,
+                    api_key: CoreProviderSecret::new(input.api_key),
+                    base_url: input.base_url,
+                    timeout: endpoint_timeout(input.timeout_ms)?,
                 })
             }
-            "anthropic" => {
-                reject_endpoint_descriptor_fields(
-                    &[
-                        ("authHeaderName", self.auth_header_name.is_some()),
-                        ("authHeaderValue", self.auth_header_value.is_some()),
-                        ("staticHeaders", self.static_headers.is_some()),
-                        ("correlationHeader", self.correlation_header.is_some()),
-                    ],
-                    "Anthropic provider",
-                )?;
+            ProviderEndpointInput::Anthropic(input) => {
                 CoreProviderDescriptor::Anthropic(CoreAnthropicProviderConfig {
-                    model,
-                    api_key: provider_secret(self.api_key.as_ref(), "provider apiKey")?,
-                    base_url: self.base_url.clone(),
-                    version: self.version.clone(),
-                    timeout,
+                    model: input.model,
+                    api_key: CoreProviderSecret::new(input.api_key),
+                    base_url: input.base_url,
+                    version: input.version,
+                    timeout: endpoint_timeout(input.timeout_ms)?,
                 })
             }
-            "openai_compatible" => {
-                reject_endpoint_descriptor_fields(
-                    &[("version", self.version.is_some())],
-                    "OpenAI-compatible provider",
-                )?;
+            ProviderEndpointInput::OpenAiCompatible(input) => {
                 CoreProviderDescriptor::OpenAiCompatible(CoreOpenAiCompatibleProviderConfig {
-                    model,
-                    base_url: required_descriptor_string(
-                        self.base_url.as_ref(),
-                        "provider baseUrl",
-                    )?,
-                    auth: provider_auth(self)?,
-                    static_headers: self
+                    model: input.model,
+                    base_url: input.base_url,
+                    auth: input.authentication.into(),
+                    static_headers: input
                         .static_headers
-                        .as_ref()
-                        .map(|headers| {
-                            headers
-                                .iter()
-                                .map(|header| {
-                                    (
-                                        header.name.clone(),
-                                        CoreProviderSecret::new(header.value.clone()),
-                                    )
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    correlation_header: self.correlation_header.clone(),
-                    timeout,
+                        .into_iter()
+                        .map(|header| (header.name, CoreProviderSecret::new(header.value)))
+                        .collect(),
+                    correlation_header: input.correlation_header,
+                    timeout: endpoint_timeout(input.timeout_ms)?,
                 })
-            }
-            _ => {
-                return Err(invalid_arg(
-                    "provider must be one of: openai, anthropic, openai_compatible",
-                ));
             }
         };
-        Ok(CoreEndpointDescriptor::Provider(descriptor))
+        Ok(provider.into())
+    }
+}
+
+impl From<ProviderAuthentication> for CoreProviderAuthConfig {
+    fn from(value: ProviderAuthentication) -> Self {
+        match value {
+            ProviderAuthentication::Bearer(value) => Self::Bearer(CoreProviderSecret::new(value)),
+            ProviderAuthentication::Header { name, value } => Self::Header {
+                name,
+                value: CoreProviderSecret::new(value),
+            },
+        }
     }
 }
 
@@ -1184,85 +1268,11 @@ fn cache_source_to_string(source: CoreCacheSource) -> String {
     .to_string()
 }
 
-fn reject_endpoint_descriptor_fields(
-    fields: &[(&'static str, bool)],
-    kind: &'static str,
-) -> Result<()> {
-    for (field, present) in fields {
-        if *present {
-            return Err(invalid_arg(format!(
-                "{field} is not valid for {kind} endpoint descriptors"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn required_descriptor_string(value: Option<&String>, name: &'static str) -> Result<String> {
-    value
-        .cloned()
-        .ok_or_else(|| invalid_arg(format!("{name} is required")))
-}
-
 fn endpoint_timeout(timeout_ms: Option<u64>) -> Result<Option<Duration>> {
     match timeout_ms {
         Some(0) => Err(invalid_arg("timeoutMs must be a positive integer")),
         Some(timeout_ms) => Ok(Some(Duration::from_millis(timeout_ms))),
         None => Ok(None),
-    }
-}
-
-fn provider_secret(value: Option<&String>, name: &'static str) -> Result<CoreProviderSecret> {
-    required_descriptor_string(value, name).map(CoreProviderSecret::new)
-}
-
-fn gateway_authentication(
-    authentication: Option<&GatewayAuthentication>,
-) -> Result<CoreGatewayAuthentication> {
-    match authentication {
-        None => Ok(CoreGatewayAuthentication::None),
-        Some(authentication) if authentication.kind == "none" => {
-            Ok(CoreGatewayAuthentication::None)
-        }
-        Some(authentication) if authentication.kind == "bearer" => {
-            Ok(CoreGatewayAuthentication::Bearer(CoreGatewaySecret::new(
-                required_descriptor_string(authentication.value.as_ref(), "authentication value")?,
-            )))
-        }
-        Some(authentication) if authentication.kind == "header" => {
-            Ok(CoreGatewayAuthentication::Header {
-                name: required_descriptor_string(
-                    authentication.header_name.as_ref(),
-                    "authentication headerName",
-                )?,
-                value: CoreGatewaySecret::new(required_descriptor_string(
-                    authentication.value.as_ref(),
-                    "authentication value",
-                )?),
-            })
-        }
-        Some(_) => Err(invalid_arg(
-            "authentication kind must be none, bearer, or header",
-        )),
-    }
-}
-
-fn provider_auth(descriptor: &EndpointDescriptor) -> Result<CoreProviderAuthConfig> {
-    match (
-        descriptor.api_key.as_ref(),
-        descriptor.auth_header_name.as_ref(),
-        descriptor.auth_header_value.as_ref(),
-    ) {
-        (Some(key), None, None) => Ok(CoreProviderAuthConfig::Bearer(CoreProviderSecret::new(
-            key.clone(),
-        ))),
-        (None, Some(name), Some(value)) => Ok(CoreProviderAuthConfig::Header {
-            name: name.clone(),
-            value: CoreProviderSecret::new(value.clone()),
-        }),
-        _ => Err(invalid_arg(
-            "OpenAI-compatible provider requires either apiKey or authHeaderName/authHeaderValue",
-        )),
     }
 }
 

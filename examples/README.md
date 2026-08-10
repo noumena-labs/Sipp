@@ -16,9 +16,8 @@ larger browser experience.
 5. Run `provider_chat` for direct provider calls from a trusted server-side
    process.
 
-All client examples register endpoints through `add(key, descriptor)`. Rust,
-Node, and Python pass the returned endpoint reference to requests; Swift uses
-the caller-defined endpoint `String` directly.
+All client examples register endpoints through `add(key, endpoint)` and pass
+the returned endpoint reference to requests.
 
 ## Direct Local Examples
 
@@ -34,6 +33,20 @@ python examples/python/query.py <model.gguf> [input]
 
 Swap `query` for `chat` or `embed`. `vision_chat` also takes a projector GGUF
 and image path.
+
+Speech examples exercise the public binding APIs with explicit model/projector
+pairs instead of model-backed automated tests:
+
+```bash
+cargo run -p sipp-rust-examples --bin listen -- <asr.gguf> <projector.gguf> <audio>
+node examples/node/speak.mjs <tts.gguf> <projector.gguf> output.wav "Hello"
+python examples/python/listen.py <asr.gguf> <projector.gguf> <audio>
+```
+
+Set `SIPP_LANGUAGE` for a language hint, `SIPP_SPEAKER_AUDIO` for encoded
+speaker-reference audio, and `SIPP_MAX_DURATION_MS` for an explicit TTS safety
+limit. Omit the duration limit to use the loaded model adapter's generation
+default.
 
 ## Gateway Examples
 
@@ -86,7 +99,7 @@ cargo xtask run examples serve gateway-openai --bind 127.0.0.1:8787
 
 Direct provider examples call the selected provider from the current trusted
 process without a gateway. By default they use the `gemini` preset, which maps
-to Sipp's OpenAI-compatible provider descriptor.
+to Sipp's OpenAI-compatible provider endpoint.
 
 ```bash
 export SIPP_PROVIDER="gemini"
@@ -96,7 +109,7 @@ node examples/node/provider_chat.mjs [input]
 python examples/python/provider_chat.py [input]
 ```
 
-For any OpenAI-compatible provider, pass the generic descriptor fields:
+For any OpenAI-compatible provider, pass the generic endpoint fields:
 
 ```bash
 export SIPP_PROVIDER="openai_compatible"
@@ -119,6 +132,8 @@ Open:
 - `/query.html`
 - `/chat.html`
 - `/embed.html`
+- `/speech.html`
+- `/switching.html`
 - `/gateway_local.html`
 - `/gateway_query.html`
 - `/gateway_chat.html`

@@ -2,6 +2,7 @@ import type {
   BackendObservability,
   CacheSource,
   EmbeddingOutput,
+  GenerateRequestHandle,
   GenerateRequestId,
   GenerateResponse,
   KvReuseMode,
@@ -21,12 +22,14 @@ import type {
 import {
   QueryError,
   type AssetRecord,
-  type ModelInfo,
-  type ObservabilityEvent,
+  type CatalogModelInfo,
+  type CatalogObservabilityEvent,
+  type CatalogObservabilitySnapshot,
   type ObservabilityEventType,
-  type ObservabilitySnapshot,
   type QueryErrorCode,
   type RegistryManifest,
+  type RuntimeSessionDescriptor,
+  type RuntimeSessionSnapshot,
 } from '../models/types.js';
 import type { ChatBoundaryInfo } from '../engine/chat-boundary-sanitizer.js';
 import { EngineModule } from './engine-module.js';
@@ -43,8 +46,10 @@ export const COMPLETED_REQUEST_STATUS_COMPLETED = 1;
 const COMPLETED_REQUEST_STATUS_CANCELLED = 2;
 const COMPLETED_REQUEST_STATUS_FAILED = 3;
 const COMPLETED_REQUEST_STATUS_UNKNOWN = 4;
+const STATUS_STALE_RUNTIME_SESSION = -3;
 const COMPLETED_REQUEST_OUTPUT_TEXT = 1;
 const COMPLETED_REQUEST_OUTPUT_EMBEDDING = 2;
+const COMPLETED_REQUEST_OUTPUT_AUDIO = 3;
 
 const RUNTIME_OBSERVABILITY_METRICS_SIZE_BYTES = 96;
 const RUNTIME_OBSERVABILITY_DOUBLE_FIELD_COUNT = 9;
@@ -125,7 +130,7 @@ type RustLifecycleBackendPreference = 'auto' | 'cpu' | 'webgpu';
 interface RustLifecycleCreateValue {
   handle: RustLifecycleHandle;
   manifest: RegistryManifest;
-  snapshot: ObservabilitySnapshot;
+  snapshot: CatalogObservabilitySnapshot;
 }
 
 export interface RustLifecycleLoadSource {
@@ -265,7 +270,7 @@ export type RustRemoteCommand =
 export type RustRemoteCommandValue =
   | { readonly kind: 'action'; readonly action: RustRemoteAction }
   | { readonly kind: 'installed'; readonly installed: RustLifecycleInstallValue }
-  | { readonly kind: 'cancelled'; readonly snapshot: ObservabilitySnapshot }
+  | { readonly kind: 'cancelled'; readonly snapshot: CatalogObservabilitySnapshot }
   | { readonly kind: 'failed'; readonly error: RustLifecycleError };
 
 interface RustLifecycleLoadOptions {
@@ -284,49 +289,49 @@ interface RustLifecyclePlannedAsset {
 
 export interface RustLifecyclePrepareLoadValue {
   loadId: string;
-  model: ModelInfo;
+  model: CatalogModelInfo;
   runtimeFingerprint: string;
   runtimeConfig: NativeRuntimeConfig;
-  loadRequired: boolean;
   assets: RustLifecyclePlannedAsset[];
   projector?: RustLifecyclePlannedAsset | null;
   manifest: RegistryManifest;
-  snapshot: ObservabilitySnapshot;
-  events: ObservabilityEvent[];
+  snapshot: CatalogObservabilitySnapshot;
+  events: CatalogObservabilityEvent[];
 }
 
 export interface RustLifecycleInstallValue {
-  model: ModelInfo;
+  model: CatalogModelInfo;
   manifest: RegistryManifest;
-  snapshot: ObservabilitySnapshot;
-  events: ObservabilityEvent[];
+  snapshot: CatalogObservabilitySnapshot;
+  events: CatalogObservabilityEvent[];
 }
 
 interface RustLifecycleCommitLoad {
   loadId: string;
   modelId: string;
   runtimeFingerprint: string;
-  chatTemplate?: string | null;
-  bosText?: string;
-  eosText?: string;
-  mediaMarker?: string | null;
   runtime?: unknown;
   profile?: unknown;
 }
 
 interface RustLifecycleCommitLoadValue {
-  model: ModelInfo;
+  model: CatalogModelInfo;
   manifest: RegistryManifest;
-  snapshot: ObservabilitySnapshot;
-  events: ObservabilityEvent[];
+  snapshot: CatalogObservabilitySnapshot;
+  events: CatalogObservabilityEvent[];
 }
 
 interface RustLifecycleRemoveValue {
   removed: unknown;
   orphanedAssets: AssetRecord[];
   manifest: RegistryManifest;
-  snapshot: ObservabilitySnapshot;
-  events: ObservabilityEvent[];
+  snapshot: CatalogObservabilitySnapshot;
+  events: CatalogObservabilityEvent[];
+}
+
+interface RustLifecycleRemoveRequest {
+  readonly modelId: string;
+  readonly activeModelId?: string;
 }
 
 export interface GgufSplitStreamCallbacks {
@@ -340,113 +345,152 @@ export interface GgufReadAtCallbacks {
   readAt(offset: number, target: Uint8Array): number | void;
 }
 
+/**
+ * Runs an operation inside the owning runtime's serialized Wasm-bridge queue.
+ *
+ * Every entry into a given Wasm instance must go through one queue: a JSPI
+ * inference loop can be suspended mid-call, and a concurrent catalog call would
+ * re-enter the same instance while it is suspended.
+ */
+export type WasmBridgeRunner = <T>(operation: (bridge: WasmBridge) => T) => Promise<T>;
+
+interface GgufCallbackFailure {
+  readonly error: unknown;
+}
+
+/**
+ * Catalog lifecycle handle. Every method is asynchronous because each one
+ * queues behind whatever else is currently inside the Wasm instance.
+ */
 export class RustLifecycleBridge {
   private closed = false;
 
   private constructor(
-    private readonly bridge: WasmBridge,
+    private readonly run: WasmBridgeRunner,
     private readonly handle: RustLifecycleHandle
   ) {}
 
-  public static create(bridge: WasmBridge, manifest: RegistryManifest): RustLifecycleBridge {
-    const created = unwrapLifecycleResponse<RustLifecycleCreateValue>(
-      bridge.modelServiceCreate({ manifest }),
-      'create model lifecycle service'
+  public static async create(
+    run: WasmBridgeRunner,
+    manifest: RegistryManifest
+  ): Promise<RustLifecycleBridge> {
+    const created = await run((bridge) =>
+      unwrapLifecycleResponse<RustLifecycleCreateValue>(
+        bridge.modelServiceCreate({ manifest }),
+        'create model lifecycle service'
+      )
     );
-    return new RustLifecycleBridge(bridge, created.handle);
+    return new RustLifecycleBridge(run, created.handle);
   }
 
-  public list(): ModelInfo[] {
-    return unwrapLifecycleResponse(this.bridge.modelServiceList(this.handle), 'list models');
+  public async list(): Promise<CatalogModelInfo[]> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(bridge.modelServiceList(this.handle), 'list models')
+    );
   }
 
-  public current(): ModelInfo | null {
-    return unwrapLifecycleResponse(this.bridge.modelServiceCurrent(this.handle), 'read current model');
+  public async manifest(): Promise<RegistryManifest> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(bridge.modelServiceManifest(this.handle), 'read manifest')
+    );
   }
 
-  public manifest(): RegistryManifest {
-    return unwrapLifecycleResponse(this.bridge.modelServiceManifest(this.handle), 'read manifest');
-  }
-
-  public prepareLoad(
+  public async prepareLoad(
     source: RustLifecycleLoadSource,
     options: RustLifecycleLoadOptions
-  ): RustLifecyclePrepareLoadValue {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServicePrepareLoad(this.handle, source, options),
-      'prepare model load'
+  ): Promise<RustLifecyclePrepareLoadValue> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(
+        bridge.modelServicePrepareLoad(this.handle, source, options),
+        'prepare model load'
+      )
     );
   }
 
-  public install(source: RustLifecycleInstallSource): RustLifecycleInstallValue {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServiceInstall(this.handle, source),
-      'install model'
+  public async install(
+    source: RustLifecycleInstallSource
+  ): Promise<RustLifecycleInstallValue> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(
+        bridge.modelServiceInstall(this.handle, source),
+        'install model'
+      )
     );
   }
 
-  public remoteAcquisition(command: RustRemoteCommand): RustRemoteCommandValue {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServiceRemoteAcquisitionCommand(this.handle, command),
-      'advance remote model acquisition'
+  public async remoteAcquisition(
+    command: RustRemoteCommand
+  ): Promise<RustRemoteCommandValue> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(
+        bridge.modelServiceRemoteAcquisitionCommand(this.handle, command),
+        'advance remote model acquisition'
+      )
     );
   }
 
-  public commitLoad(commit: RustLifecycleCommitLoad): RustLifecycleCommitLoadValue {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServiceCommitLoad(this.handle, commit),
-      'commit model load'
+  public async commitLoad(
+    commit: RustLifecycleCommitLoad
+  ): Promise<RustLifecycleCommitLoadValue> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(
+        bridge.modelServiceCommitLoad(this.handle, commit),
+        'commit model load'
+      )
     );
   }
 
-  public abortLoad(error: { message?: string }): ObservabilitySnapshot {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServiceAbortLoad(this.handle, error),
-      'abort model load'
+  public async remove(
+    modelId: string,
+    activeModelId: string | null
+  ): Promise<RustLifecycleRemoveValue> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(
+        bridge.modelServiceRemove(this.handle, {
+          modelId,
+          ...(activeModelId == null ? {} : { activeModelId }),
+        }),
+        'remove model'
+      )
     );
   }
 
-  public remove(modelId: string): RustLifecycleRemoveValue {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServiceRemove(this.handle, modelId),
-      'remove model'
+  public async snapshot(): Promise<CatalogObservabilitySnapshot> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(
+        bridge.modelServiceSnapshot(this.handle),
+        'read lifecycle snapshot'
+      )
     );
   }
 
-  public unload(): ObservabilitySnapshot {
-    return unwrapLifecycleResponse(this.bridge.modelServiceUnload(this.handle), 'unload model');
-  }
-
-  public snapshot(): ObservabilitySnapshot {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServiceSnapshot(this.handle),
-      'read lifecycle snapshot'
+  public async drainEvents(): Promise<CatalogObservabilityEvent[]> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(
+        bridge.modelServiceDrainEvents(this.handle),
+        'drain lifecycle events'
+      )
     );
   }
 
-  public drainEvents(): ObservabilityEvent[] {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServiceDrainEvents(this.handle),
-      'drain lifecycle events'
-    );
-  }
-
-  public recordEvent(
+  public async recordEvent(
     type: ObservabilityEventType,
     patch: Record<string, unknown>
-  ): ObservabilitySnapshot {
-    return unwrapLifecycleResponse(
-      this.bridge.modelServiceRecordEvent(this.handle, type, patch),
-      'record lifecycle event'
+  ): Promise<CatalogObservabilitySnapshot> {
+    return await this.run((bridge) =>
+      unwrapLifecycleResponse(
+        bridge.modelServiceRecordEvent(this.handle, type, patch),
+        'record lifecycle event'
+      )
     );
   }
 
-  public close(): void {
+  public async close(): Promise<void> {
     if (this.closed) {
       return;
     }
     this.closed = true;
-    this.bridge.modelServiceClose(this.handle);
+    await this.run((bridge) => bridge.modelServiceClose(this.handle));
   }
 }
 
@@ -552,11 +596,13 @@ export class WasmBridge {
 
   public async loadRuntimeModel(
     modelPath: string,
+    session: RuntimeSessionDescriptor,
     config?: NativeRuntimeConfig
   ): Promise<number> {
-    const result = await this.module.ccall('CE_Init', 'number', ['string', 'string'], [
+    const result = await this.module.ccall('CE_Init', 'number', ['string', 'string', 'string'], [
       modelPath,
       JSON.stringify(config ?? {}),
+      JSON.stringify(session),
     ], {
       async: true,
     });
@@ -571,20 +617,37 @@ export class WasmBridge {
     );
   }
 
-  public close(): void {
+  public async close(): Promise<void> {
     try {
-      this.module.ccall('CE_Close', null, [], []);
+      await this.module.ccall('CE_Close', null, [], [], { async: true });
     } finally {
       this.releaseReusableBuffers();
     }
   }
 
+  public getRuntimeSession(): RuntimeSessionSnapshot {
+    const rawPtr = this.module.ccall('CE_GetRuntimeSessionJson', 'pointer', [], []);
+    if (rawPtr instanceof Promise) {
+      throw new Error('Unexpected async result while reading the runtime session.');
+    }
+    const ptr = Number(rawPtr);
+    if (ptr === 0) {
+      throw new Error(this.readLastEngineError());
+    }
+    try {
+      return JSON.parse(this.readUtf8String(ptr)) as RuntimeSessionSnapshot;
+    } finally {
+      this.module.ccall('CE_FreeString', null, ['pointer'], [ptr]);
+    }
+  }
+
   public startTextRequest(
+    generation: number,
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
     options: WasmTextRequestOptions = {}
-  ): GenerateRequestId {
+  ): GenerateRequestHandle {
     validateGrammarSize(options.grammar);
     const grammarArg = options.grammar ?? '';
     const stopArg = serializeStop(options.stop);
@@ -592,8 +655,9 @@ export class WasmBridge {
     const requestId = this.module.ccall(
       'CE_StartTextRequest',
       'number',
-      ['string', 'string', 'number', 'number', 'string', 'string', 'string'],
+      ['number', 'string', 'string', 'number', 'number', 'string', 'string', 'string'],
       [
+        generation,
         contextKey,
         promptText,
         maxOutputTokens,
@@ -606,24 +670,26 @@ export class WasmBridge {
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing a request.');
     }
-    return requestId as GenerateRequestId;
+    return { generation, requestId: requestId as GenerateRequestId };
   }
 
   public startMediaRequest(
+    generation: number,
     contextKey: string,
     promptText: string,
     maxOutputTokens: number,
     media: Uint8Array[],
     options: WasmTextRequestOptions = {}
-  ): GenerateRequestId {
+  ): GenerateRequestHandle {
     validateGrammarSize(options.grammar);
     const grammarArg = options.grammar ?? '';
     const stopArg = serializeStop(options.stop);
     const samplingArg = serializeSampling(options.sampling);
-    return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
+    const requestId = this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
       this.callNumber(
         'CE_StartMediaRequest',
         [
+          'number',
           'string',
           'string',
           'number',
@@ -636,6 +702,7 @@ export class WasmBridge {
           'string',
         ],
         [
+          generation,
           contextKey,
           promptText,
           maxOutputTokens,
@@ -649,23 +716,26 @@ export class WasmBridge {
         ]
       ) as GenerateRequestId
     );
+    return { generation, requestId };
   }
 
   public startChatRequest(
+    generation: number,
     contextKey: string,
     messages: readonly ChatMessage[],
     maxOutputTokens: number,
     media: Uint8Array[] = [],
     options: WasmTextRequestOptions = {}
-  ): GenerateRequestId {
+  ): GenerateRequestHandle {
     validateGrammarSize(options.grammar);
     const grammarArg = options.grammar ?? '';
     const stopArg = serializeStop(options.stop);
     const samplingArg = serializeSampling(options.sampling);
-    return this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
+    const requestId = this.withWasmMediaBuffers(media, (flatPtr, sizesPtr) =>
       this.callNumber(
         'CE_StartChatRequest',
         [
+          'number',
           'string',
           'string',
           'number',
@@ -678,6 +748,7 @@ export class WasmBridge {
           'string',
         ],
         [
+          generation,
           contextKey,
           JSON.stringify(messages),
           maxOutputTokens,
@@ -691,23 +762,66 @@ export class WasmBridge {
         ]
       ) as GenerateRequestId
     );
+    return { generation, requestId };
   }
 
   public startEmbeddingRequest(
+    generation: number,
     contextKey: string,
     input: string,
     normalize: boolean
-  ): GenerateRequestId {
+  ): GenerateRequestHandle {
     const requestId = this.module.ccall(
       'CE_StartEmbeddingRequest',
       'number',
-      ['string', 'string', 'number'],
-      [contextKey, input, normalize ? 1 : 0]
+      ['number', 'string', 'string', 'number'],
+      [generation, contextKey, input, normalize ? 1 : 0]
     );
     if (requestId instanceof Promise) {
       throw new Error('Unexpected async result while enqueuing an embedding request.');
     }
-    return requestId as GenerateRequestId;
+    return { generation, requestId: requestId as GenerateRequestId };
+  }
+
+  public async startListenRequest(
+    generation: number,
+    audio: Uint8Array,
+    language: string,
+    maxOutputTokens: number
+  ): Promise<GenerateRequestHandle> {
+    const requestId = await this.withWasmBytesAsync(audio, (audioPtr, audioLength) =>
+      this.callNumberAsync(
+        'CE_StartListenRequest',
+        ['number', 'pointer', 'number', 'string', 'number'],
+        [generation, audioPtr, audioLength, language, maxOutputTokens]
+      ) as Promise<GenerateRequestId>
+    );
+    return { generation, requestId };
+  }
+
+  public async startSpeakRequest(
+    generation: number,
+    text: string,
+    language: string,
+    speakerAudio: Uint8Array,
+    maxDurationMs: number | undefined
+  ): Promise<GenerateRequestHandle> {
+    const requestId = await this.withWasmBytesAsync(speakerAudio, (speakerPtr, speakerLength) =>
+      this.callNumberAsync(
+        'CE_StartSpeakRequest',
+        ['number', 'string', 'string', 'pointer', 'number', 'number', 'number'],
+        [
+          generation,
+          text,
+          language,
+          speakerPtr,
+          speakerLength,
+          maxDurationMs == null ? 0 : 1,
+          maxDurationMs ?? 0,
+        ]
+      ) as Promise<GenerateRequestId>
+    );
+    return { generation, requestId };
   }
 
   public readMediaMarker(): string | null {
@@ -768,33 +882,53 @@ export class WasmBridge {
     }
   }
 
-  public async cancelQuery(requestId: GenerateRequestId): Promise<boolean> {
+  public async cancelQuery(request: GenerateRequestHandle): Promise<boolean> {
     const result = this.module.ccall(
       'CE_CancelRequest',
       'number',
-      ['number'],
-      [requestId]
+      ['number', 'number'],
+      [request.generation, request.requestId]
     );
-    return result instanceof Promise ? Boolean(await result) : Boolean(result);
+    const status = Number(result instanceof Promise ? await result : result);
+    if (status < 0) {
+      throw new Error(this.readLastEngineError());
+    }
+    return Boolean(status);
   }
 
-  public getCompletedRequestStatus(requestId: GenerateRequestId): number {
-    return this.callNumber('CE_GetCompletedRequestStatus', ['number'], [requestId]);
+  public getCompletedRequestStatus(request: GenerateRequestHandle): number {
+    const status = this.callNumber(
+      'CE_GetCompletedRequestStatus',
+      ['number', 'number'],
+      [request.generation, request.requestId]
+    );
+    if (status < 0) {
+      throw new Error(this.readLastEngineError());
+    }
+    return status;
   }
 
-  public consumeCompletedRequest(requestId: GenerateRequestId): boolean {
-    return Boolean(this.callNumber('CE_ConsumeCompletedRequest', ['number'], [requestId]));
+  public consumeCompletedRequest(request: GenerateRequestHandle): boolean {
+    const result = this.callNumber(
+      'CE_ConsumeCompletedRequest',
+      ['number', 'number'],
+      [request.generation, request.requestId]
+    );
+    if (result === STATUS_STALE_RUNTIME_SESSION) {
+      throw new Error(this.readLastEngineError());
+    }
+    return Boolean(result);
   }
 
-  public consumeCompletedResponseIfPresent(requestId: GenerateRequestId): boolean {
-    const status = this.getCompletedRequestStatus(requestId);
+  public consumeCompletedResponseIfPresent(request: GenerateRequestHandle): boolean {
+    const status = this.getCompletedRequestStatus(request);
     if (status === COMPLETED_REQUEST_STATUS_UNKNOWN) {
       return false;
     }
     if (status === COMPLETED_REQUEST_STATUS_PENDING) {
       return false;
     }
-    if (!this.consumeCompletedRequest(requestId)) {
+    if (!this.consumeCompletedRequest(request)) {
       throw new Error('Failed to consume completed queued request response.');
     }
     return true;
@@ -836,14 +970,8 @@ export class WasmBridge {
 
   public modelServiceList(
     handle: RustLifecycleHandle
-  ): RustLifecycleResponse<ModelInfo[]> {
-    return this.callLifecycleJson<ModelInfo[]>('CE_ModelServiceList', ['number'], [handle]);
-  }
-
-  public modelServiceCurrent(
-    handle: RustLifecycleHandle
-  ): RustLifecycleResponse<ModelInfo | null> {
-    return this.callLifecycleJson<ModelInfo | null>('CE_ModelServiceCurrent', ['number'], [handle]);
+  ): RustLifecycleResponse<CatalogModelInfo[]> {
+    return this.callLifecycleJson<CatalogModelInfo[]>('CE_ModelServiceList', ['number'], [handle]);
   }
 
   public modelServiceManifest(
@@ -897,52 +1025,43 @@ export class WasmBridge {
     );
   }
 
-  public modelServiceAbortLoad(
-    handle: RustLifecycleHandle,
-    error: { message?: string } = {}
-  ): RustLifecycleResponse<ObservabilitySnapshot> {
-    return this.callLifecycleJson<ObservabilitySnapshot>(
-      'CE_ModelServiceAbortLoad',
-      ['number', 'string'],
-      [handle, JSON.stringify(error)]
-    );
-  }
-
   public modelServiceRemove(
     handle: RustLifecycleHandle,
-    modelId: string
+    request: RustLifecycleRemoveRequest
   ): RustLifecycleResponse<RustLifecycleRemoveValue> {
     return this.callLifecycleJson<RustLifecycleRemoveValue>(
       'CE_ModelServiceRemove',
       ['number', 'string'],
-      [handle, modelId]
+      [handle, JSON.stringify(request)]
     );
-  }
-
-  public modelServiceUnload(
-    handle: RustLifecycleHandle
-  ): RustLifecycleResponse<ObservabilitySnapshot> {
-    return this.callLifecycleJson<ObservabilitySnapshot>('CE_ModelServiceUnload', ['number'], [handle]);
   }
 
   public modelServiceSnapshot(
     handle: RustLifecycleHandle
-  ): RustLifecycleResponse<ObservabilitySnapshot> {
-    return this.callLifecycleJson<ObservabilitySnapshot>('CE_ModelServiceSnapshot', ['number'], [handle]);
+  ): RustLifecycleResponse<CatalogObservabilitySnapshot> {
+    return this.callLifecycleJson<CatalogObservabilitySnapshot>(
+      'CE_ModelServiceSnapshot',
+      ['number'],
+      [handle]
+    );
   }
 
   public modelServiceDrainEvents(
     handle: RustLifecycleHandle
-  ): RustLifecycleResponse<ObservabilityEvent[]> {
-    return this.callLifecycleJson<ObservabilityEvent[]>('CE_ModelServiceDrainEvents', ['number'], [handle]);
+  ): RustLifecycleResponse<CatalogObservabilityEvent[]> {
+    return this.callLifecycleJson<CatalogObservabilityEvent[]>(
+      'CE_ModelServiceDrainEvents',
+      ['number'],
+      [handle]
+    );
   }
 
   public modelServiceRecordEvent(
     handle: RustLifecycleHandle,
     type: ObservabilityEventType,
     patch: Record<string, unknown>
-  ): RustLifecycleResponse<ObservabilitySnapshot> {
-    return this.callLifecycleJson<ObservabilitySnapshot>(
+  ): RustLifecycleResponse<CatalogObservabilitySnapshot> {
+    return this.callLifecycleJson<CatalogObservabilitySnapshot>(
       'CE_ModelServiceRecordEvent',
       ['number', 'string', 'string'],
       [handle, type, JSON.stringify(patch)]
@@ -1037,7 +1156,7 @@ export class WasmBridge {
     shardMaxBytes: number,
     callbacks: GgufReadAtCallbacks
   ): number {
-    let callbackError: unknown = null;
+    let callbackFailure: GgufCallbackFailure | null = null;
     const readAtPtr = this.module.addFunction(
       (_userData: number, offset: bigint | number, dstPtr: number, len: number) => {
         try {
@@ -1045,7 +1164,7 @@ export class WasmBridge {
           const target = this.module.HEAPU8.subarray(start, start + len);
           return callbacks.readAt(this.byteOffset(offset), target) ?? 0;
         } catch (error) {
-          callbackError = error;
+          callbackFailure ??= { error };
           return -1;
         }
       },
@@ -1061,7 +1180,7 @@ export class WasmBridge {
       if (count <= 0) {
         throw this.ggufCallbackError(
           `Rust GGUF split planning failed with status ${count}.`,
-          callbackError
+          callbackFailure
         );
       }
       return count;
@@ -1076,7 +1195,7 @@ export class WasmBridge {
     shardMaxBytes: number,
     callbacks: GgufSplitStreamCallbacks
   ): void {
-    let callbackError: unknown = null;
+    let callbackFailure: GgufCallbackFailure | null = null;
     const readAtPtr = this.module.addFunction(
       (_userData: number, offset: bigint | number, dstPtr: number, len: number) => {
         try {
@@ -1084,7 +1203,7 @@ export class WasmBridge {
           const target = this.module.HEAPU8.subarray(start, start + len);
           return callbacks.readAt(this.byteOffset(offset), target) ?? 0;
         } catch (error) {
-          callbackError = error;
+          callbackFailure ??= { error };
           return -1;
         }
       },
@@ -1095,7 +1214,7 @@ export class WasmBridge {
         try {
           return callbacks.openShard(this.readUtf8String(pathPtr), index, count) ?? 0;
         } catch (error) {
-          callbackError = error;
+          callbackFailure ??= { error };
           return -1;
         }
       },
@@ -1108,7 +1227,7 @@ export class WasmBridge {
           const bytes = this.module.HEAPU8.subarray(start, start + len);
           return callbacks.writeShard(bytes) ?? 0;
         } catch (error) {
-          callbackError = error;
+          callbackFailure ??= { error };
           return -1;
         }
       },
@@ -1119,7 +1238,7 @@ export class WasmBridge {
         try {
           return callbacks.closeShard() ?? 0;
         } catch (error) {
-          callbackError = error;
+          callbackFailure ??= { error };
           return -1;
         }
       },
@@ -1144,7 +1263,7 @@ export class WasmBridge {
       if (status !== 0) {
         throw this.ggufCallbackError(
           `Rust GGUF stream split failed with status ${status}.`,
-          callbackError
+          callbackFailure
         );
       }
     } finally {
@@ -1160,17 +1279,17 @@ export class WasmBridge {
   }
 
   public readCompletedRequestRuntimeObservability(
-    requestId: GenerateRequestId
+    request: GenerateRequestHandle
   ): RequestObservabilityMetrics | null {
     return this.readRuntimeObservabilityViaCall(
       'CE_GetCompletedRequestRuntimeObservability',
-      ['number'],
-      [requestId]
+      ['number', 'number'],
+      [request.generation, request.requestId]
     );
   }
 
-  public takeCompletedResponse(requestId: GenerateRequestId): GenerateResponse {
-    const status = this.getCompletedRequestStatus(requestId);
+  public takeCompletedResponse(request: GenerateRequestHandle): GenerateResponse {
+    const status = this.getCompletedRequestStatus(request);
     if (status === COMPLETED_REQUEST_STATUS_PENDING) {
       throw new Error('Queued request reached a terminal step without a completed response.');
     }
@@ -1178,48 +1297,61 @@ export class WasmBridge {
       throw new Error('Queued request response is no longer available.');
     }
 
-    const outputKind = this.callNumber('CE_GetCompletedRequestOutputKind', ['number'], [requestId]);
+    const outputKind = this.callNumber(
+      'CE_GetCompletedRequestOutputKind',
+      ['number', 'number'],
+      [request.generation, request.requestId]
+    );
     if (outputKind === COMPLETED_REQUEST_OUTPUT_TEXT) {
       const outputText = this.copyText(
         'CE_GetCompletedRequestOutputSize',
         'CE_CopyCompletedRequestOutput',
         'output',
-        ['number'],
-        [requestId]
+        ['number', 'number'],
+        [request.generation, request.requestId]
       );
       return {
-        ...this.completedResponseBase(requestId, status),
+        ...this.completedResponseBase(request, status),
         outputText,
       };
     }
     if (outputKind === COMPLETED_REQUEST_OUTPUT_EMBEDDING) {
-      const embedding = this.readCompletedEmbedding(requestId);
+      const embedding = this.readCompletedEmbedding(request);
       return {
-        ...this.completedResponseBase(requestId, status),
+        ...this.completedResponseBase(request, status),
         embedding,
       };
     }
-    throw new Error(`Completed request ${requestId} has unknown output kind ${outputKind}.`);
+    if (outputKind === COMPLETED_REQUEST_OUTPUT_AUDIO) {
+      const audio = this.readCompletedAudio(request);
+      return {
+        ...this.completedResponseBase(request, status),
+        audio,
+      };
+    }
+    throw new Error(
+      `Completed request ${request.generation}:${request.requestId} has unknown output kind ${outputKind}.`
+    );
   }
 
   private completedResponseBase(
-    requestId: GenerateRequestId,
+    request: GenerateRequestHandle,
     status: number
-  ): Omit<GenerateResponse, 'outputText' | 'embedding'> {
+  ): Omit<GenerateResponse, 'outputText' | 'embedding' | 'audio'> {
     const errorText = this.copyText(
       'CE_GetCompletedRequestErrorSize',
       'CE_CopyCompletedRequestError',
       'error',
-      ['number'],
-      [requestId]
+      ['number', 'number'],
+      [request.generation, request.requestId]
     );
-    const runtimeObservability = this.readCompletedRequestRuntimeObservability(requestId);
-    if (!this.consumeCompletedRequest(requestId)) {
+    const runtimeObservability = this.readCompletedRequestRuntimeObservability(request);
+    if (!this.consumeCompletedRequest(request)) {
       throw new Error('Failed to consume completed queued request response.');
     }
 
     return {
-      requestId,
+      requestId: request.requestId,
       completed: status === COMPLETED_REQUEST_STATUS_COMPLETED,
       failed: status === COMPLETED_REQUEST_STATUS_FAILED,
       cancelled: status === COMPLETED_REQUEST_STATUS_CANCELLED,
@@ -1228,28 +1360,68 @@ export class WasmBridge {
     };
   }
 
+  private readCompletedAudio(request: GenerateRequestHandle): import('../engine/inference-types.js').AudioOutput {
+    const length = this.callNumber(
+      'CE_GetCompletedRequestAudioLength',
+      ['number', 'number'],
+      [request.generation, request.requestId]
+    );
+    if (length < 0) {
+      throw new Error(
+        `Failed to read completed audio length for request ${request.generation}:${request.requestId}.`
+      );
+    }
+    const ptr = this.allocate(Math.max(1, length));
+    try {
+      const copied = this.callNumber(
+        'CE_CopyCompletedRequestAudio',
+        ['number', 'number', 'pointer', 'number'],
+        [request.generation, request.requestId, ptr, length]
+      );
+      if (copied !== length) {
+        throw new Error(
+          `Failed to copy completed audio for request ${request.generation}:${request.requestId}.`
+        );
+      }
+      return {
+        data: this.module.HEAPU8.slice(ptr, ptr + length),
+        sampleRateHz: this.callNumber(
+          'CE_GetCompletedRequestAudioSampleRate',
+          ['number', 'number'],
+          [request.generation, request.requestId]
+        ),
+        channels: this.callNumber(
+          'CE_GetCompletedRequestAudioChannels',
+          ['number', 'number'],
+          [request.generation, request.requestId]
+        ),
+        durationMs: this.callNumber(
+          'CE_GetCompletedRequestAudioDurationMs',
+          ['number', 'number'],
+          [request.generation, request.requestId]
+        ),
+      };
+    } finally {
+      this.free(ptr);
+    }
+  }
+
   public async runInferenceLoop(
+    generation: number,
     maxTicks: number,
     maxCompletedResponses: number,
-    maxGeneratedTokens: number,
-    options: {
-      maxDurationUs?: number;
-    } = {}
+    maxGeneratedTokens: number
   ): Promise<WasmSchedulerProgressResult> {
-    const maxDurationUs = Math.max(0, options.maxDurationUs ?? 0);
     const resultPtr = this.ensureLoopResultBuffer();
 
     const stepResult = await this.callNumberAsync(
       'CE_RunSchedulerLoop',
       ['number', 'number', 'number', 'number', 'pointer'],
-      [
-        maxTicks,
-        maxCompletedResponses,
-        maxGeneratedTokens,
-        maxDurationUs,
-        resultPtr,
-      ]
+      [generation, maxTicks, maxCompletedResponses, maxGeneratedTokens, resultPtr]
     );
+    if (stepResult === STATUS_STALE_RUNTIME_SESSION) {
+      throw new Error(this.readLastEngineError());
+    }
 
     const loopResult = this.readSchedulerLoopResult(resultPtr);
     return {
@@ -1322,10 +1494,29 @@ export class WasmBridge {
     }
   }
 
-  private ggufCallbackError(message: string, callbackError: unknown): Error {
-    if (callbackError == null) {
+  private async withWasmBytesAsync<T>(
+    bytes: Uint8Array,
+    operation: (ptr: number, len: number) => Promise<T>
+  ): Promise<T> {
+    const ptr = this.allocate(Math.max(1, bytes.byteLength));
+    try {
+      if (bytes.byteLength > 0) {
+        this.module.HEAPU8.set(bytes, ptr);
+      }
+      return await operation(ptr, bytes.byteLength);
+    } finally {
+      this.free(ptr);
+    }
+  }
+
+  private ggufCallbackError(
+    message: string,
+    callbackFailure: GgufCallbackFailure | null
+  ): Error {
+    if (callbackFailure == null) {
       return new Error(message);
     }
+    const callbackError = callbackFailure.error;
     const detail = callbackError instanceof Error ? callbackError.message : String(callbackError);
     return new Error(`${message} Callback failed: ${detail}`, { cause: callbackError });
   }
@@ -1529,18 +1720,26 @@ export class WasmBridge {
     }
   }
 
-  private readCompletedEmbedding(requestId: GenerateRequestId): EmbeddingOutput {
-    const length = this.callNumber('CE_GetCompletedRequestEmbeddingLength', ['number'], [requestId]);
+  private readCompletedEmbedding(request: GenerateRequestHandle): EmbeddingOutput {
+    const length = this.callNumber(
+      'CE_GetCompletedRequestEmbeddingLength',
+      ['number', 'number'],
+      [request.generation, request.requestId]
+    );
     if (length < 0) {
       throw new Error('Completed request did not expose an embedding vector.');
     }
     const pooling = poolingTypeFromCode(
-      this.callNumber('CE_GetCompletedRequestEmbeddingPooling', ['number'], [requestId])
+      this.callNumber(
+        'CE_GetCompletedRequestEmbeddingPooling',
+        ['number', 'number'],
+        [request.generation, request.requestId]
+      )
     );
     const normalizedValue = this.callNumber(
       'CE_GetCompletedRequestEmbeddingNormalized',
-      ['number'],
-      [requestId]
+      ['number', 'number'],
+      [request.generation, request.requestId]
     );
     if (normalizedValue < 0) {
       throw new Error('Failed to read embedding normalization flag.');
@@ -1550,8 +1749,8 @@ export class WasmBridge {
     try {
       const copied = this.callNumber(
         'CE_CopyCompletedRequestEmbedding',
-        ['number', 'pointer', 'number'],
-        [requestId, bufferPtr, length]
+        ['number', 'number', 'pointer', 'number'],
+        [request.generation, request.requestId, bufferPtr, length]
       );
       if (copied !== length) {
         throw new Error('Failed to copy embedding output.');

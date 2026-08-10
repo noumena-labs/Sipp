@@ -14,8 +14,6 @@ function createSha256TestModule(updateLengths: number[] = []): EngineModule {
     FS: {
       analyzePath: () => ({ exists: false }),
       mkdir: () => {},
-      writeFile: () => {},
-      unlink: () => {},
       mount: () => {},
       unmount: () => {},
     },
@@ -59,8 +57,22 @@ test('WasmBridge forwards Rust runtime config JSON without TS-side normalization
     },
   } as unknown as EngineModule;
   const bridge = new WasmBridge(module);
+  const session = {
+    model: {
+      id: 'model-1',
+      name: 'model.gguf',
+      modality: 'text' as const,
+      status: 'ready' as const,
+      source: 'local' as const,
+      bytes: 1,
+      assetFingerprint: 'asset-fingerprint',
+      createdAt: '1970-01-01T00:00:00.000Z',
+      updatedAt: '1970-01-01T00:00:00.000Z',
+    },
+    runtimeFingerprint: 'runtime-fingerprint',
+  };
 
-  await bridge.loadRuntimeModel('/models/model.gguf', {
+  await bridge.loadRuntimeModel('/models/model.gguf', session, {
     placement: { gpu_layers: { count: 99 }, split_mode: 'row' },
     context: { n_ctx: 8192, flash_attention: 'enabled' },
     sampling: { samplers: ['top_k', 'top_p'], top_k: 32 },
@@ -90,8 +102,41 @@ test('WasmBridge forwards Rust runtime config JSON without TS-side normalization
           },
         },
       }),
+      JSON.stringify(session),
     ],
   ]);
+});
+
+test('WasmBridge awaits asynchronous native runtime teardown', async () => {
+  let finishClose!: () => void;
+  const calls: Array<{ ident: string; opts: { async?: boolean } | undefined }> = [];
+  const module = {
+    ccall: (
+      ident: string,
+      _returnType: string | null,
+      _argTypes: string[],
+      _args: unknown[],
+      opts?: { async?: boolean }
+    ) => {
+      calls.push({ ident, opts });
+      return new Promise<void>((resolve) => {
+        finishClose = resolve;
+      });
+    },
+  } as unknown as EngineModule;
+
+  let closed = false;
+  const closing = new WasmBridge(module).close().then(() => {
+    closed = true;
+  });
+  await Promise.resolve();
+
+  assert.equal(closed, false);
+  assert.deepEqual(calls, [{ ident: 'CE_Close', opts: { async: true } }]);
+
+  finishClose();
+  await closing;
+  assert.equal(closed, true);
 });
 
 test('WasmBridge forwards text request stop and sampling JSON', () => {
@@ -104,7 +149,7 @@ test('WasmBridge forwards text request stop and sampling JSON', () => {
   } as unknown as EngineModule;
   const bridge = new WasmBridge(module);
 
-  const requestId = bridge.startTextRequest('default', 'hello', 16, {
+  const request = bridge.startTextRequest(3, 'default', 'hello', 16, {
     grammar: 'root ::= "ok"',
     stop: ['END'],
     sampling: {
@@ -116,12 +161,13 @@ test('WasmBridge forwards text request stop and sampling JSON', () => {
     emitTokens: true,
   });
 
-  assert.equal(requestId, 7);
+  assert.deepEqual(request, { generation: 3, requestId: 7 });
   assert.deepEqual(calls, [
     {
       ident: 'CE_StartTextRequest',
-      argTypes: ['string', 'string', 'number', 'number', 'string', 'string', 'string'],
+      argTypes: ['number', 'string', 'string', 'number', 'number', 'string', 'string', 'string'],
       args: [
+        3,
         'default',
         'hello',
         16,
@@ -137,6 +183,116 @@ test('WasmBridge forwards text request stop and sampling JSON', () => {
       ],
     },
   ]);
+});
+
+test('WasmBridge keeps listen audio alive during asynchronous request start', async () => {
+  const memory = new ArrayBuffer(4096);
+  const heapU8 = new Uint8Array(memory);
+  const freed: number[] = [];
+  const module = {
+    HEAPU8: heapU8,
+    _malloc: () => 64,
+    _free: (ptr: number) => freed.push(ptr),
+    ccall: async (
+      ident: string,
+      _returnType: string,
+      argTypes: string[],
+      args: unknown[],
+      options: { async?: boolean }
+    ) => {
+      assert.equal(ident, 'CE_StartListenRequest');
+      assert.deepEqual(argTypes, ['number', 'pointer', 'number', 'string', 'number']);
+      assert.deepEqual(args, [3, 64, 3, 'en', 256]);
+      assert.equal(options.async, true);
+      assert.deepEqual(heapU8.slice(64, 67), new Uint8Array([1, 2, 3]));
+      await Promise.resolve();
+      assert.deepEqual(freed, []);
+      return 7;
+    },
+  } as unknown as EngineModule;
+
+  const request = await new WasmBridge(module).startListenRequest(
+    3,
+    new Uint8Array([1, 2, 3]),
+    'en',
+    256
+  );
+
+  assert.deepEqual(request, { generation: 3, requestId: 7 });
+  assert.deepEqual(freed, [64]);
+});
+
+test('WasmBridge keeps speaker audio alive during asynchronous request enqueue', async () => {
+  const memory = new ArrayBuffer(4096);
+  const heapU8 = new Uint8Array(memory);
+  const freed: number[] = [];
+  const module = {
+    HEAPU8: heapU8,
+    _malloc: () => 64,
+    _free: (ptr: number) => freed.push(ptr),
+    ccall: async (
+      ident: string,
+      _returnType: string,
+      argTypes: string[],
+      args: unknown[],
+      options: { async?: boolean }
+    ) => {
+      assert.equal(ident, 'CE_StartSpeakRequest');
+      assert.deepEqual(
+        argTypes,
+        ['number', 'string', 'string', 'pointer', 'number', 'number', 'number']
+      );
+      assert.deepEqual(args, [3, 'hello', 'en', 64, 3, 1, 2_000]);
+      assert.equal(options.async, true);
+      assert.deepEqual(heapU8.slice(64, 67), new Uint8Array([1, 2, 3]));
+      await Promise.resolve();
+      assert.deepEqual(freed, []);
+      return 7;
+    },
+  } as unknown as EngineModule;
+
+  const request = await new WasmBridge(module).startSpeakRequest(
+    3,
+    'hello',
+    'en',
+    new Uint8Array([1, 2, 3]),
+    2_000
+  );
+
+  assert.deepEqual(request, { generation: 3, requestId: 7 });
+  assert.deepEqual(freed, [64]);
+});
+
+test('WasmBridge preserves an omitted speech duration limit', async () => {
+  const module = {
+    HEAPU8: new Uint8Array(8),
+    _malloc: () => 4,
+    _free: () => {},
+    ccall: async (
+      ident: string,
+      _returnType: string,
+      argTypes: string[],
+      args: unknown[]
+    ) => {
+      assert.equal(ident, 'CE_StartSpeakRequest');
+      assert.deepEqual(
+        argTypes,
+        ['number', 'string', 'string', 'pointer', 'number', 'number', 'number']
+      );
+      assert.deepEqual(args, [3, 'hello', '', 4, 0, 0, 0]);
+      return 8;
+    },
+  } as unknown as EngineModule;
+
+  const request = await new WasmBridge(module).startSpeakRequest(
+    3,
+    'hello',
+    '',
+    new Uint8Array(),
+    undefined
+  );
+
+  assert.deepEqual(request, { generation: 3, requestId: 8 });
 });
 
 test('parseBackendObservabilityJson preserves real backend registry facts', () => {
@@ -217,8 +373,6 @@ test('WasmBridge converts GGUF split callback exceptions into failed statuses', 
     FS: {
       analyzePath: () => ({ exists: false }),
       mkdir: () => {},
-      writeFile: () => {},
-      unlink: () => {},
       mount: () => {},
       unmount: () => {},
     },
@@ -277,6 +431,29 @@ test('WasmBridge converts GGUF split callback exceptions into failed statuses', 
   assert.deepEqual(removed, [1, 2, 3, 4, 5]);
 });
 
+test('WasmBridge preserves an undefined GGUF callback failure', () => {
+  const module = createSha256TestModule();
+  let readAt: ((...args: unknown[]) => unknown) | null = null;
+  module.addFunction = (callback) => {
+    readAt = callback as (...args: unknown[]) => unknown;
+    return 1;
+  };
+  module.removeFunction = () => {};
+  module.ccall = (ident) => {
+    if (ident !== 'CE_GgufPlanSplitCount') {
+      throw new Error(`Unexpected call: ${ident}`);
+    }
+    readAt?.(0, 0, 32, 4);
+    return -3;
+  };
+  const bridge = new WasmBridge(module);
+
+  assert.throws(
+    () => bridge.planGgufSplitCount(16, 8, { readAt: () => { throw undefined; } }),
+    /Callback failed: undefined/
+  );
+});
+
 test('WasmBridge copies completed embedding responses as f32 values', () => {
   const memory = new ArrayBuffer(4096);
   const heapF32 = new Float32Array(memory);
@@ -284,8 +461,6 @@ test('WasmBridge copies completed embedding responses as f32 values', () => {
     FS: {
       analyzePath: () => ({ exists: false }),
       mkdir: () => {},
-      writeFile: () => {},
-      unlink: () => {},
       mount: () => {},
       unmount: () => {},
     },
@@ -312,7 +487,7 @@ test('WasmBridge copies completed embedding responses as f32 values', () => {
         return 0;
       }
       if (ident === 'CE_CopyCompletedRequestEmbedding') {
-        const ptr = args[1] as number;
+        const ptr = args[2] as number;
         heapF32[ptr / 4] = 3;
         heapF32[ptr / 4 + 1] = 4;
         return 2;
@@ -334,7 +509,7 @@ test('WasmBridge copies completed embedding responses as f32 values', () => {
   };
   const bridge = new WasmBridge(module);
 
-  const response = bridge.takeCompletedResponse(7);
+  const response = bridge.takeCompletedResponse({ generation: 4, requestId: 7 });
 
   assert.deepEqual(response, {
     requestId: 7,
@@ -351,6 +526,61 @@ test('WasmBridge copies completed embedding responses as f32 values', () => {
   });
 });
 
+test('WasmBridge copies completed WAV responses with audio metadata', () => {
+  const memory = new ArrayBuffer(4096);
+  const heapU8 = new Uint8Array(memory);
+  const module: EngineModule = {
+    FS: {
+      analyzePath: () => ({ exists: false }),
+      mkdir: () => {},
+      mount: () => {},
+      unmount: () => {},
+    },
+    HEAP32: new Int32Array(memory),
+    HEAPF32: new Float32Array(memory),
+    HEAPF64: new Float64Array(memory),
+    HEAPU8: heapU8,
+    _malloc: () => 64,
+    _free: () => {},
+    ccall: (ident: string, _returnType: string | null, _argTypes: string[], args: unknown[]) => {
+      if (ident === 'CE_GetCompletedRequestStatus') return 1;
+      if (ident === 'CE_GetCompletedRequestOutputKind') return 3;
+      if (ident === 'CE_GetCompletedRequestAudioLength') return 4;
+      if (ident === 'CE_CopyCompletedRequestAudio') {
+        heapU8.set(new TextEncoder().encode('RIFF'), args[2] as number);
+        return 4;
+      }
+      if (ident === 'CE_GetCompletedRequestAudioSampleRate') return 24_000;
+      if (ident === 'CE_GetCompletedRequestAudioChannels') return 1;
+      if (ident === 'CE_GetCompletedRequestAudioDurationMs') return 250;
+      if (ident === 'CE_GetCompletedRequestErrorSize') return 0;
+      if (ident === 'CE_GetCompletedRequestRuntimeObservability') return -1;
+      if (ident === 'CE_ConsumeCompletedRequest') return 1;
+      throw new Error(`Unexpected call: ${ident}`);
+    },
+    UTF8ToString: () => '',
+    addFunction: () => 0,
+    removeFunction: () => {},
+  };
+
+  const response = new WasmBridge(module).takeCompletedResponse({ generation: 4, requestId: 9 });
+
+  assert.deepEqual(response, {
+    requestId: 9,
+    completed: true,
+    failed: false,
+    cancelled: false,
+    audio: {
+      data: new Uint8Array([82, 73, 70, 70]),
+      sampleRateHz: 24_000,
+      channels: 1,
+      durationMs: 250,
+    },
+    errorMessage: null,
+    observability: null,
+  });
+});
+
 test('WasmBridge copies completed text responses by output kind', () => {
   const memory = new SharedArrayBuffer(4096);
   const heapU8 = new Uint8Array(memory);
@@ -358,8 +588,6 @@ test('WasmBridge copies completed text responses by output kind', () => {
     FS: {
       analyzePath: () => ({ exists: false }),
       mkdir: () => {},
-      writeFile: () => {},
-      unlink: () => {},
       mount: () => {},
       unmount: () => {},
     },
@@ -380,7 +608,7 @@ test('WasmBridge copies completed text responses by output kind', () => {
         return 4;
       }
       if (ident === 'CE_CopyCompletedRequestOutput') {
-        const ptr = args[1] as number;
+        const ptr = args[2] as number;
         heapU8.set(new TextEncoder().encode('done'), ptr);
         return 4;
       }
@@ -403,7 +631,7 @@ test('WasmBridge copies completed text responses by output kind', () => {
   };
   const bridge = new WasmBridge(module);
 
-  const response = bridge.takeCompletedResponse(8);
+  const response = bridge.takeCompletedResponse({ generation: 4, requestId: 8 });
 
   assert.deepEqual(response, {
     requestId: 8,

@@ -4,7 +4,7 @@
 //! dependency on OPFS, `File`, `fetch`, or WORKERFS. The browser host installs
 //! assets and mounts files; Rust owns the persisted lifecycle decisions.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -21,8 +21,8 @@ use crate::lifecycle::util::{
     asset_refcount_mismatch, asset_summary, bump_projector_index_revision as bump_revision,
     classified_asset, decrement_asset_refcount, empty_asset_id, increment_asset_refcount,
     increment_expected_asset_refcount, invalid_asset_field, invalid_source, manifest_key_mismatch,
-    media_marker_for_modality, missing_model_asset, model_missing_asset, model_not_found,
-    sha256_hex, sorted_model_asset_ids, validate_registry_manifest_version, AssetSummary,
+    missing_model_asset, model_missing_asset, model_not_found, sha256_hex, sorted_model_asset_ids,
+    validate_asset_inspection_version, validate_registry_manifest_version, AssetSummary,
 };
 use crate::lifecycle::{
     AssetInspection, BackendCapabilities, BackendPlan, BackendPolicy, BackendPreference,
@@ -35,13 +35,12 @@ use crate::runtime::numeric::{
     MILLIS_PER_SECOND, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE,
 };
 
+const BROWSER_CPU_CONTEXT_CEILING: u32 = 4096;
 const NO_PENDING_BROWSER_MODEL_LOAD: &str = "no pending browser model load";
 const BROWSER_MODEL_LOAD_ALREADY_PENDING: &str = "a browser model load is already pending";
 const BROWSER_LOAD_COMMIT_MISMATCH: &str =
     "browser model load commit does not match the pending load";
 const BROWSER_REGISTRY_MANIFEST_LABEL: &str = "browser registry manifest";
-const CODE_QUERY_FAILED: &str = "QUERY_FAILED";
-const QUERY_STATUS_FAILED: &str = "failed";
 const BROWSER_MODEL_ID_HASH_CHARS: usize = 24;
 const LIFECYCLE_SERIALIZATION_FALLBACK: &str =
     "{\"ok\":false,\"error\":{\"code\":\"STORAGE_CORRUPT\",\"message\":\"failed to serialize lifecycle response\"}}";
@@ -105,8 +104,11 @@ pub struct BrowserAssetRecord {
 pub struct BrowserModelPairing {
     pub state: CoreModelPairingState,
     pub checked_projector_index_revision: u64,
-    #[serde(default)]
     pub compatible_vision_projector_types: Vec<String>,
+    /// Audio-input projector types accepted by the model.
+    pub compatible_audio_projector_types: Vec<String>,
+    /// Audio-generation projector types accepted by the model.
+    pub compatible_audio_generation_projector_types: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason_code: Option<ModelPairingReason>,
     pub updated_at: String,
@@ -142,29 +144,9 @@ pub struct BrowserModelInfo {
     pub status: ModelStatus,
     pub source: ModelSourceKind,
     pub bytes: u64,
-    pub loaded: bool,
-    pub chat_template: Option<String>,
-    pub bos_text: String,
-    pub eos_text: String,
-    pub media_marker: Option<String>,
+    pub asset_fingerprint: String,
     pub created_at: String,
     pub updated_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrowserLoadedModelState {
-    pub id: String,
-    pub asset_fingerprint: String,
-    pub runtime_fingerprint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chat_template: Option<String>,
-    #[serde(default)]
-    pub bos_text: String,
-    #[serde(default)]
-    pub eos_text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub media_marker: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,13 +292,13 @@ pub enum BrowserRemoteCommandResponse {
         action: Value,
     },
     Installed {
-        installed: BrowserInstallResponse,
+        installed: Box<BrowserInstallResponse>,
     },
     Cancelled {
-        snapshot: BrowserObservabilitySnapshot,
+        snapshot: Box<BrowserObservabilitySnapshot>,
     },
     Failed {
-        error: BrowserLifecycleError,
+        error: Box<BrowserLifecycleError>,
     },
 }
 
@@ -337,7 +319,6 @@ pub struct BrowserPrepareLoadResponse {
     pub model: BrowserModelInfo,
     pub runtime_fingerprint: String,
     pub runtime_config: Value,
-    pub load_required: bool,
     #[serde(default)]
     pub assets: Vec<BrowserPlannedAsset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -365,14 +346,6 @@ pub struct BrowserCommitLoadRequest {
     pub model_id: String,
     pub runtime_fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chat_template: Option<String>,
-    #[serde(default)]
-    pub bos_text: String,
-    #[serde(default)]
-    pub eos_text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub media_marker: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<Value>,
@@ -398,6 +371,14 @@ pub struct BrowserRemoveResponse {
     pub snapshot: BrowserObservabilitySnapshot,
     #[serde(default)]
     pub events: Vec<BrowserObservabilityEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRemoveRequest {
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -447,7 +428,6 @@ struct BrowserResponseContext {
 #[derive(Debug)]
 pub struct BrowserLifecycleService {
     pub manifest: BrowserRegistryManifest,
-    current: Option<BrowserLoadedModelState>,
     pending: Option<PendingLoad>,
     pending_remote: Option<PendingRemoteAcquisition>,
     acquisition_ids: RemoteAcquisitionIds,
@@ -462,7 +442,6 @@ impl BrowserLifecycleService {
         let now = now_iso();
         Ok(Self {
             manifest,
-            current: None,
             pending: None,
             pending_remote: None,
             acquisition_ids: RemoteAcquisitionIds::default(),
@@ -487,15 +466,6 @@ impl BrowserLifecycleService {
             .collect()
     }
 
-    pub fn current(&self) -> Option<BrowserModelInfo> {
-        self.current.as_ref().and_then(|current| {
-            self.manifest
-                .models
-                .get(&current.id)
-                .map(|entry| self.model_info_from_entry(entry))
-        })
-    }
-
     pub fn drain_events(&mut self) -> Vec<BrowserObservabilityEvent> {
         self.events.drain(..).collect()
     }
@@ -516,18 +486,12 @@ impl BrowserLifecycleService {
         let base_plan = self.derive_base_plan_for_entry(&entry)?;
         let entry = self.resolve_entry_for_loading(entry, &base_plan)?;
 
-        let backend_plan = browser_backend_plan(&options)?;
+        let mut backend_plan = browser_backend_plan(&options)?;
+        self.apply_browser_cpu_context_policy(&entry, &mut backend_plan)?;
         let runtime_config = serde_json::to_value(&backend_plan.config)?;
         let runtime_fingerprint = runtime_fingerprint(&runtime_config, &backend_plan.selection);
         let asset_fingerprint = asset_fingerprint(&entry);
         let load_id = browser_load_id(&entry.id, &asset_fingerprint, &runtime_fingerprint);
-        let load_required = browser_load_required(
-            self.current.as_ref(),
-            &entry.id,
-            &asset_fingerprint,
-            &runtime_fingerprint,
-        );
-
         let model = self.model_info_from_entry(&entry);
         let (assets, projector) = self.planned_assets_for_entry(&entry)?;
         self.pending = Some(PendingLoad {
@@ -553,13 +517,61 @@ impl BrowserLifecycleService {
             model,
             runtime_fingerprint,
             runtime_config,
-            load_required,
             assets,
             projector,
             manifest: response.manifest,
             snapshot: response.snapshot,
             events: response.events,
         })
+    }
+
+    fn apply_browser_cpu_context_policy(
+        &self,
+        entry: &BrowserModelEntry,
+        plan: &mut BackendPlan,
+    ) -> Result<(), ModelError> {
+        if plan.selection.selected != BackendPreference::Cpu.as_str()
+            || plan.config.context.n_ctx.is_some()
+        {
+            return Ok(());
+        }
+
+        let context_size = self
+            .trained_context_size_for_entry(entry)?
+            .unwrap_or(BROWSER_CPU_CONTEXT_CEILING)
+            .min(BROWSER_CPU_CONTEXT_CEILING);
+        plan.config.context.n_ctx = Some(context_size as i32);
+        Ok(())
+    }
+
+    fn trained_context_size_for_entry(
+        &self,
+        entry: &BrowserModelEntry,
+    ) -> Result<Option<u32>, ModelError> {
+        let mut trained_context_size = None;
+        for asset_id in &entry.model_asset_ids {
+            let asset = self
+                .manifest
+                .assets
+                .get(asset_id)
+                .ok_or_else(|| missing_model_asset(asset_id))?;
+            let Some(size) = asset
+                .inspection
+                .as_ref()
+                .and_then(|inspection| inspection.trained_context_size)
+            else {
+                continue;
+            };
+            if trained_context_size.is_some_and(|current| current != size) {
+                return Err(ModelError::InvalidModelSource(format!(
+                    "model '{}' has inconsistent trained context metadata across its assets",
+                    entry.id
+                )));
+            }
+            trained_context_size = Some(size);
+        }
+
+        Ok(trained_context_size)
     }
 
     pub fn install(
@@ -595,11 +607,7 @@ impl BrowserLifecycleService {
         };
         let mut entry = self.upsert_base_model_entry(&base_plan)?;
         if let Some(projector_id) = source_projector {
-            entry = self.set_resolved_projector(
-                &entry.id,
-                &projector_id,
-                &plan.compatible_vision_projector_types,
-            )?;
+            entry = self.set_resolved_projector(&entry.id, &projector_id, &plan)?;
         } else {
             entry = self.resolve_entry_for_loading(entry, &base_plan)?;
         }
@@ -725,13 +733,13 @@ impl BrowserLifecycleService {
             RemoteAcquisitionProgress::Failed(error) => {
                 self.pending_remote = None;
                 Ok(BrowserRemoteCommandResponse::Failed {
-                    error: lifecycle_error(error),
+                    error: Box::new(lifecycle_error(error)),
                 })
             }
             RemoteAcquisitionProgress::Cancelled => {
                 self.pending_remote = None;
                 Ok(BrowserRemoteCommandResponse::Cancelled {
-                    snapshot: self.snapshot.clone(),
+                    snapshot: Box::new(self.snapshot.clone()),
                 })
             }
         }
@@ -770,7 +778,9 @@ impl BrowserLifecycleService {
             })
             .collect::<Result<Vec<_>, _>>()?;
         match self.install(BrowserInstallSource { assets, classified }) {
-            Ok(installed) => Ok(BrowserRemoteCommandResponse::Installed { installed }),
+            Ok(installed) => Ok(BrowserRemoteCommandResponse::Installed {
+                installed: Box::new(installed),
+            }),
             Err(error) => {
                 let progress = pending.acquisition.fail_finalization(error);
                 self.pending_remote = Some(pending);
@@ -813,15 +823,6 @@ impl BrowserLifecycleService {
             .get(&request.model_id)
             .ok_or_else(|| model_not_found(&request.model_id))?
             .clone();
-        self.current = Some(BrowserLoadedModelState {
-            id: request.model_id,
-            asset_fingerprint: asset_fingerprint(&entry),
-            runtime_fingerprint: request.runtime_fingerprint,
-            chat_template: request.chat_template,
-            bos_text: request.bos_text,
-            eos_text: request.eos_text,
-            media_marker: request.media_marker,
-        });
         let model = self.model_info_from_entry(&entry);
         self.emit(
             BrowserObservabilityEventType::LoadComplete,
@@ -843,58 +844,25 @@ impl BrowserLifecycleService {
         })
     }
 
-    pub fn abort_load(&mut self, message: Option<String>) -> BrowserObservabilitySnapshot {
-        self.pending = None;
-        self.pending_remote = None;
-        self.emit(
-            BrowserObservabilityEventType::Error,
-            SnapshotPatch {
-                mode: None,
-                state: Some(BrowserLifecycleState::Error),
-                model: None,
-                query: Some(Some(failed_query_observation(message))),
-                runtime: None,
-                profile: None,
-            },
-        );
-        self.snapshot.clone()
-    }
-
-    pub fn remove(&mut self, model_id: &str) -> Result<BrowserRemoveResponse, ModelError> {
-        if self
-            .current
-            .as_ref()
-            .is_some_and(|current| current.id == model_id)
-        {
-            return Err(ModelError::ModelInUse(model_id.to_string()));
+    pub fn remove(
+        &mut self,
+        request: BrowserRemoveRequest,
+    ) -> Result<BrowserRemoveResponse, ModelError> {
+        if request.active_model_id.as_deref() == Some(request.model_id.as_str()) {
+            return Err(ModelError::ModelInUse(request.model_id));
         }
+        let model_id = request.model_id;
         let removed = self
             .manifest
             .models
-            .remove(model_id)
-            .ok_or_else(|| model_not_found(model_id))?;
+            .remove(&model_id)
+            .ok_or_else(|| model_not_found(&model_id))?;
         self.decrement_existing_refs(&removed);
         let orphaned_assets = self.remove_orphaned_assets();
         if contains_projector_asset(&orphaned_assets) {
             self.bump_projector_index_revision()?;
         }
         validate_manifest(&self.manifest)?;
-        let state = if self.current.is_some() {
-            BrowserLifecycleState::Ready
-        } else {
-            BrowserLifecycleState::Idle
-        };
-        self.emit(
-            BrowserObservabilityEventType::LoadComplete,
-            SnapshotPatch {
-                mode: None,
-                state: Some(state),
-                model: Some(self.current()),
-                query: Some(None),
-                runtime: Some(None),
-                profile: Some(None),
-            },
-        );
         let response = self.response_context();
         Ok(BrowserRemoveResponse {
             removed,
@@ -905,26 +873,7 @@ impl BrowserLifecycleService {
         })
     }
 
-    pub fn unload(&mut self) -> BrowserObservabilitySnapshot {
-        self.current = None;
-        self.pending = None;
-        self.pending_remote = None;
-        self.emit(
-            BrowserObservabilityEventType::LoadComplete,
-            SnapshotPatch {
-                mode: None,
-                state: Some(BrowserLifecycleState::Idle),
-                model: Some(None),
-                query: Some(None),
-                runtime: Some(None),
-                profile: Some(None),
-            },
-        );
-        self.snapshot.clone()
-    }
-
     pub fn close(&mut self) -> BrowserObservabilitySnapshot {
-        self.current = None;
         self.pending = None;
         self.pending_remote = None;
         self.emit(
@@ -1068,43 +1017,56 @@ impl BrowserLifecycleService {
     ) -> Result<BrowserModelEntry, ModelError> {
         let normalized_base_projector_types =
             normalize_projector_types(&base_plan.compatible_vision_projector_types);
-        let compatible_projector_types =
-            compatible_projector_type_set(&base_plan.compatible_vision_projector_types);
+        let normalized_base_audio_projector_types =
+            normalize_projector_types(&base_plan.compatible_audio_projector_types);
+        let normalized_base_audio_generation_projector_types =
+            normalize_projector_types(&base_plan.compatible_audio_generation_projector_types);
         if let Some(projector_id) = entry.projector_asset_id.clone() {
             if let Some(projector) = self.manifest.assets.get(&projector_id).cloned() {
-                if base_plan.compatible_vision_projector_types.is_empty() {
+                if base_plan.compatible_vision_projector_types.is_empty()
+                    && base_plan.compatible_audio_projector_types.is_empty()
+                    && base_plan
+                        .compatible_audio_generation_projector_types
+                        .is_empty()
+                {
                     return Ok(entry);
                 }
                 let inspection = projector.inspection.clone();
-                if !projector_type_matches(inspection.as_ref(), &compatible_projector_types) {
+                if !projector_type_matches(inspection.as_ref(), base_plan) {
                     entry = self.detach_projector(&entry.id, base_plan)?;
                 } else if match entry.pairing.as_ref() {
                     Some(pairing) => {
                         pairing.state != CoreModelPairingState::Resolved
                             || normalize_projector_types(&pairing.compatible_vision_projector_types)
                                 != normalized_base_projector_types
+                            || normalize_projector_types(&pairing.compatible_audio_projector_types)
+                                != normalized_base_audio_projector_types
+                            || normalize_projector_types(
+                                &pairing.compatible_audio_generation_projector_types,
+                            ) != normalized_base_audio_generation_projector_types
                     }
                     None => true,
                 } {
-                    entry = self.set_resolved_projector(
-                        &entry.id,
-                        &projector_id,
-                        &base_plan.compatible_vision_projector_types,
-                    )?;
+                    entry = self.set_resolved_projector(&entry.id, &projector_id, base_plan)?;
                 }
             } else {
                 entry = self.detach_projector(&entry.id, base_plan)?;
             }
         }
 
-        if base_plan.modality != ModelModality::Vision {
+        if base_plan.modality == ModelModality::Text {
             return self.set_unresolved_pairing(
                 &entry.id,
                 base_plan,
-                ModelPairingReason::BaseNotVision,
+                ModelPairingReason::BaseNotMedia,
             );
         }
-        if base_plan.compatible_vision_projector_types.is_empty() {
+        if base_plan.compatible_vision_projector_types.is_empty()
+            && base_plan.compatible_audio_projector_types.is_empty()
+            && base_plan
+                .compatible_audio_generation_projector_types
+                .is_empty()
+        {
             return self.set_unresolved_pairing(
                 &entry.id,
                 base_plan,
@@ -1118,18 +1080,17 @@ impl BrowserLifecycleService {
                     == self.manifest.projector_index_revision
                 && normalize_projector_types(&pairing.compatible_vision_projector_types)
                     == normalized_base_projector_types
+                && normalize_projector_types(&pairing.compatible_audio_projector_types)
+                    == normalized_base_audio_projector_types
+                && normalize_projector_types(&pairing.compatible_audio_generation_projector_types)
+                    == normalized_base_audio_generation_projector_types
         }) {
             return Ok(entry);
         }
 
-        let matches = self
-            .find_compatible_installed_projector_ids(&base_plan.compatible_vision_projector_types);
+        let matches = self.find_compatible_installed_projector_ids(base_plan);
         if matches.len() == 1 {
-            self.set_resolved_projector(
-                &entry.id,
-                &matches[0],
-                &base_plan.compatible_vision_projector_types,
-            )
+            self.set_resolved_projector(&entry.id, &matches[0], base_plan)
         } else {
             self.set_unresolved_pairing(
                 &entry.id,
@@ -1143,18 +1104,14 @@ impl BrowserLifecycleService {
         }
     }
 
-    fn find_compatible_installed_projector_ids(
-        &self,
-        compatible_vision_projector_types: &[String],
-    ) -> Vec<String> {
-        let compatible = compatible_projector_type_set(compatible_vision_projector_types);
+    fn find_compatible_installed_projector_ids(&self, base_plan: &PairingPlan) -> Vec<String> {
         let mut matches = Vec::new();
         for asset in self.manifest.assets.values() {
             if asset.kind != ModelAssetKind::Projector || asset.ref_count == 0 {
                 continue;
             }
             let inspection = asset.inspection.as_ref();
-            if projector_type_matches(inspection, &compatible) {
+            if projector_type_matches(inspection, base_plan) {
                 matches.push(asset.id.clone());
             }
         }
@@ -1165,18 +1122,20 @@ impl BrowserLifecycleService {
         &mut self,
         id: &str,
         projector_asset_id: &str,
-        compatible_vision_projector_types: &[String],
+        plan: &PairingPlan,
     ) -> Result<BrowserModelEntry, ModelError> {
         let now = now_iso();
         let revision = self.manifest.projector_index_revision;
         self.update_model_entry(id, |entry| {
             entry.projector_asset_id = Some(projector_asset_id.to_string());
-            entry.modality = ModelModality::Vision;
+            entry.modality = plan.modality;
             entry.status = ModelStatus::Ready;
             entry.pairing = Some(browser_pairing(
                 CoreModelPairingState::Resolved,
                 revision,
-                compatible_vision_projector_types,
+                &plan.compatible_vision_projector_types,
+                &plan.compatible_audio_projector_types,
+                &plan.compatible_audio_generation_projector_types,
                 None,
                 &now,
             ));
@@ -1200,6 +1159,8 @@ impl BrowserLifecycleService {
                 CoreModelPairingState::Unresolved,
                 revision,
                 &plan.compatible_vision_projector_types,
+                &plan.compatible_audio_projector_types,
+                &plan.compatible_audio_generation_projector_types,
                 Some(reason_code),
                 &now,
             ));
@@ -1285,7 +1246,6 @@ impl BrowserLifecycleService {
             .into_iter()
             .filter_map(|asset_id| self.manifest.assets.get(&asset_id));
         let summary = browser_asset_summary(assets);
-        let current = current_loaded_model(self.current.as_ref(), &entry.id);
         BrowserModelInfo {
             id: entry.id.clone(),
             name: entry.name.clone(),
@@ -1293,11 +1253,7 @@ impl BrowserLifecycleService {
             status: entry.status,
             source: summary.source,
             bytes: summary.bytes,
-            loaded: current.is_some(),
-            chat_template: current.and_then(|current| current.chat_template.clone()),
-            bos_text: current.map_or_else(String::new, |current| current.bos_text.clone()),
-            eos_text: current.map_or_else(String::new, |current| current.eos_text.clone()),
-            media_marker: browser_media_marker(current, entry.modality),
+            asset_fingerprint: asset_fingerprint(entry),
             created_at: entry.created_at.clone(),
             updated_at: entry.updated_at.clone(),
         }
@@ -1741,6 +1697,9 @@ fn validate_asset_record(asset: &BrowserAssetRecord) -> Result<(), ModelError> {
     if asset.bytes == 0 {
         return Err(invalid_asset_field(&asset.id, "byte size must be positive"));
     }
+    if let Some(inspection) = &asset.inspection {
+        validate_asset_inspection_version(inspection.version)?;
+    }
     let has_split_index = asset.source_part_index.is_some() || asset.source_part_count.is_some();
     if has_split_index {
         let index = asset
@@ -1781,59 +1740,41 @@ fn browser_asset_summary<'asset>(
     asset_summary(assets.map(|asset| (asset.bytes, asset.source_url.is_some())))
 }
 
-fn current_loaded_model<'model>(
-    current: Option<&'model BrowserLoadedModelState>,
-    entry_id: &str,
-) -> Option<&'model BrowserLoadedModelState> {
-    current.filter(|current| current.id == entry_id)
-}
-
-fn browser_media_marker(
-    current: Option<&BrowserLoadedModelState>,
-    modality: ModelModality,
-) -> Option<String> {
-    current
-        .and_then(|current| current.media_marker.clone())
-        .or_else(|| media_marker_for_modality(modality))
-}
-
 fn entry_asset_ids(entry: &BrowserModelEntry) -> Vec<String> {
     sorted_model_asset_ids(&entry.model_asset_ids, entry.projector_asset_id.as_ref())
-}
-
-fn failed_query_observation(message: Option<String>) -> BrowserQueryObservation {
-    BrowserQueryObservation {
-        context_key: None,
-        status: QUERY_STATUS_FAILED.to_string(),
-        wall_ms: None,
-        ttft_ms: None,
-        output_tokens: None,
-        error_code: Some(CODE_QUERY_FAILED.to_string()),
-        error_message: message,
-    }
 }
 
 fn normalize_projector_types(projector_types: &[String]) -> Vec<String> {
     sorted_unique_strings(projector_types.to_vec())
 }
 
-fn compatible_projector_type_set(projector_types: &[String]) -> BTreeSet<&String> {
-    projector_types.iter().collect()
+fn projector_type_matches(inspection: Option<&AssetInspection>, plan: &PairingPlan) -> bool {
+    let Some(inspection) = inspection else {
+        return false;
+    };
+    projector_role_matches(
+        &plan.compatible_vision_projector_types,
+        inspection.provided_vision_projector_type.as_ref(),
+    ) && projector_role_matches(
+        &plan.compatible_audio_projector_types,
+        inspection.provided_audio_projector_type.as_ref(),
+    ) && projector_role_matches(
+        &plan.compatible_audio_generation_projector_types,
+        inspection.provided_audio_generation_projector_type.as_ref(),
+    )
 }
 
-fn projector_type_matches(
-    inspection: Option<&AssetInspection>,
-    compatible_projector_types: &BTreeSet<&String>,
-) -> bool {
-    inspection
-        .and_then(|inspection| inspection.provided_vision_projector_type.as_ref())
-        .is_some_and(|provided| compatible_projector_types.contains(provided))
+fn projector_role_matches(required: &[String], provided: Option<&String>) -> bool {
+    required.is_empty()
+        || provided.is_some_and(|provided| required.iter().any(|value| value == provided))
 }
 
 fn browser_pairing(
     state: CoreModelPairingState,
     projector_index_revision: u64,
     compatible_vision_projector_types: &[String],
+    compatible_audio_projector_types: &[String],
+    compatible_audio_generation_projector_types: &[String],
     reason_code: Option<ModelPairingReason>,
     updated_at: &str,
 ) -> BrowserModelPairing {
@@ -1842,6 +1783,12 @@ fn browser_pairing(
         checked_projector_index_revision: projector_index_revision,
         compatible_vision_projector_types: normalize_projector_types(
             compatible_vision_projector_types,
+        ),
+        compatible_audio_projector_types: normalize_projector_types(
+            compatible_audio_projector_types,
+        ),
+        compatible_audio_generation_projector_types: normalize_projector_types(
+            compatible_audio_generation_projector_types,
         ),
         reason_code,
         updated_at: updated_at.to_string(),
@@ -1869,22 +1816,6 @@ fn browser_load_id(model_id: &str, asset_fingerprint: &str, runtime_fingerprint:
         "runtimeFingerprint": runtime_fingerprint,
         "nonce": now_iso(),
     }))
-}
-
-fn browser_load_required(
-    current: Option<&BrowserLoadedModelState>,
-    model_id: &str,
-    asset_fingerprint: &str,
-    runtime_fingerprint: &str,
-) -> bool {
-    match current {
-        Some(current) => {
-            current.id != model_id
-                || current.asset_fingerprint != asset_fingerprint
-                || current.runtime_fingerprint != runtime_fingerprint
-        }
-        None => true,
-    }
 }
 
 fn browser_backend_plan(options: &BrowserLoadOptions) -> Result<BackendPlan, ModelError> {

@@ -62,7 +62,7 @@ impl PrefixStateCache {
         self.pending_snapshots.clear();
     }
 
-    pub(crate) fn drain_pending_snapshots(
+    pub(in crate::runtime::session) fn drain_pending_snapshots(
         &mut self,
         runtime: &NativeRuntimeHandle,
         max_to_drain: usize,

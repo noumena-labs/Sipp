@@ -1,4 +1,6 @@
 import type {
+  AudioResult,
+  BrowserAudioRun,
   BrowserEmbeddingRun,
   BrowserTextRun,
   BrowserTokenBatches,
@@ -151,6 +153,23 @@ export function createBrowserEmbeddingRun(
     response,
     cancel: () => {
       linkedAbort.controller.abort();
+    },
+  };
+}
+
+/** Create a browser audio run that owns cancellation for its response promise. */
+export function createBrowserAudioRun(
+  signal: AbortSignal | undefined,
+  responseFactory: (signal: AbortSignal) => Promise<AudioResult>
+): BrowserAudioRun {
+  const linkedAbort = createLinkedAbortController(signal);
+  const response = responseFactory(linkedAbort.signal).finally(() => {
+    linkedAbort.dispose();
+  });
+  return {
+    response,
+    cancel: (reason?: unknown) => {
+      linkedAbort.controller.abort(reason);
     },
   };
 }

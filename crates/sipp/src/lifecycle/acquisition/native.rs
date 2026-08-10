@@ -145,7 +145,7 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
                     .await
                 {
                     NativeDownloadResult::Succeeded { event, record } => {
-                        downloaded.insert(record.id.clone(), record);
+                        downloaded.insert(record.id.clone(), *record);
                         event
                     }
                     NativeDownloadResult::Failed(event) => event,
@@ -395,7 +395,7 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
                 asset_ids,
                 created_asset_ids,
             },
-            record: installed.record,
+            record: Box::new(installed.record),
         }
     }
 
@@ -458,7 +458,7 @@ impl<B: StorageBackend> NativeRemoteExecutor<B> {
 enum NativeDownloadResult {
     Succeeded {
         event: RemoteAcquisitionEvent,
-        record: AssetRecord,
+        record: Box<AssetRecord>,
     },
     Failed(RemoteAcquisitionEvent),
 }

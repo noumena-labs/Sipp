@@ -1,33 +1,37 @@
-import { ModelService } from '../models/model-service.js';
-import { AssetStore, type BrowserCachePolicyOptions } from '../models/asset-store.js';
-import { ModelRegistryStore } from '../models/model-registry-store.js';
-import { createBrowserEmbeddingRun, createBrowserTextRun } from '../models/token-queue.js';
+import type { BrowserCachePolicyOptions } from '../models/asset-store.js';
+import {
+  createBrowserAudioRun,
+  createBrowserEmbeddingRun,
+  createBrowserTextRun,
+} from '../models/token-queue.js';
 import {
   QueryError,
   type SippClient as SippClientShape,
+  type BrowserAudioRun,
   type BrowserEmbeddingRun,
   type BrowserTextRun,
   type ChatInput,
   type ChatOptions,
   type EmbedOptions,
-  type EndpointDescriptor,
+  type Endpoint,
   type EndpointRef,
   type EngineEvent,
   type EngineObservability,
   type EngineState,
   type ManagedModel,
-  ENDPOINT_DESCRIPTOR_PAYLOAD,
+  type ListenOptions,
+  ENDPOINT_PAYLOAD,
   type ModelLifecycleService,
   type ModelAddOptions,
   type ModelStore,
   type QueryInput,
   type QueryOptions,
+  type SpeakOptions,
   ENDPOINT_REF_PAYLOAD,
 } from '../models/types.js';
 import { resolveUrl } from '../utils/url.js';
-import { MainThreadEngineRuntime } from '../runtime/main-thread/engine-runtime.js';
+import { AsyncSerialQueue } from '../utils/async-queue.js';
 import { WorkerModelServiceClient } from '../worker/model-service-client.js';
-import { FileSystemStorage } from './file-system-storage.js';
 import {
   GatewayEndpointRegistry,
   runGatewayChat,
@@ -49,8 +53,6 @@ export interface EngineModuleOptions {
 export interface SippClientOptions {
   moduleUrl?: string;
   wasmUrl?: string;
-  pthreadModuleUrl?: string;
-  pthreadWasmUrl?: string;
   wasmThreading?: 'single-thread' | 'pthread';
   moduleOptions?: EngineModuleOptions;
   maxModelBytes?: number;
@@ -58,8 +60,7 @@ export interface SippClientOptions {
   storageRoot?: string;
   /** Override browser OPFS split thresholds for large GGUF model files. */
   browserCache?: BrowserCachePolicyOptions;
-  trustedOrigins?: string[];
-  executionMode?: 'auto' | 'worker' | 'main-thread';
+  trustedOrigins?: readonly string[];
   workerUrl?: string;
 }
 
@@ -122,21 +123,6 @@ class BrowserModelStore implements ModelStore {
   }
 }
 
-function shouldUseWorker(config: SippClientOptions): boolean {
-  if (config.executionMode === 'main-thread') {
-    return false;
-  }
-  if (config.executionMode === 'worker') {
-    return true;
-  }
-
-  return (
-    typeof window !== 'undefined' &&
-    typeof document !== 'undefined' &&
-    typeof Worker !== 'undefined'
-  );
-}
-
 /**
  * Browser application client that owns one local model lifecycle service.
  */
@@ -148,18 +134,10 @@ export class SippClient implements SippClientShape {
   #providers = new ProviderEndpointRegistry();
   #localEndpointId: string | null = null;
   #closed = false;
+  #endpointOperations = new AsyncSerialQueue();
 
   public constructor(options: SippClientOptions = {}) {
-    if (shouldUseWorker(options)) {
-      this.#service = new WorkerModelServiceClient(options);
-    } else {
-      const storage = new FileSystemStorage(options.storageRoot);
-      this.#service = new ModelService(
-        new MainThreadEngineRuntime(options),
-        new ModelRegistryStore(storage),
-        new AssetStore(storage, options.browserCache)
-      );
-    }
+    this.#service = new WorkerModelServiceClient(options);
     this.models = new BrowserModelStore(this.#service, () => this.assertOpen());
     this.observability = {
       current: () => {
@@ -174,44 +152,52 @@ export class SippClient implements SippClientShape {
   }
 
   /**
-   * Registers or replaces an endpoint after its descriptor is validated.
+   * Registers or replaces an endpoint.
    */
-  public async add(id: string, descriptor: EndpointDescriptor): Promise<EndpointRef> {
+  public async add(id: string, endpoint: Endpoint): Promise<EndpointRef> {
     this.assertOpen();
     const normalizedId = normalizeEndpointId(id, 'endpoint id');
-    assertEndpointDescriptor(descriptor);
-    const payload = descriptor[ENDPOINT_DESCRIPTOR_PAYLOAD];
+    const payload = endpoint[ENDPOINT_PAYLOAD];
     if (payload.kind === 'local') {
-      await this.#service.load(payload.modelId, payload.options);
-      this.#gatewayEndpoints.remove(normalizedId);
-      this.#providers.remove(normalizedId);
-      this.#localEndpointId = normalizedId;
-      return { [ENDPOINT_REF_PAYLOAD]: { kind: 'local', id: normalizedId } };
+      return await this.#endpointOperations.run(async () => {
+        this.#localEndpointId = null;
+        this.#gatewayEndpoints.remove(normalizedId);
+        this.#providers.remove(normalizedId);
+        await this.#service.load(payload.modelId, payload.options);
+        this.#localEndpointId = normalizedId;
+        return { [ENDPOINT_REF_PAYLOAD]: { kind: 'local', id: normalizedId } };
+      });
     }
     if (payload.kind === 'gateway') {
-      const endpoint = this.#gatewayEndpoints.prepare(normalizedId, payload.options);
-      await this.removeLocalEndpoint(normalizedId);
-      this.#providers.remove(normalizedId);
-      return this.#gatewayEndpoints.commit(endpoint);
+      const prepared = this.#gatewayEndpoints.prepare(normalizedId, payload.options);
+      return await this.#endpointOperations.run(async () => {
+        await this.unpublishLocalEndpoint(normalizedId);
+        this.#providers.remove(normalizedId);
+        return this.#gatewayEndpoints.commit(prepared);
+      });
     }
-    const provider = this.#providers.prepare(normalizedId, payload.options);
-    await this.removeLocalEndpoint(normalizedId);
-    this.#gatewayEndpoints.remove(normalizedId);
-    return this.#providers.commit(provider);
+    const prepared = this.#providers.prepare(normalizedId, payload.options);
+    return await this.#endpointOperations.run(async () => {
+      await this.unpublishLocalEndpoint(normalizedId);
+      this.#gatewayEndpoints.remove(normalizedId);
+      return this.#providers.commit(prepared);
+    });
   }
 
   public async remove(id: string): Promise<void> {
     this.assertOpen();
     const normalizedId = normalizeEndpointId(id, 'endpoint id');
-    if (this.#localEndpointId === normalizedId) {
-      await this.removeLocalEndpoint(normalizedId);
-      return;
-    }
-    const removed = this.#gatewayEndpoints.remove(normalizedId)
-      || this.#providers.remove(normalizedId);
-    if (!removed) {
-      throw new QueryError('MODEL_NOT_FOUND', `endpoint not found: ${normalizedId}`);
-    }
+    await this.#endpointOperations.run(async () => {
+      if (this.#localEndpointId === normalizedId) {
+        await this.unpublishLocalEndpoint(normalizedId);
+        return;
+      }
+      const removed = this.#gatewayEndpoints.remove(normalizedId)
+        || this.#providers.remove(normalizedId);
+      if (!removed) {
+        throw new QueryError('MODEL_NOT_FOUND', `endpoint not found: ${normalizedId}`);
+      }
+    });
   }
 
   public query(input: QueryInput, options: QueryOptions = {}): BrowserTextRun {
@@ -277,6 +263,24 @@ export class SippClient implements SippClientShape {
     );
   }
 
+  public listen(audio: Uint8Array, options: ListenOptions = {}): BrowserTextRun {
+    this.assertOpen();
+    this.ensureLocalEndpoint(options.endpoint);
+    const { endpoint: _endpoint, ...localOptions } = options;
+    return createBrowserTextRun(localOptions, (_tokenBatchSink, signal) =>
+      this.#service.runListen(audio, { ...localOptions, signal })
+    );
+  }
+
+  public speak(text: string, options: SpeakOptions = {}): BrowserAudioRun {
+    this.assertOpen();
+    this.ensureLocalEndpoint(options.endpoint);
+    const { endpoint: _endpoint, ...localOptions } = options;
+    return createBrowserAudioRun(localOptions.signal, (signal) =>
+      this.#service.runSpeak(text, { ...localOptions, signal })
+    );
+  }
+
   public state(): EngineState {
     this.assertOpen();
     return this.#service.state();
@@ -290,6 +294,10 @@ export class SippClient implements SippClientShape {
   public async close(): Promise<void> {
     this.assertOpen();
     this.#closed = true;
+    // A queued add(...) can still publish a local endpoint before it observes
+    // the closed flag, so clear the route after the queue drains.
+    await this.#endpointOperations.idle();
+    this.#localEndpointId = null;
     await this.#service.close();
   }
 
@@ -299,15 +307,18 @@ export class SippClient implements SippClientShape {
     }
   }
 
-  private async removeLocalEndpoint(id: string): Promise<void> {
+  private async unpublishLocalEndpoint(id: string): Promise<void> {
     if (this.#localEndpointId === id) {
-      await this.#service.unload();
       this.#localEndpointId = null;
+      await this.#service.unload();
     }
   }
 
   private ensureLocalEndpoint(endpoint: EndpointRef | undefined): void {
     if (endpoint == null) {
+      if (this.#localEndpointId == null) {
+        throw new QueryError('MODEL_NOT_FOUND', 'local endpoint not found');
+      }
       return;
     }
     const { id, kind } = endpoint[ENDPOINT_REF_PAYLOAD];
@@ -318,6 +329,7 @@ export class SippClient implements SippClientShape {
       throw new QueryError('MODEL_NOT_FOUND', `local endpoint not found: ${id}`);
     }
   }
+
 }
 
 function managedModel(model: {
@@ -374,18 +386,4 @@ function normalizeEndpointId(value: unknown, name: string): string {
     throw new QueryError('QUERY_FAILED', `${name} must not contain surrounding whitespace`);
   }
   return value;
-}
-
-function assertEndpointDescriptor(value: unknown): asserts value is EndpointDescriptor {
-  if (
-    typeof value !== 'object' ||
-    value == null ||
-    Array.isArray(value) ||
-    !(ENDPOINT_DESCRIPTOR_PAYLOAD in value)
-  ) {
-    throw new QueryError(
-      'QUERY_FAILED',
-      'endpoint descriptors must be created by EndpointDescriptor'
-    );
-  }
 }

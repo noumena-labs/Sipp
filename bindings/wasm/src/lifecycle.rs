@@ -9,7 +9,8 @@ use sipp::lifecycle::{
     browser_lifecycle_error_response, browser_lifecycle_response_json,
     browser_lifecycle_success_response, BrowserCommitLoadRequest, BrowserCreateConfig,
     BrowserInstallSource, BrowserLifecycleEnvelope, BrowserLifecycleService, BrowserLoadOptions,
-    BrowserLoadSource, BrowserObservabilityEventType, BrowserRemoteCommand, ModelError,
+    BrowserLoadSource, BrowserObservabilityEventType, BrowserRemoteCommand, BrowserRemoveRequest,
+    ModelError,
 };
 
 #[derive(Debug, Serialize)]
@@ -48,10 +49,6 @@ pub(crate) fn model_service_close(service: usize) -> i32 {
 
 pub(crate) fn model_service_list_json(service: usize) -> String {
     service_response(service, |service| service.list())
-}
-
-pub(crate) fn model_service_current_json(service: usize) -> String {
-    service_response(service, |service| service.current())
 }
 
 pub(crate) fn model_service_manifest_json(service: usize) -> String {
@@ -94,31 +91,11 @@ pub(crate) fn model_service_commit_load_json(service: usize, commit_json: &str) 
     })
 }
 
-pub(crate) fn model_service_abort_load_json(service: usize, error_json: &str) -> String {
-    service_response(service, |service| {
-        let message = (!error_json.trim().is_empty())
-            .then(|| error_json.to_string())
-            .and_then(|value| {
-                serde_json::from_str::<Value>(&value)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    })
-                    .or(Some(value))
-            });
-        service.abort_load(message)
+pub(crate) fn model_service_remove_json(service: usize, request_json: &str) -> String {
+    service_result_response(service, |service| {
+        let request = parse_json_arg::<BrowserRemoveRequest>(request_json)?;
+        service.remove(request)
     })
-}
-
-pub(crate) fn model_service_remove_json(service: usize, model_id: &str) -> String {
-    service_result_response(service, |service| service.remove(model_id))
-}
-
-pub(crate) fn model_service_unload_json(service: usize) -> String {
-    service_response(service, |service| service.unload())
 }
 
 pub(crate) fn model_service_snapshot_json(service: usize) -> String {
@@ -221,3 +198,7 @@ where
 {
     serde_json::from_str::<T>(value).map_err(ModelError::from)
 }
+
+#[cfg(test)]
+#[path = "tests/lifecycle_tests.rs"]
+mod lifecycle_tests;

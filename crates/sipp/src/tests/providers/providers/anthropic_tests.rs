@@ -690,7 +690,3 @@ async fn maps_anthropic_stream_error() {
     assert_eq!(err.code.as_deref(), Some("overloaded_error"));
     assert_eq!(err.request_id.as_deref(), Some("req-stream-error"));
 }
-
-fn byte_stream(items: Vec<ProviderResult<Bytes>>) -> HttpByteStream {
-    Box::pin(futures_util::stream::iter(items))
-}

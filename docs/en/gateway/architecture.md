@@ -40,7 +40,7 @@ explicitly.
 
 ## Public Endpoints
 
-Rust, Node, Python, and browser packages expose gateway endpoint descriptors
+Rust, Node, Python, and browser packages expose gateway endpoint configurations
 through the same `.add` path used for local and provider endpoints:
 
 - A protocol target.
@@ -51,8 +51,8 @@ through the same `.add` path used for local and provider endpoints:
 - Timeout policy.
 - Protocol-specific request options.
 
-The endpoint id is supplied only to `.add`. Local model, provider, and gateway
-descriptors are different descriptor kinds, but `query`, `chat`, and `embed`
+The endpoint id is supplied only to `.add`. Local, provider, and gateway inputs
+select different private endpoint variants, but `query`, `chat`, and `embed`
 request shapes are identical once an endpoint ref is selected.
 
 ## First-Party Applications

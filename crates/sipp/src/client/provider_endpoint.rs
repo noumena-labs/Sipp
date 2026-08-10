@@ -321,5 +321,5 @@ async fn collect_provider_stream(
 }
 
 fn provider_error(error: crate::providers::ProviderError, secrets: &[String]) -> SippError {
-    SippError::Provider(ProviderEndpointError::from_provider_error(error, secrets))
+    ProviderEndpointError::from_provider_error(error, secrets).into()
 }

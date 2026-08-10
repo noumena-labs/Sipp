@@ -2,7 +2,7 @@
 
 Sipp exposes one endpoint-oriented client model across all public package
 surfaces. See the [Library API Overview](../api) for the shared
-`SippClient.add`, `query`, `chat`, and `embed` contracts, endpoint descriptor
+`SippClient.add`, `query`, `chat`, and `embed` contracts, endpoint configuration
 reference, and gateway-client symmetry patterns.
 
 Most developers should start here instead of building from source.
