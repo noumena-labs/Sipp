@@ -6,11 +6,20 @@
 
 ## 安装
 
+一键生成预配置 Vite 和跨域隔离响应头的完整项目：
+
+```bash
+npm create @sipphq/sipp@latest my-app
+cd my-app && npm install && npm run dev
+```
+
+或在现有浏览器应用中安装 SDK：
+
 ```bash
 npm install @sipphq/sipp
 ```
 
-在浏览器环境中使用此包。服务器路由或 Node 服务改用 [`@sipphq/sipp-server`](node.md)。
+在浏览器环境中使用此包。服务器路由或 Node 服务改用 [`@sipphq/sipp-server`](node.md)。浏览器本地 WebGPU/WASM 推理需要在托管服务器上配置 `Cross-Origin-Opener-Policy: same-origin` 与 `Cross-Origin-Embedder-Policy: require-corp` 响应头。
 
 ## 适用场景
 

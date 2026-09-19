@@ -8,8 +8,28 @@
 
 ## 浏览器本地推理
 
+一键生成预配置 Vite 和跨域隔离响应头的完整项目：
+
+```bash
+npm create @sipphq/sipp@latest my-app
+cd my-app && npm install && npm run dev
+```
+
+或在现有项目中安装浏览器 SDK：
+
 ```bash
 npm install @sipphq/sipp
+```
+
+使用默认多线程 WASM 运行时的 Vite 应用需要配置 Sipp 的跨域隔离响应头：
+
+```ts
+import { sippViteConfig } from '@sipphq/sipp/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  ...sippViteConfig(),
+});
 ```
 
 ```ts

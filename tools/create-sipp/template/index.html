@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sipp AI Chat</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="app-header">
+        <div class="header-left">
+          <span class="logo">⚡</span>
+          <h1>Sipp AI Chat</h1>
+          <span class="subtitle">Local In-Browser Inference with WebGPU</span>
+        </div>
+        <div class="header-right">
+          <span id="status-badge" class="badge badge-idle">No Model Loaded</span>
+        </div>
+      </header>
+
+      <section class="model-control-card">
+        <div class="control-row">
+          <label for="model-source">Model Source:</label>
+          <select id="model-source">
+            <option value="hf-qwen">Qwen 2.5 0.5B Instruct (Hugging Face GGUF, ~398MB)</option>
+            <option value="custom-url">Custom GGUF URL...</option>
+            <option value="file-upload">Upload Local .gguf File...</option>
+          </select>
+
+          <input
+            type="text"
+            id="custom-url-input"
+            class="hidden"
+            placeholder="https://huggingface.co/.../model.gguf"
+          />
+
+          <input
+            type="file"
+            id="file-input"
+            class="hidden"
+            accept=".gguf"
+          />
+
+          <button id="load-model-btn" class="btn btn-primary">Load Model</button>
+        </div>
+
+        <div id="progress-container" class="progress-container hidden">
+          <div class="progress-bar-bg">
+            <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%"></div>
+          </div>
+          <span id="progress-text" class="progress-text">0%</span>
+        </div>
+      </section>
+
+      <main class="chat-container">
+        <div id="messages-list" class="messages-list">
+          <div class="message system-message">
+            <div class="message-content">
+              Welcome to <strong>Sipp</strong>! Click <strong>Load Model</strong> to download and initialize an AI model locally in your browser. All inference runs entirely on your device via WebGPU.
+            </div>
+          </div>
+        </div>
+
+        <div class="composer-container">
+          <form id="chat-form" class="composer-form">
+            <textarea
+              id="user-input"
+              placeholder="Ask a question or enter a prompt... (Shift+Enter for newline)"
+              rows="2"
+              disabled
+            ></textarea>
+            <div class="composer-actions">
+              <button type="button" id="clear-btn" class="btn btn-secondary" title="Clear chat history">Clear</button>
+              <button type="submit" id="send-btn" class="btn btn-primary" disabled>Send</button>
+            </div>
+          </form>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

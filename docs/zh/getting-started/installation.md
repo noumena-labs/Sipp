@@ -2,6 +2,18 @@
 
 根据应用所使用的运行时安装相应包。所有客户端包使用相同的模型：注册端点，保存返回的端点引用，在执行 `query`、`chat` 或 `embed` 时指定该端点。
 
+## 创建浏览器应用
+
+```bash
+npm create @sipphq/sipp@latest my-app
+cd my-app
+npm install
+npm run dev
+```
+
+该命令运行公开的 `@sipphq/create-sipp` 初始化器，并创建依赖浏览器 SDK
+`@sipphq/sipp` 的 Vite 应用。初始化器需要 Node.js 20.19 或更高版本。
+
 ## 软件包安装
 
 | 平台 | 安装命令 | 适用场景 |
@@ -14,7 +26,11 @@
 | Python Metal | `pip install "sipppy[metal]"` | macOS 上使用 Metal 后端 Wheel 的 Python 本地推理。 |
 | Rust | `cargo add sipp-rs` | Rust 本地推理及网关客户端。 |
 
-当前发布工作流会发布浏览器 npm 包、Node npm 包、Python Wheel 和 Rust 源码 Crate, 但尚未发布独立的 gateway-server 二进制文件、容器镜像或 `cargo install` 目标。在官方服务器制品发布前，部署网关服务请使用源码签出及 Dockerfile。
+请根据代码的执行环境选择 JavaScript 包。客户端组件和浏览器 Bundle 使用
+`@sipphq/sipp`；Node.js 路由、服务端函数和后端服务使用
+`@sipphq/sipp-server`。全栈框架通常会同时使用两者，但不能把服务端包打进浏览器 Bundle。
+
+当前发布工作流会发布浏览器 SDK 与初始化器 npm 包、Node SDK npm 包、Python Wheel 和 Rust 源码 Crate, 但尚未发布独立的 gateway-server 二进制文件、容器镜像或 `cargo install` 目标。在官方服务器制品发布前，部署网关服务请使用源码签出及 Dockerfile。
 
 ## 运行时要求
 

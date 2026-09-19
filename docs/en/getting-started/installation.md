@@ -5,6 +5,19 @@ public client packages use the same endpoint model: register an endpoint, keep
 the returned endpoint reference, and choose that endpoint for `query`, `chat`,
 or `embed`.
 
+## Create A Browser App
+
+```bash
+npm create @sipphq/sipp@latest my-app
+cd my-app
+npm install
+npm run dev
+```
+
+This runs the public `@sipphq/create-sipp` initializer and creates a Vite app
+that depends on the browser SDK, `@sipphq/sipp`. The initializer requires
+Node.js 20.19 or newer.
+
 ## Package Installs
 
 | Surface | Install | Use for |
@@ -17,7 +30,13 @@ or `embed`.
 | Python Metal | `pip install "sipppy[metal]"` | Python local inference with Metal backend wheels on macOS. |
 | Rust | `cargo add sipp-rs` | Rust applications and services. |
 
-The current release workflow publishes browser npm, Node npm, Python wheels,
+Choose a JavaScript package by where the code runs. Client components and
+browser bundles use `@sipphq/sipp`; Node.js routes, server functions, and
+backend services use `@sipphq/sipp-server`. A full-stack framework may use both,
+but the server package must not enter the browser bundle.
+
+The current release workflow publishes the browser SDK and initializer npm
+packages, the Node npm packages, Python wheels,
 and Rust crates. It does not yet publish a standalone gateway-server
 binary, container image, or `cargo install` target. Use the source checkout and
 Dockerfile when deploying the gateway server until a public server artifact is

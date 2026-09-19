@@ -117,6 +117,13 @@
         "typescript": "^5.3.3",
       },
     },
+    "tools/create-sipp": {
+      "name": "@sipphq/create-sipp",
+      "version": "0.1.0",
+      "bin": {
+        "create-sipp": "bin/index.js",
+      },
+    },
     "tools/playground": {
       "name": "sipp-browser-playground",
       "version": "0.0.1",
@@ -491,6 +498,8 @@
     "@rollup/rollup-win32-x64-gnu": ["@rollup/rollup-win32-x64-gnu@4.61.1", "", { "os": "win32", "cpu": "x64" }, "sha512-gK1iCEPfpoSG9wfBihXxvBMi8ZfcWffYkEsC/Eih+iFENTaewvNcrEQ69lIOWYO5pePHKLHHO7nq5AILGO/HQQ=="],
 
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.61.1", "", { "os": "win32", "cpu": "x64" }, "sha512-X+zaP2x+j4RXGfbp/seSoRHWnPxzApilDszisZxbYH5C/jTxFhCtDNdPGZb9lJyYPs24wGxruPF7Y+sIXt9Gzw=="],
+
+    "@sipphq/create-sipp": ["@sipphq/create-sipp@workspace:tools/create-sipp"],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
