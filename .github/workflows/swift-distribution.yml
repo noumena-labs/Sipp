@@ -63,17 +63,9 @@ jobs:
         uses: lukka/get-cmake@v4.3.1
 
       - name: Cache Cargo and Swift native build outputs
-        uses: actions/cache@v5.0.5
+        uses: ./.github/actions/cargo-native-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .build/cargo
-            .build/cmake
-            .build/c
-          key: cargo-swift-distribution-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
-          restore-keys: |
-            cargo-swift-distribution-${{ runner.os }}-${{ runner.arch }}-
+          key-prefix: cargo-swift-distribution-${{ runner.os }}-${{ runner.arch }}
 
       - name: Apply package versions
         uses: ./.github/actions/apply-package-versions

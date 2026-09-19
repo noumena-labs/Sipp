@@ -161,17 +161,9 @@ jobs:
           max-size: 3G
 
       - name: Cache Cargo and native build outputs
-        uses: actions/cache@v5.0.5
+        uses: ./.github/actions/cargo-native-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .build/cargo
-            .build/cmake
-            .build/c
-          key: cargo-build-native-${{ runner.os }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
-          restore-keys: |
-            cargo-build-native-${{ runner.os }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}-
+          key-prefix: cargo-build-native-${{ runner.os }}-${{ matrix.id }}-${{ matrix.os }}-${{ matrix.abi }}
 
       - name: Cache hermetic build toolchains
         uses: actions/cache@v5.0.5
@@ -612,17 +604,9 @@ jobs:
           max-size: 3G
 
       - name: Cache Cargo and native build outputs
-        uses: actions/cache@v5.0.5
+        uses: ./.github/actions/cargo-native-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .build/cargo
-            .build/cmake
-            .build/c
-          key: cargo-build-native-rust-core-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
-          restore-keys: |
-            cargo-build-native-rust-core-${{ runner.os }}-
+          key-prefix: cargo-build-native-rust-core-${{ runner.os }}
 
       - name: Cache hermetic build toolchains
         uses: actions/cache@v5.0.5
