@@ -26,6 +26,12 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use xshell::{cmd, Shell};
 
+mod doc_snippets;
+
+use doc_snippets::collect_docs_code_fence_symbol_violations;
+#[cfg(test)]
+use doc_snippets::{DocSnippetChecker, PublicSymbols};
+
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
 /////////////////////////////////////////////////////////////////////////////////
@@ -360,7 +366,7 @@ pub fn run(sh: &Shell, ctx: &BuildContext, command: TestCommands) -> Result<()> 
         TestCommands::List(args) => run_list(ctx, &args),
         TestCommands::Unit(args) => run_unit(sh, ctx, &args),
         TestCommands::Smoke(args) => run_smoke(sh, ctx, &args),
-        TestCommands::Verify(args) => run_verify(sh, ctx, &args),
+        TestCommands::Verify(args) => run_verify(ctx, &args),
     }
 }
 
@@ -1914,7 +1920,7 @@ fn format_temperature(temperature: f32) -> String {
     }
 }
 
-fn run_verify(sh: &Shell, ctx: &BuildContext, args: &TestVerifyArgs) -> Result<()> {
+fn run_verify(ctx: &BuildContext, args: &TestVerifyArgs) -> Result<()> {
     if args.target == TestVerifyTarget::PublicDocs {
         return run_public_docs_verify(ctx, args);
     }
@@ -1958,15 +1964,8 @@ fn run_verify(sh: &Shell, ctx: &BuildContext, args: &TestVerifyArgs) -> Result<(
     }
 
     let coverage_root = ctx.build_root().join("coverage");
-    sh.create_dir(&coverage_root)?;
-
     let report_areas = coverage_report_areas(&suites);
-    let coverage_result = (|| -> Result<CoverageSummaries> {
-        if report_areas.rust {
-            write_rust_coverage_reports(sh, ctx)?;
-        }
-        write_coverage_summary(&coverage_root, report_areas)
-    })();
+    let coverage_result = write_coverage_summary(&coverage_root, report_areas);
     report.checks.push(VerifyCheckReport::from_result(
         "coverage-artifacts",
         &coverage_result,
@@ -2047,6 +2046,7 @@ fn verify_public_api_docs(ctx: &BuildContext) -> Result<()> {
         let path = ctx.workspace_root().join(relative);
         collect_python_public_doc_violations(&path, relative, &mut violations)?;
     }
+    collect_docs_code_fence_symbol_violations(ctx, &mut violations)?;
 
     if violations.is_empty() {
         return Ok(());
@@ -2255,32 +2255,6 @@ fn read_public_doc_lines(path: &Path) -> Result<Vec<String>> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     Ok(source.lines().map(str::to_owned).collect())
-}
-
-fn write_rust_coverage_reports(sh: &Shell, ctx: &BuildContext) -> Result<()> {
-    ensure_cargo_llvm_cov()?;
-    let coverage_root = ctx.build_root().join("coverage");
-    let rust_dir = coverage_root.join("rust");
-    sh.create_dir(&rust_dir)?;
-    let rust_lcov = rust_dir.join("lcov.info");
-    let rust_html = rust_dir.join("html");
-
-    let _root = sh.push_dir(ctx.workspace_root());
-    output::run_build_command(
-        "Writing Rust LCOV report",
-        cmd!(
-            sh,
-            "cargo llvm-cov report --lcov --output-path {rust_lcov} --ignore-filename-regex third_party|llama\\.cpp|\\.build|target|tests|examples|demos|tools"
-        ),
-    )?;
-    output::run_build_command(
-        "Writing Rust HTML report",
-        cmd!(
-            sh,
-            "cargo llvm-cov report --html --output-dir {rust_html} --ignore-filename-regex third_party|llama\\.cpp|\\.build|target|tests|examples|demos|tools"
-        ),
-    )?;
-    Ok(())
 }
 
 fn write_coverage_summary(
