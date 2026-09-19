@@ -65,17 +65,24 @@ pub(crate) fn apply_toolchains<'a>(
             command = command.env("VULKAN_SDK", &vulkan.sdk_dir);
 
             let current_cmake_prefix = std_env::var("CMAKE_PREFIX_PATH").unwrap_or_default();
-            let separator = path_separator();
-            let new_cmake_prefix = if current_cmake_prefix.is_empty() {
-                vulkan.sdk_dir.display().to_string()
-            } else {
-                format!(
-                    "{}{separator}{}",
-                    vulkan.sdk_dir.display(),
-                    current_cmake_prefix
-                )
-            };
+            let sdk_dir = vulkan.sdk_dir.display().to_string();
+            let new_cmake_prefix =
+                prepend_paths(std::slice::from_ref(&sdk_dir), &current_cmake_prefix);
             command = command.env("CMAKE_PREFIX_PATH", new_cmake_prefix);
+
+            #[cfg(target_os = "macos")]
+            {
+                let runtime_lib = vulkan.sdk_dir.join("lib").display().to_string();
+                let current_library_path = std_env::var("DYLD_LIBRARY_PATH").unwrap_or_default();
+                command = command.env(
+                    "DYLD_LIBRARY_PATH",
+                    prepend_paths(std::slice::from_ref(&runtime_lib), &current_library_path),
+                );
+                command = command.env(
+                    "VK_ICD_FILENAMES",
+                    vulkan.sdk_dir.join("share/vulkan/icd.d/MoltenVK_icd.json"),
+                );
+            }
         }
         Some(Backend::Cuda) => {
             output::detail("Toolchain", "CUDA");
@@ -100,16 +107,20 @@ pub(crate) fn apply_toolchains<'a>(
 
     if !path_additions.is_empty() {
         let current_path = std_env::var("PATH").unwrap_or_default();
-        let separator = path_separator();
-        let new_path = format!(
-            "{}{separator}{}",
-            path_additions.join(separator),
-            current_path
-        );
+        let new_path = prepend_paths(&path_additions, &current_path);
         command = command.env("PATH", new_path);
     }
 
     Ok(command)
+}
+
+fn prepend_paths(paths: &[String], current: &str) -> String {
+    let paths = paths.join(path_separator());
+    if current.is_empty() {
+        paths
+    } else {
+        format!("{paths}{}{current}", path_separator())
+    }
 }
 
 fn path_separator() -> &'static str {
