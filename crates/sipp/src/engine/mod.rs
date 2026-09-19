@@ -5,10 +5,11 @@ mod token_emission;
 
 pub use config::{
     CacheRuntimeConfig, ContextRuntimeConfig, FlashAttentionMode, GenerateOptions, GpuLayerConfig,
-    KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig, MultimodalRuntimeConfig,
-    NativeRuntimeConfig, ObservabilityRuntimeConfig, ResidencyRuntimeConfig, ResolvedRuntimeLimits,
-    RopeScaling, SamplerStage, SamplingRuntimeConfig, SamplingRuntimeOverride,
-    SchedulerRuntimeConfig, SplitMode, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
+    KvCacheType, KvReuseMode, LogitBias, ModelLoadMode, ModelPlacementConfig,
+    MultimodalRuntimeConfig, NativeRuntimeConfig, ObservabilityRuntimeConfig,
+    ResidencyRuntimeConfig, ResolvedRuntimeLimits, RopeScaling, SamplerStage,
+    SamplingRuntimeConfig, SamplingRuntimeOverride, SchedulerRuntimeConfig, SplitMode,
+    DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
 pub use driver::{
     ChatMessage, ChatRequest, ChatRole, EngineEmbeddingResponseFuture, EngineEmbeddingRun,

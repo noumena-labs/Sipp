@@ -73,7 +73,7 @@ test('WasmBridge forwards Rust runtime config JSON without TS-side normalization
   };
 
   await bridge.loadRuntimeModel('/models/model.gguf', session, {
-    placement: { gpu_layers: { count: 99 }, split_mode: 'row' },
+    placement: { gpu_layers: { count: 99 }, split_mode: 'row', load_mode: 'none' },
     context: { n_ctx: 8192, flash_attention: 'enabled' },
     sampling: { samplers: ['top_k', 'top_p'], top_k: 32 },
     scheduler: {
@@ -90,7 +90,7 @@ test('WasmBridge forwards Rust runtime config JSON without TS-side normalization
     [
       '/models/model.gguf',
       JSON.stringify({
-        placement: { gpu_layers: { count: 99 }, split_mode: 'row' },
+        placement: { gpu_layers: { count: 99 }, split_mode: 'row', load_mode: 'none' },
         context: { n_ctx: 8192, flash_attention: 'enabled' },
         sampling: { samplers: ['top_k', 'top_p'], top_k: 32 },
         scheduler: {

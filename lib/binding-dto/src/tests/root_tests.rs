@@ -222,6 +222,33 @@ fn finite_f32_fields_reject_non_finite_values() {
 }
 
 #[test]
+fn model_load_mode_maps_to_core_config() {
+    let placement = ModelPlacementConfig {
+        load_mode: Some("direct_io".to_string()),
+        ..ModelPlacementConfig::default()
+    };
+
+    let config = CoreModelPlacementConfig::try_from(&placement).expect("placement config");
+
+    assert_eq!(config.load_mode, ModelLoadMode::DirectIo);
+}
+
+#[test]
+fn invalid_model_load_mode_is_rejected() {
+    let placement = ModelPlacementConfig {
+        load_mode: Some("legacy".to_string()),
+        ..ModelPlacementConfig::default()
+    };
+
+    let error = CoreModelPlacementConfig::try_from(&placement).expect_err("invalid load mode");
+
+    assert_eq!(
+        error.to_string(),
+        "load_mode must be one of: auto, none, mmap, mlock, mmap_mlock, direct_io"
+    );
+}
+
+#[test]
 fn partial_sampling_runtime_config_preserves_core_defaults() {
     let sampling = SamplingRuntimeConfig {
         repeat_penalty: Some(1.2),

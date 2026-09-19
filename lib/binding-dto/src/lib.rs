@@ -11,7 +11,8 @@ use sipp::endpoint::Local as CoreLocalEndpoint;
 use sipp::engine::protocol::{CacheSource as CoreCacheSource, RequestStats as CoreRequestStats};
 use sipp::engine::{
     ChatMessage as CoreChatMessage, ChatRole as CoreChatRole, FlashAttentionMode, GpuLayerConfig,
-    KvCacheType, KvReuseMode, LogitBias, ModelPlacementConfig as CoreModelPlacementConfig,
+    KvCacheType, KvReuseMode, LogitBias, ModelLoadMode,
+    ModelPlacementConfig as CoreModelPlacementConfig,
     MultimodalRuntimeConfig as CoreMultimodalRuntimeConfig,
     NativeRuntimeConfig as CoreNativeRuntimeConfig,
     ObservabilityRuntimeConfig as CoreObservabilityRuntimeConfig, PoolingType as CorePoolingType,
@@ -206,8 +207,7 @@ pub struct ModelPlacementConfig {
     pub split_mode: Option<String>,
     pub main_gpu: Option<i32>,
     pub tensor_split: Option<Vec<f64>>,
-    pub use_mmap: Option<bool>,
-    pub use_mlock: Option<bool>,
+    pub load_mode: Option<String>,
     pub fit_params: Option<bool>,
     pub fit_params_min_ctx: Option<i32>,
     pub fit_params_target_bytes: Option<Vec<f64>>,
@@ -238,8 +238,9 @@ impl TryFrom<&ModelPlacementConfig> for CoreModelPlacementConfig {
                 .map(|value| finite_f64_to_f32(*value, "tensor_split"))
                 .collect::<Result<Vec<_>>>()?;
         }
-        assign_if_some(&mut core.use_mmap, value.use_mmap);
-        assign_if_some(&mut core.use_mlock, value.use_mlock);
+        if let Some(value) = &value.load_mode {
+            core.load_mode = parse_model_load_mode(value)?;
+        }
         assign_if_some(&mut core.fit_params, value.fit_params);
         core.fit_params_min_ctx = value.fit_params_min_ctx;
         if let Some(value) = &value.fit_params_target_bytes {
@@ -1285,6 +1286,13 @@ fn parse_gpu_layers(value: &str) -> Result<GpuLayerConfig> {
 
 fn parse_split_mode(value: &str) -> Result<SplitMode> {
     parse_choice(value, "split_mode must be one of: none, layer, row, tensor")
+}
+
+fn parse_model_load_mode(value: &str) -> Result<ModelLoadMode> {
+    parse_choice(
+        value,
+        "load_mode must be one of: auto, none, mmap, mlock, mmap_mlock, direct_io",
+    )
 }
 
 fn parse_flash_attention(value: &str) -> Result<FlashAttentionMode> {

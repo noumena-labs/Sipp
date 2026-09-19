@@ -3,7 +3,7 @@
 //! Covers runtime configuration normalization, serialization, and boundary choices through pure value assertions.
 
 use super::super::arg_value;
-use super::{GpuLayerConfig, ModelPlacementConfig, SplitMode};
+use super::{GpuLayerConfig, ModelLoadMode, ModelPlacementConfig, SplitMode};
 use crate::defaults::BYTES_PER_MIB_U64;
 
 #[test]
@@ -27,8 +27,7 @@ fn placement_arg_len_matches_emitted_args() {
         split_mode: SplitMode::Tensor,
         main_gpu: Some(1),
         tensor_split: vec![0.5, 0.5],
-        use_mlock: true,
-        use_mmap: false,
+        load_mode: ModelLoadMode::Mlock,
         fit_params: true,
         fit_params_min_ctx: Some(2048),
         fit_params_target_bytes: vec![BYTES_PER_MIB_U64],
@@ -44,8 +43,31 @@ fn placement_arg_len_matches_emitted_args() {
     assert_eq!(arg_value(&args, "--device"), Some("gpu0,gpu1"));
     assert_eq!(arg_value(&args, "--gpu-layers"), Some("99"));
     assert_eq!(arg_value(&args, "--split-mode"), Some("tensor"));
-    assert!(args.iter().any(|arg| arg == "--no-mmap"));
+    assert_eq!(arg_value(&args, "--load-mode"), Some("mlock"));
     assert!(args.iter().any(|arg| arg == "--no-host"));
+}
+
+#[test]
+fn model_load_modes_match_llama_arguments() {
+    for (mode, expected) in [
+        (ModelLoadMode::Auto, "auto"),
+        (ModelLoadMode::None, "none"),
+        (ModelLoadMode::Mmap, "mmap"),
+        (ModelLoadMode::Mlock, "mlock"),
+        (ModelLoadMode::MmapMlock, "mmap+mlock"),
+        (ModelLoadMode::DirectIo, "dio"),
+    ] {
+        let placement = ModelPlacementConfig {
+            load_mode: mode,
+            ..ModelPlacementConfig::default()
+        };
+        let mut args = Vec::with_capacity(placement.arg_len());
+
+        placement.push_args(&mut args);
+
+        assert_eq!(args.capacity(), args.len());
+        assert_eq!(arg_value(&args, "--load-mode"), Some(expected));
+    }
 }
 
 #[test]

@@ -9,7 +9,7 @@ use crate::defaults::BYTES_PER_MIB_U64;
 fn native_runtime_config_deserializes_sparse_browser_json() {
     let config: NativeRuntimeConfig = serde_json::from_str(
         r#"{
-            "placement": { "gpu_layers": { "count": 99 } },
+            "placement": { "gpu_layers": { "count": 99 }, "load_mode": "none" },
             "context": { "n_ctx": 8192, "flash_attention": "enabled" },
             "sampling": {
                 "samplers": ["top_k", "top_p", "temperature"],
@@ -27,6 +27,7 @@ fn native_runtime_config_deserializes_sparse_browser_json() {
     .expect("browser runtime json");
 
     assert_eq!(config.placement.gpu_layers, GpuLayerConfig::Count(99));
+    assert_eq!(config.placement.load_mode, ModelLoadMode::None);
     assert_eq!(config.context.n_ctx, Some(8192));
     assert_eq!(config.context.flash_attention, FlashAttentionMode::Enabled);
     assert_eq!(
@@ -98,8 +99,7 @@ fn llama_common_args_presizes_exact_argument_count() {
             tensor_split: vec![0.5, 0.5],
             fit_params_min_ctx: Some(2048),
             fit_params_target_bytes: vec![BYTES_PER_MIB_U64],
-            use_mlock: true,
-            use_mmap: false,
+            load_mode: ModelLoadMode::Mlock,
             check_tensors: true,
             no_extra_bufts: true,
             no_host: true,

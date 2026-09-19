@@ -103,7 +103,7 @@ CPU context capacity is required.
 
 | Group | Common fields | Use |
 | --- | --- | --- |
-| `placement` | `devices`, `gpu_layers`, `split_mode`, `main_gpu`, `tensor_split`, `use_mmap`, `use_mlock`, `fit_params` | Model placement, memory mapping, and GPU residency choices. |
+| `placement` | `devices`, `gpu_layers`, `split_mode`, `main_gpu`, `tensor_split`, `load_mode`, `fit_params` | Model placement, loading, and GPU residency choices. `load_mode` accepts `auto`, `none`, `mmap`, `mlock`, `mmap_mlock`, or `direct_io`. |
 | `context` | `n_ctx`, `n_batch`, `n_ubatch`, `n_parallel`, `n_threads`, `n_threads_batch`, `flash_attention`, `offload_kqv` | Context window, batch sizes, CPU thread counts, attention, and KV behavior. |
 | `sampling` | `samplers`, `seed`, `top_k`, `top_p`, `min_p`, `temperature`, `repeat_penalty`, `mirostat`, `logit_bias` | Default local sampling behavior for text generation. |
 | `scheduler` | `continuous_batching`, `policy`, `prefill_chunk_size`, `max_running_requests`, `max_queued_requests` | Request scheduling, batching, and queue limits. |

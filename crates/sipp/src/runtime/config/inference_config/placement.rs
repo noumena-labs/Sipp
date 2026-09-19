@@ -6,7 +6,7 @@ use crate::defaults::BYTES_PER_MIB_U64;
 
 use super::{args_len, positive_or_none, push_arg, push_csv_arg, push_flag, push_optional_arg};
 
-const ALWAYS_EMITTED_KEY_VALUE_ARGS: usize = 1;
+const ALWAYS_EMITTED_KEY_VALUE_ARGS: usize = 2;
 const BASE_ARG_LEN: usize = ALWAYS_EMITTED_KEY_VALUE_ARGS * super::KEY_VALUE_ARG_LEN;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,8 +17,7 @@ pub struct ModelPlacementConfig {
     pub split_mode: SplitMode,
     pub main_gpu: Option<i32>,
     pub tensor_split: Vec<f32>,
-    pub use_mmap: bool,
-    pub use_mlock: bool,
+    pub load_mode: ModelLoadMode,
     pub fit_params: bool,
     pub fit_params_min_ctx: Option<i32>,
     pub fit_params_target_bytes: Vec<u64>,
@@ -35,8 +34,11 @@ impl Default for ModelPlacementConfig {
             split_mode: SplitMode::Layer,
             main_gpu: None,
             tensor_split: Vec::new(),
-            use_mmap: cfg!(not(target_family = "wasm")),
-            use_mlock: false,
+            load_mode: if cfg!(target_family = "wasm") {
+                ModelLoadMode::None
+            } else {
+                ModelLoadMode::Mmap
+            },
             fit_params: false,
             fit_params_min_ctx: None,
             fit_params_target_bytes: Vec::new(),
@@ -69,13 +71,7 @@ impl ModelPlacementConfig {
                 self.fit_params_min_ctx.is_some(),
                 !self.fit_params_target_bytes.is_empty(),
             ],
-            [
-                self.use_mlock,
-                !self.use_mmap,
-                self.check_tensors,
-                self.no_extra_bufts,
-                self.no_host,
-            ],
+            [self.check_tensors, self.no_extra_bufts, self.no_host],
         )
     }
 
@@ -91,6 +87,7 @@ impl ModelPlacementConfig {
         if !self.tensor_split.is_empty() {
             push_csv_arg(args, "--tensor-split", self.tensor_split.iter());
         }
+        push_arg(args, "--load-mode", self.load_mode.as_llama_arg());
         push_arg(args, "--fit", if self.fit_params { "on" } else { "off" });
         push_optional_arg(args, "--fit-ctx", self.fit_params_min_ctx);
         if !self.fit_params_target_bytes.is_empty() {
@@ -102,11 +99,40 @@ impl ModelPlacementConfig {
                     .map(|bytes| bytes / BYTES_PER_MIB_U64),
             );
         }
-        push_flag(args, "--mlock", self.use_mlock);
-        push_flag(args, "--no-mmap", !self.use_mmap);
         push_flag(args, "--check-tensors", self.check_tensors);
         push_flag(args, "--no-repack", self.no_extra_bufts);
         push_flag(args, "--no-host", self.no_host);
+    }
+}
+
+/// Selects how model weights are loaded into host memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelLoadMode {
+    /// Lets llama.cpp choose according to device capabilities.
+    Auto,
+    /// Reads weights without memory mapping or locking.
+    None,
+    /// Memory-maps model weights.
+    Mmap,
+    /// Reads and locks model weights in memory.
+    Mlock,
+    /// Memory-maps and locks model weights in memory.
+    MmapMlock,
+    /// Uses direct I/O where the platform supports it.
+    DirectIo,
+}
+
+impl ModelLoadMode {
+    fn as_llama_arg(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
+            Self::Mmap => "mmap",
+            Self::Mlock => "mlock",
+            Self::MmapMlock => "mmap+mlock",
+            Self::DirectIo => "dio",
+        }
     }
 }
 

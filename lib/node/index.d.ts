@@ -230,6 +230,15 @@ export interface LogitBiasConfig {
   bias: number
 }
 
+/** Selects how model weights are loaded into host memory. */
+export type ModelLoadMode =
+  | 'auto'
+  | 'none'
+  | 'mmap'
+  | 'mlock'
+  | 'mmap_mlock'
+  | 'direct_io'
+
 /** Device placement and memory-mapping settings for local model loading. */
 export interface ModelPlacementConfig {
   devices?: Array<string>
@@ -237,8 +246,7 @@ export interface ModelPlacementConfig {
   split_mode?: string
   main_gpu?: number
   tensor_split?: Array<number>
-  use_mmap?: boolean
-  use_mlock?: boolean
+  load_mode?: ModelLoadMode
   fit_params?: boolean
   fit_params_min_ctx?: number
   fit_params_target_bytes?: Array<number>
