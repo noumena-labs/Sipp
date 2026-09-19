@@ -15,7 +15,7 @@ use super::SchedulerPolicyConfig;
 #[cfg(test)]
 use super::SchedulerPolicyMode;
 pub use context::{ContextRuntimeConfig, FlashAttentionMode, KvCacheType, RopeScaling};
-pub use placement::{GpuLayerConfig, ModelPlacementConfig, SplitMode};
+pub use placement::{GpuLayerConfig, ModelLoadMode, ModelPlacementConfig, SplitMode};
 pub use sampling::SamplingRuntimeOverride;
 pub use sampling::{LogitBias, SamplerStage, SamplingRuntimeConfig};
 

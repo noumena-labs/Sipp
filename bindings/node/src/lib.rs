@@ -200,10 +200,8 @@ pub struct ModelPlacementConfig {
     pub main_gpu: Option<i32>,
     #[napi(js_name = "tensor_split")]
     pub tensor_split: Option<Vec<f64>>,
-    #[napi(js_name = "use_mmap")]
-    pub use_mmap: Option<bool>,
-    #[napi(js_name = "use_mlock")]
-    pub use_mlock: Option<bool>,
+    #[napi(js_name = "load_mode")]
+    pub load_mode: Option<String>,
     #[napi(js_name = "fit_params")]
     pub fit_params: Option<bool>,
     #[napi(js_name = "fit_params_min_ctx")]
@@ -235,8 +233,7 @@ impl From<&ModelPlacementConfig> for dto::ModelPlacementConfig {
             split_mode: value.split_mode.clone(),
             main_gpu: value.main_gpu,
             tensor_split: value.tensor_split.clone(),
-            use_mmap: value.use_mmap,
-            use_mlock: value.use_mlock,
+            load_mode: value.load_mode.clone(),
             fit_params: value.fit_params,
             fit_params_min_ctx: value.fit_params_min_ctx,
             fit_params_target_bytes: value.fit_params_target_bytes.clone(),

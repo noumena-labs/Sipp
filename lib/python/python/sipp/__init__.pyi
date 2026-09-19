@@ -6,6 +6,7 @@ from typing import Any, Final, Iterator, Literal, Mapping, Optional, Sequence, T
 PathLike = Union[str, Path]
 GpuLayerConfig = Union[str, dict[str, int]]
 ActivePythonBackend = Literal["cpu", "cuda", "metal", "vulkan"]
+ModelLoadMode = Literal["auto", "none", "mmap", "mlock", "mmap_mlock", "direct_io"]
 DEFAULT_CONTEXT_KEY: Final[str]
 DEFAULT_MAX_TOKENS: Final[int]
 
@@ -18,8 +19,7 @@ class ModelPlacementConfig:
         split_mode: Optional[str] = None,
         main_gpu: Optional[int] = None,
         tensor_split: Optional[Sequence[float]] = None,
-        use_mmap: Optional[bool] = None,
-        use_mlock: Optional[bool] = None,
+        load_mode: Optional[ModelLoadMode] = None,
         fit_params: Optional[bool] = None,
         fit_params_min_ctx: Optional[int] = None,
         fit_params_target_bytes: Optional[Sequence[int]] = None,

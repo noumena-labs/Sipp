@@ -36,7 +36,7 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 | 分组 | 常见字段 | 用途 |
 | --- | --- | --- |
-| `placement` | `devices`, `gpu_layers`, `split_mode`, `main_gpu`, `tensor_split`, `use_mmap`, `use_mlock`, `fit_params` | 模型放置、内存映射、GPU 驻留 |
+| `placement` | `devices`, `gpu_layers`, `split_mode`, `main_gpu`, `tensor_split`, `load_mode`, `fit_params` | 模型放置、加载和 GPU 驻留。`load_mode` 可设为 `auto`、`none`、`mmap`、`mlock`、`mmap_mlock` 或 `direct_io`。 |
 | `context` | `n_ctx`, `n_batch`, `n_ubatch`, `n_parallel`, `n_threads`, `n_threads_batch`, `flash_attention`, `offload_kqv` | 上下文窗口、批大小、微批大小、并发数、CPU 线程、注意力机制、KV 缓存 |
 | `sampling` | `samplers`, `seed`, `top_k`, `top_p`, `min_p`, `temperature`, `repeat_penalty`, `mirostat`, `logit_bias` | 本地文本生成的默认采样参数 |
 | `scheduler` | `continuous_batching`, `policy`, `prefill_chunk_size`, `max_running_requests`, `max_queued_requests` | 请求调度、批处理、队列限制 |

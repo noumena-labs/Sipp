@@ -4,6 +4,14 @@ export type BackendDeviceType = 'cpu' | 'gpu' | 'igpu' | 'accel' | 'unknown';
 
 export type GpuLayerConfig = 'auto' | 'all' | { count: number };
 export type SplitMode = 'none' | 'layer' | 'row' | 'tensor';
+/** Selects how model weights are loaded into host memory. */
+export type ModelLoadMode =
+  | 'auto'
+  | 'none'
+  | 'mmap'
+  | 'mlock'
+  | 'mmap_mlock'
+  | 'direct_io';
 export type KvCacheType = 'f16' | 'f32' | 'q8_0' | 'q4_0' | 'q4_1' | 'iq4_nl' | 'q5_0' | 'q5_1';
 export type RopeScaling = 'none' | 'linear' | 'yarn';
 export type KvReuseMode = 'disabled' | 'live_slot_prefix' | 'state_snapshot' | 'live_slot_and_snapshot';
@@ -28,8 +36,7 @@ export interface ModelPlacementConfig {
   split_mode?: SplitMode;
   main_gpu?: number;
   tensor_split?: number[];
-  use_mmap?: boolean;
-  use_mlock?: boolean;
+  load_mode?: ModelLoadMode;
   fit_params?: boolean;
   fit_params_min_ctx?: number;
   fit_params_target_bytes?: number[];
