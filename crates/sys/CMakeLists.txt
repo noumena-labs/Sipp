@@ -66,7 +66,7 @@ endif()
 
 install(TARGETS sipp_shim ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 
-foreach(_sipp_target cpp-httplib llama-common-base)
+foreach(_sipp_target cpp-httplib llama-common-base vendor-hash)
   if(TARGET ${_sipp_target})
     install(TARGETS ${_sipp_target}
       ARCHIVE DESTINATION lib

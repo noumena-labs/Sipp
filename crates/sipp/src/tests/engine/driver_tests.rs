@@ -11,6 +11,7 @@ use crate::runtime::request::GenerateResponse;
 use futures::executor::block_on;
 use futures::future::poll_fn;
 use futures::StreamExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
@@ -37,9 +38,34 @@ fn closed_engine() -> SippEngine {
         inner: Arc::new(EngineInner {
             command_tx,
             event_subscribers: Arc::new(Mutex::new(Vec::new())),
-            _driver: thread::spawn(|| {}),
+            driver: Some(thread::spawn(|| {})),
         }),
     }
+}
+
+#[test]
+fn dropping_the_last_engine_handle_joins_the_driver() {
+    let (command_tx, command_rx) = mpsc::channel();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let driver_stopped = stopped.clone();
+    let driver = thread::spawn(move || {
+        assert!(matches!(
+            command_rx.recv(),
+            Ok(EngineThreadCommand::Close(None))
+        ));
+        driver_stopped.store(true, Ordering::SeqCst);
+    });
+    let engine = SippEngine {
+        inner: Arc::new(EngineInner {
+            command_tx,
+            event_subscribers: Arc::new(Mutex::new(Vec::new())),
+            driver: Some(driver),
+        }),
+    };
+
+    drop(engine);
+
+    assert!(stopped.load(Ordering::SeqCst));
 }
 
 #[test]

@@ -258,7 +258,7 @@ void apply_sampling_json(
     if (json_schema != nullptr && json_schema[0] != '\0') {
         sampling.grammar = {
             COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT,
-            json_schema_to_grammar(nlohmann::ordered_json::parse(json_schema)),
+            json_schema_to_grammar(common_json::parse(json_schema)),
         };
     }
 }
@@ -269,8 +269,7 @@ bool parse_messages(const char * messages_json, std::vector<common_chat_msg> & o
         return false;
     }
 
-    using json = nlohmann::ordered_json;
-    const json parsed = json::parse(messages_json, nullptr, false);
+    const common_json parsed = common_json::parse_no_throw(messages_json);
     if (parsed.is_discarded() || !parsed.is_array()) {
         return false;
     }
@@ -1536,8 +1535,12 @@ sipp_mtmd_bitmap * sipp_mtmd_bitmap_init_from_buf(
         return nullptr;
     }
 
-    const mtmd_helper_bitmap_wrapper inner =
-        mtmd_helper_bitmap_init_from_buf(context->inner, data, len, false);
+    const mtmd_helper_bitmap_wrapper inner = mtmd_helper_bitmap_init_from_buf(
+        context->inner,
+        data,
+        len,
+        false,
+        mtmd_helper_init_opt_default());
     if (inner.bitmap == nullptr) {
         return nullptr;
     }
