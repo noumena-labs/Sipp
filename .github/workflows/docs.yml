@@ -2,6 +2,12 @@ name: Docs
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Release sipp packages"]
+    types:
+      - completed
+    branches:
+      - master
 
 permissions:
   contents: read
@@ -16,12 +22,14 @@ env:
 jobs:
   build:
     name: Build mdBook
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
         with:
           submodules: false
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -40,7 +48,6 @@ jobs:
         run: cargo xtask docs build
 
       - name: Upload Pages artifact
-        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' }}
         uses: actions/upload-pages-artifact@v4
         with:
           path: book
@@ -48,7 +55,6 @@ jobs:
   deploy:
     name: Deploy GitHub Pages
     needs: build
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     permissions:
       pages: write
