@@ -38,7 +38,7 @@ jobs:
             ~/.cargo/git
             .build/cargo
             .build/xtask
-          key: cargo-public-ci-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'xtask/Cargo.toml', 'xtask/src/**/*.rs') }}
+          key: cargo-public-ci-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'xtask/Cargo.toml', 'xtask/src/**/*.rs') }}
           restore-keys: |
             cargo-public-ci-${{ runner.os }}-
 
@@ -69,17 +69,9 @@ jobs:
           max-size: 3G
 
       - name: Cache Cargo and native build outputs
-        uses: actions/cache@v5.0.5
+        uses: ./.github/actions/cargo-native-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .build/cargo
-            .build/cmake
-            .build/c
-          key: cargo-ci-rust-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
-          restore-keys: |
-            cargo-ci-rust-${{ runner.os }}-
+          key-prefix: cargo-ci-rust-${{ runner.os }}
 
       - name: Doctor core readiness
         run: cargo xtask --plain doctor --target core
@@ -141,17 +133,9 @@ jobs:
           actions-cache-folder: emsdk-cache
 
       - name: Cache Cargo and native build outputs
-        uses: actions/cache@v5.0.5
+        uses: ./.github/actions/cargo-native-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .build/cargo
-            .build/cmake
-            .build/c
-          key: cargo-ci-browser-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
-          restore-keys: |
-            cargo-ci-browser-${{ runner.os }}-
+          key-prefix: cargo-ci-browser-${{ runner.os }}
 
       - name: Cache JavaScript dependencies
         uses: actions/cache@v5.0.5
@@ -220,17 +204,9 @@ jobs:
           max-size: 3G
 
       - name: Cache Cargo and native build outputs
-        uses: actions/cache@v5.0.5
+        uses: ./.github/actions/cargo-native-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .build/cargo
-            .build/cmake
-            .build/c
-          key: cargo-ci-node-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
-          restore-keys: |
-            cargo-ci-node-${{ runner.os }}-
+          key-prefix: cargo-ci-node-${{ runner.os }}
 
       - name: Cache JavaScript dependencies
         uses: actions/cache@v5.0.5
@@ -286,17 +262,9 @@ jobs:
           max-size: 3G
 
       - name: Cache Cargo and native build outputs
-        uses: actions/cache@v5.0.5
+        uses: ./.github/actions/cargo-native-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .build/cargo
-            .build/cmake
-            .build/c
-          key: cargo-ci-python-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'apps/cli/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
-          restore-keys: |
-            cargo-ci-python-${{ runner.os }}-
+          key-prefix: cargo-ci-python-${{ runner.os }}
 
       - name: Cache xtask toolchains
         uses: actions/cache@v5.0.5
@@ -335,17 +303,9 @@ jobs:
           max-size: 3G
 
       - name: Cache Cargo and Swift native build outputs
-        uses: actions/cache@v5.0.5
+        uses: ./.github/actions/cargo-native-cache
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            .build/cargo
-            .build/cmake
-            .build/c
-          key: cargo-ci-swift-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml', 'crates/**/Cargo.toml', 'lib/**/Cargo.toml', 'xtask/Cargo.toml', 'bindings/**/Cargo.toml') }}
-          restore-keys: |
-            cargo-ci-swift-${{ runner.os }}-${{ runner.arch }}-
+          key-prefix: cargo-ci-swift-${{ runner.os }}-${{ runner.arch }}
 
       - name: Run Swift package unit suite
         run: cargo xtask --plain test unit --no-coverage suite swift-package
