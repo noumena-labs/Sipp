@@ -3363,6 +3363,7 @@ dependencies = [
  "inquire",
  "owo-colors",
  "portable-pty",
+ "regex",
  "serde_json",
  "sha2",
  "tui-banner",

@@ -18,6 +18,8 @@ use crate::cli::{
 use crate::test_support::TempDir;
 use crate::utils::BuildContext;
 
+use std::collections::BTreeSet;
+
 use super::{
     apply_search_filter, case_counts, catalog_suite_ids, collect_catalog_ownership_violations,
     collect_files_with_extension, collect_files_with_suffix, collect_python_public_doc_violations,
@@ -31,8 +33,8 @@ use super::{
     python_venv_exe, reconcile_executed_cases, rust_host_cfg_enabled, selected_smoke_suites,
     selected_unit_suites, selected_verify_suites, source_owner_suites, suite_by_id, test_backends,
     validate_package_filter, validate_suite_backends, CaseDiscoverer, CaseStatus,
-    CoverageSummaries, LcovSummary, RunReport, RustTestTarget, SuiteReport, TestCase,
-    TestCaseReport, TestCounts, TestGroup, VerifyCheckReport, VerifyReport,
+    CoverageSummaries, DocSnippetChecker, LcovSummary, PublicSymbols, RunReport, RustTestTarget,
+    SuiteReport, TestCase, TestCaseReport, TestCounts, TestGroup, VerifyCheckReport, VerifyReport,
     NODE_GENERATION_SMOKE_SCRIPTS, PYTHON_GENERATION_SMOKE_SCRIPTS, RUST_BINDING_TEST_TARGETS,
     RUST_CRATE_TEST_TARGETS, RUST_GENERATION_SMOKE_EXAMPLES, TEST_SUITES,
 };
@@ -279,6 +281,92 @@ fn public_doc_checker_reports_missing_exports() {
     assert!(violations
         .iter()
         .any(|violation| violation.contains("missing Python docstring")));
+}
+
+#[test]
+fn doc_snippet_checker_accepts_public_symbols_and_ignores_prose() {
+    let markdown = r#"
+Import { Missing } from '@sipphq/sipp' in prose when describing syntax.
+
+```ts
+// import { MissingComment } from '@sipphq/sipp';
+import { Endpoint, type ChatInput } from '@sipphq/sipp';
+import { sippViteConfig as viteConfig } from '@sipphq/sipp/vite';
+```
+
+```python
+from sipp import (
+    ChatMessage,
+    SippClient as Client,
+)
+```
+"#;
+    let symbols = public_symbols(
+        &["ChatInput", "Endpoint"],
+        &["sippViteConfig"],
+        &[],
+        &["ChatMessage", "SippClient"],
+    );
+    let mut violations = Vec::new();
+    let checker = DocSnippetChecker::new(symbols).unwrap();
+
+    checker.check(markdown, "docs/example.md", &mut violations);
+
+    assert!(violations.is_empty(), "{violations:#?}");
+}
+
+#[test]
+fn doc_snippet_checker_reports_drift_and_internal_packages_inside_fences() {
+    let markdown = r#"
+```typescript
+import { MissingWeb } from '@sipphq/sipp';
+import { SippClient } from '@noumena-labs/sipp-server';
+import { SippClient } from '@sipphq/sipp/missing';
+```
+
+```python
+from sipp import MissingPython
+```
+
+```text
+import { Ignored } from '@sipphq/sipp';
+```
+"#;
+    let symbols = public_symbols(&["SippClient"], &[], &["SippClient"], &["SippClient"]);
+    let mut violations = Vec::new();
+    let checker = DocSnippetChecker::new(symbols).unwrap();
+
+    checker.check(markdown, "docs/example.md", &mut violations);
+
+    assert_eq!(violations.len(), 4, "{violations:#?}");
+    assert!(violations.iter().any(|value| value.contains("MissingWeb")));
+    assert!(violations
+        .iter()
+        .any(|value| value.contains("inaccessible internal package")));
+    assert!(violations
+        .iter()
+        .any(|value| value.contains("unsupported Sipp package entry point")));
+    assert!(violations
+        .iter()
+        .any(|value| value.contains("MissingPython")));
+}
+
+fn public_symbols(
+    web: &[&str],
+    web_vite: &[&str],
+    node: &[&str],
+    python: &[&str],
+) -> PublicSymbols {
+    PublicSymbols {
+        web: symbol_set(web),
+        web_vite: symbol_set(web_vite),
+        node: symbol_set(node),
+        python: symbol_set(python),
+    }
+}
+
+fn symbol_set(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|name| (*name).to_string()).collect()
 }
 
 #[test]
