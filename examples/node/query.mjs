@@ -39,12 +39,9 @@ await client.add(
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // `query` is the simplest text-generation call: one prompt in, one response out.
-const result = await client.query({
-  prompt: input,
-  options: textOptions(),
-  local: {
-    contextKey: 'node-query-example',
-  },
+const result = await client.query(input, {
+  ...textOptions(),
+  contextKey: 'node-query-example',
 }).response;
 printText(result);
 

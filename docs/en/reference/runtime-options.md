@@ -12,8 +12,8 @@ endpoint.
 | Client options | `new SippClient(options)` | `new SippClient(options)` | Model storage plus browser assets, workers, cache policy, and native backend setup. |
 | Model sources | `client.models.add(sources)` | `client.models.add(sources)` | Browser files or HTTP(S) URLs; native paths or HTTP(S) URLs. Model shards and projectors share one list. |
 | Local endpoint load options | `Endpoint.local(model, options)` | `Endpoint.local(model, { runtime })` | Backend preference and native runtime config. |
-| Text request options | `client.query(prompt, options)` | `client.query({ options })` | Output length, sampling shortcuts, streaming, cancellation, and stop strings. |
-| Local request options | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | Local-only prompt state, grammars, images, and embedding normalization. |
+| Text request options | `client.query(prompt, options)` | `client.query(prompt, options)` | Output length, sampling shortcuts, streaming, cancellation, and stop strings. |
+| Local request options | `contextKey`, `grammar`, media, `normalize` | `contextKey`, `grammar`, media, `normalize` | Local-only prompt state, grammars, images, and embedding normalization. |
 | Request extensions | `extra` | `extra` | Extra fields interpreted by gateway or provider endpoints. Local endpoints reject them. |
 
 Python and Rust expose the same concepts with language-native endpoint inputs and
@@ -140,10 +140,10 @@ Endpoint-specific fields belong in `extra`. The selected gateway or provider
 interprets them; local endpoints reject them:
 
 ```ts
-const run = client.chat({
+const run = client.chat(messages, {
   endpoint,
-  messages,
-  options: { maxTokens: 128, temperature: 0.2 },
+  maxTokens: 128,
+  temperature: 0.2,
   extra: {
     reasoning_effort: 'low',
   },

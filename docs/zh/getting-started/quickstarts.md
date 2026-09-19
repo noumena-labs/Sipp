@@ -2,7 +2,7 @@
 
 以下代码片段展示 `query`、`chat` 和 `embed` 的调用方式。`query` 接收并发送提示词字符串，不会自动套用对话模板。纯提示词仅适用于基础模型（completion-style / base model）；如果调用纯解码器（decoder-only）的对话或instruct GGUF 模型，需自行在应用层渲染好模型的指令模板。`query` 同样兼容编码器-解码器（encoder-decoder）架构的 GGUF 文本模型。`chat` 接口接收结构化角色消息，由底层自动处理模板。`embed` 返回向量数据，前提是加载的本地模型支持并开启了嵌入特性。
 
-本地上下文标识符的命名在不同语言中仅有大小写差异：浏览器和 Node.js 使用驼峰 `contextKey`；Python 和 Rust 使用蛇形 `context_key`。
+本地上下文标识符的命名在不同语言中仅有大小写差异：浏览器和 Node.js 使用驼峰 `contextKey`；Python 和 Rust 使用蛇形 `context_key`。浏览器包（`@sipphq/sipp`）与 Node.js 服务端包（`@sipphq/sipp-server`）使用相同的位置参数调用形态，例如 `client.chat(messages, options)`。
 
 可运行示例见[示例与演示](../examples-demos.md)。
 
@@ -109,19 +109,17 @@ const textEndpoint = await client.add(
 );
 
 // query：传递原始提示词。请在应用层将提示词渲染为目标模型对应的模板。
-const query = await client.query({
+const query = await client.query(queryPrompt, {
   endpoint: textEndpoint,
-  prompt: queryPrompt,
-  options: textOptions,
-  local: { contextKey: 'node-query' },
+  ...textOptions,
+  contextKey: 'node-query',
 }).response;
 
 // chat：传递角色消息列表。本地运行时会自动读取并应用 tokenizer.chat_template。
-const chat = await client.chat({
+const chat = await client.chat(messages, {
   endpoint: textEndpoint,
-  messages,
-  options: textOptions,
-  local: { contextKey: 'node-chat' },
+  ...textOptions,
+  contextKey: 'node-chat',
 }).response;
 
 const embedModel = await client.models.add([embedModelPath]);
@@ -133,10 +131,10 @@ const embedEndpoint = await client.add(
 );
 
 // embed：返回向量数据。指定的本地端点必须具备嵌入生成能力。
-const embedding = await client.embed({
+const embedding = await client.embed('Sipp embedding input.', {
   endpoint: embedEndpoint,
-  input: 'Sipp embedding input.',
-  local: { contextKey: 'node-embed', normalize: true },
+  contextKey: 'node-embed',
+  normalize: true,
 }).response;
 
 console.log(query.text, chat.text, embedding.values.length);
@@ -409,23 +407,20 @@ const embedEndpoint = await client.add('embed', Endpoint.provider({
 }));
 
 // query：传递原始补全提示词，发往兼容补全协议的服务商。
-const query = await client.query({
+const query = await client.query('Write one provider inference sentence.', {
   endpoint: completionEndpoint,
-  prompt: 'Write one provider inference sentence.',
-  options: { maxTokens: 64 },
+  maxTokens: 64,
 }).response;
 
 // chat：向服务商发送其原生支持的角色消息格式。
-const chat = await client.chat({
+const chat = await client.chat(chatMessages, {
   endpoint: chatEndpoint,
-  messages: chatMessages,
-  options: { maxTokens: 64 },
+  maxTokens: 64,
 }).response;
 
 // embed：调用服务商提供的原生嵌入模型。
-const embedding = await client.embed({
+const embedding = await client.embed('Sipp embedding input.', {
   endpoint: embedEndpoint,
-  input: 'Sipp embedding input.',
 }).response;
 
 console.log(query.text, chat.text, embedding.values.length);

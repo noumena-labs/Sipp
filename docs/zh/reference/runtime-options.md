@@ -9,8 +9,8 @@
 | 客户端选项 | `new SippClient(options)` | `new SippClient(options)` | 模型存储，以及浏览器资源、Worker、缓存策略和原生后端初始化 |
 | 模型来源 | `client.models.add(sources)` | `client.models.add(sources)` | 浏览器文件或 HTTP(S) URL；原生路径或 HTTP(S) URL。模型分片和投影器使用同一列表 |
 | 本地端点加载选项 | `Endpoint.local(model, options)` | `Endpoint.local(model, { runtime })` | 后端偏好和原生运行时配置 |
-| 文本请求选项 | `client.query(prompt, options)` | `client.query({ options })` | 输出长度、采样控制、流式、取消、停止词 |
-| 本地请求选项 | `contextKey`, `grammar`, media, `normalize` | `local: { contextKey, grammar, media, normalize }` | 仅限本地的 Prompt 状态、文法、图片、嵌入归一化 |
+| 文本请求选项 | `client.query(prompt, options)` | `client.query(prompt, options)` | 输出长度、采样控制、流式、取消、停止词 |
+| 本地请求选项 | `contextKey`, `grammar`, media, `normalize` | `contextKey`, `grammar`, media, `normalize` | 仅限本地的 Prompt 状态、文法、图片、嵌入归一化 |
 | 请求扩展 | `extra` | `extra` | 由网关或服务商端点解释的额外字段。本地端点会拒绝 |
 
 Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相同的功能。
@@ -71,7 +71,7 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 ### 文本请求选项
 
-`Options` 或 `SippTextOptions` 可同时用于 `query` 和 `chat`。
+`QueryOptions` 同时用于 `query` 和 `chat`。
 
 | 选项 | 类型 | 说明 |
 | --- | --- | --- |
@@ -83,13 +83,12 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 ### 本地请求选项
 
-`local: { ... }` 只对本地端点生效，网关和服务商端点会直接忽略。
+`contextKey`、`grammar` 等本地请求字段直接放在选项对象中。本地端点使用这些字段；网关和服务商端点不会解释它们。
 
 | 选项 | 类型 | 说明 |
 | --- | --- | --- |
 | `contextKey` | `String` | 本地 KV 缓存的上下文键。相同键的请求复用缓存中的前缀。 |
 | `grammar` | `String` | GBNF 文法字符串，约束输出格式。 |
-| `jsonSchema` | `Value` | JSON Schema，约束输出为合法的 JSON。 |
 | `samplers` | `Vec<Sampler>` | 覆盖运行时配置中的采样器链。 |
 | `seed` | `u32` | 覆盖运行时配置中的随机种子。 |
 | `minP` | `f32` | 覆盖运行时配置中的 min-p 阈值。 |
@@ -103,10 +102,9 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 
 ```ts
 // Node.js
-client.query({
+client.query(prompt, {
   endpoint,
-  prompt,
-  options: { maxTokens: 64 },
+  maxTokens: 64,
   extra: { custom_field: 'value' },
 });
 ```
@@ -117,10 +115,9 @@ client.query({
 
 ```ts
 // Node.js
-client.chat({
+client.chat(messages, {
   endpoint,
-  messages,
-  options: { maxTokens: 128 },
+  maxTokens: 128,
   extra: {
     reasoning_effort: 'low',
   },

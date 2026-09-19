@@ -33,11 +33,11 @@ Sipp 将操作与端点分离。根据输入格式和期望输出选择 `query`�
 ### 本地 query（原始提示词）
 
 ```ts
-const run = client.query({
+const run = client.query(prompt, {
   endpoint,
-  prompt,
-  options: { maxTokens: 128, temperature: 0.2 },
-  local: { contextKey: 'docs-example' },
+  maxTokens: 128,
+  temperature: 0.2,
+  contextKey: 'docs-example',
   emitTokens: true,
 });
 ```
@@ -47,14 +47,14 @@ const run = client.query({
 仅当 GGUF 模型声明了聊天模板时才能使用 `chat`。Sipp 将角色消息交由 llama.cpp 渲染模板，然后基于渲染后的提示词生成文本。
 
 ```ts
-const run = client.chat({
+const run = client.chat([
+  { role: 'system', content: 'Answer with one concise paragraph.' },
+  { role: 'user', content: 'Explain local chat.' },
+], {
   endpoint,
-  messages: [
-    { role: 'system', content: 'Answer with one concise paragraph.' },
-    { role: 'user', content: 'Explain local chat.' },
-  ],
-  options: { maxTokens: 128, temperature: 0.2 },
-  local: { contextKey: 'docs-example' },
+  maxTokens: 128,
+  temperature: 0.2,
+  contextKey: 'docs-example',
   emitTokens: true,
 });
 ```
@@ -70,10 +70,9 @@ const endpoint = await client.add(
   Endpoint.local(model)
 );
 
-const run = client.query({
+const run = client.query('translate English to German: Hello, world.', {
   endpoint,
-  prompt: 'translate English to German: Hello, world.',
-  options: { maxTokens: 64 },
+  maxTokens: 64,
 });
 ```
 
@@ -82,10 +81,9 @@ const run = client.query({
 ### 本地嵌入
 
 ```ts
-const run = client.embed({
+const run = client.embed('Vectorize this sentence for retrieval.', {
   endpoint,
-  input: 'Vectorize this sentence for retrieval.',
-  local: { normalize: true },
+  normalize: true,
 });
 
 const embedding = (await run.response).values;
@@ -103,7 +101,7 @@ const embedding = (await run.response).values;
 
 `model` 是网关公开的目标名称。网关收到请求后，将该名称解析为具体的本地 GGUF 模型、OpenAI 端点、兼容 OpenAI 的端点或 Anthropic 端点。
 
-网关调用支持 `query` 和 `chat` 的通用文本选项：`max_tokens`、`temperature`、`top_p`、`stop`、`stream`。`contextKey`、`grammar`、`jsonSchema`、`sampling`、`media`、`normalize` 这些仅限本地的字段，网关端点会拒绝。`extra` 也只对直连提供商有效，网关同样拒绝；自定义网关需自行处理提供商特定的扩展字段。
+网关调用支持 `query` 和 `chat` 的通用文本选项：`max_tokens`、`temperature`、`top_p`、`stop`、`stream`。`contextKey`、`grammar`、`sampling`、`media`、`normalize` 这些仅限本地的字段，网关端点会拒绝。`extra` 也只对直连提供商有效，网关同样拒绝；自定义网关需自行处理提供商特定的扩展字段。
 
 ### 网关目标映射
 
@@ -130,13 +128,13 @@ const endpoint = await client.add('gateway-openai', Endpoint.gateway({
   },
 }));
 
-const run = client.chat({
+const run = client.chat([
+  { role: 'system', content: 'Answer for application developers.' },
+  { role: 'user', content: 'When should I use gateway chat?' },
+], {
   endpoint,
-  messages: [
-    { role: 'system', content: 'Answer for application developers.' },
-    { role: 'user', content: 'When should I use gateway chat?' },
-  ],
-  options: { maxTokens: 128, temperature: 0.2 },
+  maxTokens: 128,
+  temperature: 0.2,
 });
 ```
 

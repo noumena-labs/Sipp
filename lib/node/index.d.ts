@@ -9,15 +9,15 @@ export declare class SippClient {
   /** Remove a registered endpoint. */
   remove(id: string): Promise<void>
   /** Start raw-prompt text generation and return the run handle. */
-  query(request: SippQueryRequest): SippTextRun
+  query(input: QueryInput, options?: QueryOptions): SippTextRun
   /** Start chat generation from ordered role/content messages. */
-  chat(request: SippChatRequest): SippTextRun
+  chat(input: ChatInput, options?: QueryOptions): SippTextRun
   /** Start a single-input embedding request. */
-  embed(request: SippEmbedRequest): SippEmbeddingRun
+  embed(input: string, options?: EmbedOptions): SippEmbeddingRun
   /** Start speech recognition from encoded WAV, MP3, or FLAC audio. */
-  listen(request: SippListenRequest): SippTextRun
+  listen(audio: Buffer, options?: ListenOptions): SippTextRun
   /** Start speech synthesis and return a WAV response. */
-  speak(request: SippSpeakRequest): SippAudioRun
+  speak(text: string, options?: SpeakOptions): SippAudioRun
 }
 
 /** Client storage configuration. */
@@ -37,7 +37,7 @@ export interface ManagedModel {
 /** Models available to a Sipp client. */
 export declare class ModelStore {
   /** Add a model from local paths or HTTP(S) URLs. */
-  add(sources: readonly (string | URL)[]): Promise<ManagedModel>
+  add(sources: readonly string[]): Promise<ManagedModel>
   /** List available models. */
   list(): Promise<ManagedModel[]>
   /** Remove a model that is not used by an endpoint. */
@@ -94,79 +94,53 @@ declare const endpointRefBrand: unique symbol
 /** Opaque reference returned by endpoint registration. */
 export type EndpointRef = { readonly [endpointRefBrand]: true }
 
-/** Shared generation options for text-producing requests. */
-export interface SippTextOptions {
-  maxTokens?: number
-  temperature?: number
-  topP?: number
-  stop?: Array<string>
+/** Raw prompt accepted by positional query calls. */
+export type QueryInput = string | {
+  readonly prompt: string
+  readonly media?: readonly Buffer[]
 }
 
-/** Local-only prompt options such as grammar constraints and image inputs. */
-export interface LocalTextOptions {
-  contextKey?: string
-  grammar?: string
-  jsonSchema?: string
-  sampling?: SamplingRuntimeOverride
-  media?: Array<Buffer>
+/** Ordered messages accepted by positional chat calls. */
+export type ChatInput = readonly ChatMessage[] | {
+  readonly messages: readonly ChatMessage[]
+  readonly media?: readonly Buffer[]
 }
 
-/** Local-only embedding options for context and vector normalization. */
-export interface LocalEmbedOptions {
-  contextKey?: string
-  normalize?: boolean
+/** Options shared by positional query and chat calls. */
+export interface QueryOptions {
+  readonly endpoint?: EndpointRef
+  readonly contextKey?: string
+  readonly maxTokens?: number
+  readonly temperature?: number
+  readonly topP?: number
+  readonly sampling?: SamplingRuntimeOverride
+  readonly stop?: readonly string[]
+  readonly emitTokens?: boolean
+  readonly grammar?: string
+  readonly extra?: Record<string, unknown>
 }
 
-/** Raw-prompt text generation request. */
-export interface SippQueryRequest {
-  requestId?: string
-  endpoint?: EndpointRef
-  prompt: string
-  options?: SippTextOptions
-  local?: LocalTextOptions
-  extra?: Record<string, unknown>
-  emitTokens?: boolean
+/** Options for a positional embedding call. */
+export interface EmbedOptions {
+  readonly endpoint?: EndpointRef
+  readonly normalize?: boolean
+  readonly contextKey?: string
+  readonly extra?: Record<string, unknown>
 }
 
-/** Chat text generation request. */
-export interface SippChatRequest {
-  requestId?: string
-  endpoint?: EndpointRef
-  messages: Array<ChatMessage>
-  options?: SippTextOptions
-  local?: LocalTextOptions
-  extra?: Record<string, unknown>
-  emitTokens?: boolean
+/** Options for a positional speech-recognition call. */
+export interface ListenOptions {
+  readonly endpoint?: EndpointRef
+  readonly language?: string
+  readonly maxTokens?: number
 }
 
-/** Single-input embedding request. */
-export interface SippEmbedRequest {
-  requestId?: string
-  endpoint?: EndpointRef
-  input: string
-  local?: LocalEmbedOptions
-  extra?: Record<string, unknown>
-}
-
-/** Speech-recognition request for encoded WAV, MP3, or FLAC audio. */
-export interface SippListenRequest {
-  requestId?: string
-  endpoint?: EndpointRef
-  audio: Buffer
-  language?: string
-  /** Maximum transcript tokens. Omitted requests use the core default. */
-  maxTokens?: number
-}
-
-/** Speech-synthesis request with an optional encoded speaker reference. */
-export interface SippSpeakRequest {
-  requestId?: string
-  endpoint?: EndpointRef
-  text: string
-  language?: string
-  speakerAudio?: Buffer
-  /** Hard duration limit. Reaching it before end of generation fails. */
-  maxDurationMs?: number
+/** Options for a positional speech-synthesis call. */
+export interface SpeakOptions {
+  readonly endpoint?: EndpointRef
+  readonly language?: string
+  readonly speakerAudio?: Buffer
+  readonly maxDurationMs?: number
 }
 
 /** Token accounting returned by an inference endpoint. */

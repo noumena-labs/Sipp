@@ -9,7 +9,9 @@ supports encoder-decoder GGUF text models. `chat` sends role-tagged messages.
 embedding mode enabled.
 
 Local context naming differs only by language casing: browser and Node.js use
-`contextKey`; Python and Rust use `context_key`.
+`contextKey`; Python and Rust use `context_key`. Browser (`@sipphq/sipp`) and
+Node.js (`@sipphq/sipp-server`) use the same positional call shape, such as
+`client.chat(messages, options)`.
 
 See [Examples And Demos](../examples-demos.md) for runnable end-to-end files.
 
@@ -112,19 +114,17 @@ const textEndpoint = await client.add(
 );
 
 // query: raw prompt; replace markers with the target model's template.
-const query = await client.query({
+const query = await client.query(queryPrompt, {
   endpoint: textEndpoint,
-  prompt: queryPrompt,
-  options: textOptions,
-  local: { contextKey: 'node-query' },
+  ...textOptions,
+  contextKey: 'node-query',
 }).response;
 
 // chat: role messages; local runtime uses tokenizer.chat_template.
-const chat = await client.chat({
+const chat = await client.chat(messages, {
   endpoint: textEndpoint,
-  messages,
-  options: textOptions,
-  local: { contextKey: 'node-chat' },
+  ...textOptions,
+  contextKey: 'node-chat',
 }).response;
 
 const embedModel = await client.models.add([embedModelPath]);
@@ -136,10 +136,10 @@ const embedEndpoint = await client.add(
 );
 
 // embed: vector output; local endpoint must be embedding-capable.
-const embedding = await client.embed({
+const embedding = await client.embed('Sipp embedding input.', {
   endpoint: embedEndpoint,
-  input: 'Sipp embedding input.',
-  local: { contextKey: 'node-embed', normalize: true },
+  contextKey: 'node-embed',
+  normalize: true,
 }).response;
 
 console.log(query.text, chat.text, embedding.values.length);
@@ -421,23 +421,20 @@ const embedEndpoint = await client.add('embed', Endpoint.provider({
 }));
 
 // query: raw completion prompt for a completion-compatible provider.
-const query = await client.query({
+const query = await client.query('Write one provider inference sentence.', {
   endpoint: completionEndpoint,
-  prompt: 'Write one provider inference sentence.',
-  options: { maxTokens: 64 },
+  maxTokens: 64,
 }).response;
 
 // chat: provider-native role messages.
-const chat = await client.chat({
+const chat = await client.chat(chatMessages, {
   endpoint: chatEndpoint,
-  messages: chatMessages,
-  options: { maxTokens: 64 },
+  maxTokens: 64,
 }).response;
 
 // embed: provider-native embedding model.
-const embedding = await client.embed({
+const embedding = await client.embed('Sipp embedding input.', {
   endpoint: embedEndpoint,
-  input: 'Sipp embedding input.',
 }).response;
 
 console.log(query.text, chat.text, embedding.values.length);

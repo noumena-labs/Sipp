@@ -44,10 +44,9 @@ export const querySipp = createServerFn({ method: 'POST' })
       model: requiredEnv('OPENAI_MODEL'),
       apiKey: requiredEnv('OPENAI_API_KEY'),
     }));
-    const run = client.query({
+    const run = client.query(data.prompt, {
       endpoint,
-      prompt: data.prompt,
-      options: { maxTokens: 128 },
+      maxTokens: 128,
     });
     const response = await run.response;
     return { text: response.text, usage: response.usage };
@@ -103,8 +102,8 @@ export const Route = createFileRoute('/api/sipp/query')({
             model: decoded.target,
             apiKey: requiredEnv('OPENAI_API_KEY'),
           }));
-          const run = client.query({
-            ...decoded.request,
+          const run = client.query(decoded.input, {
+            ...decoded.options,
             endpoint,
           });
           if (decoded.stream) {

@@ -36,21 +36,17 @@ const gatewayEndpoint = await client.add('gateway', Endpoint.gateway({
   },
 }));
 
-const localRun = client.chat({
+const localRun = client.chat(chatMessages(input), {
   endpoint: localEndpoint,
-  messages: chatMessages(input),
-  options: textOptions(),
-  local: {
-    contextKey: 'node-gateway-chat-local',
-  },
+  ...textOptions(),
+  contextKey: 'node-gateway-chat-local',
   emitTokens: true,
 });
 const local = await collectStreamedText('local', localRun);
 
-const gatewayRun = client.chat({
+const gatewayRun = client.chat(chatMessages(input), {
   endpoint: gatewayEndpoint,
-  messages: chatMessages(input),
-  options: textOptions(),
+  ...textOptions(),
   emitTokens: true,
 });
 const gateway = await collectStreamedText('gateway', gatewayRun);

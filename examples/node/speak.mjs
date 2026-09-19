@@ -16,8 +16,7 @@ const client = new SippClient();
 const model = await client.models.add([modelPath, projectorPath]);
 await client.add('tts', Endpoint.local(model, { runtime: runtimeConfig(4096) }));
 
-const response = await client.speak({
-  text: words.join(' ') || 'Hello from Sipp.',
+const response = await client.speak(words.join(' ') || 'Hello from Sipp.', {
   language: process.env.SIPP_LANGUAGE,
   speakerAudio: process.env.SIPP_SPEAKER_AUDIO
     ? readFileSync(process.env.SIPP_SPEAKER_AUDIO)

@@ -35,12 +35,9 @@ console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // Embeddings use the same local endpoint. The runtime is loaded with
 // `embeddings=true`, and the request asks for a normalized vector.
-const result = await client.embed({
-  input,
-  local: {
-    contextKey: 'node-embed-example',
-    normalize: true,
-  },
+const result = await client.embed(input, {
+  contextKey: 'node-embed-example',
+  normalize: true,
 }).response;
 printEmbedding(result);
 

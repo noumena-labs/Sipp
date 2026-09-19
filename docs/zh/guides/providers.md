@@ -26,11 +26,10 @@ const endpoint = await client.add('provider', Endpoint.provider({
   apiKey: requiredEnv('OPENAI_API_KEY'),
 }));
 
-const run = client.chat({
-  endpoint,
-  messages: [{ role: 'user', content: 'Explain provider inference.' }],
-  options: { maxTokens: 128, temperature: 0.2 },
-});
+const run = client.chat(
+  [{ role: 'user', content: 'Explain provider inference.' }],
+  { endpoint, maxTokens: 128, temperature: 0.2 }
+);
 console.log((await run.response).text);
 ```
 
@@ -41,10 +40,9 @@ console.log((await run.response).text);
 对于通用的请求字段，请使用 Sipp 标准的请求选项；针对特定服务商的专有字段，请将其置于 `extra` 下：
 
 ```ts
-const run = client.chat({
+const run = client.chat(messages, {
   endpoint,
-  messages,
-  options: { maxTokens: 128 },
+  maxTokens: 128,
   extra: {
     reasoning_effort: 'low',
   },

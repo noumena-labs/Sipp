@@ -51,8 +51,8 @@ export async function POST(request: Request): Promise<Response> {
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),
     }));
-    const run = client.query({
-      ...decoded.request,
+    const run = client.query(decoded.input, {
+      ...decoded.options,
       endpoint,
     });
     if (decoded.stream) {
@@ -111,11 +111,10 @@ export async function POST(request: Request): Promise<Response> {
     model: requiredEnv('OPENAI_MODEL'),
     apiKey: requiredEnv('OPENAI_API_KEY'),
   }));
-  const run = client.query({
+  const run = client.query(prompt, {
     endpoint,
-    prompt,
     emitTokens: true,
-    options: { maxTokens: 128 },
+    maxTokens: 128,
   });
 
   const stream = new ReadableStream<Uint8Array>({
