@@ -21,6 +21,6 @@ runs:
           .build/cargo
           .build/cmake
           .build/c
-        key: ${{ inputs.key-prefix }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'apps/**/Cargo.toml', 'bindings/**/Cargo.toml', 'crates/**/Cargo.toml', 'examples/**/Cargo.toml', 'lib/**/Cargo.toml', 'tools/**/Cargo.toml', 'xtask/Cargo.toml') }}
+        key: ${{ inputs.key-prefix }}-ninja-v1-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'apps/**/Cargo.toml', 'bindings/**/Cargo.toml', 'crates/**/Cargo.toml', 'examples/**/Cargo.toml', 'lib/**/Cargo.toml', 'tools/**/Cargo.toml', 'xtask/Cargo.toml') }}
         restore-keys: |
-          ${{ inputs.key-prefix }}-
+          ${{ inputs.key-prefix }}-ninja-v1-
