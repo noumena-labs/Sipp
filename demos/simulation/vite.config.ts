@@ -2,6 +2,7 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { sippViteConfig } from '../../lib/web/src/vite.js';
 import { sippClientDistWatch } from '../sipp-dist-watch';
 
 const simAppDir = fileURLToPath(new URL('.', import.meta.url));
@@ -15,6 +16,7 @@ const sippClientDirectorEntry = path.join(sippClientDistDir, 'orchestrator/index
 const appOutDir = path.resolve(simAppDir, '../../.build/artifacts/demos/simulation');
 
 export default defineConfig({
+  ...sippViteConfig(),
   plugins: [react(), sippClientDistWatch()],
   build: {
     outDir: appOutDir,
@@ -30,17 +32,5 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ['@noumena-labs/sipp'],
-  },
-  server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
-  preview: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
   },
 });

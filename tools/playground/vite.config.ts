@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import { sippClientDistWatch } from '../../demos/sipp-dist-watch';
+import { sippViteConfig } from '../../lib/web/src/vite.js';
 
 const playgroundAppDir = fileURLToPath(new URL('.', import.meta.url));
 const sippClientDistDir = path.resolve(
@@ -13,6 +14,7 @@ const sippClientEntry = path.join(sippClientDistDir, 'index.js');
 const appOutDir = path.resolve(playgroundAppDir, '../../.build/artifacts/tools/playground');
 
 export default defineConfig({
+  ...sippViteConfig(),
   plugins: [react(), sippClientDistWatch()],
   build: {
     outDir: appOutDir,
@@ -29,17 +31,5 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ['@noumena-labs/sipp'],
-  },
-  server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
-  preview: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
   },
 });
