@@ -22,5 +22,36 @@ still own:
 - Close `SippClient` instances when a page, worker, or component no longer
   needs local runtime resources.
 
+## Interrupted Downloads
+
+Remote model downloads keep successfully written OPFS bytes when the network
+stalls or a retryable request fails. A later attempt resumes with `Range` and
+`If-Range` when the server exposes an ETag or last-modified validator. If the
+server rejects or ignores the range, Sipp discards the partial file and retries
+the request from the beginning. Partial downloads survive page reloads and are
+removed when they become invalid or remain unused for seven days.
+
+Set the per-chunk stall deadline when adding a remote model. The default is 30
+seconds:
+
+```ts
+const model = await client.models.add(['/models/model.gguf'], {
+  stallTimeoutMs: 30_000,
+});
+```
+
+Applications can observe a range fallback without intercepting console output:
+
+```ts
+const unsubscribe = client.subscribeEvents((event) => {
+  if (event.type === 'fallback-warning' && event.kind === 'transfer') {
+    reportDownloadFallback(event.detail);
+  }
+});
+
+// Stop observing when the owning view or worker is disposed.
+unsubscribe();
+```
+
 Use the browser examples for minimal flows and the playground for runtime
 diagnostics.

@@ -4,6 +4,7 @@ import { ModelService } from '../../src/models/model-service.js';
 import {
   AssetStore,
   type RemoteAssetMetadata,
+  type RemoteDownloadPlan,
   type RemoteStoreReceipt,
 } from '../../src/models/asset-store.js';
 import { ModelRegistryStore } from '../../src/models/model-registry-store.js';
@@ -219,7 +220,7 @@ class FakeAssetStore {
       return [await this.installFile({ kind: 'model', file })];
     }
 
-    await this.cleanupBrowserSplitArtifacts();
+    await this.cleanupLocalSplitArtifacts();
     this.localSplitCount += 1;
     const sourceFileName = file.name.replace(/[\\/:*?"<>|]+/g, '-');
     return [0, 1].map((index) => {
@@ -246,12 +247,41 @@ class FakeAssetStore {
     });
   }
 
+  public async prepareRemoteDownload(
+    metadata: RemoteAssetMetadata
+  ): Promise<RemoteDownloadPlan> {
+    const storagePath = `asset-model-${metadata.name}-${metadata.bytes}`;
+    return {
+      storagePath,
+      layout: 'single-file',
+      startOffset: this.files.get(storagePath)?.size ?? 0,
+    };
+  }
+
+  public async resetRemoteDownload(plan: RemoteDownloadPlan): Promise<RemoteDownloadPlan> {
+    this.files.delete(plan.storagePath);
+    return { ...plan, startOffset: 0 };
+  }
+
   public async downloadRemote(
     metadata: RemoteAssetMetadata,
     kind: AssetRecord['kind'],
-    response: Response
+    options: { readonly body: ReadableStream<Uint8Array> | null }
   ): Promise<RemoteStoreReceipt> {
-    const payload = await response.arrayBuffer();
+    const { body } = options;
+    if (body == null) {
+      throw new Error('fake remote response body is required');
+    }
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      chunks.push(value);
+    }
+    const payload = new Blob(chunks);
     const id = `asset-${kind}-${metadata.name}-${metadata.bytes}`;
     const stored = new File([payload], metadata.name);
     this.files.set(id, stored);
@@ -278,9 +308,9 @@ class FakeAssetStore {
   public async downloadRemoteGguf(
     metadata: RemoteAssetMetadata,
     _runtime: unknown,
-    response: Response
+    options: { readonly body: ReadableStream<Uint8Array> | null }
   ): Promise<RemoteStoreReceipt> {
-    return await this.downloadRemote(metadata, 'model', response);
+    return await this.downloadRemote(metadata, 'model', options);
   }
 
   public async getFile(record: AssetRecord): Promise<File> {
@@ -334,19 +364,19 @@ class FakeAssetStore {
     this.files.delete(record.id);
   }
 
-  public async cleanupBrowserSplitArtifacts(): Promise<void> {
+  public async cleanupLocalSplitArtifacts(): Promise<void> {
     this.cleanupCount += 1;
   }
 
   public openAcquisitionJournal(): {
-    recordStoragePath(storagePath: string): Promise<void>;
-    recordStoragePaths(storagePaths: readonly string[]): Promise<void>;
+    recordResumableDownload(storagePath: string, expectedBytes: number): Promise<void>;
+    recordTemporaryPaths(storagePaths: readonly string[]): Promise<void>;
     cleanupUncommitted(manifest: RegistryManifest): Promise<void>;
     clear(): Promise<void>;
   } {
     return {
-      recordStoragePath: async () => {},
-      recordStoragePaths: async () => {},
+      recordResumableDownload: async () => {},
+      recordTemporaryPaths: async () => {},
       cleanupUncommitted: async () => {},
       clear: async () => {},
     };
@@ -1467,6 +1497,23 @@ test('ModelService preserves terminal remote acquisition errors', async () => {
       assert.equal(rust.remoteCancelCount, 0);
     }
   );
+});
+
+test('ModelService rejects invalid remote download stall timeouts', async () => {
+  const { service } = createRustBackedService();
+
+  for (const stallTimeoutMs of [0, -1, Number.NaN]) {
+    await assert.rejects(
+      service.add(
+        { kind: 'remote', urls: ['https://example.test/model.gguf'] },
+        { stallTimeoutMs }
+      ),
+      (error) =>
+        error instanceof QueryError &&
+        error.code === 'INVALID_MODEL_SOURCE' &&
+        /stallTimeoutMs/.test(error.message)
+    );
+  }
 });
 
 test('ModelService cleans browser remote downloads when classification fails', async () => {

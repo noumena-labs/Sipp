@@ -3,140 +3,11 @@ import assert from 'node:assert/strict';
 import { AssetStore, type GgufSplitRuntime, type RemoteAssetMetadata } from '../../src/models/asset-store.js';
 import {
   BrowserAcquisitionJournal,
-  recoverBrowserAcquisitionJournals,
+  recoverBrowserAcquisitionState,
 } from '../../src/models/acquisition-journal.js';
-import { QueryError } from '../../src/models/types.js';
-import { FileSystemStorage, type OpfsSyncAccessHandle } from '../../src/engine/file-system-storage.js';
-
-class MemorySyncAccessHandle implements OpfsSyncAccessHandle {
-  private buffer: Uint8Array;
-
-  constructor(
-    private readonly files: Map<string, File>,
-    private readonly fileName: string,
-    bytes: Uint8Array
-  ) {
-    this.buffer = bytes.slice();
-  }
-
-  public read(target: Uint8Array, options: { at?: number } = {}): number {
-    const offset = options.at ?? 0;
-    const source = this.buffer.subarray(offset, offset + target.byteLength);
-    target.set(source);
-    return source.byteLength;
-  }
-
-  public write(source: Uint8Array, options: { at?: number } = {}): number {
-    const offset = options.at ?? 0;
-    const end = offset + source.byteLength;
-    if (end > this.buffer.byteLength) {
-      const next = new Uint8Array(end);
-      next.set(this.buffer);
-      this.buffer = next;
-    }
-    this.buffer.set(source, offset);
-    return source.byteLength;
-  }
-
-  public truncate(size: number): void {
-    this.buffer = this.buffer.slice(0, size);
-  }
-
-  public flush(): void {}
-
-  public close(): void {
-    this.files.set(this.fileName, new File([this.buffer], this.fileName));
-  }
-}
-
-class MemoryStorage {
-  public readonly files = new Map<string, File>();
-  public readonly texts = new Map<string, string>();
-  public readonly operations: string[] = [];
-  public readonly writes: string[] = [];
-  public readonly deleted: string[] = [];
-  public failWith: unknown = null;
-
-  public async streamToDisk(
-    fileName: string,
-    stream: ReadableStream<Uint8Array>,
-    onProgress?: (bytes: number) => void
-  ): Promise<File> {
-    if (this.failWith != null) {
-      throw this.failWith;
-    }
-    this.operations.push(`stream:${fileName}`);
-    this.writes.push(fileName);
-    const reader = stream.getReader();
-    const chunks: Uint8Array[] = [];
-    let bytes = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        if (value != null) {
-          chunks.push(value);
-          bytes += value.byteLength;
-          onProgress?.(bytes);
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-    const file = new File(chunks, fileName);
-    this.files.set(fileName, file);
-    return file;
-  }
-
-  public async getFile(fileName: string): Promise<File | null> {
-    return this.files.get(fileName) ?? null;
-  }
-
-  public async listFileNames(): Promise<string[]> {
-    return [...this.files.keys()];
-  }
-
-  public async listFileNamesAt(path: readonly string[]): Promise<string[]> {
-    const prefix = `${path.join('/')}/`;
-    return [...this.texts.keys()]
-      .filter((key) => key.startsWith(prefix))
-      .map((key) => key.slice(prefix.length))
-      .filter((key) => !key.includes('/'));
-  }
-
-  public async readTextAt(path: readonly string[]): Promise<string | null> {
-    return this.texts.get(path.join('/')) ?? null;
-  }
-
-  public async writeTextAt(path: readonly string[], contents: string): Promise<void> {
-    const key = path.join('/');
-    this.operations.push(`journal:${key}`);
-    this.texts.set(key, contents);
-  }
-
-  public async createSyncAccessHandle(
-    fileName: string,
-    options: { create?: boolean } = {}
-  ): Promise<OpfsSyncAccessHandle> {
-    const file = this.files.get(fileName);
-    if (file == null && options.create !== true) {
-      throw new DOMException('Missing file', 'NotFoundError');
-    }
-    const bytes = file == null ? new Uint8Array() : new Uint8Array(await file.arrayBuffer());
-    return new MemorySyncAccessHandle(this.files, fileName, bytes);
-  }
-
-  public async deleteFile(fileName: string): Promise<void> {
-    this.deleted.push(fileName);
-    this.files.delete(fileName);
-  }
-
-  public async deleteFileAt(path: readonly string[]): Promise<void> {
-    this.texts.delete(path.join('/'));
-  }
-}
+import { QueryError, type ModelLoadProgress } from '../../src/models/types.js';
+import { FileSystemStorage } from '../../src/engine/file-system-storage.js';
+import { MemoryStorage } from '../support/memory-storage.js';
 
 const metadata: RemoteAssetMetadata = {
   url: 'https://models.test/model.gguf',
@@ -168,6 +39,35 @@ function createTestAssetStore(storage: MemoryStorage): AssetStore {
   return new AssetStore(storage as unknown as FileSystemStorage);
 }
 
+const singleFileRuntime: GgufSplitRuntime = {
+  browserCacheLayout: async () => 'single-file',
+  planGgufSplitCount: async () => 1,
+  splitGgufStream: async () => {},
+};
+
+async function downloadRemote(
+  store: AssetStore,
+  body: ReadableStream<Uint8Array> | null,
+  options: {
+    readonly metadata?: RemoteAssetMetadata;
+    readonly journal?: BrowserAcquisitionJournal;
+    readonly onProgress?: (progress: ModelLoadProgress) => void;
+  } = {}
+) {
+  const remoteMetadata = options.metadata ?? metadata;
+  const plan = await store.prepareRemoteDownload(remoteMetadata, singleFileRuntime);
+  return await store.downloadRemoteGguf(
+    remoteMetadata,
+    singleFileRuntime,
+    {
+      plan,
+      body,
+      onProgress: options.onProgress,
+      journal: options.journal,
+    }
+  );
+}
+
 async function withSyncAccessSupported<T>(fn: () => Promise<T>): Promise<T> {
   const original = FileSystemStorage.isSyncAccessSupported;
   FileSystemStorage.isSyncAccessSupported = async () => true;
@@ -182,9 +82,9 @@ test('AssetStore registers remote downloads without copying the OPFS temp file',
   await withSupportedStorage(async () => {
     const storage = new MemoryStorage();
     const store = createTestAssetStore(storage);
-    const response = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
+    const body = new Blob(['model-bytes']).stream() as unknown as ReadableStream<Uint8Array>;
 
-    const receipt = await store.downloadRemote(metadata, 'model', response);
+    const receipt = await downloadRemote(store, body);
     const record = receipt.records[0];
     assert.ok(record);
     const file = await store.getFile(record);
@@ -200,7 +100,7 @@ test('AssetStore registers remote downloads without copying the OPFS temp file',
   });
 });
 
-test('AssetStore records remote download journal before creating the asset file', async () => {
+test('AssetStore records resumable download metadata before creating the asset file', async () => {
   await withSupportedStorage(async () => {
     const storage = new MemoryStorage();
     const store = createTestAssetStore(storage);
@@ -208,14 +108,93 @@ test('AssetStore records remote download journal before creating the asset file'
       storage as unknown as FileSystemStorage,
       'lease-1'
     );
-    const response = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
+    const body = new Blob(['model-bytes']).stream() as unknown as ReadableStream<Uint8Array>;
 
-    await store.downloadRemote(metadata, 'model', response, undefined, undefined, journal);
+    await downloadRemote(store, body, { journal });
 
     assert.equal(storage.operations.length, 2);
-    assert.equal(storage.operations[0], 'journal:.incoming/journals/lease-1.json');
+    assert.match(storage.operations[0], /^journal:\.incoming\/partials\/[0-9a-f]{64}\.json$/);
     assert.match(storage.operations[1], /^stream:asset-[0-9a-f]{64}-model\.gguf$/);
   });
+});
+
+test('Browser acquisition recovery retains resumable bytes across page reloads', async () => {
+  const storage = new MemoryStorage();
+  const store = createTestAssetStore(storage);
+  const plan = await store.prepareRemoteDownload(metadata, singleFileRuntime);
+  const journal = new BrowserAcquisitionJournal(
+    storage as unknown as FileSystemStorage,
+    'lease-resume'
+  );
+  await journal.recordResumableDownload(plan.storagePath, metadata.bytes);
+  await journal.recordTemporaryPaths(['split-uncommitted.gguf']);
+  storage.files.set(plan.storagePath, new File(['partial'], plan.storagePath));
+  storage.files.set(
+    'split-uncommitted.gguf',
+    new File(['temporary'], 'split-uncommitted.gguf')
+  );
+
+  await recoverBrowserAcquisitionState(
+    storage as unknown as FileSystemStorage,
+    emptyManifest
+  );
+
+  assert.equal(storage.files.get(plan.storagePath)?.size, 7);
+  assert.equal(storage.files.has('split-uncommitted.gguf'), false);
+  assert.equal(storage.texts.has('.incoming/journals/lease-resume.json'), false);
+  assert.ok([...storage.texts.keys()].some((path) => path.startsWith('.incoming/partials/')));
+  assert.equal(
+    (await store.prepareRemoteDownload(metadata, singleFileRuntime)).startOffset,
+    7
+  );
+});
+
+test('Browser acquisition rollback preserves resumable bytes and removes generated artifacts', async () => {
+  const storage = new MemoryStorage();
+  const store = createTestAssetStore(storage);
+  const plan = await store.prepareRemoteDownload(metadata, singleFileRuntime);
+  const journal = new BrowserAcquisitionJournal(
+    storage as unknown as FileSystemStorage,
+    'lease-rollback'
+  );
+  await journal.recordResumableDownload(plan.storagePath, metadata.bytes);
+  await journal.recordTemporaryPaths(['split-rollback.gguf']);
+  storage.files.set(plan.storagePath, new File(['partial'], plan.storagePath));
+  storage.files.set('split-rollback.gguf', new File(['temporary'], 'split-rollback.gguf'));
+
+  await journal.cleanupUncommitted(emptyManifest);
+
+  assert.equal(storage.files.get(plan.storagePath)?.size, 7);
+  assert.equal(storage.files.has('split-rollback.gguf'), false);
+  assert.ok([...storage.texts.keys()].some((path) => path.startsWith('.incoming/partials/')));
+  assert.equal(storage.texts.has('.incoming/journals/lease-rollback.json'), false);
+});
+
+test('Browser acquisition cleanup discards stale resumable downloads', async () => {
+  const storage = new MemoryStorage();
+  const store = createTestAssetStore(storage);
+  const plan = await store.prepareRemoteDownload(metadata, singleFileRuntime);
+  const journal = new BrowserAcquisitionJournal(
+    storage as unknown as FileSystemStorage,
+    'lease-stale'
+  );
+  await journal.recordResumableDownload(plan.storagePath, metadata.bytes);
+  storage.files.set(plan.storagePath, new File(['partial'], plan.storagePath));
+  const markerPath = [...storage.texts.keys()].find((path) =>
+    path.startsWith('.incoming/partials/')
+  );
+  assert.ok(markerPath != null);
+  const marker = JSON.parse(storage.texts.get(markerPath) ?? '{}') as Record<string, unknown>;
+  marker.updatedAt = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  storage.texts.set(markerPath, JSON.stringify(marker));
+
+  await recoverBrowserAcquisitionState(
+    storage as unknown as FileSystemStorage,
+    emptyManifest
+  );
+
+  assert.equal(storage.files.has(plan.storagePath), false);
+  assert.equal(storage.texts.has(markerPath), false);
 });
 
 test('Browser acquisition journal recovery preserves registered assets', async () => {
@@ -234,7 +213,7 @@ test('Browser acquisition journal recovery preserves registered assets', async (
     })
   );
 
-  await recoverBrowserAcquisitionJournals(storage as unknown as FileSystemStorage, {
+  await recoverBrowserAcquisitionState(storage as unknown as FileSystemStorage, {
     version: 7,
     projectorIndexRevision: 0,
     models: {},
@@ -260,14 +239,20 @@ test('AssetStore replaces wrong-sized deterministic remote files', async () => {
   await withSupportedStorage(async () => {
     const storage = new MemoryStorage();
     const store = createTestAssetStore(storage);
-    const initial = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
-    const first = await store.downloadRemote(metadata, 'model', initial);
+    const initial = new Blob(['model-bytes']).stream() as unknown as ReadableStream<Uint8Array>;
+    const first = await downloadRemote(store, initial);
     const record = first.records[0];
     assert.ok(record);
     storage.files.set(record.storagePath, new File(['short'], record.storagePath));
 
-    const replacement = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
-    const second = await store.downloadRemote(metadata, 'model', replacement);
+    const replacement = new Blob(['model-bytes']).stream() as unknown as ReadableStream<Uint8Array>;
+    const stalePlan = await store.prepareRemoteDownload(metadata, singleFileRuntime);
+    const plan = await store.resetRemoteDownload(stalePlan);
+    const second = await store.downloadRemoteGguf(
+      metadata,
+      singleFileRuntime,
+      { plan, body: replacement }
+    );
 
     assert.deepEqual(storage.deleted, [record.storagePath]);
     assert.equal(second.records[0]?.storagePath, record.storagePath);
@@ -281,10 +266,10 @@ test('AssetStore surfaces quota failures with a storage-specific error code', as
     const storage = new MemoryStorage();
     storage.failWith = new DOMException('quota full', 'QuotaExceededError');
     const store = createTestAssetStore(storage);
-    const response = new Response(new Blob(['model-bytes']).stream(), { status: 200 });
+    const body = new Blob(['model-bytes']).stream() as unknown as ReadableStream<Uint8Array>;
 
     await assert.rejects(
-      () => store.downloadRemote(metadata, 'model', response),
+      () => downloadRemote(store, body),
       (error) =>
         error instanceof QueryError &&
         error.code === 'STORAGE_QUOTA_EXCEEDED' &&
@@ -335,17 +320,18 @@ test('AssetStore splits large local GGUF files through sync OPFS callbacks', asy
   });
 });
 
-test('AssetStore cleans browser split temp files and unregistered shards', async () => {
+test('AssetStore cleans local split temp files and unregistered shards', async () => {
   await withSupportedStorage(async () => {
     const storage = new MemoryStorage();
     storage.files.set('tmp-source-leftover.gguf', new File(['tmp'], 'tmp-source-leftover.gguf'));
     storage.files.set('tmp-local-source-leftover.gguf', new File(['tmp'], 'tmp-local-source-leftover.gguf'));
     storage.files.set('split-orphan-00001-of-00002.gguf', new File(['orphan'], 'split-orphan-00001-of-00002.gguf'));
-    storage.files.set('split-keep-00001-of-00002.gguf', new File(['keep'], 'split-keep-00001-of-00002.gguf'));
+    storage.files.set('split-local-orphan-00001-of-00002.gguf', new File(['orphan'], 'split-local-orphan-00001-of-00002.gguf'));
+    storage.files.set('split-local-keep-00001-of-00002.gguf', new File(['keep'], 'split-local-keep-00001-of-00002.gguf'));
     storage.files.set('asset-model.gguf', new File(['model'], 'asset-model.gguf'));
     const store = createTestAssetStore(storage);
 
-    await store.cleanupBrowserSplitArtifacts({
+    await store.cleanupLocalSplitArtifacts({
       version: 7,
       projectorIndexRevision: 0,
       models: {},
@@ -353,19 +339,65 @@ test('AssetStore cleans browser split temp files and unregistered shards', async
         keep: {
           id: 'keep',
           kind: 'shard',
-          name: 'split-keep-00001-of-00002.gguf',
+          name: 'split-local-keep-00001-of-00002.gguf',
           bytes: 4,
-          storagePath: 'split-keep-00001-of-00002.gguf',
+          storagePath: 'split-local-keep-00001-of-00002.gguf',
           refCount: 0,
           createdAt: new Date(0).toISOString(),
         },
       },
     });
 
-    assert.equal(storage.files.has('tmp-source-leftover.gguf'), false);
+    assert.equal(storage.files.has('tmp-source-leftover.gguf'), true);
     assert.equal(storage.files.has('tmp-local-source-leftover.gguf'), false);
-    assert.equal(storage.files.has('split-orphan-00001-of-00002.gguf'), false);
-    assert.equal(storage.files.has('split-keep-00001-of-00002.gguf'), true);
+    assert.equal(storage.files.has('split-orphan-00001-of-00002.gguf'), true);
+    assert.equal(storage.files.has('split-local-orphan-00001-of-00002.gguf'), false);
+    assert.equal(storage.files.has('split-local-keep-00001-of-00002.gguf'), true);
     assert.equal(storage.files.has('asset-model.gguf'), true);
+  });
+});
+
+test('AssetStore supports resumable downloads with 206 Partial Content', async () => {
+  await withSupportedStorage(async () => {
+    const storage = new MemoryStorage();
+    const store = createTestAssetStore(storage);
+    const metadata: RemoteAssetMetadata = {
+      url: 'https://example.com/model.gguf',
+      canonicalUrl: 'https://example.com/model.gguf',
+      name: 'model.gguf',
+      bytes: 5,
+    };
+    const plan = await store.prepareRemoteDownload(metadata, singleFileRuntime);
+    const { storagePath } = plan;
+
+    storage.files.set(storagePath, new File([Uint8Array.from([1, 2, 3])], storagePath));
+
+    const progress: number[] = [];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Uint8Array.from([4, 5]));
+        controller.close();
+      },
+    });
+
+    const resumedPlan = await store.prepareRemoteDownload(metadata, singleFileRuntime);
+    const receipt = await store.downloadRemoteGguf(
+      metadata,
+      singleFileRuntime,
+      {
+        plan: resumedPlan,
+        body,
+        onProgress: (p) => progress.push(p.loadedBytes),
+      }
+    );
+
+    assert.equal(receipt.records.length, 1);
+    assert.equal(receipt.records[0].bytes, 5);
+    const finalFile = await store.getFile(receipt.records[0]);
+    assert.equal(finalFile.size, 5);
+    const content = new Uint8Array(await finalFile.arrayBuffer());
+    assert.deepEqual([...content], [1, 2, 3, 4, 5]);
+    assert.ok(progress.includes(3));
+    assert.ok(progress.includes(5));
   });
 });
