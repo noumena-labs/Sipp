@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 
-def _fake_native_module_source(observability: str) -> str:
+def _fake_native_module_source(observability: str, usable_backend: str) -> str:
     return f'''
 class CacheRuntimeConfig: pass
 class ChatMessage: pass
@@ -53,6 +53,8 @@ DEFAULT_CONTEXT_KEY = "default"
 DEFAULT_MAX_TOKENS = 128
 def backend_observability_json(include_details):
     return {observability!r}
+def backend_is_usable(backend):
+    return backend == {usable_backend!r} or backend == "cpu"
 def set_llama_log_quiet(quiet):
     return None
 '''
@@ -62,8 +64,11 @@ def test_package_import_exposes_public_runtime_helpers() -> None:
     import sipp
 
     assert callable(sipp.backend_observability_json)
+    assert callable(sipp.backend_is_usable)
     assert callable(sipp.set_llama_log_quiet)
-    assert sipp.get_active_backend() in {"cpu", "cuda", "metal", "vulkan", "unknown"}
+    active_backend = sipp.get_active_backend()
+    assert active_backend in {"cpu", "cuda", "metal", "vulkan"}
+    assert sipp.backend_is_usable(active_backend)
     assert hasattr(sipp.SippClient, "add")
     assert hasattr(sipp.SippClient, "remove")
     assert hasattr(sipp.SippClient, "models")
@@ -207,7 +212,7 @@ def test_invalid_backend_environment_is_rejected() -> None:
 def test_package_loader_supports_explicit_fake_native_module(tmp_path: Path) -> None:
     fake_native = tmp_path / "fake_native.py"
     fake_native.write_text(
-        _fake_native_module_source('{"compiled":{"vulkan":true}}'),
+        _fake_native_module_source('{"compiled":{"vulkan":true}}', "vulkan"),
         encoding="utf-8",
     )
     package_root = Path(__file__).resolve().parents[1] / "python"
@@ -245,7 +250,7 @@ def test_package_loader_registers_cuda_13_dll_directory(tmp_path: Path) -> None:
     cuda_bin_x64.mkdir(parents=True)
     fake_native = tmp_path / "fake_native.py"
     fake_native.write_text(
-        _fake_native_module_source('{"compiled":{"cuda":true}}'),
+        _fake_native_module_source('{"compiled":{"cuda":true}}', "cuda"),
         encoding="utf-8",
     )
     package_root = Path(__file__).resolve().parents[1] / "python"
@@ -286,7 +291,8 @@ def test_package_loader_supports_installed_backend_package(tmp_path: Path) -> No
         _fake_native_module_source(
             '{"compiled":{"vulkan":true},'
             '"gpuOffloadSupported":true,'
-            '"availableBackends":[{"name":"vulkan"}]}'
+            '"availableBackends":[{"name":"VK"}]}',
+            "vulkan",
         ),
         encoding="utf-8",
     )
