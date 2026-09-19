@@ -1149,6 +1149,10 @@ fn cpp_and_rust_case_name_parsers_handle_supported_shapes() {
     );
     assert_eq!(rust_host_cfg_enabled("#[cfg(unix)]"), Some(cfg!(unix)));
     assert_eq!(
+        rust_host_cfg_enabled("#[cfg(target_os = \"macos\")]"),
+        Some(cfg!(target_os = "macos"))
+    );
+    assert_eq!(
         rust_host_cfg_enabled("#[cfg(target_family = \"wasm\")]"),
         Some(cfg!(target_family = "wasm"))
     );
