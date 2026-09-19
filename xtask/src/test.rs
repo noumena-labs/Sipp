@@ -2688,6 +2688,7 @@ fn rust_host_cfg_enabled(line: &str) -> Option<bool> {
     match compact.as_str() {
         "#[cfg(unix)]" => Some(cfg!(unix)),
         "#[cfg(windows)]" => Some(cfg!(windows)),
+        "#[cfg(target_os=\"macos\")]" => Some(cfg!(target_os = "macos")),
         "#[cfg(target_family=\"wasm\")]" => Some(cfg!(target_family = "wasm")),
         "#[cfg(not(target_family=\"wasm\"))]" => Some(!cfg!(target_family = "wasm")),
         // Cataloged suites use their declared/default Cargo features. If a caller changes
