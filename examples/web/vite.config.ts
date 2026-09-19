@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { sippViteConfig } from '../../lib/web/src/vite.js';
 
 const exampleDir = fileURLToPath(new URL('.', import.meta.url));
 const sippDistDir = path.resolve(
@@ -22,6 +23,7 @@ const pageEntries = {
 };
 
 export default defineConfig({
+  ...sippViteConfig(),
   build: {
     outDir: path.resolve(exampleDir, '../../.build/artifacts/examples/web'),
     emptyOutDir: true,
@@ -34,18 +36,6 @@ export default defineConfig({
       '@noumena-labs/sipp': sippEntry,
     },
     preserveSymlinks: true,
-  },
-  server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
-  preview: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
   },
   optimizeDeps: {
     exclude: ['@noumena-labs/sipp'],
