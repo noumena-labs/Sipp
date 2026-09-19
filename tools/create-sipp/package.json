@@ -1,0 +1,45 @@
+{
+  "name": "@sipphq/create-sipp",
+  "version": "0.1.0",
+  "description": "Scaffold a modern Sipp browser AI application with WebGPU and local inference in seconds",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "bin": {
+    "create-sipp": "bin/index.js"
+  },
+  "files": [
+    "bin",
+    "template",
+    "README.md"
+  ],
+  "keywords": [
+    "sipp",
+    "ai",
+    "llm",
+    "webgpu",
+    "browser-ai",
+    "create-app",
+    "scaffold"
+  ],
+  "author": "Noumena Labs",
+  "license": "Apache-2.0",
+  "homepage": "https://www.sipp.sh/",
+  "bugs": {
+    "url": "https://github.com/noumena-labs/Sipp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noumena-labs/Sipp.git",
+    "directory": "tools/create-sipp"
+  },
+  "scripts": {
+    "build:stage": "node scripts/stage-package.mjs",
+    "test": "node --test tests/cli.test.mjs"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  }
+}

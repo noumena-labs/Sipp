@@ -17,8 +17,29 @@ See [Examples And Demos](../examples-demos.md) for runnable end-to-end files.
 
 ## Browser Local
 
+Scaffold a complete Vite app with cross-origin isolation pre-configured:
+
+```bash
+npm create @sipphq/sipp@latest my-app
+cd my-app && npm install && npm run dev
+```
+
+Or add the browser SDK to an existing project:
+
 ```bash
 npm install @sipphq/sipp
+```
+
+Vite applications using the default multithreaded WASM runtime need the Sipp
+cross-origin isolation headers:
+
+```ts
+import { sippViteConfig } from '@sipphq/sipp/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  ...sippViteConfig(),
+});
 ```
 
 ```ts

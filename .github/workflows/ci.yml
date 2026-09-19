@@ -165,6 +165,12 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun install --frozen-lockfile
 
+      - name: Test and pack browser app initializer
+        run: |
+          bun run --cwd tools/create-sipp test
+          bun run --cwd tools/create-sipp build:stage
+          npm pack --dry-run .build/artifacts/npm/create-sipp
+
       - name: Run browser unit suites
         run: |
           cargo xtask --plain test unit --no-coverage suite browser --wasm-threading single-thread

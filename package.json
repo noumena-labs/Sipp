@@ -6,6 +6,7 @@
     "lib/node",
     "lib/web",
     "demos/*",
+    "tools/create-sipp",
     "tools/playground",
     "examples/web"
   ]

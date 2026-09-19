@@ -89,8 +89,9 @@ The unified SDK lets you dynamically partition and optimize complex application 
 
 It packages a **high-performance WebGPU engine**, with a secure container gateway proxy into a single, neat toolkit. Future releases will focus on embedded vector memory, on-device PII masking, and automated smart routing. See [Roadmap](docs/en/roadmap.md).
 
-From a source checkout, use the repo launcher installed by the setup scripts,
-or call the underlying xtask directly:
+The `sipp` command below is the repository's contributor launcher; it is not an
+npm package or the application scaffolder. From a source checkout, use the
+launcher installed by the setup scripts, or call the underlying xtask directly:
 
 ```bash
 sipp build wasm                  # Compile high-performance WebGPU assets
@@ -122,15 +123,37 @@ Run them yourself here: [benchmark.sipp.sh/benchmark](https://benchmark.sipp.sh/
 
 
 
-## Install
+## Create Or Install
 
-Sipp supports web browsers, desktop application wrappers, server environments, and native runtimes. Install the specific implementation layer for your surface environment:
+Create a ready-to-run browser application:
 
 ```sh
-# For Web Browsers, Next.js, and TanStack applications
+npm create @sipphq/sipp@latest my-app
+cd my-app
+npm install
+npm run dev
+```
+
+npm maps that command to the public `@sipphq/create-sipp` initializer. The
+generated application depends on the browser SDK, `@sipphq/sipp`. The
+initializer requires Node.js 20.19 or newer.
+
+For an existing application, choose the package by where that import executes,
+not by the framework name:
+
+| Code location | Package | Purpose |
+| --- | --- | --- |
+| Browser bundle or client component | `@sipphq/sipp` | Browser-local WebGPU/WASM inference and browser-to-gateway calls. |
+| Node.js process, API route, or server function | `@sipphq/sipp-server` | Native server inference, provider calls, and gateway route handlers. |
+| Full-stack Next.js or TanStack app | Both | Keep `@sipphq/sipp` in client modules and `@sipphq/sipp-server` in server-only modules. |
+
+Never import `@sipphq/sipp-server` into a browser bundle.
+
+```sh
+# For code that runs in a web browser
 npm install @sipphq/sipp
 
-# For Node.js backend deployments (with native CUDA/Metal compilation)
+# For code that runs in Node.js
 npm install @sipphq/sipp-server
 
 # For native systems development and application embedding
@@ -150,15 +173,15 @@ sipp build swift
 
 ---
 
-## Runtimes & Flavors
+## Package Surfaces
 
 Most developers should start with our pre-built packages when available. Swift
 support currently builds from a source checkout on macOS.
 
 | Surface | Module | Install | Docs |
 | --- | --- | --- | --- |
-| **Browser** | Sipp Edge | `npm install @sipphq/sipp` | [Browser package](docs/en/packages/browser.md) |
-| **Node.js** | Sipp Core | `npm install @sipphq/sipp-server` | [Node.js package](docs/en/packages/node.md) |
+| **Browser** | Browser SDK | `npm install @sipphq/sipp` | [Browser package](docs/en/packages/browser.md) |
+| **Node.js** | Server SDK | `npm install @sipphq/sipp-server` | [Node.js package](docs/en/packages/node.md) |
 | **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust package](docs/en/packages/rust.md) |
 | **Python** | Sipp Core | Wheels available on release page | [Python package](docs/en/packages/python.md) |
 | **Swift** | Sipp Core | Source-built on macOS | [Swift package](docs/en/packages/swift.md) |

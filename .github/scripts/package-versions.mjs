@@ -1,7 +1,11 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const cargoPath = 'Cargo.toml';
-const jsonPackagePaths = ['lib/web/package.json', 'lib/node/package.json'];
+const jsonPackagePaths = [
+  'lib/web/package.json',
+  'lib/node/package.json',
+  'tools/create-sipp/package.json',
+];
 const pythonBackends = ['cuda', 'metal', 'vulkan'];
 
 const command = process.argv[2];
@@ -52,6 +56,10 @@ function resolveAlignedVersion() {
     cargoWorkspace: cargo.match(
       /^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m,
     )?.[1],
+    createSipp: readJsonVersion('tools/create-sipp/package.json'),
+    createSippTemplate: JSON.parse(
+      readFileSync('tools/create-sipp/template/package.json', 'utf8'),
+    ).dependencies?.['@sipphq/sipp']?.replace(/^\^/, ''),
     node: readJsonVersion('lib/node/package.json'),
     python: pyproject.match(/^version = "([^"]+)"/m)?.[1],
     ...pythonBackendPackages,
@@ -88,6 +96,16 @@ function applyPackageVersions(packageVersion, pythonPackageVersion) {
     pkg.version = packageVersion;
     writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
   }
+
+  const createSippTemplatePath = 'tools/create-sipp/template/package.json';
+  const createSippTemplate = JSON.parse(
+    readFileSync(createSippTemplatePath, 'utf8'),
+  );
+  createSippTemplate.dependencies['@sipphq/sipp'] = `^${packageVersion}`;
+  writeFileSync(
+    createSippTemplatePath,
+    `${JSON.stringify(createSippTemplate, null, 2)}\n`,
+  );
 
   const pyprojectPath = 'lib/python/pyproject.toml';
   const pyproject = readFileSync(pyprojectPath, 'utf8')

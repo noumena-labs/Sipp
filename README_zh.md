@@ -66,6 +66,8 @@ const [smoothie, snowcone] = await Promise.all([
 
 它把**高性能 WebGPU 引擎**和安全的容器化网关代理打包成一个简洁的工具包。后续版本将重点推进嵌入式向量记忆、设备端 PII 脱敏，以及自动智能路由。参见[路线图](docs/zh/roadmap.md)。
 
+下面的 `sipp` 命令是源码仓库的贡献者启动器，不是 npm 包或应用脚手架。
+
 ```bash
 sipp build wasm                # 编译高性能 WebGPU 资源
 sipp run demos serve chat      # 启动本地硬件加速测试画布
@@ -89,15 +91,29 @@ sipp run demos serve chat      # 启动本地硬件加速测试画布
 > * **E2E Latency (End-to-End Latency)：** 端到端延迟，单位为毫秒 (ms)。**越低越好**。
 > * *测试环境为 Nvidia GTX 3080，1 次预热，3 次正式测量。结果为所有测量运行的平均值。*
 
-## 安装
+## 创建或安装
 
-Sipp 支持 Web 浏览器、桌面应用封装、服务端环境和原生运行时。请根据目标运行环境安装对应实现层：
+创建一个可直接运行的浏览器应用：
 
 ```sh
-# 适用于 Web 浏览器、Next.js 和 TanStack 应用
+npm create @sipphq/sipp@latest my-app
+cd my-app
+npm install
+npm run dev
+```
+
+npm 会将该命令映射到公开的 `@sipphq/create-sipp` 初始化器。生成的应用
+依赖浏览器 SDK `@sipphq/sipp`，并要求 Node.js 20.19 或更高版本。
+
+现有应用应根据代码的执行位置选择包：浏览器 Bundle 与客户端组件使用
+`@sipphq/sipp`；Node.js 进程、API 路由和服务端函数使用
+`@sipphq/sipp-server`。全栈应用可以同时使用两者，但不能把服务端包打进浏览器 Bundle。
+
+```sh
+# 适用于浏览器中运行的代码
 npm install @sipphq/sipp
 
-# 适用于 Node.js 后端部署（带原生 CUDA/Metal 编译）
+# 适用于 Node.js 中运行的代码
 npm install @sipphq/sipp-server
 
 # 适用于原生系统开发和应用嵌入
@@ -114,14 +130,14 @@ cargo add sipp-rs
 
 ---
 
-## 运行时与版本形态
+## 软件包运行环境
 
 多数开发者应优先使用预构建、已发布的包，而不是直接从 monorepo 源码编译。
 
 | 运行环境 | 模块 | 安装 | 文档 |
 | --- | --- | --- | --- |
-| **Browser** | Sipp Edge | `npm install @sipphq/sipp` | [浏览器包](docs/zh/packages/browser.md) |
-| **Node.js** | Sipp Core | `npm install @sipphq/sipp-server` | [Node.js 包](docs/zh/packages/node.md) |
+| **Browser** | 浏览器 SDK | `npm install @sipphq/sipp` | [浏览器包](docs/zh/packages/browser.md) |
+| **Node.js** | 服务端 SDK | `npm install @sipphq/sipp-server` | [Node.js 包](docs/zh/packages/node.md) |
 | **Rust** | Sipp Core | `cargo add sipp-rs` | [Rust 包](docs/zh/packages/rust.md) |
 | **Python** | Sipp Core | Release 页面提供 wheel | [Python 包](docs/zh/packages/python.md) |
 | **Gateway Server** | Sipp Cloud | 从源码构建 | [网关服务](docs/zh/gateway/server.md) |

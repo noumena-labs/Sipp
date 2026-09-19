@@ -62,21 +62,11 @@ export function LocalQuery(): JSX.Element {
 
 ```ts
 // vite.config.ts
+import { sippViteConfig } from '@sipphq/sipp/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
-  preview: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
+  ...sippViteConfig(),
 });
 ```
 

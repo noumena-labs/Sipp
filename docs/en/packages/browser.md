@@ -10,12 +10,23 @@ See the [Library API Overview](../api/) for the shared `add`, `query`,
 
 ## Install
 
+Scaffold a complete Vite app with cross-origin isolation pre-configured:
+
+```bash
+npm create @sipphq/sipp@latest my-app
+cd my-app && npm install && npm run dev
+```
+
+Or install the SDK in an existing browser application:
+
 ```bash
 npm install @sipphq/sipp
 ```
 
 Use this package in browser code. For server routes or Node services, use
-[`@sipphq/sipp-server`](node.md).
+[`@sipphq/sipp-server`](node.md). Browser-local WebGPU/WASM execution requires
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` response headers.
 
 ## Use It For
 
