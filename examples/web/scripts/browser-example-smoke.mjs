@@ -1,10 +1,14 @@
-import http from 'node:http';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import {
+  closeViteServer,
+  ensureViteServer,
+  withTimeout,
+} from '../../../tools/browser-smoke/vite-server.mjs';
 
+const EXAMPLE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 5174;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -99,140 +103,6 @@ function parseCase(value) {
   return value;
 }
 
-function exampleDir() {
-  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(scriptDir, '..');
-}
-
-function serverUrl(options) {
-  return `http://${options.host}:${options.port}`;
-}
-
-async function waitForServer(url, timeoutMs) {
-  const started = Date.now();
-  let lastError = null;
-  while (Date.now() - started < timeoutMs) {
-    try {
-      const status = await httpStatus(url);
-      if (status >= 200 && status < 500) {
-        return true;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-    await sleep(250);
-  }
-  if (lastError != null) {
-    throw lastError;
-  }
-  return false;
-}
-
-function httpStatus(url) {
-  return new Promise((resolve, reject) => {
-    const request = http.get(url, (response) => {
-      response.resume();
-      response.on('end', () => resolve(response.statusCode ?? 0));
-    });
-    request.setTimeout(1_000, () => {
-      request.destroy(new Error(`Timed out connecting to ${url}`));
-    });
-    request.on('error', reject);
-  });
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function withTimeout(promise, timeoutMs, label) {
-  let timer = null;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer != null) {
-      clearTimeout(timer);
-    }
-  });
-}
-
-function bunxCommand() {
-  if (process.platform !== 'win32') {
-    return 'bunx';
-  }
-
-  const home = process.env.USERPROFILE;
-  if (home != null) {
-    const bunx = path.join(home, '.bun', 'bin', 'bunx.exe');
-    if (existsSync(bunx)) {
-      return bunx;
-    }
-  }
-  return 'bunx.exe';
-}
-
-function startVite(options) {
-  const command = bunxCommand();
-  const child = spawn(
-    command,
-    ['--bun', 'vite', '--host', options.host, '--port', String(options.port), '--strictPort'],
-    {
-      cwd: exampleDir(),
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }
-  );
-
-  child.stdout.on('data', (chunk) => {
-    process.stderr.write(chunk);
-  });
-  child.stderr.on('data', (chunk) => {
-    process.stderr.write(chunk);
-  });
-
-  return child;
-}
-
-async function closeServer(child) {
-  if (child == null || child.exitCode != null) {
-    return;
-  }
-
-  child.kill();
-  await new Promise((resolve) => {
-    const timer = setTimeout(resolve, 3_000);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-}
-
-async function ensureServer(options) {
-  const url = serverUrl(options);
-  try {
-    if (await waitForServer(url, 1_000)) {
-      return { url, child: null };
-    }
-  } catch {
-    // No existing server; start a local Vite process below.
-  }
-
-  const child = startVite(options);
-  try {
-    await waitForServer(url, options.timeoutMs);
-    return { url, child };
-  } catch (error) {
-    await closeServer(child);
-    throw new Error(`Example server did not start at ${url}: ${error.message}`);
-  }
-}
-
 async function runCase(page, url, caseName, options) {
   const pageName = CASE_PAGES.get(caseName);
   await page.goto(`${url}/${pageName}`, { waitUntil: 'domcontentloaded', timeout: options.timeoutMs });
@@ -266,7 +136,13 @@ async function runCase(page, url, caseName, options) {
 }
 
 async function runBrowserExampleSmoke(options) {
-  const { url, child } = await ensureServer(options);
+  const { url, child } = await ensureViteServer({
+    rootDir: EXAMPLE_DIR,
+    host: options.host,
+    port: options.port,
+    timeoutMs: options.timeoutMs,
+    label: 'Example',
+  });
   let browser = null;
   try {
     browser = await withTimeout(
@@ -283,7 +159,7 @@ async function runBrowserExampleSmoke(options) {
     return { url, cases };
   } finally {
     await browser?.close();
-    await closeServer(child);
+    await closeViteServer(child);
   }
 }
 
