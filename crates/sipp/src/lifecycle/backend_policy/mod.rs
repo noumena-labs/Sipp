@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use crate::backend::{
     backend_observability_json, json_array_strings, json_bool, KEY_AVAILABLE_BACKENDS,
-    KEY_COMPILED, KEY_DYNAMIC_BACKEND_LOADING, KEY_GPU_OFFLOAD_SUPPORTED, KEY_NAME,
+    KEY_BACKEND_NAME, KEY_COMPILED, KEY_DEVICES, KEY_DYNAMIC_BACKEND_LOADING,
+    KEY_GPU_OFFLOAD_SUPPORTED, KEY_NAME,
 };
 use crate::collection::sorted_unique_non_empty_strings;
 use crate::engine::{FlashAttentionMode, GpuLayerConfig, NativeRuntimeConfig};
@@ -111,11 +112,9 @@ pub fn read_backend_capabilities() -> Result<BackendCapabilities, ModelError> {
     let raw = backend_observability_json(true).map_err(ModelError::from)?;
     let value = serde_json::from_str::<Value>(&raw)?;
 
-    let available = normalize_backend_names_or_cpu(&json_array_strings(
-        &value,
-        KEY_AVAILABLE_BACKENDS,
-        KEY_NAME,
-    ));
+    let mut available_names = json_array_strings(&value, KEY_AVAILABLE_BACKENDS, KEY_NAME);
+    available_names.extend(json_array_strings(&value, KEY_DEVICES, KEY_BACKEND_NAME));
+    let available = normalize_backend_names_or_cpu(&available_names);
     let dynamic_backend_loading = json_bool(&value, KEY_DYNAMIC_BACKEND_LOADING).unwrap_or(false);
     let compiled = if dynamic_backend_loading {
         available.clone()
@@ -181,6 +180,16 @@ fn select_auto_backend(capabilities: &BackendCapabilities) -> String {
         }
     }
     CPU_BACKEND.to_string()
+}
+
+/// Query native runtime capabilities for a usable canonical backend.
+pub fn host_backend_is_usable(name: &str) -> Result<bool, ModelError> {
+    let name = normalize_backend_name(name);
+    if is_cpu_backend(&name) {
+        return Ok(true);
+    }
+    let capabilities = read_backend_capabilities()?.normalized();
+    Ok(backend_is_usable(&name, &capabilities))
 }
 
 fn require_backend(
@@ -260,19 +269,20 @@ fn selection_reason(requested: BackendPreference, selected: &str) -> String {
 
 fn normalize_backend_name(name: &str) -> String {
     let lower = name.trim().to_ascii_lowercase();
-    if lower.contains("cuda") {
-        BackendPreference::Cuda.as_str().to_string()
-    } else if lower.contains("metal") {
-        BackendPreference::Metal.as_str().to_string()
-    } else if lower.contains("vulkan") {
-        BackendPreference::Vulkan.as_str().to_string()
-    } else if lower.contains("webgpu") {
-        BackendPreference::WebGpu.as_str().to_string()
-    } else if lower.contains("cpu") {
-        CPU_BACKEND.to_string()
-    } else {
-        lower
+    for token in lower.split(|character: char| !character.is_ascii_alphanumeric()) {
+        let canonical = match token {
+            "cuda" | "nv" | "nvidia" => Some(BackendPreference::Cuda.as_str()),
+            "metal" | "mtl" | "apple" => Some(BackendPreference::Metal.as_str()),
+            "vulkan" | "vk" => Some(BackendPreference::Vulkan.as_str()),
+            "webgpu" | "wgpu" => Some(BackendPreference::WebGpu.as_str()),
+            "cpu" => Some(CPU_BACKEND),
+            _ => None,
+        };
+        if let Some(canonical) = canonical {
+            return canonical.to_string();
+        }
     }
+    lower
 }
 
 fn is_cpu_backend(name: &str) -> bool {

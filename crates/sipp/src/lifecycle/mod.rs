@@ -12,7 +12,8 @@ mod types;
 mod util;
 
 pub use backend_policy::{
-    read_backend_capabilities, BackendCapabilities, BackendPlan, BackendPolicy,
+    host_backend_is_usable, read_backend_capabilities, BackendCapabilities, BackendPlan,
+    BackendPolicy,
 };
 pub use browser::{
     error_response as browser_lifecycle_error_response,

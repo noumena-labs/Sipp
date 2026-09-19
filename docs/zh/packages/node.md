@@ -65,6 +65,7 @@ console.log(streamed || response.text);
 ```
 
 设置环境变量 `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` 来选择原生后端引擎。关于本地运行时的配置参数与请求选项说明，请参阅[运行时选项](../reference/runtime-options.md)。
+使用默认自动选择时，若跳过不可用的 GPU 后端，`onFallback(listener)` 会发出结构化的 `fallback-warning` 事件。
 
 Intel 集成显卡的 Mac 建议设置 `SIPP_NODE_BACKEND=cpu`。Metal 后端主要面向
 Apple Silicon 和已测试的 AMD Mac GPU。Apple Silicon 可以通过 Rosetta 2

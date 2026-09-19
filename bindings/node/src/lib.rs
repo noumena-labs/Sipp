@@ -17,7 +17,10 @@ use sipp::backend::{
 use sipp::core::TokenUsage as CoreTokenUsage;
 use sipp::engine::protocol::RequestStats as CoreRequestStats;
 use sipp::engine::{PoolingType as CorePoolingType, TokenBatch as CoreTokenBatch};
-use sipp::lifecycle::{ModelModality as CoreModelModality, ModelStatus as CoreModelStatus};
+use sipp::lifecycle::{
+    host_backend_is_usable as core_backend_is_usable, ModelModality as CoreModelModality,
+    ModelStatus as CoreModelStatus,
+};
 use sipp::{
     Endpoint as CoreEndpoint, EndpointRef as CoreEndpointRef, ManagedModel as CoreManagedModel,
     ProviderEndpointError as CoreProviderEndpointError,
@@ -1635,6 +1638,12 @@ impl Task for ClientNextTokenTask {
 #[napi]
 pub fn backend_observability_json(include_details: Option<bool>) -> Result<String> {
     core_backend_observability_json(include_details.unwrap_or(true)).map_err(core_error)
+}
+
+/// Return whether the native runtime reports a usable canonical backend.
+#[napi]
+pub fn backend_is_usable(backend: String) -> Result<bool> {
+    core_backend_is_usable(&backend).map_err(|error| napi_error(error.to_string()))
 }
 
 /// Enable or suppress llama.cpp native logging.

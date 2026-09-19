@@ -13,6 +13,7 @@ mod observability_json_tests;
 /////////////////////////////////////////////////////////////////////////////////
 
 pub(crate) const KEY_AVAILABLE_BACKENDS: &str = "availableBackends";
+pub(crate) const KEY_BACKEND_NAME: &str = "backendName";
 pub(crate) const KEY_COMPILED: &str = "compiled";
 pub(crate) const KEY_DEVICE_ID: &str = "deviceId";
 pub(crate) const KEY_DEVICES: &str = "devices";

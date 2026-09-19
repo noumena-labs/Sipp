@@ -74,6 +74,8 @@ console.log(streamed || response.text);
 ```
 
 Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
+With the default automatic selection, `onFallback(listener)` emits a structured
+`fallback-warning` when an unavailable GPU backend is skipped.
 By default, macOS tries `metal` then `cpu`; Windows and Linux try `cuda`,
 `vulkan`, then `cpu`.
 See [Runtime Options](../reference/runtime-options.md) for local runtime config
