@@ -26,8 +26,6 @@ pub(crate) fn apply_host_cmake_overrides(context: &BuildContext, config: &mut Co
         );
     }
 
-    config.generator("Ninja");
-
     if context.target.contains("msvc") {
         config.define("CMAKE_POLICY_DEFAULT_CMP0194", "OLD");
         config.cxxflag("/EHsc");

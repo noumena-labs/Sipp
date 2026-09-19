@@ -9,7 +9,7 @@ use crate::test_support::TempDir;
 #[cfg(target_os = "macos")]
 use crate::toolchains::vulkan::VulkanLayout;
 use crate::utils::BuildContext;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use std::fs;
 use xshell::cmd;
 
@@ -56,6 +56,39 @@ fn native_toolchain_env_does_not_install_missing_ninja() {
     let _command = apply_toolchains(&sh, &ctx, cmd!(sh, "true"), None).unwrap();
 
     assert!(!ctx.ninja_toolchain_dir().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn native_toolchain_env_adds_managed_ninja_without_selecting_a_generator() {
+    let temp = TempDir::new("env-managed-ninja");
+    let ctx = BuildContext::from_workspace_root_for_test(temp.path());
+    let ninja = ctx.ninja_exe();
+    fs::create_dir_all(ninja.parent().unwrap()).unwrap();
+    fs::write(&ninja, b"").unwrap();
+    let sh = xshell::Shell::new().unwrap();
+
+    let output = apply_toolchains(
+        &sh,
+        &ctx,
+        cmd!(sh, "/usr/bin/env").env_remove("CMAKE_GENERATOR"),
+        None,
+    )
+    .unwrap()
+    .read()
+    .unwrap();
+
+    let path = output
+        .lines()
+        .find_map(|line| line.strip_prefix("PATH="))
+        .unwrap();
+    assert_eq!(
+        std::env::split_paths(path).next().as_deref(),
+        Some(ctx.ninja_toolchain_dir().as_path())
+    );
+    assert!(!output
+        .lines()
+        .any(|line| line.starts_with("CMAKE_GENERATOR=")));
 }
 
 #[cfg(target_os = "macos")]
