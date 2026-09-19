@@ -101,7 +101,7 @@ directly without a Sipp gateway.
 ## `query()` — Generate from a Raw Prompt
 
 ```text
-query(request: SippQueryRequest) -> SippTextRun
+query(input: QueryInput, options?: QueryOptions) -> SippTextRun
 ```
 
 `query` sends the prompt string to the selected endpoint exactly as supplied.
@@ -111,16 +111,15 @@ Use `query` when the application owns the full prompt shape, including custom
 templates, completion-style models, encoder-decoder text models, few-shot
 prompts, or agent loops that render prompts themselves.
 
-### Request Fields
+### Arguments
 
 | Field             | Type                         | Description                                                                                                                            |
 | ----------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `endpoint`        | `EndpointRef`                | Registered endpoint to target. May be omitted only when exactly one local endpoint supports the operation.                             |
-| `prompt`          | string                       | Raw prompt text.                                                                                                                       |
-| `options`         | `SippTextOptions` optional | Shared generation options: `maxTokens`, `temperature`, `topP`, and `stop`.                                                             |
-| `local`           | `LocalTextOptions` optional  | Local-only options such as `contextKey`, `grammar`, `jsonSchema`, sampling overrides, and media inputs. Rejected by gateway endpoints. |
-| `extra`           | map optional                 | Free-form fields interpreted by gateway or provider endpoints. Local endpoints reject them.                                           |
-| `emitTokens`      | boolean                      | When true, stream `TokenBatch` values through the returned run handle.                                                                 |
+| `input`           | string or `{ prompt, media? }` | Raw prompt text and optional media.                                                                                                  |
+| `endpoint`        | `EndpointRef`                  | Option selecting a registered endpoint. May be omitted only when exactly one endpoint supports the operation.                        |
+| generation options | `QueryOptions` fields        | `maxTokens`, `temperature`, `topP`, `stop`, `sampling`, and `emitTokens`.                                                            |
+| local options     | `QueryOptions` fields          | `contextKey` and `grammar`.                                                                                                          |
+| `extra`           | map optional                   | Free-form fields interpreted by gateway or provider endpoints. Local endpoints reject them.                                         |
 
 ### Return Value
 
@@ -140,7 +139,7 @@ prompts, or agent loops that render prompts themselves.
 ## `chat()` — Generate from Role Messages
 
 ```text
-chat(request: SippChatRequest) -> SippTextRun
+chat(input: ChatInput, options?: QueryOptions) -> SippTextRun
 ```
 
 `chat` sends ordered role/content messages to the selected endpoint. The
@@ -152,16 +151,12 @@ endpoint owns message rendering.
 | Gateway       | Forwards messages to the resolved gateway target. Provider targets handle their own message mapping.      |
 | Provider      | Sends messages using the provider's native chat-completions format.                                       |
 
-### Request Fields
+### Arguments
 
 | Field        | Type                  | Description                                |
 | ------------ | --------------------- | ------------------------------------------ |
-| `endpoint`   | `EndpointRef`         | Registered endpoint to target.             |
-| `messages`   | `{ role, content }[]` | Ordered conversation turns.                |
-| `options`    | `SippTextOptions`   | Same shared generation options as `query`. |
-| `local`      | `LocalTextOptions`    | Same local-only options as `query`.        |
-| `extra`      | map optional          | Same endpoint-specific extensions as `query`. |
-| `emitTokens` | boolean               | Same streaming control as `query`.         |
+| `input`      | `{ role, content }[]` or `{ messages, media? }` | Ordered conversation turns and optional media. |
+| `options`    | `QueryOptions` | Endpoint, generation, local, streaming, and extension options shared with `query`. |
 
 ### Return Value
 
@@ -172,20 +167,21 @@ endpoint owns message rendering.
 ## `embed()` — Generate an Embedding
 
 ```text
-embed(request: SippEmbedRequest) -> SippEmbeddingRun
+embed(input: string, options?: EmbedOptions) -> SippEmbeddingRun
 ```
 
 `embed` produces a single embedding vector from text input. It does not accept
 generation options and does not stream tokens.
 
-### Request Fields
+### Arguments
 
 | Field             | Type                         | Description                                                      |
 | ----------------- | ---------------------------- | ---------------------------------------------------------------- |
-| `endpoint`        | `EndpointRef`                | Registered endpoint to target.                                   |
-| `input`           | string                       | Text to vectorize.                                               |
-| `local`           | `LocalEmbedOptions` optional | Local embedding options, including `contextKey` and `normalize`. |
-| `extra`           | map optional                 | Free-form fields interpreted by gateway or provider endpoints.   |
+| `input`           | string                       | Text to vectorize.                                             |
+| `endpoint`        | `EndpointRef`                | Option selecting a registered endpoint.                        |
+| `contextKey`      | string optional              | Local KV-cache context key.                                    |
+| `normalize`       | boolean optional             | Whether to normalize a local embedding.                        |
+| `extra`           | map optional                 | Fields interpreted by gateway or provider endpoints.          |
 
 ### Return Value
 
@@ -230,7 +226,7 @@ calls `query`, `chat`, or `embed` the same way it would call a local endpoint.
 ```text
 Client client:
   add("remote", Endpoint.gateway(options))
-  -> client.query/chat/embed({ endpoint: ref, ... })
+  -> client.query/chat/embed(input, { endpoint: ref, ... })
   -> request is sent to the gateway over HTTP
 ```
 
@@ -244,8 +240,8 @@ model = client.models.add(files)
 localRef = client.add("local", Endpoint.local(model, options))
 gatewayRef = client.add("gateway", Endpoint.gateway(options))
 
-client.query({ endpoint: localRef, prompt, ... })
-client.query({ endpoint: gatewayRef, prompt, ... })
+client.query(prompt, { endpoint: localRef, ... })
+client.query(prompt, { endpoint: gatewayRef, ... })
 ```
 
 The operation code stays the same. Only the endpoint reference changes.

@@ -39,19 +39,15 @@ const gatewayEndpoint = await client.add('gateway', Endpoint.gateway({
   },
 }));
 
-const local = await client.query({
+const local = await client.query(input, {
   endpoint: localEndpoint,
-  prompt: input,
-  options: textOptions(),
-  local: {
-    contextKey: 'node-gateway-query-local',
-  },
+  ...textOptions(),
+  contextKey: 'node-gateway-query-local',
 }).response;
 
-const gateway = await client.query({
+const gateway = await client.query(input, {
   endpoint: gatewayEndpoint,
-  prompt: input,
-  options: textOptions(),
+  ...textOptions(),
 }).response;
 
 console.log('local:');

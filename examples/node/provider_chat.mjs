@@ -20,10 +20,9 @@ const input =
 // gateway or application route instead of holding provider credentials.
 const client = new SippClient();
 const endpoint = await client.add('provider', providerEndpoint());
-const result = await client.chat({
+const result = await client.chat([{ role: 'user', content: input }], {
   endpoint,
-  messages: [{ role: 'user', content: input }],
-  options: textOptions(),
+  ...textOptions(),
 }).response;
 printText(result);
 

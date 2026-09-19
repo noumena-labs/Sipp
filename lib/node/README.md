@@ -41,11 +41,11 @@ await client.add(
   })
 );
 
-const run = client.query({
-  prompt: 'Explain Sipp in one sentence.',
+const run = client.query('Explain Sipp in one sentence.', {
   emitTokens: true,
-  options: { maxTokens: 64, temperature: 0.7 },
-  local: { contextKey: 'node-local' },
+  maxTokens: 64,
+  temperature: 0.7,
+  contextKey: 'node-local',
 });
 
 let streamed = '';
@@ -87,7 +87,7 @@ export async function handleQuery(request: Request): Promise<Response> {
         value: process.env.SIPP_GATEWAY_TOKEN!,
       },
     }));
-    const run = client.query({ ...decoded.request, endpoint });
+    const run = client.query(decoded.input, { ...decoded.options, endpoint });
     return decoded.stream
       ? gatewayTextStreamResponse(run)
       : Response.json(

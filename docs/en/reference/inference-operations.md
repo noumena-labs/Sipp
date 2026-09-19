@@ -62,11 +62,11 @@ const prompt = [
   '<|assistant|>',
 ].join('\n');
 
-const run = client.query({
+const run = client.query(prompt, {
   endpoint,
-  prompt,
-  options: { maxTokens: 128, temperature: 0.2 },
-  local: { contextKey: 'docs-example' },
+  maxTokens: 128,
+  temperature: 0.2,
+  contextKey: 'docs-example',
   emitTokens: true,
 });
 ```
@@ -78,14 +78,14 @@ passes the role messages to llama.cpp template rendering and then generates
 from the rendered prompt.
 
 ```ts
-const run = client.chat({
+const run = client.chat([
+  { role: 'system', content: 'Answer with one concise paragraph.' },
+  { role: 'user', content: 'Explain local chat.' },
+], {
   endpoint,
-  messages: [
-    { role: 'system', content: 'Answer with one concise paragraph.' },
-    { role: 'user', content: 'Explain local chat.' },
-  ],
-  options: { maxTokens: 128, temperature: 0.2 },
-  local: { contextKey: 'docs-example' },
+  maxTokens: 128,
+  temperature: 0.2,
+  contextKey: 'docs-example',
   emitTokens: true,
 });
 ```
@@ -106,10 +106,9 @@ const endpoint = await client.add(
   Endpoint.local(model)
 );
 
-const run = client.query({
+const run = client.query('translate English to German: Hello, world.', {
   endpoint,
-  prompt: 'translate English to German: Hello, world.',
-  options: { maxTokens: 64 },
+  maxTokens: 64,
 });
 ```
 
@@ -122,10 +121,9 @@ Use `embed` with a model/runtime that supports embeddings. Local embedding
 normalization is a local-only option.
 
 ```ts
-const run = client.embed({
+const run = client.embed('Vectorize this sentence for retrieval.', {
   endpoint,
-  input: 'Vectorize this sentence for retrieval.',
-  local: { normalize: true },
+  normalize: true,
 });
 
 const embedding = (await run.response).values;
@@ -185,7 +183,7 @@ Anthropic endpoint.
 
 Gateway calls accept shared text options for `query` and `chat`, such as
 `max_tokens`, `temperature`, `top_p`, `stop`, and `stream`. Local-only fields
-such as `contextKey`, `grammar`, `jsonSchema`, `sampling`, `media`, and
+such as `contextKey`, `grammar`, `sampling`, `media`, and
 `normalize` are rejected by gateway endpoints. Direct-provider
 `extra` are also rejected by gateway endpoints; a custom gateway must
 translate provider-specific extensions deliberately.
@@ -217,13 +215,13 @@ const endpoint = await client.add('gateway-openai', Endpoint.gateway({
   },
 }));
 
-const run = client.chat({
+const run = client.chat([
+  { role: 'system', content: 'Answer for application developers.' },
+  { role: 'user', content: 'When should I use gateway chat?' },
+], {
   endpoint,
-  messages: [
-    { role: 'system', content: 'Answer for application developers.' },
-    { role: 'user', content: 'When should I use gateway chat?' },
-  ],
-  options: { maxTokens: 128, temperature: 0.2 },
+  maxTokens: 128,
+  temperature: 0.2,
 });
 ```
 

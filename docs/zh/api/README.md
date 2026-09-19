@@ -83,23 +83,22 @@ add(id: string, endpoint: Endpoint) -> EndpointRef
 ## `query()` — 传原始提示词生成文本
 
 ```text
-query(request: SippQueryRequest) -> SippTextRun
+query(input: QueryInput, options?: QueryOptions) -> SippTextRun
 ```
 
 `query` 将提示词字符串原样发送给目标端点，不应用聊天模板。
 
 需要自行控制提示词格式时使用 `query`，适用于自定义模板、基础模型、编码器-解码器模型、少样本提示或自行构建提示词的智能体。
 
-### 请求字段
+### 参数
 
 | 字段 | 类型 | 说明 |
 | ----------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `endpoint` | `EndpointRef` | 目标端点。客户端只有一个本地端点支持该操作时可以省略。 |
-| `prompt` | string | 提示词文本。 |
-| `options` | `SippTextOptions`（可选） | 通用生成选项：`maxTokens`、`temperature`、`topP`、`stop`。 |
-| `local` | `LocalTextOptions`（可选） | 仅限本地的选项：`contextKey`、`grammar`、`jsonSchema`、采样覆盖、多模态输入。网关端点会拒绝。 |
+| `input` | string 或 `{ prompt, media? }` | 原始提示词与可选媒体。 |
+| `endpoint` | `EndpointRef` | 选项中的目标端点。客户端只有一个端点支持该操作时可以省略。 |
+| 生成选项 | `QueryOptions` 字段 | `maxTokens`、`temperature`、`topP`、`stop`、`sampling`、`emitTokens`。 |
+| 本地选项 | `QueryOptions` 字段 | `contextKey` 和 `grammar`。 |
 | `extra` | map（可选） | 由网关或服务商端点解释的扩展字段。本地端点会拒绝。 |
-| `emitTokens` | boolean | 设为 true 时，通过返回的句柄流式输出 `TokenBatch`。 |
 
 ### 返回值
 
@@ -118,7 +117,7 @@ query(request: SippQueryRequest) -> SippTextRun
 ## `chat()` — 传消息列表生成文本
 
 ```text
-chat(request: SippChatRequest) -> SippTextRun
+chat(input: ChatInput, options?: QueryOptions) -> SippTextRun
 ```
 
 `chat` 将有序的角色/内容消息发送给目标端点，由端点处理消息渲染。
@@ -129,16 +128,12 @@ chat(request: SippChatRequest) -> SippTextRun
 | 网关 | 将消息转发至网关的目标，服务商目标自行处理消息格式。 |
 | 服务商 | 转成服务商原生的 chat-completions 格式发出去。 |
 
-### 请求字段
+### 参数
 
 | 字段 | 类型 | 说明 |
 | ------------ | --------------------- | ------------------------------------------ |
-| `endpoint` | `EndpointRef` | 目标端点。 |
-| `messages` | `{ role, content }[]` | 有序的对话轮次。 |
-| `options` | `SippTextOptions` | 同 `query` 的生成选项。 |
-| `local` | `LocalTextOptions` | 同 `query` 的本地选项。 |
-| `extra` | map（可选） | 同 `query` 的端点扩展字段。 |
-| `emitTokens` | boolean | 同 `query` 的流式开关。 |
+| `input` | `{ role, content }[]` 或 `{ messages, media? }` | 有序对话和可选媒体。 |
+| `options` | `QueryOptions` | 与 `query` 共用的端点、生成、本地、流式和扩展选项。 |
 
 ### 返回值
 
@@ -149,18 +144,19 @@ chat(request: SippChatRequest) -> SippTextRun
 ## `embed()` — 生成嵌入向量
 
 ```text
-embed(request: SippEmbedRequest) -> SippEmbeddingRun
+embed(input: string, options?: EmbedOptions) -> SippEmbeddingRun
 ```
 
 `embed` 将输入文本转换为嵌入向量。不支持生成选项，也不流式输出 Token。
 
-### 请求字段
+### 参数
 
 | 字段 | 类型 | 说明 |
 | ----------------- | ---------------------------- | ---------------------------------------------------------------- |
-| `endpoint` | `EndpointRef` | 目标端点。 |
 | `input` | string | 要向量化的文本。 |
-| `local` | `LocalEmbedOptions`（可选） | 仅限本地的选项：`contextKey`、`normalize`。 |
+| `endpoint` | `EndpointRef` | 选项中的目标端点。 |
+| `contextKey` | string（可选） | 本地 KV 缓存的上下文键。 |
+| `normalize` | boolean（可选） | 是否归一化本地嵌入。 |
 | `extra` | map（可选） | 由网关或服务商端点解释的扩展字段。 |
 
 ### 返回值
@@ -202,7 +198,7 @@ embed(request: SippEmbedRequest) -> SippEmbeddingRun
 ```text
 客户端：
   add("remote", Endpoint.gateway(options))
-  -> client.query / chat / embed({ endpoint: ref, ... })
+  -> client.query / chat / embed(input, { endpoint: ref, ... })
    -> 请求通过 HTTP 发送至网关
 ```
 
@@ -215,8 +211,8 @@ model = client.models.add(files)
 localRef = client.add("local", Endpoint.local(model, options))
 gatewayRef = client.add("gateway", Endpoint.gateway(options))
 
-client.query({ endpoint: localRef, prompt, ... })
-client.query({ endpoint: gatewayRef, prompt, ... })
+client.query(prompt, { endpoint: localRef, ... })
+client.query(prompt, { endpoint: gatewayRef, ... })
 ```
 
 操作代码完全相同，仅端点引用不同。

@@ -14,8 +14,7 @@ const client = new SippClient();
 const model = await client.models.add([modelPath, projectorPath]);
 await client.add('asr', Endpoint.local(model, { runtime: runtimeConfig(8192) }));
 
-const response = await client.listen({
-  audio: readFileSync(audioPath),
+const response = await client.listen(readFileSync(audioPath), {
   language: process.env.SIPP_LANGUAGE,
 }).response;
 console.log(response.text.trim());

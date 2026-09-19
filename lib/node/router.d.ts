@@ -1,8 +1,9 @@
 import type {
-  SippChatRequest,
-  SippEmbedRequest,
+  ChatInput,
+  EmbedOptions,
   SippEmbeddingResponse,
-  SippQueryRequest,
+  QueryInput,
+  QueryOptions,
   SippTextResponse,
   SippTextRun,
 } from './index'
@@ -29,21 +30,24 @@ export declare class GatewayProfileError extends Error {
 export interface GatewayDecodedQuery {
   readonly target: string
   readonly stream: boolean
-  readonly request: SippQueryRequest
+  readonly input: QueryInput
+  readonly options: QueryOptions
 }
 
 /** Chat request decoded from the first-party gateway JSON profile. */
 export interface GatewayDecodedChat {
   readonly target: string
   readonly stream: boolean
-  readonly request: SippChatRequest
+  readonly input: ChatInput
+  readonly options: QueryOptions
 }
 
 /** Embedding request decoded from the first-party gateway JSON profile. */
 export interface GatewayDecodedEmbed {
   readonly target: string
   readonly stream: false
-  readonly request: SippEmbedRequest
+  readonly input: string
+  readonly options: EmbedOptions
 }
 
 /** Token usage encoded with first-party gateway snake_case field names. */

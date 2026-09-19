@@ -29,8 +29,8 @@ use sipp::{
     SippEmbeddingResponse as CoreClientEmbeddingResponse,
     SippEmbeddingResponseFuture as CoreClientEmbeddingResponseFuture,
     SippEmbeddingRun as CoreClientEmbeddingRun, SippError as CoreClientError,
-    SippListenRequest as CoreClientListenRequest, SippRequestContext as CoreClientRequestContext,
-    SippSpeakRequest as CoreClientSpeakRequest, SippTextResponse as CoreClientTextResponse,
+    SippListenRequest as CoreClientListenRequest, SippSpeakRequest as CoreClientSpeakRequest,
+    SippTextResponse as CoreClientTextResponse,
     SippTextResponseFuture as CoreClientTextResponseFuture, SippTextRun as CoreClientTextRun,
     SippTokenBatches as CoreClientTokenBatches,
 };
@@ -521,166 +521,66 @@ impl From<EndpointRef> for dto::EndpointRef {
     }
 }
 
-/// Shared generation options for text-producing requests.
+/// Raw prompt with optional multimodal media.
 #[napi(object)]
-pub struct SippTextOptions {
+pub struct QueryInput {
+    pub prompt: String,
+    pub media: Option<Vec<Buffer>>,
+}
+
+/// Chat messages with optional multimodal media.
+#[napi(object)]
+pub struct ChatInput {
+    pub messages: Vec<ChatMessage>,
+    pub media: Option<Vec<Buffer>>,
+}
+
+/// Options shared by positional query and chat calls.
+#[napi(object)]
+#[derive(Default)]
+pub struct QueryOptions {
+    pub endpoint: Option<EndpointRef>,
+    #[napi(js_name = "contextKey")]
+    pub context_key: Option<String>,
     #[napi(js_name = "maxTokens")]
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
     #[napi(js_name = "topP")]
     pub top_p: Option<f64>,
-    pub stop: Option<Vec<String>>,
-}
-
-impl From<SippTextOptions> for dto::SippTextOptions {
-    fn from(value: SippTextOptions) -> Self {
-        Self {
-            max_tokens: value.max_tokens,
-            temperature: value.temperature,
-            top_p: value.top_p,
-            stop: value.stop,
-        }
-    }
-}
-
-/// Local-only prompt options such as grammar constraints and image inputs.
-#[napi(object)]
-pub struct LocalTextOptions {
-    #[napi(js_name = "contextKey")]
-    pub context_key: Option<String>,
-    pub grammar: Option<String>,
-    #[napi(js_name = "jsonSchema")]
-    pub json_schema: Option<String>,
     pub sampling: Option<SamplingRuntimeConfig>,
-    pub media: Option<Vec<Buffer>>,
+    pub stop: Option<Vec<String>>,
+    #[napi(js_name = "emitTokens")]
+    pub emit_tokens: Option<bool>,
+    pub grammar: Option<String>,
+    pub extra: Option<serde_json::Value>,
 }
 
-impl From<LocalTextOptions> for dto::LocalTextOptions {
-    fn from(value: LocalTextOptions) -> Self {
-        Self {
-            context_key: value.context_key,
-            grammar: value.grammar,
-            json_schema: value.json_schema,
-            sampling: value
-                .sampling
-                .as_ref()
-                .map(dto::SamplingRuntimeConfig::from),
-            media: value
-                .media
-                .map(|buffers| buffers.into_iter().map(Vec::<u8>::from).collect())
-                .unwrap_or_default(),
-        }
-    }
-}
-
-/// Local-only embedding options for context and vector normalization.
+/// Options for a positional embedding call.
 #[napi(object)]
-pub struct LocalEmbedOptions {
+#[derive(Default)]
+pub struct EmbedOptions {
+    pub endpoint: Option<EndpointRef>,
+    pub normalize: Option<bool>,
     #[napi(js_name = "contextKey")]
     pub context_key: Option<String>,
-    pub normalize: Option<bool>,
-}
-
-impl From<LocalEmbedOptions> for dto::LocalEmbedOptions {
-    fn from(value: LocalEmbedOptions) -> Self {
-        Self {
-            context_key: value.context_key,
-            normalize: value.normalize,
-        }
-    }
-}
-
-/// Prompt completion request routed to an inference endpoint.
-#[napi(object)]
-pub struct SippQueryRequest {
-    #[napi(js_name = "requestId")]
-    pub request_id: Option<String>,
-    pub endpoint: Option<EndpointRef>,
-    pub prompt: String,
-    pub options: Option<SippTextOptions>,
-    pub local: Option<LocalTextOptions>,
-    pub extra: Option<serde_json::Value>,
-    #[napi(js_name = "emitTokens")]
-    pub emit_tokens: Option<bool>,
-}
-
-impl From<SippQueryRequest> for dto::SippQueryRequest {
-    fn from(value: SippQueryRequest) -> Self {
-        Self {
-            request_id: value.request_id,
-            endpoint: value.endpoint.map(dto::EndpointRef::from),
-            prompt: value.prompt,
-            options: value.options.map(dto::SippTextOptions::from),
-            local: value.local.map(dto::LocalTextOptions::from),
-            extra: value.extra,
-            emit_tokens: value.emit_tokens,
-        }
-    }
-}
-
-/// Chat completion request routed to an inference endpoint.
-#[napi(object)]
-pub struct SippChatRequest {
-    #[napi(js_name = "requestId")]
-    pub request_id: Option<String>,
-    pub endpoint: Option<EndpointRef>,
-    pub messages: Vec<ChatMessage>,
-    pub options: Option<SippTextOptions>,
-    pub local: Option<LocalTextOptions>,
-    pub extra: Option<serde_json::Value>,
-    #[napi(js_name = "emitTokens")]
-    pub emit_tokens: Option<bool>,
-}
-
-impl From<SippChatRequest> for dto::SippChatRequest {
-    fn from(value: SippChatRequest) -> Self {
-        Self {
-            request_id: value.request_id,
-            endpoint: value.endpoint.map(dto::EndpointRef::from),
-            messages: value
-                .messages
-                .into_iter()
-                .map(dto::ChatMessage::from)
-                .collect(),
-            options: value.options.map(dto::SippTextOptions::from),
-            local: value.local.map(dto::LocalTextOptions::from),
-            extra: value.extra,
-            emit_tokens: value.emit_tokens,
-        }
-    }
-}
-
-/// Embedding request routed to an inference endpoint.
-#[napi(object)]
-pub struct SippEmbedRequest {
-    #[napi(js_name = "requestId")]
-    pub request_id: Option<String>,
-    pub endpoint: Option<EndpointRef>,
-    pub input: String,
-    pub local: Option<LocalEmbedOptions>,
     pub extra: Option<serde_json::Value>,
 }
 
-/// Speech-recognition request routed to a local audio endpoint.
+/// Options for a positional speech-recognition call.
 #[napi(object)]
-pub struct SippListenRequest {
-    #[napi(js_name = "requestId")]
-    pub request_id: Option<String>,
+#[derive(Default)]
+pub struct ListenOptions {
     pub endpoint: Option<EndpointRef>,
-    pub audio: Buffer,
     pub language: Option<String>,
-    /// Maximum number of transcript tokens to generate.
     #[napi(js_name = "maxTokens")]
     pub max_tokens: Option<u32>,
 }
 
-/// Speech-synthesis request routed to a local audio endpoint.
+/// Options for a positional speech-synthesis call.
 #[napi(object)]
-pub struct SippSpeakRequest {
-    #[napi(js_name = "requestId")]
-    pub request_id: Option<String>,
+#[derive(Default)]
+pub struct SpeakOptions {
     pub endpoint: Option<EndpointRef>,
-    pub text: String,
     pub language: Option<String>,
     #[napi(js_name = "speakerAudio")]
     pub speaker_audio: Option<Buffer>,
@@ -688,15 +588,41 @@ pub struct SippSpeakRequest {
     pub max_duration_ms: Option<u32>,
 }
 
-impl From<SippEmbedRequest> for dto::SippEmbedRequest {
-    fn from(value: SippEmbedRequest) -> Self {
-        Self {
-            request_id: value.request_id,
-            endpoint: value.endpoint.map(dto::EndpointRef::from),
-            input: value.input,
-            local: value.local.map(dto::LocalEmbedOptions::from),
-            extra: value.extra,
-        }
+struct TextRequestParts {
+    endpoint: Option<dto::EndpointRef>,
+    options: dto::SippTextOptions,
+    local: dto::LocalTextOptions,
+    extra: Option<serde_json::Value>,
+    emit_tokens: bool,
+}
+
+fn text_request_parts(
+    options: Option<QueryOptions>,
+    media: Option<Vec<Buffer>>,
+) -> TextRequestParts {
+    let options = options.unwrap_or_default();
+    TextRequestParts {
+        endpoint: options.endpoint.map(dto::EndpointRef::from),
+        options: dto::SippTextOptions {
+            max_tokens: options.max_tokens,
+            temperature: options.temperature,
+            top_p: options.top_p,
+            stop: options.stop,
+        },
+        local: dto::LocalTextOptions {
+            context_key: options.context_key,
+            grammar: options.grammar,
+            json_schema: None,
+            sampling: options
+                .sampling
+                .as_ref()
+                .map(dto::SamplingRuntimeConfig::from),
+            media: media
+                .map(|buffers| buffers.into_iter().map(Vec::<u8>::from).collect())
+                .unwrap_or_default(),
+        },
+        extra: options.extra,
+        emit_tokens: options.emit_tokens.unwrap_or(false),
     }
 }
 
@@ -1228,92 +1154,127 @@ impl SippClient {
         })
     }
 
+    /// Start raw-prompt text generation.
     #[napi(ts_return_type = "SippTextRun")]
-    pub fn query(&self, request: SippQueryRequest) -> Result<SippTextRun> {
-        let context = CoreClientRequestContext {
-            request_id: request.request_id.clone(),
+    pub fn query(
+        &self,
+        input: Either<String, QueryInput>,
+        options: Option<QueryOptions>,
+    ) -> Result<SippTextRun> {
+        let (prompt, media) = match input {
+            Either::A(prompt) => (prompt, None),
+            Either::B(input) => (input.prompt, input.media),
         };
-        let request = dto::SippQueryRequest::from(request);
+        let parts = text_request_parts(options, media);
+        let request = dto::SippQueryRequest {
+            request_id: None,
+            endpoint: parts.endpoint,
+            prompt,
+            options: Some(parts.options),
+            local: Some(parts.local),
+            extra: parts.extra,
+            emit_tokens: Some(parts.emit_tokens),
+        };
         let request = sipp::SippQueryRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .query_with_context(context, request);
+            .query(request);
         Ok(SippTextRun::from_core(run))
     }
 
+    /// Start chat generation from ordered role/content messages.
     #[napi(ts_return_type = "SippTextRun")]
-    pub fn chat(&self, request: SippChatRequest) -> Result<SippTextRun> {
-        let context = CoreClientRequestContext {
-            request_id: request.request_id.clone(),
+    pub fn chat(
+        &self,
+        input: Either<Vec<ChatMessage>, ChatInput>,
+        options: Option<QueryOptions>,
+    ) -> Result<SippTextRun> {
+        let (messages, media) = match input {
+            Either::A(messages) => (messages, None),
+            Either::B(input) => (input.messages, input.media),
         };
-        let request = dto::SippChatRequest::from(request);
+        let parts = text_request_parts(options, media);
+        let request = dto::SippChatRequest {
+            request_id: None,
+            endpoint: parts.endpoint,
+            messages: messages.into_iter().map(dto::ChatMessage::from).collect(),
+            options: Some(parts.options),
+            local: Some(parts.local),
+            extra: parts.extra,
+            emit_tokens: Some(parts.emit_tokens),
+        };
         let request = sipp::SippChatRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .chat_with_context(context, request);
+            .chat(request);
         Ok(SippTextRun::from_core(run))
     }
 
+    /// Start a single-input embedding request.
     #[napi(ts_return_type = "SippEmbeddingRun")]
-    pub fn embed(&self, request: SippEmbedRequest) -> Result<SippEmbeddingRun> {
-        let context = CoreClientRequestContext {
-            request_id: request.request_id.clone(),
+    pub fn embed(&self, input: String, options: Option<EmbedOptions>) -> Result<SippEmbeddingRun> {
+        let options = options.unwrap_or_default();
+        let request = dto::SippEmbedRequest {
+            request_id: None,
+            endpoint: options.endpoint.map(dto::EndpointRef::from),
+            input,
+            local: Some(dto::LocalEmbedOptions {
+                context_key: options.context_key,
+                normalize: options.normalize,
+            }),
+            extra: options.extra,
         };
-        let request = dto::SippEmbedRequest::from(request);
         let request = sipp::SippEmbedRequest::try_from(request).map_err(convert_error)?;
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .embed_with_context(context, request);
+            .embed(request);
         Ok(SippEmbeddingRun::from_core(run))
     }
 
     /// Start speech recognition with an optional transcript token limit.
     #[napi(ts_return_type = "SippTextRun")]
-    pub fn listen(&self, request: SippListenRequest) -> Result<SippTextRun> {
-        let context = CoreClientRequestContext {
-            request_id: request.request_id,
-        };
+    pub fn listen(&self, audio: Buffer, options: Option<ListenOptions>) -> Result<SippTextRun> {
+        let options = options.unwrap_or_default();
         let request = CoreClientListenRequest {
-            endpoint: request
+            endpoint: options
                 .endpoint
                 .map(|endpoint| CoreEndpointRef::from_id(endpoint.id)),
-            audio: request.audio.into(),
-            language: request.language,
-            max_tokens: request.max_tokens,
+            audio: audio.into(),
+            language: options.language,
+            max_tokens: options.max_tokens,
         };
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .listen_with_context(context, request);
+            .listen(request);
         Ok(SippTextRun::from_core(run))
     }
 
+    /// Start speech synthesis and return a WAV response.
     #[napi(ts_return_type = "SippAudioRun")]
-    pub fn speak(&self, request: SippSpeakRequest) -> Result<SippAudioRun> {
-        let context = CoreClientRequestContext {
-            request_id: request.request_id,
-        };
+    pub fn speak(&self, text: String, options: Option<SpeakOptions>) -> Result<SippAudioRun> {
+        let options = options.unwrap_or_default();
         let request = CoreClientSpeakRequest {
-            endpoint: request
+            endpoint: options
                 .endpoint
                 .map(|endpoint| CoreEndpointRef::from_id(endpoint.id)),
-            text: request.text,
-            language: request.language,
-            speaker_audio: request.speaker_audio.map(Vec::<u8>::from),
-            max_duration_ms: request.max_duration_ms,
+            text,
+            language: options.language,
+            speaker_audio: options.speaker_audio.map(Vec::<u8>::from),
+            max_duration_ms: options.max_duration_ms,
         };
         let run = self
             .inner
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?
-            .speak_with_context(context, request);
+            .speak(request);
         Ok(SippAudioRun::from_core(run))
     }
 }

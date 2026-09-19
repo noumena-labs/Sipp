@@ -36,17 +36,17 @@ await client.add(
 console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // `chat` sends role-tagged messages and can stream partial token batches.
-const run = client.chat({
-  messages: [
+const run = client.chat(
+  [
     { role: 'system', content: 'Answer concisely.' },
     { role: 'user', content: input },
   ],
-  options: textOptions(),
-  local: {
+  {
+    ...textOptions(),
     contextKey: 'node-chat-example',
-  },
-  emitTokens: true,
-});
+    emitTokens: true,
+  }
+);
 let streamed = '';
 for await (const batch of run.tokens) {
   process.stdout.write(batch.text);

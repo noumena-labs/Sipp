@@ -34,18 +34,14 @@ const gatewayEndpoint = await client.add('gateway', Endpoint.gateway({
   },
 }));
 
-const local = await client.embed({
+const local = await client.embed(input, {
   endpoint: localEndpoint,
-  input,
-  local: {
-    contextKey: 'node-gateway-embed-local',
-    normalize: true,
-  },
+  contextKey: 'node-gateway-embed-local',
+  normalize: true,
 }).response;
 
-const gateway = await client.embed({
+const gateway = await client.embed(input, {
   endpoint: gatewayEndpoint,
-  input,
 }).response;
 
 console.log('local:');

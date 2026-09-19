@@ -32,11 +32,10 @@ const endpoint = await client.add('provider', Endpoint.provider({
   apiKey: requiredEnv('OPENAI_API_KEY'),
 }));
 
-const run = client.chat({
-  endpoint,
-  messages: [{ role: 'user', content: 'Explain provider inference.' }],
-  options: { maxTokens: 128, temperature: 0.2 },
-});
+const run = client.chat(
+  [{ role: 'user', content: 'Explain provider inference.' }],
+  { endpoint, maxTokens: 128, temperature: 0.2 }
+);
 console.log((await run.response).text);
 ```
 
@@ -49,10 +48,9 @@ Typed request fields should use Sipp's request options. Provider-only
 fields belong in `extra`:
 
 ```ts
-const run = client.chat({
+const run = client.chat(messages, {
   endpoint,
-  messages,
-  options: { maxTokens: 128 },
+  maxTokens: 128,
   extra: {
     reasoning_effort: 'low',
   },

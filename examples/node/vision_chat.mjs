@@ -41,17 +41,17 @@ console.log(`backend_after_load=${backendObservabilityJson(true)}`);
 
 // Multimodal chat uses the same chat API. Model metadata pairs the projector;
 // image bytes are passed on the request.
-const run = client.chat({
-  messages: [
-    { role: 'user', content: input },
-  ],
-  options: textOptions(),
-  local: {
-    contextKey: 'node-vision-chat-example',
+const run = client.chat(
+  {
+    messages: [{ role: 'user', content: input }],
     media: [readFileSync(image)],
   },
-  emitTokens: true,
-});
+  {
+    ...textOptions(),
+    contextKey: 'node-vision-chat-example',
+    emitTokens: true,
+  }
+);
 let streamed = '';
 for await (const batch of run.tokens) {
   process.stdout.write(batch.text);

@@ -56,13 +56,13 @@ const queryPrompt = [
   '<|assistant|>',
 ].join('\n');
 
-const run = client.query({
+const run = client.query(queryPrompt, {
   endpoint,
   // query: raw prompt; replace markers with the target model's template.
-  prompt: queryPrompt,
   emitTokens: true,
-  options: { maxTokens: 64, temperature: 0.7 },
-  local: { contextKey: 'node-local' },
+  maxTokens: 64,
+  temperature: 0.7,
+  contextKey: 'node-local',
 });
 
 let streamed = '';
@@ -109,10 +109,9 @@ const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain gateway inference.' },
 ];
-const run = client.chat({
+const run = client.chat(messages, {
   endpoint,
-  messages,
-  options: { maxTokens: 64 },
+  maxTokens: 64,
 });
 console.log((await run.response).text);
 ```
@@ -146,10 +145,9 @@ const messages = [
   { role: 'system', content: 'Answer concisely.' },
   { role: 'user', content: 'Explain provider inference.' },
 ];
-const run = client.chat({
+const run = client.chat(messages, {
   endpoint,
-  messages,
-  options: { maxTokens: 64 },
+  maxTokens: 64,
 });
 console.log((await run.response).text);
 ```
@@ -192,7 +190,7 @@ export async function handleQuery(request: Request): Promise<Response> {
       model: decoded.target,
       apiKey: requiredEnv('OPENAI_API_KEY'),
     }));
-    const run = client.query({ ...decoded.request, endpoint });
+    const run = client.query(decoded.input, { ...decoded.options, endpoint });
     return decoded.stream
       ? gatewayTextStreamResponse(run)
       : Response.json(
