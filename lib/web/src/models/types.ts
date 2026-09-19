@@ -48,6 +48,11 @@ export interface ModelLoadOptions {
 export interface ModelAddOptions {
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: ModelLoadProgress) => void;
+  /**
+   * Positive maximum milliseconds to wait for stream data before considering
+   * the download stalled. Defaults to 30,000ms.
+   */
+  readonly stallTimeoutMs?: number;
 }
 
 /** @internal */
@@ -600,12 +605,21 @@ export const Endpoint = {
   },
 };
 
+/** Structured notice emitted when Sipp falls back to a full model download. */
+export interface FallbackEvent {
+  readonly type: 'fallback-warning';
+  readonly kind: 'transfer';
+  readonly detail: string;
+  readonly fallbackTo: 'full-download';
+}
+
 export type EngineEvent =
   | { type: 'state'; state: EngineState }
   | { type: 'load-progress'; loadedBytes: number; totalBytes: number | null; assetName?: string }
   | { type: 'request-started'; requestId: string; streamId: number }
   | { type: 'request-completed'; requestId: string }
   | { type: 'request-failed'; requestId: string; error: string }
+  | FallbackEvent
   | { type: 'closed' };
 
 export type { TokenEmissionStats, TokenBatch };

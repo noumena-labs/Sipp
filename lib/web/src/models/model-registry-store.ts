@@ -1,6 +1,6 @@
 import { FileSystemStorage } from '../engine/file-system-storage.js';
 import { AsyncSerialQueue } from '../utils/async-queue.js';
-import { recoverBrowserAcquisitionJournals } from './acquisition-journal.js';
+import { recoverBrowserAcquisitionState } from './acquisition-journal.js';
 import {
   QueryError,
   type RegistryManifest,
@@ -92,7 +92,7 @@ export class ModelRegistryStore {
         } else {
           this.manifest = parseManifest(text);
         }
-        await recoverBrowserAcquisitionJournals(this.storage, this.manifest);
+        await recoverBrowserAcquisitionState(this.storage, this.manifest);
       })().finally(() => {
         this.initPromise = null;
       });

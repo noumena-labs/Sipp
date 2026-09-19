@@ -1,10 +1,15 @@
-import type { GgufSplitRuntime, RemoteAssetMetadata } from './asset-store.js';
+import type {
+  GgufSplitRuntime,
+  RemoteAssetMetadata,
+  RemoteDownloadPlan,
+} from './asset-store.js';
 import { AssetStore } from './asset-store.js';
 import type { BrowserAcquisitionJournal } from './acquisition-journal.js';
 import {
   QueryError,
   type AssetRecord,
   type ClassifiedAsset,
+  type FallbackEvent,
   type ModelAddOptions,
   type RegistryManifest,
 } from './types.js';
@@ -13,6 +18,7 @@ import type {
   RustRemoteEvent,
   RustRemoteFailure,
 } from '../wasm/wasm-bridge.js';
+import { StreamStallError } from '../engine/file-system-storage.js';
 
 export interface RemoteHostResult {
   readonly event: RustRemoteEvent;
@@ -26,6 +32,17 @@ type ClassifyAsset = (
   signal?: AbortSignal
 ) => Promise<ClassifiedAsset>;
 
+interface RemoteAcquisitionOptions extends ModelAddOptions {
+  readonly onWarning?: (event: FallbackEvent) => void;
+}
+
+class DownloadTransportError extends Error {
+  public constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'request transport failed', { cause });
+    this.name = 'DownloadTransportError';
+  }
+}
+
 /** Executes Rust-selected HTTP and OPFS operations without owning acquisition policy. */
 export class RemoteAcquisitionHost {
   private readonly downloaded = new Map<string, AssetRecord>();
@@ -36,7 +53,7 @@ export class RemoteAcquisitionHost {
     private readonly runtime: GgufSplitRuntime,
     private readonly manifest: RegistryManifest,
     private readonly classify: ClassifyAsset,
-    private readonly options: ModelAddOptions
+    private readonly options: RemoteAcquisitionOptions
   ) {}
 
   public async execute(action: RustRemoteAction): Promise<RemoteHostResult> {
@@ -130,23 +147,6 @@ export class RemoteAcquisitionHost {
   private async download(
     action: Extract<RustRemoteAction, { kind: 'download' }>
   ): Promise<RemoteHostResult> {
-    let response: Response;
-    try {
-      response = await fetch(action.metadata.url, { signal: this.options.signal });
-    } catch (error) {
-      if (this.options.signal?.aborted === true) {
-        throw error;
-      }
-      return failed(action, {
-        phase: 'download',
-        kind: 'transport',
-        reason: 'request transport failed',
-      });
-    }
-    if (!response.ok) {
-      return failed(action, httpFailure('download', response));
-    }
-
     const metadata: RemoteAssetMetadata = {
       url: action.metadata.url,
       canonicalUrl: action.metadata.url,
@@ -157,16 +157,80 @@ export class RemoteAcquisitionHost {
         ? {}
         : { lastModified: action.metadata.lastModified }),
     };
+
+    let plan: RemoteDownloadPlan;
+    let response: Response | null = null;
+    try {
+      plan = await this.assetStore.prepareRemoteDownload(metadata, this.runtime);
+      if (plan.startOffset < metadata.bytes) {
+        const headers = downloadRangeHeaders(action, plan.startOffset);
+        response = await fetchDownloadResponse(action.metadata.url, {
+          headers: Object.keys(headers).length > 0 ? headers : undefined,
+          signal: this.options.signal,
+        });
+        const invalidRangeResponse =
+          plan.startOffset > 0 &&
+          (response.status === 416 ||
+            (response.ok && !responseRangeStartsAt(response, plan.startOffset)));
+        if (invalidRangeResponse) {
+          this.warnTransfer(
+            action.metadata.name,
+            response.status === 416
+              ? 'range request was not satisfiable'
+              : 'server did not honor the requested byte range'
+          );
+          // Release the ignored response before retrying without a range.
+          try {
+            await response.body?.cancel();
+          } catch {}
+          plan = await this.assetStore.resetRemoteDownload(plan);
+          response = await fetchDownloadResponse(action.metadata.url, {
+            signal: this.options.signal,
+          });
+        }
+      }
+    } catch (error) {
+      if (this.options.signal?.aborted === true) {
+        throw error;
+      }
+      return failed(
+        action,
+        error instanceof DownloadTransportError
+          ? {
+              phase: 'download',
+              kind: 'transport',
+              reason: error.message,
+            }
+          : hostFailure('download', error)
+      );
+    }
+
+    if (response != null && !response.ok) {
+      return failed(action, httpFailure('download', response));
+    }
+
+    if (response != null && response.body == null) {
+      return failed(action, {
+        phase: 'download',
+        kind: 'transport',
+        reason: 'response body is null',
+      });
+    }
+
     let createdAssetIds: readonly string[] = [];
     try {
       const journal = this.openJournal(action.acquisitionId);
       const receipt = await this.assetStore.downloadRemoteGguf(
         metadata,
         this.runtime,
-        response,
-        this.options.signal,
-        this.options.onProgress,
-        journal
+        {
+          plan,
+          body: response?.body ?? null,
+          signal: this.options.signal,
+          onProgress: this.options.onProgress,
+          journal,
+          stallTimeoutMs: this.options.stallTimeoutMs ?? 30_000,
+        }
       );
       createdAssetIds = receipt.createdAssetIds;
       const classified: ClassifiedAsset[] = [];
@@ -250,6 +314,15 @@ export class RemoteAcquisitionHost {
     }
     return this.journal;
   }
+
+  private warnTransfer(assetName: string, reason: string): void {
+    this.options.onWarning?.({
+      type: 'fallback-warning',
+      kind: 'transfer',
+      detail: `Resumable download fallback for "${assetName}": ${reason}.`,
+      fallbackTo: 'full-download',
+    });
+  }
 }
 
 function operationIdentity(action: RustRemoteAction): {
@@ -303,12 +376,53 @@ function httpFailure(
   };
 }
 
+function responseRangeStartsAt(response: Response, startOffset: number): boolean {
+  if (response.status !== 206) {
+    return false;
+  }
+  const contentRange = response.headers.get('Content-Range')?.trim();
+  const match = contentRange?.match(/^bytes (\d+)-\d+\/\d+$/);
+  return match != null && Number(match[1]) === startOffset;
+}
+
+function downloadRangeHeaders(
+  action: Extract<RustRemoteAction, { kind: 'download' }>,
+  startOffset: number
+): Record<string, string> {
+  if (startOffset === 0 || startOffset >= action.metadata.bytes) {
+    return {};
+  }
+  return {
+    Range: `bytes=${startOffset}-`,
+    ...(action.metadata.etag != null
+      ? { 'If-Range': action.metadata.etag }
+      : action.metadata.lastModified != null
+        ? { 'If-Range': action.metadata.lastModified }
+        : {}),
+  };
+}
+
+async function fetchDownloadResponse(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (cause) {
+    throw new DownloadTransportError(cause);
+  }
+}
+
 function hostFailure(
   phase: RustRemoteFailure['phase'],
   error: unknown
 ): RustRemoteFailure {
   if (error instanceof QueryError && error.code === 'STORAGE_CORRUPT') {
     return { phase, kind: 'integrity', reason: error.message };
+  }
+  if (phase === 'download' && error instanceof StreamStallError) {
+    return {
+      phase,
+      kind: 'transport',
+      reason: error.message,
+    };
   }
   return {
     phase,

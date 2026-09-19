@@ -28,6 +28,7 @@ export {
   type EndpointRef,
   type EngineBackendName,
   type EngineEvent,
+  type FallbackEvent,
   type EngineState,
   type EngineStats,
   type EngineStatus,

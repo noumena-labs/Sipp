@@ -14,8 +14,8 @@ const DEFAULT_BROWSER_SHARD_MAX_BYTES = 512 * 1024 * 1024;
 const LOCAL_FILE_FINGERPRINT_SAMPLE_BYTES = 64 * 1024;
 const PROGRESS_MIN_INTERVAL_MS = 100;
 const PROGRESS_MIN_PERCENT_STEP = 1;
-const BROWSER_SPLIT_TEMP_PREFIXES = ['tmp-source-', 'tmp-local-source-'];
-const BROWSER_SPLIT_SHARD_PREFIXES = ['split-', 'split-local-'];
+const LOCAL_SPLIT_TEMP_PREFIXES = ['tmp-local-source-'];
+const LOCAL_SPLIT_SHARD_PREFIXES = ['split-local-'];
 
 /** Browser OPFS policy for deciding when GGUF assets are split into shards. */
 export interface BrowserCachePolicyOptions {
@@ -62,6 +62,22 @@ export interface RemoteAssetMetadata {
   readonly bytes: number;
   readonly etag?: string;
   readonly lastModified?: string;
+}
+
+/** OPFS destination and resume offset resolved before issuing an HTTP request. */
+export interface RemoteDownloadPlan {
+  readonly storagePath: string;
+  readonly layout: 'single-file' | 'split-gguf';
+  readonly startOffset: number;
+}
+
+interface RemoteDownloadOptions {
+  readonly plan: RemoteDownloadPlan;
+  readonly body: ReadableStream<Uint8Array> | null;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: ModelLoadProgress) => void;
+  readonly journal?: BrowserAcquisitionJournal;
+  readonly stallTimeoutMs?: number;
 }
 
 export interface RemoteStoreReceipt {
@@ -282,6 +298,110 @@ export class AssetStore {
     this.browserCachePolicy = normalizeBrowserCachePolicy(browserCachePolicy);
   }
 
+  /** Resolve the deterministic OPFS path, layout, and safe resume offset. */
+  public async prepareRemoteDownload(
+    metadata: RemoteAssetMetadata,
+    runtime: GgufSplitRuntime
+  ): Promise<RemoteDownloadPlan> {
+    let layout: RemoteDownloadPlan['layout'];
+    try {
+      layout = await runtime.browserCacheLayout(
+        metadata.bytes,
+        true,
+        this.browserCachePolicy.directLoadMaxBytes,
+        this.browserCachePolicy.shardMaxBytes
+      );
+    } catch (error) {
+      throw new QueryError(
+        'REMOTE_LOAD_FAILED',
+        'Browser-only large GGUF splitting requires the wasm32 Rust ingest browser build.',
+        { cause: error }
+      );
+    }
+
+    let storagePath: string;
+    if (layout === 'split-gguf') {
+      const sourceKey = (await remoteSourceFingerprint(metadata)).slice(0, 24);
+      storagePath = `tmp-source-${sourceKey}-${metadata.name}`;
+    } else {
+      const fingerprint = await remoteSourceFingerprint(metadata);
+      const id = assetIdFromFingerprint(fingerprint);
+      storagePath = `${id}-${metadata.name}`;
+    }
+
+    const existing = await this.storage.getFile(storagePath);
+    if (existing != null && existing.size > metadata.bytes) {
+      await this.storage.deleteFile(storagePath);
+      return { storagePath, layout, startOffset: 0 };
+    }
+    return { storagePath, layout, startOffset: existing?.size ?? 0 };
+  }
+
+  /** Discard a partial download when the server cannot honor its byte range. */
+  public async resetRemoteDownload(plan: RemoteDownloadPlan): Promise<RemoteDownloadPlan> {
+    await this.storage.deleteFile(plan.storagePath);
+    return { ...plan, startOffset: 0 };
+  }
+
+  private async streamRemoteToDisk(
+    metadata: RemoteAssetMetadata,
+    options: RemoteDownloadOptions
+  ): Promise<File> {
+    const { body, onProgress, plan, signal } = options;
+    const { storagePath, startOffset } = plan;
+    const existing = await this.storage.getFile(storagePath);
+
+    if (startOffset === metadata.bytes && existing?.size === metadata.bytes) {
+      return existing;
+    }
+    if (body == null) {
+      throw new QueryError('REMOTE_LOAD_FAILED', 'Remote download response has no body.');
+    }
+
+    if (existing != null && startOffset === 0) {
+      await this.storage.deleteFile(storagePath);
+    }
+
+    const emitDownloadProgress = createProgressEmitter(
+      onProgress,
+      'download',
+      metadata.name,
+      metadata.bytes
+    );
+    emitDownloadProgress(startOffset, true);
+
+    let file: File;
+    try {
+      file = await this.storage.streamToDisk(
+        storagePath,
+        body,
+        {
+          onProgress: (bytes) => emitDownloadProgress(bytes),
+          signal,
+          startOffset,
+          stallTimeoutMs: options.stallTimeoutMs,
+          keepFileOnFailure: true,
+        }
+      );
+      emitDownloadProgress(file.size, true);
+    } catch (error) {
+      if (isQuotaExceededError(error)) {
+        throw quotaExceededError(metadata.name, metadata.bytes, error);
+      }
+      throw error;
+    }
+
+    if (file.size !== metadata.bytes) {
+      await this.storage.deleteFile(storagePath);
+      throw new QueryError(
+        'REMOTE_LOAD_FAILED',
+        `Downloaded "${metadata.canonicalUrl}" size mismatch: expected ${metadata.bytes} bytes, got ${file.size}.`
+      );
+    }
+
+    return file;
+  }
+
   public ensureAvailable(): void {
     if (!FileSystemStorage.isSupported()) {
       throw new QueryError(
@@ -291,18 +411,18 @@ export class AssetStore {
     }
   }
 
-  public async downloadRemote(
+  private async downloadRemote(
     metadata: RemoteAssetMetadata,
     kind: ModelAssetKind,
-    response: Response,
-    signal?: AbortSignal,
-    onProgress?: (progress: ModelLoadProgress) => void,
-    journal?: BrowserAcquisitionJournal
+    options: RemoteDownloadOptions
   ): Promise<RemoteStoreReceipt> {
+    if (options.plan.layout !== 'single-file') {
+      throw new QueryError('REMOTE_LOAD_FAILED', 'Remote download plan is invalid.');
+    }
     this.ensureAvailable();
     const fingerprint = await remoteSourceFingerprint(metadata);
     const id = assetIdFromFingerprint(fingerprint);
-    const storagePath = `${id}-${metadata.name}`;
+    const { storagePath } = options.plan;
     const existing = await this.storage.getFile(storagePath);
     if (existing != null && existing.size === metadata.bytes) {
       return {
@@ -320,44 +440,8 @@ export class AssetStore {
         createdAssetIds: [],
       };
     }
-    if (existing != null) {
-      await this.storage.deleteFile(storagePath);
-    }
-    if (response.body == null) {
-      throw new QueryError('REMOTE_LOAD_FAILED', 'Remote download response has no body.');
-    }
 
-    await journal?.recordStoragePath(storagePath);
-    let file: File;
-    const emitDownloadProgress = createProgressEmitter(
-      onProgress,
-      'download',
-      metadata.name,
-      metadata.bytes
-    );
-    emitDownloadProgress(0, true);
-    try {
-      file = await this.storage.streamToDisk(
-        storagePath,
-        response.body,
-        (bytes) => emitDownloadProgress(bytes),
-        signal
-      );
-      emitDownloadProgress(file.size, true);
-    } catch (error) {
-      if (isQuotaExceededError(error)) {
-        throw quotaExceededError(metadata.name, metadata.bytes, error);
-      }
-      throw error;
-    }
-
-    if (file.size !== metadata.bytes) {
-      await this.storage.deleteFile(storagePath);
-      throw new QueryError(
-        'REMOTE_LOAD_FAILED',
-        `Downloaded "${metadata.canonicalUrl}" size mismatch: expected ${metadata.bytes} bytes, got ${file.size}.`
-      );
-    }
+    const file = await this.streamRemoteToDisk(metadata, options);
 
     const record = this.buildAssetRecord({
       id,
@@ -376,30 +460,16 @@ export class AssetStore {
   public async downloadRemoteGguf(
     metadata: RemoteAssetMetadata,
     runtime: GgufSplitRuntime,
-    response: Response,
-    signal?: AbortSignal,
-    onProgress?: (progress: ModelLoadProgress) => void,
-    journal?: BrowserAcquisitionJournal
+    options: RemoteDownloadOptions
   ): Promise<RemoteStoreReceipt> {
     this.ensureAvailable();
+    await options.journal?.recordResumableDownload(
+      options.plan.storagePath,
+      metadata.bytes
+    );
     const policy = this.browserCachePolicy;
-    let layout: 'single-file' | 'split-gguf';
-    try {
-      layout = await runtime.browserCacheLayout(
-        metadata.bytes,
-        true,
-        policy.directLoadMaxBytes,
-        policy.shardMaxBytes
-      );
-    } catch (error) {
-      throw new QueryError(
-        'REMOTE_LOAD_FAILED',
-        'Browser-only large GGUF splitting requires the wasm32 Rust ingest browser build.',
-        { cause: error }
-      );
-    }
-    if (layout !== 'split-gguf') {
-      return await this.downloadRemote(metadata, 'model', response, signal, onProgress, journal);
+    if (options.plan.layout !== 'split-gguf') {
+      return await this.downloadRemote(metadata, 'model', options);
     }
     if (!(await FileSystemStorage.isSyncAccessSupported())) {
       throw new QueryError(
@@ -407,45 +477,14 @@ export class AssetStore {
         'Browser-only large GGUF splitting requires OPFS sync access handles. Run model loading in a browser worker with createSyncAccessHandle() support.'
       );
     }
-    if (response.body == null) {
-      throw new QueryError('REMOTE_LOAD_FAILED', 'Remote download response has no body.');
-    }
 
     const sourceKey = (await remoteSourceFingerprint(metadata)).slice(0, 24);
-    const sourceTempPath = `tmp-source-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2)}-${metadata.name}`;
+    const sourceTempPath = options.plan.storagePath;
     const outputPrefix = `split-${sourceKey}-${stripGgufExtension(metadata.name)}`;
-    const emitDownloadProgress = createProgressEmitter(
-      onProgress,
-      'download',
-      metadata.name,
-      metadata.bytes
-    );
 
-    try {
-      emitDownloadProgress(0, true);
-      await journal?.recordStoragePath(sourceTempPath);
-      const sourceFile = await this.storage.streamToDisk(
-        sourceTempPath,
-        response.body,
-        (bytes) => emitDownloadProgress(bytes),
-        signal
-      );
-      emitDownloadProgress(sourceFile.size, true);
-      if (sourceFile.size !== metadata.bytes) {
-        throw new QueryError(
-          'REMOTE_LOAD_FAILED',
-          `Downloaded "${metadata.canonicalUrl}" size mismatch: expected ${metadata.bytes} bytes, got ${sourceFile.size}.`
-        );
-      }
-    } catch (error) {
-      await this.storage.deleteFile(sourceTempPath);
-      if (isQuotaExceededError(error)) {
-        throw quotaExceededError(metadata.name, metadata.bytes, error);
-      }
-      throw error;
-    }
+    await this.streamRemoteToDisk(metadata, options);
+
+    const { journal, onProgress, signal } = options;
 
     const records = await this.splitStoredGguf({
       sourcePath: sourceTempPath,
@@ -468,6 +507,7 @@ export class AssetStore {
         sourcePartCount: count,
       }),
     });
+
     return {
       records,
       createdAssetIds: records.map((record) => record.id),
@@ -508,7 +548,7 @@ export class AssetStore {
         'Browser-only large local GGUF splitting requires OPFS sync access handles. Run model loading in a browser worker with createSyncAccessHandle() support.'
       );
     }
-    await this.cleanupBrowserSplitArtifacts(manifest);
+    await this.cleanupLocalSplitArtifacts(manifest);
 
     const sourceKey = (await localFileFingerprint(file, name)).slice(0, 24);
     const sourceTempPath = `tmp-local-source-${Date.now().toString(36)}-${Math.random()
@@ -527,12 +567,10 @@ export class AssetStore {
       await this.storage.streamToDisk(
         sourceTempPath,
         file.stream(),
-        (bytes) => emitStoreProgress(bytes),
-        signal
+        { onProgress: (bytes) => emitStoreProgress(bytes), signal }
       );
       emitStoreProgress(file.size, true);
     } catch (error) {
-      await this.storage.deleteFile(sourceTempPath);
       if (isQuotaExceededError(error)) {
         throw quotaExceededError(name, file.size, error);
       }
@@ -579,8 +617,10 @@ export class AssetStore {
         await this.storage.streamToDisk(
           storagePath,
           input.file.stream(),
-          (bytes) => emitStoreProgress(bytes),
-          input.signal
+          {
+            onProgress: (bytes) => emitStoreProgress(bytes),
+            signal: input.signal,
+          }
         );
         emitStoreProgress(input.file.size, true);
       } catch (error) {
@@ -639,16 +679,17 @@ export class AssetStore {
     await this.storage.deleteFile(record.storagePath);
   }
 
-  public async cleanupBrowserSplitArtifacts(manifest: RegistryManifest): Promise<void> {
+  /** Removes uncommitted artifacts owned by browser-side local-file splitting. */
+  public async cleanupLocalSplitArtifacts(manifest: RegistryManifest): Promise<void> {
     this.ensureAvailable();
     const protectedPaths = new Set(
       Object.values(manifest.assets).map((asset) => asset.storagePath)
     );
     const fileNames = await this.storage.listFileNames();
     for (const fileName of fileNames) {
-      const isTempSource = BROWSER_SPLIT_TEMP_PREFIXES.some((prefix) => fileName.startsWith(prefix));
+      const isTempSource = LOCAL_SPLIT_TEMP_PREFIXES.some((prefix) => fileName.startsWith(prefix));
       const isUnregisteredSplitShard =
-        BROWSER_SPLIT_SHARD_PREFIXES.some((prefix) => fileName.startsWith(prefix)) &&
+        LOCAL_SPLIT_SHARD_PREFIXES.some((prefix) => fileName.startsWith(prefix)) &&
         !protectedPaths.has(fileName);
       if (isTempSource || isUnregisteredSplitShard) {
         await this.storage.deleteFile(fileName);
@@ -767,7 +808,7 @@ export class AssetStore {
         const path = splitShardPath(input.outputPrefix, index, shardCount);
         shardPaths.push(path);
       }
-      await input.journal?.recordStoragePaths(shardPaths);
+      await input.journal?.recordTemporaryPaths(shardPaths);
 
       for (const path of shardPaths) {
         const handle = await this.storage.createSyncAccessHandle(path, { create: true });

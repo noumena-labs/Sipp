@@ -355,6 +355,16 @@ export class ModelService {
     source: ModelAddSource,
     options: ModelAddOptions = {}
   ): Promise<ModelInfo> {
+    if (
+      source.kind === 'remote' &&
+      options.stallTimeoutMs != null &&
+      (!Number.isFinite(options.stallTimeoutMs) || options.stallTimeoutMs <= 0)
+    ) {
+      throw new QueryError(
+        'INVALID_MODEL_SOURCE',
+        'Remote model stallTimeoutMs must be a positive finite number.'
+      );
+    }
     return this.lifecycleOperations.run(async () => {
       if (options.signal?.aborted) {
         throw new DOMException('Model install aborted.', 'AbortError');
@@ -776,7 +786,10 @@ export class ModelService {
             inspection: result.inspection,
           };
         },
-        addOptions
+        {
+          ...addOptions,
+          onWarning: (event) => this.emitEngineEvent(event),
+        }
       )
       : null;
     let rust: RustLifecycleBridge | null = null;

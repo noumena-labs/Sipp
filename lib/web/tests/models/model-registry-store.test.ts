@@ -22,6 +22,10 @@ class MemoryStorage {
   public async listFileNamesAt(): Promise<string[]> {
     return [];
   }
+
+  public async listFileNames(): Promise<string[]> {
+    return [];
+  }
 }
 
 async function withSupportedStorage<T>(fn: () => Promise<T>): Promise<T> {

@@ -7,6 +7,24 @@ interface WritableFileSink {
   release(): void;
 }
 
+interface StreamToDiskOptions {
+  readonly onProgress?: (bytes: number) => void;
+  readonly signal?: AbortSignal;
+  readonly startOffset?: number;
+  readonly stallTimeoutMs?: number;
+  readonly keepFileOnFailure?: boolean;
+}
+
+/** Error raised when a streamed OPFS write receives no data before its deadline. */
+export class StreamStallError extends Error {
+  public readonly code = 'STALL_TIMEOUT' as const;
+
+  public constructor(stallTimeoutMs: number) {
+    super(`Download stream stalled: no data received for ${stallTimeoutMs}ms.`);
+    this.name = 'TimeoutError';
+  }
+}
+
 const STREAM_WRITE_BUFFER_BYTES = 4 * 1024 * 1024;
 const DEFAULT_OPFS_ROOT = 'sipp-models';
 
@@ -131,7 +149,19 @@ export class FileSystemStorage {
     return typeof DOMException === 'function' && error instanceof DOMException && error.name === 'NotFoundError';
   }
 
-  private toWritableFileSink(writable: FileSystemWritableFileStream): WritableFileSink {
+  private async toWritableFileSink(
+    writable: FileSystemWritableFileStream,
+    startOffset = 0
+  ): Promise<WritableFileSink> {
+    const seek = (writable as unknown as {
+      seek?: (offset: number) => Promise<void>;
+    }).seek;
+    if (startOffset > 0) {
+      if (typeof seek !== 'function') {
+        throw new Error('OPFS writable stream does not support resumed writes.');
+      }
+      await seek.call(writable, startOffset);
+    }
     if (
       typeof writable.write === 'function' &&
       typeof writable.close === 'function' &&
@@ -157,7 +187,8 @@ export class FileSystemStorage {
   }
 
   private async createSyncWritableFileSink(
-    handle: FileSystemFileHandle
+    handle: FileSystemFileHandle,
+    startOffset = 0
   ): Promise<WritableFileSink | null> {
     const createSyncAccessHandle = (handle as unknown as {
       createSyncAccessHandle?: () => Promise<OpfsSyncAccessHandle>;
@@ -167,14 +198,18 @@ export class FileSystemStorage {
     }
 
     const access = await createSyncAccessHandle.call(handle);
-    let offset = 0;
-    access.truncate(0);
+    let offset = startOffset;
+    if (startOffset === 0) {
+      access.truncate(0);
+    }
     return {
       write: async (chunk) => {
         const written = access.write(toFileSystemWriteChunk(chunk), { at: offset });
         if (written !== chunk.byteLength) {
           throw new Error(`OPFS write failed: expected ${chunk.byteLength} bytes, wrote ${written}.`);
         }
+        // Each buffered write is a durable resume checkpoint if the Worker is terminated.
+        access.flush();
         offset += written;
       },
       close: async () => {
@@ -182,6 +217,9 @@ export class FileSystemStorage {
         access.close();
       },
       abort: async () => {
+        try {
+          access.flush();
+        } catch {}
         access.close();
       },
       release: () => {},
@@ -317,9 +355,16 @@ export class FileSystemStorage {
   public async streamToDisk(
     fileName: string,
     stream: ReadableStream<Uint8Array>,
-    onProgress?: (bytes: number) => void,
-    signal?: AbortSignal
+    options: StreamToDiskOptions = {}
   ): Promise<File> {
+    const {
+      onProgress,
+      signal,
+      startOffset = 0,
+      stallTimeoutMs = 0,
+      keepFileOnFailure = false,
+    } = options;
+
     if (signal?.aborted) {
       throw createAbortError('File write aborted.');
     }
@@ -328,44 +373,70 @@ export class FileSystemStorage {
     const handle = await root.getFileHandle(fileName, { create: true });
 
     const sink =
-      (await this.createSyncWritableFileSink(handle)) ??
-      this.toWritableFileSink(await handle.createWritable());
+      (await this.createSyncWritableFileSink(handle, startOffset)) ??
+      (await this.toWritableFileSink(
+        await handle.createWritable(startOffset > 0 ? { keepExistingData: true } : undefined),
+        startOffset
+      ));
     const reader = stream.getReader();
     let closed = false;
-    try {
-      let bytesWritten = 0;
-      let pendingBytes = 0;
-      const pendingChunks: Uint8Array[] = [];
+    let bytesWritten = startOffset;
+    let pendingBytes = 0;
+    const pendingChunks: Uint8Array[] = [];
 
-      const flushPending = async (): Promise<void> => {
-        if (pendingBytes === 0) {
-          return;
-        }
-        const chunk =
-          pendingChunks.length === 1
-            ? pendingChunks[0]
-            : (() => {
-                const merged = new Uint8Array(pendingBytes);
-                let offset = 0;
-                for (const part of pendingChunks) {
-                  merged.set(part, offset);
-                  offset += part.byteLength;
-                }
-                return merged;
-              })();
-        await sink.write(chunk);
-        bytesWritten += pendingBytes;
-        pendingChunks.length = 0;
-        pendingBytes = 0;
-        onProgress?.(bytesWritten);
-      };
+    const flushPending = async (): Promise<void> => {
+      if (pendingBytes === 0) {
+        return;
+      }
+      const chunk =
+        pendingChunks.length === 1
+          ? pendingChunks[0]
+          : (() => {
+              const merged = new Uint8Array(pendingBytes);
+              let offset = 0;
+              for (const part of pendingChunks) {
+                merged.set(part, offset);
+                offset += part.byteLength;
+              }
+              return merged;
+            })();
+      await sink.write(chunk);
+      bytesWritten += pendingBytes;
+      pendingChunks.length = 0;
+      pendingBytes = 0;
+      onProgress?.(bytesWritten);
+    };
+
+    try {
+      if (startOffset > 0) {
+        onProgress?.(startOffset);
+      }
 
       while (true) {
         if (signal?.aborted) {
           throw createAbortError('File write aborted.');
         }
 
-        const { done, value } = await reader.read();
+        let readResult: Awaited<ReturnType<ReadableStreamDefaultReader<Uint8Array>['read']>>;
+        if (stallTimeoutMs > 0) {
+          let timerId: ReturnType<typeof setTimeout> | undefined;
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timerId = setTimeout(() => {
+              reject(new StreamStallError(stallTimeoutMs));
+            }, stallTimeoutMs);
+          });
+          try {
+            readResult = await Promise.race([reader.read(), timeoutPromise]);
+          } finally {
+            if (timerId !== undefined) {
+              clearTimeout(timerId);
+            }
+          }
+        } else {
+          readResult = await reader.read();
+        }
+
+        const { done, value } = readResult;
         if (done) {
           break;
         }
@@ -393,18 +464,31 @@ export class FileSystemStorage {
       closed = true;
       return await handle.getFile();
     } catch (e) {
-      // Cleanup on failure
       try {
         if (!closed) {
-          await sink.abort();
+          if (keepFileOnFailure) {
+            try {
+              await flushPending();
+            } catch {}
+            try {
+              await sink.close();
+              closed = true;
+            } catch {
+              await sink.abort();
+            }
+          } else {
+            await sink.abort();
+          }
         }
       } catch {}
       try {
         await reader.cancel(e);
       } catch {}
-      try {
-        await root.removeEntry(fileName);
-      } catch {}
+      if (!keepFileOnFailure) {
+        try {
+          await root.removeEntry(fileName);
+        } catch {}
+      }
       throw e;
     } finally {
       try {
