@@ -74,6 +74,9 @@ export type CancellationReason =
 /** Return JSON backend/device observability reported by the native runtime. */
 export declare function backendObservabilityJson(includeDetails?: boolean | undefined | null): string
 
+/** Return whether the native runtime reports a usable canonical backend. */
+export declare function backendIsUsable(backend: string): boolean
+
 /** Prefix KV-cache reuse and snapshot settings for local inference. */
 export interface CacheRuntimeConfig {
   mode?: string

@@ -21,6 +21,18 @@ sipp build node --backend cpu && node examples/node/query.mjs <model.gguf> "Expl
 if the launcher is not active.
 
 Set `SIPP_NODE_BACKEND=cpu|vulkan|cuda|metal` to choose a native backend.
+When the default `auto` selection skips an unavailable GPU backend, subscribe
+at startup to receive the structured warning:
+
+```ts
+import { onFallback } from '@sipphq/sipp-server';
+
+const unsubscribe = onFallback((event) => {
+  console.info(event.detail, `Using ${event.fallbackTo}.`);
+});
+```
+
+Call `unsubscribe()` when the application no longer needs backend notices.
 
 ## Local GGUF Query
 

@@ -129,3 +129,22 @@ fn normalize_backend_names_drops_empty_and_deduplicates() {
     assert_eq!(normalize_backend_names(&names), vec!["cpu", "cuda"]);
     assert_eq!(normalize_backend_names_or_cpu(&[]), vec!["cpu"]);
 }
+
+#[test]
+fn backend_usability_normalizes_native_aliases_without_substring_matches() {
+    let capabilities = BackendCapabilities {
+        compiled: strings(&["metal", "cuda", "vulkan"]),
+        available: strings(&["Apple M2 Pro", "NVIDIA CUDA", "ggml_vulkan"]),
+        gpu_offload_supported: true,
+    }
+    .normalized();
+
+    assert!(backend_is_usable("metal", &capabilities));
+    assert!(backend_is_usable("cuda", &capabilities));
+    assert!(backend_is_usable("vulkan", &capabilities));
+    assert_eq!(normalize_backend_name("MTL"), "metal");
+    assert_eq!(normalize_backend_name("NV"), "cuda");
+    assert_eq!(normalize_backend_name("VK"), "vulkan");
+    assert_eq!(normalize_backend_name("metallica"), "metallica");
+    assert_eq!(normalize_backend_name("environment"), "environment");
+}

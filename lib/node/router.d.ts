@@ -15,6 +15,19 @@ export type ActiveNodeBackend = 'cpu' | 'cuda' | 'metal' | 'vulkan'
 /** Return the backend selected for the currently loaded native binding. */
 export declare function getActiveBackend(): ActiveNodeBackend
 
+/** Structured warning emitted when automatic backend selection downgrades. */
+export interface FallbackEvent {
+  readonly type: 'fallback-warning'
+  readonly kind: 'backend'
+  readonly detail: string
+  readonly fallbackTo: ActiveNodeBackend
+}
+
+/** Subscribe to automatic backend fallback warnings. */
+export declare function onFallback(
+  listener: (event: FallbackEvent) => void
+): () => void
+
 /** Error raised while decoding or formatting the first-party gateway profile. */
 export declare class GatewayProfileError extends Error {
   constructor(
