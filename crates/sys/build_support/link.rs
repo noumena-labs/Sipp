@@ -49,6 +49,7 @@ fn link_cmake_libraries(context: &BuildContext, search_dirs: &[PathBuf]) {
     let mut core_libraries = vec![
         "sipp_shim",
         "mtmd",
+        "vendor-hash",
         "llama-common",
         "llama-common-base",
         "cpp-httplib",

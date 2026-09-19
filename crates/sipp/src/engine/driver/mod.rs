@@ -66,7 +66,7 @@ pub struct SippEngine {
 struct EngineInner {
     command_tx: mpsc::Sender<EngineThreadCommand>,
     event_subscribers: EngineEventSubscribers,
-    _driver: JoinHandle<()>,
+    driver: Option<JoinHandle<()>>,
 }
 
 /// Future returned by [`SippEngine::load`].
@@ -390,7 +390,7 @@ impl Future for EngineLoad {
                     inner: Arc::new(EngineInner {
                         command_tx,
                         event_subscribers: self.event_subscribers.clone(),
-                        _driver: join_handle,
+                        driver: Some(join_handle),
                     }),
                 }))
             }
@@ -427,6 +427,9 @@ impl Drop for EngineLoad {
 impl Drop for EngineInner {
     fn drop(&mut self) {
         let _ = self.command_tx.send(EngineThreadCommand::Close(None));
+        if let Some(driver) = self.driver.take() {
+            let _ = driver.join();
+        }
     }
 }
 
