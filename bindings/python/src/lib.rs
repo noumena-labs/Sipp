@@ -25,6 +25,7 @@ use sipp::engine::{
     ChatMessage, ModelPlacementConfig, NativeRuntimeConfig, SamplingRuntimeConfig,
     SchedulerRuntimeConfig, TokenBatch, DEFAULT_CONTEXT_KEY, DEFAULT_MAX_TOKENS,
 };
+use sipp::lifecycle::host_backend_is_usable as core_backend_is_usable;
 use sipp::{
     Endpoint as CoreEndpoint, EndpointRef as CoreEndpointRef, ManagedModel as CoreManagedModel,
     ProviderEndpointError as CoreProviderEndpointError, SippAudioResponse as ClientAudioResponse,
@@ -1305,6 +1306,12 @@ fn backend_observability_json(include_details: bool) -> PyResult<String> {
     core_backend_observability_json(include_details).map_err(to_py_error)
 }
 
+/// Return whether the native runtime reports a usable canonical backend.
+#[pyfunction]
+fn backend_is_usable(backend: &str) -> PyResult<bool> {
+    core_backend_is_usable(backend).map_err(|error| PyRuntimeError::new_err(error.to_string()))
+}
+
 /// Enable or suppress llama.cpp native logging.
 #[pyfunction]
 fn set_llama_log_quiet(quiet: bool) {
@@ -1356,6 +1363,7 @@ fn _native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("DEFAULT_CONTEXT_KEY", DEFAULT_CONTEXT_KEY)?;
     module.add("DEFAULT_MAX_TOKENS", DEFAULT_MAX_TOKENS)?;
     module.add_function(wrap_pyfunction!(backend_observability_json, module)?)?;
+    module.add_function(wrap_pyfunction!(backend_is_usable, module)?)?;
     module.add_function(wrap_pyfunction!(set_llama_log_quiet, module)?)?;
     Ok(())
 }

@@ -7,7 +7,6 @@ for the current process.
 
 import importlib
 import importlib.util
-import json
 import os
 import sys
 from pathlib import Path
@@ -83,82 +82,21 @@ def _load_extension_from_path(path: Path) -> object:
     return module
 
 
-def _backend_name_matches(value: object, backend: str) -> bool:
-    return backend in str(value or "").lower()
-
-
-def _backend_available(info: dict[str, object], backend: str) -> bool:
-    if backend == "cpu":
-        return True
-
-    compiled = info.get("compiled")
-    available_backends = info.get("availableBackends")
-    devices = info.get("devices")
-    if not isinstance(compiled, dict):
-        compiled = {}
-    if not isinstance(available_backends, list):
-        available_backends = []
-    if not isinstance(devices, list):
-        devices = []
-
-    return (
-        compiled.get(backend) is True
-        and info.get("gpuOffloadSupported") is True
-        and (
-            any(
-                isinstance(item, dict)
-                and _backend_name_matches(item.get("name"), backend)
-                for item in available_backends
-            )
-            or any(
-                isinstance(item, dict)
-                and _backend_name_matches(item.get("backendName"), backend)
-                for item in devices
-            )
-        )
-    )
-
-
 def _assert_backend_usable(module: object, backend: str) -> None:
-    if backend == "cpu":
-        return
-
-    observability = getattr(module, "backend_observability_json", None)
-    if not callable(observability):
-        raise RuntimeError(
-            f"{backend} binding does not expose backend_observability_json()"
-        )
-
-    info = json.loads(observability(True))
-    if not isinstance(info, dict) or not _backend_available(info, backend):
+    is_usable = getattr(module, "backend_is_usable")
+    if not is_usable(backend):
         raise RuntimeError(
             f"{backend} binding loaded, but no usable {backend} backend was reported"
         )
 
 
-def _infer_backend_from_path(path: Path) -> str:
-    file_name = path.name.lower()
-    for backend in ("cuda", "metal", "vulkan", "cpu"):
-        if backend in file_name:
+def _infer_backend_from_module(module: object) -> str:
+    is_usable = getattr(module, "backend_is_usable")
+
+    for backend in ("cuda", "metal", "vulkan"):
+        if is_usable(backend):
             return backend
     return "cpu"
-
-
-def _infer_backend_from_module(module: object, path: Optional[Path] = None) -> str:
-    fallback = _infer_backend_from_path(path) if path is not None else "cpu"
-    observability = getattr(module, "backend_observability_json", None)
-    if callable(observability):
-        try:
-            info = json.loads(observability(False))
-            compiled = info.get("compiled") if isinstance(info, dict) else None
-            if isinstance(compiled, dict):
-                for backend in ("cuda", "metal", "vulkan"):
-                    if compiled.get(backend) is True:
-                        return backend
-        except Exception:
-            return fallback
-
-    return fallback
 
 
 def _load_explicit_native_library() -> Optional[object]:
@@ -170,7 +108,7 @@ def _load_explicit_native_library() -> Optional[object]:
 
     native_path = Path(path)
     module = _load_extension_from_path(native_path)
-    _ACTIVE_BACKEND = _infer_backend_from_module(module, native_path)
+    _ACTIVE_BACKEND = _infer_backend_from_module(module)
     return module
 
 
@@ -297,6 +235,7 @@ SchedulerPolicyConfig = _native.SchedulerPolicyConfig
 SchedulerRuntimeConfig = _native.SchedulerRuntimeConfig
 UnsupportedOperationError = _native.UnsupportedOperationError
 backend_observability_json = _native.backend_observability_json
+backend_is_usable = _native.backend_is_usable
 set_llama_log_quiet = _native.set_llama_log_quiet
 
 __all__ = [
@@ -330,6 +269,7 @@ __all__ = [
     "SchedulerPolicyConfig",
     "SchedulerRuntimeConfig",
     "UnsupportedOperationError",
+    "backend_is_usable",
     "backend_observability_json",
     "get_active_backend",
     "set_llama_log_quiet",

@@ -1,6 +1,8 @@
 use crate::build_support::context::BuildContext;
 use cmake::Config;
 use std::env;
+use std::path::PathBuf;
+use std::process::Command;
 
 /////////////////////////////////////////////////////////////////////////////////
 /// TESTS
@@ -81,11 +83,51 @@ pub(crate) fn link_system_libraries(context: &BuildContext) {
         ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
+
+        if context.target.ends_with("apple-darwin") {
+            link_macos_clang_runtime();
+        }
     }
 
     if !context.features.backend_dl && context.features.vulkan {
         link_vulkan_libraries(context);
     }
+}
+
+fn link_macos_clang_runtime() {
+    let output = Command::new("/usr/bin/xcrun")
+        .args(["clang", "-print-file-name=libclang_rt.osx.a"])
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => panic!("failed to locate Apple Clang through xcrun: {error}"),
+    };
+    if !output.status.success() {
+        panic!(
+            "Apple Clang failed to report its macOS runtime archive: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let archive = match String::from_utf8(output.stdout) {
+        Ok(path) => PathBuf::from(path.trim()),
+        Err(error) => panic!("Apple Clang returned a non-UTF-8 runtime path: {error}"),
+    };
+    if !archive.is_file() {
+        panic!(
+            "Apple Clang runtime archive does not exist: {}",
+            archive.display()
+        );
+    }
+    let Some(directory) = archive.parent() else {
+        panic!(
+            "Apple Clang runtime archive has no parent directory: {}",
+            archive.display()
+        );
+    };
+
+    println!("cargo:rustc-link-search=native={}", directory.display());
+    println!("cargo:rustc-link-lib=static=clang_rt.osx");
 }
 
 fn link_vulkan_libraries(context: &BuildContext) {
