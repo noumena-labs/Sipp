@@ -127,7 +127,9 @@ fn link_macos_clang_runtime() {
     };
 
     println!("cargo:rustc-link-search=native={}", directory.display());
-    println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    // Dynamic consumers need the availability helper at final link time, but
+    // compiler-rt objects must not be copied into distributable static archives.
+    println!("cargo:rustc-link-lib=static:-bundle=clang_rt.osx");
 }
 
 fn link_vulkan_libraries(context: &BuildContext) {
