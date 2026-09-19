@@ -31,7 +31,6 @@ pub(crate) fn apply_toolchains<'a>(
     let ninja_dir = ctx.ninja_toolchain_dir();
     if ctx.ninja_exe().exists() {
         path_additions.push(ninja_dir.display().to_string());
-        command = command.env("CMAKE_GENERATOR", "Ninja");
     }
 
     let uv_dir = ctx

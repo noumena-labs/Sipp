@@ -15,6 +15,8 @@ mod cmake_tests;
 pub(crate) fn build_native(context: &BuildContext) -> PathBuf {
     let mut config = Config::new(&context.manifest_dir);
     config
+        // Keep raw Cargo and xtask builds on one compatible cache format.
+        .generator("Ninja")
         .profile("Release")
         .define("SIPP_LLAMA_CPP_DIR", context.llama_dir.as_os_str())
         .define("CMAKE_INSTALL_LIBDIR", "lib")
