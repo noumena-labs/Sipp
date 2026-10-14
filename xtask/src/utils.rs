@@ -266,8 +266,7 @@ impl BuildContext {
         self.lib_root().join("python")
     }
 
-    fn playwright_core_cli(&self) -> Result<PathBuf> {
-        let playground_dir = self.playground_dir();
+    fn playwright_core_cli(&self, package_dir: &Path) -> Result<PathBuf> {
         let output = Command::new("node")
             .arg("-e")
             .arg(
@@ -275,18 +274,18 @@ impl BuildContext {
                  const entry = require.resolve('playwright-core', { paths: [process.cwd()] }); \
                  console.log(path.join(path.dirname(entry), 'cli.js'));",
             )
-            .current_dir(&playground_dir)
+            .current_dir(package_dir)
             .output()
             .with_context(|| {
                 format!(
                     "failed to resolve Playwright Core CLI from {}",
-                    playground_dir.display()
+                    package_dir.display()
                 )
             })?;
         if !output.status.success() {
             anyhow::bail!(
                 "failed to resolve Playwright Core CLI from {}: {}",
-                playground_dir.display(),
+                package_dir.display(),
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
@@ -303,9 +302,8 @@ impl BuildContext {
         self.toolchain_dir().join("playwright-browsers")
     }
 
-    fn playwright_chromium_executable(&self) -> Result<(PathBuf, bool)> {
+    fn playwright_chromium_executable(&self, package_dir: &Path) -> Result<(PathBuf, bool)> {
         let browsers_dir = self.playwright_browsers_dir();
-        let playground_dir = self.playground_dir();
         let output = Command::new("node")
             .arg("-e")
             .arg(
@@ -315,7 +313,7 @@ impl BuildContext {
                  console.log(executable); \
                  console.log(fs.existsSync(executable) ? 'true' : 'false');",
             )
-            .current_dir(&playground_dir)
+            .current_dir(package_dir)
             .env("PLAYWRIGHT_BROWSERS_PATH", &browsers_dir)
             .output()
             .context("failed to query Playwright Chromium executable path")?;
@@ -447,14 +445,19 @@ impl BuildContext {
     }
 }
 
-pub(crate) fn ensure_playwright_chromium(sh: &Shell, ctx: &BuildContext) -> Result<()> {
-    let (chromium_exe, installed) = ctx.playwright_chromium_executable()?;
+/// Install Playwright Chromium for the `playwright-core` resolved from `package_dir`.
+pub(crate) fn ensure_playwright_chromium(
+    sh: &Shell,
+    ctx: &BuildContext,
+    package_dir: &Path,
+) -> Result<()> {
+    let (chromium_exe, installed) = ctx.playwright_chromium_executable(package_dir)?;
     if installed {
         output::detail("Playwright Chromium", chromium_exe.display());
         return Ok(());
     }
 
-    let playwright_cli = ctx.playwright_core_cli()?;
+    let playwright_cli = ctx.playwright_core_cli(package_dir)?;
     if !playwright_cli.is_file() {
         anyhow::bail!(
             "Playwright Core CLI was not found at {}; run `cargo xtask setup --profile browser`",
@@ -462,7 +465,7 @@ pub(crate) fn ensure_playwright_chromium(sh: &Shell, ctx: &BuildContext) -> Resu
         );
     }
 
-    let _dir = sh.push_dir(ctx.playground_dir());
+    let _dir = sh.push_dir(package_dir);
     let browsers_dir = ctx.playwright_browsers_dir();
     output::run_command(
         "Installing Playwright Chromium",

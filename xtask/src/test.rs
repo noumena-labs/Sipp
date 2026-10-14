@@ -1305,7 +1305,7 @@ fn run_browser_example_smoke(
     let example_dir = ctx.browser_example_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, std::slice::from_ref(&example_dir))?;
     targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
-    ensure_playwright_chromium(sh, ctx)?;
+    ensure_playwright_chromium(sh, ctx, &example_dir)?;
 
     output::path("Example workspace", &example_dir);
     output::path("Artifact directory", &ctx.example_artifacts_dir("web"));
@@ -1343,7 +1343,7 @@ fn run_playground_browser_runtime_smoke(
     let playground_dir = ctx.playground_dir();
     ensure_javascript_workspace_dependencies(sh, ctx, std::slice::from_ref(&playground_dir))?;
     targets::wasm::build(sh, ctx, WasmThreading::Pthread, WasmRuntime::Auto)?;
-    ensure_playwright_chromium(sh, ctx)?;
+    ensure_playwright_chromium(sh, ctx, &playground_dir)?;
 
     output::path("Playground workspace", &playground_dir);
     output::path("Artifact directory", &ctx.tool_artifacts_dir("playground"));

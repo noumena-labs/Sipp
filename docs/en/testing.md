@@ -113,6 +113,17 @@ cases require a model/runtime that reports embedding support.
 | `cargo xtask test smoke group local-model` | `cli`, `example-rust`, `example-node`, and `example-python` |
 | `cargo xtask test smoke group full` | Every smoke suite, including playground, gateway, and llama checks |
 
+Browser smoke suites apply one timeout, 30000 ms by default, to each
+Playwright step: browser launch, page navigation, runtime readiness, and each
+example's inference. Raise it on a cold or busy machine:
+
+```bash
+cargo xtask test smoke suite example-browser --timeout-ms 120000
+cargo xtask test smoke suite playground-browser --timeout-ms 120000
+cargo xtask test smoke group examples --backend cpu --browser-timeout-ms 120000
+cargo xtask test smoke group full --backend cpu   --example-browser-timeout-ms 120000 --playground-browser-timeout-ms 120000
+```
+
 Use `cargo xtask run examples serve browser` to manually serve browser examples.
 Use `cargo xtask run examples serve gateway-local --model <model.gguf>` to
 serve the minimal local gateway proxy. Provider-backed and production serving

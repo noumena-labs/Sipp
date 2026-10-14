@@ -96,6 +96,15 @@ cargo xtask test verify --changed
 | `cargo xtask test smoke group local-model` | `cli`、`example-rust`、`example-node`、`example-python` |
 | `cargo xtask test smoke group full` | 所有冒烟测试套件（含 Playground、网关、llama 检查） |
 
+浏览器冒烟测试对每个 Playwright 步骤（启动浏览器、页面导航、运行时就绪以及每个示例的推理）使用同一个超时时间，默认 30000 毫秒。在冷启动或负载较高的机器上可调大该值：
+
+```bash
+cargo xtask test smoke suite example-browser --timeout-ms 120000
+cargo xtask test smoke suite playground-browser --timeout-ms 120000
+cargo xtask test smoke group examples --backend cpu --browser-timeout-ms 120000
+cargo xtask test smoke group full --backend cpu   --example-browser-timeout-ms 120000 --playground-browser-timeout-ms 120000
+```
+
 手动启动浏览器端示例：`cargo xtask run examples serve browser`。
 
 启动极简版本地网关代理：`cargo xtask run examples serve gateway-local --model <model.gguf>`。如需验证完整网关服务和生产环境配置，使用 `apps/gateway-server`。运行 `sipp run gateway-server check --config <path>` 校验网关配置。Docker 容器测试见[网关 Docker 指南](gateway/docker.md)，curl 和 Postman 的网络验证见[网关测试指南](gateway/testing.md)。Playground 环境由 `test smoke suite playground-browser` 负责验证。
