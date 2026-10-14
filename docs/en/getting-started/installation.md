@@ -16,7 +16,7 @@ npm run dev
 
 This runs the public `@sipphq/create-sipp` initializer and creates a Vite app
 that depends on the browser SDK, `@sipphq/sipp`. The initializer requires
-Node.js 20.19 or newer.
+Node.js 20.19+ or 22.12+, the range the generated app's Vite version supports.
 
 ## Package Installs
 

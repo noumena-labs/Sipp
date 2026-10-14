@@ -103,7 +103,7 @@ npm run dev
 ```
 
 npm 会将该命令映射到公开的 `@sipphq/create-sipp` 初始化器。生成的应用
-依赖浏览器 SDK `@sipphq/sipp`，并要求 Node.js 20.19 或更高版本。
+依赖浏览器 SDK `@sipphq/sipp`，并要求 Node.js 20.19+ 或 22.12+（与生成应用所用的 Vite 版本一致）。
 
 现有应用应根据代码的执行位置选择包：浏览器 Bundle 与客户端组件使用
 `@sipphq/sipp`；Node.js 进程、API 路由和服务端函数使用

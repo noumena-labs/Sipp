@@ -2,7 +2,7 @@
 
 A browser-native AI chat application powered by [Sipp](https://github.com/noumena-labs/Sipp) and WebGPU.
 
-Requires Node.js 20.19 or newer.
+Requires Node.js 20.19+ or 22.12+ (the range Vite 8 supports).
 
 ## Quickstart
 
