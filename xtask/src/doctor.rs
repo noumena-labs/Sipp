@@ -50,6 +50,15 @@ pub fn run(ctx: &BuildContext, args: &DoctorArgs) -> Result<()> {
 
     if includes_swift(&args.target) {
         hard_failures += print_swift_statuses(ctx);
+    } else if matches!(args.target, DoctorTarget::All) {
+        output::detail(
+            "Swift",
+            "skipped; Apple package builds require a macOS host",
+        );
+    }
+
+    if includes_llama_submodule(&args.target) {
+        hard_failures += print_llama_submodule_status(ctx);
     }
 
     if includes_native_backend(&args.target) {
@@ -122,8 +131,13 @@ fn print_wasm_statuses(ctx: &BuildContext, include_js_workspace: bool) {
 
 fn print_swift_statuses(ctx: &BuildContext) -> usize {
     output::phase("Swift binding readiness");
+    let host = swift_host_status();
+    if host.is_missing() {
+        host.print();
+        return 1;
+    }
     let statuses = vec![
-        swift_host_status(),
+        host,
         xcode_tool_status(
             "Xcode",
             "xcodebuild",
@@ -161,16 +175,19 @@ fn print_swift_statuses(ctx: &BuildContext) -> usize {
         status.print();
     }
 
+    failures
+}
+
+fn print_llama_submodule_status(ctx: &BuildContext) -> usize {
     if ctx.llama_cpp_dir().join("include/llama.h").is_file() {
         output::success("llama.cpp submodule is initialized");
+        0
     } else {
         output::warning(
             "llama.cpp submodule is missing; run `git submodule update --init --recursive`",
         );
-        failures += 1;
+        1
     }
-
-    failures
 }
 
 fn print_backend_statuses(ctx: &BuildContext, backend: &Backend) {
@@ -354,6 +371,14 @@ fn includes_wasm(target: &DoctorTarget) -> bool {
 }
 
 fn includes_swift(target: &DoctorTarget) -> bool {
+    match target {
+        DoctorTarget::Swift => true,
+        DoctorTarget::All => cfg!(target_os = "macos"),
+        _ => false,
+    }
+}
+
+fn includes_llama_submodule(target: &DoctorTarget) -> bool {
     matches!(target, DoctorTarget::All | DoctorTarget::Swift)
 }
 

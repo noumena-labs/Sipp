@@ -7,9 +7,9 @@ use crate::cli::{Backend, DoctorTarget};
 use crate::toolchain::ToolStatus;
 
 use super::{
-    doctor_target_label, includes_core, includes_native_backend, includes_node, includes_python,
-    includes_swift, includes_wasm, metal_status, missing_swift_rust_targets,
-    required_command_status, swift_host_status,
+    doctor_target_label, includes_core, includes_llama_submodule, includes_native_backend,
+    includes_node, includes_python, includes_swift, includes_wasm, metal_status,
+    missing_swift_rust_targets, required_command_status, swift_host_status,
 };
 
 #[test]
@@ -26,7 +26,10 @@ fn target_inclusion_matrix_matches_doctor_scope() {
     assert!(!includes_native_backend(&DoctorTarget::Core));
     assert!(includes_core(&DoctorTarget::Swift));
     assert!(includes_swift(&DoctorTarget::Swift));
-    assert!(includes_swift(&DoctorTarget::All));
+    assert!(!includes_swift(&DoctorTarget::Node));
+    assert!(includes_llama_submodule(&DoctorTarget::All));
+    assert!(includes_llama_submodule(&DoctorTarget::Swift));
+    assert!(!includes_llama_submodule(&DoctorTarget::Node));
     assert!(!includes_native_backend(&DoctorTarget::Swift));
 }
 
@@ -68,6 +71,14 @@ fn metal_status_reflects_current_host_platform() {
         metal_status(),
         ToolStatus::Warn { name: "Metal", .. }
     ));
+}
+
+#[test]
+fn all_target_checks_swift_only_on_macos_hosts() {
+    assert_eq!(
+        includes_swift(&DoctorTarget::All),
+        cfg!(target_os = "macos")
+    );
 }
 
 #[test]
