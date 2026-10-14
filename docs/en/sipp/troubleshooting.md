@@ -73,3 +73,20 @@ sipp toolchain install all
 CUDA is not installed by xtask. Install CUDA through NVIDIA tooling and rerun
 `sipp doctor --target node --backend cuda` or the target you need.
 
+
+## llama.cpp Submodule Fails To Clone
+
+The `crates/sys/llama.cpp` submodule is public and clones over HTTPS without
+GitHub credentials:
+
+```bash
+git submodule update --init --recursive
+```
+
+Clones made before the submodule URL moved to HTTPS may still use SSH and fail
+with `Permission denied (publickey)`. Refresh the recorded URL, then update:
+
+```bash
+git submodule sync --recursive
+git submodule update --init --recursive
+```

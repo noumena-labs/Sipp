@@ -64,3 +64,18 @@ sipp toolchain install all
 ```
 
 注意：CUDA 不由 xtask 自动安装。请从 NVIDIA 官方渠道安装 CUDA，然后重新运行 `sipp doctor --target node --backend cuda` 检查。
+
+## llama.cpp 子模块克隆失败
+
+`crates/sys/llama.cpp` 子模块是公开仓库，可通过 HTTPS 克隆，无需 GitHub 凭据：
+
+```bash
+git submodule update --init --recursive
+```
+
+在子模块地址改为 HTTPS 之前创建的克隆可能仍使用 SSH，并报错 `Permission denied (publickey)`。请先刷新记录的地址，再更新：
+
+```bash
+git submodule sync --recursive
+git submodule update --init --recursive
+```
