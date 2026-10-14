@@ -2505,6 +2505,7 @@ fn apply_search_filter(
 
 fn suite_matches_search(suite: &TestSuite, search: &str) -> bool {
     contains_search(suite.id.as_str(), search)
+        || contains_search(suite.id.selector(), search)
         || contains_search(suite.group.as_str(), search)
         || suite
             .layer
@@ -2521,6 +2522,7 @@ fn suite_matches_search(suite: &TestSuite, search: &str) -> bool {
 
 fn case_matches_search(case: &TestCase, search: &str) -> bool {
     contains_search(case.suite_id.as_str(), search)
+        || contains_search(case.suite_id.selector(), search)
         || contains_search(&case.name, search)
         || contains_search(&case.path, search)
 }
@@ -2534,7 +2536,7 @@ fn print_text_list(suites: &[&TestSuite], cases: &[TestCase]) -> Result<()> {
     for suite in suites {
         println!(
             "  {:<18} {:<6} {:<9} {:<9} {}",
-            suite.id.as_str(),
+            suite.id.selector(),
             suite.group.as_str(),
             suite.layer.map(|layer| layer.as_str()).unwrap_or("-"),
             if suite.coverage { "coverage" } else { "" },
@@ -2545,6 +2547,8 @@ fn print_text_list(suites: &[&TestSuite], cases: &[TestCase]) -> Result<()> {
             "", "", suite.requirements
         );
     }
+    println!();
+    println!("Run one suite with `cargo xtask test <group> suite <name>`.");
 
     if !cases.is_empty() {
         println!();
@@ -2552,7 +2556,7 @@ fn print_text_list(suites: &[&TestSuite], cases: &[TestCase]) -> Result<()> {
         for case in cases {
             println!(
                 "  {:<18} {:<42} {}",
-                case.suite_id.as_str(),
+                case.suite_id.selector(),
                 case.name,
                 case.path
             );
@@ -2575,6 +2579,7 @@ fn list_json_value(suites: &[&TestSuite], cases: &[TestCase]) -> Value {
         .map(|suite| {
             json!({
                 "id": suite.id.as_str(),
+                "selector": suite.id.selector(),
                 "group": suite.group.as_str(),
                 "layer": suite.layer.map(|layer| layer.as_str()),
                 "description": suite.description,
@@ -2839,7 +2844,7 @@ fn apply_unit_suite_selection(
     match target {
         TestUnitSuiteTarget::Xtask => {
             selection.suites = vec![suite_by_id(TestSuiteId::Xtask)?];
-            selection.filters = unit_filters("suite", "xtask");
+            selection.filters = unit_filters("suite", TestSuiteId::Xtask.selector());
         }
         TestUnitSuiteTarget::RustCrates(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustCrates)?];
@@ -2847,13 +2852,13 @@ fn apply_unit_suite_selection(
             selection.filters = json!({
                 "command": "unit",
                 "namespace": "suite",
-                "target": "rust-crates",
+                "target": TestSuiteId::RustCrates.selector(),
                 "package": args.package.as_deref(),
             });
         }
         TestUnitSuiteTarget::RustBindings => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustBindings)?];
-            selection.filters = unit_filters("suite", "rust-bindings");
+            selection.filters = unit_filters("suite", TestSuiteId::RustBindings.selector());
         }
         TestUnitSuiteTarget::Browser(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::PackageTs)?];
@@ -2861,7 +2866,7 @@ fn apply_unit_suite_selection(
             selection.filters = json!({
                 "command": "unit",
                 "namespace": "suite",
-                "target": "browser",
+                "target": TestSuiteId::PackageTs.selector(),
                 "wasmThreading": args.wasm_threading.as_str(),
             });
         }
@@ -2871,17 +2876,17 @@ fn apply_unit_suite_selection(
             selection.filters = json!({
                 "command": "unit",
                 "namespace": "suite",
-                "target": "demos",
+                "target": TestSuiteId::DemoTs.selector(),
                 "wasmThreading": args.wasm_threading.as_str(),
             });
         }
         TestUnitSuiteTarget::Api => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustPublicApi)?];
-            selection.filters = unit_filters("suite", "api");
+            selection.filters = unit_filters("suite", TestSuiteId::RustPublicApi.selector());
         }
         TestUnitSuiteTarget::Cli => {
             selection.suites = vec![suite_by_id(TestSuiteId::Cli)?];
-            selection.filters = unit_filters("suite", "cli");
+            selection.filters = unit_filters("suite", TestSuiteId::Cli.selector());
         }
         TestUnitSuiteTarget::NodePackage(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::NodePackage)?];
@@ -2889,7 +2894,7 @@ fn apply_unit_suite_selection(
             selection.filters = json!({
                 "command": "unit",
                 "namespace": "suite",
-                "target": "node-package",
+                "target": TestSuiteId::NodePackage.selector(),
                 "backend": args.backend.as_str(),
             });
         }
@@ -2899,13 +2904,13 @@ fn apply_unit_suite_selection(
             selection.filters = json!({
                 "command": "unit",
                 "namespace": "suite",
-                "target": "python-package",
+                "target": TestSuiteId::PythonPackage.selector(),
                 "backend": args.backend.as_str(),
             });
         }
         TestUnitSuiteTarget::SwiftPackage => {
             selection.suites = vec![suite_by_id(TestSuiteId::SwiftPackage)?];
-            selection.filters = unit_filters("suite", "swift-package");
+            selection.filters = unit_filters("suite", TestSuiteId::SwiftPackage.selector());
         }
     }
     Ok(())
@@ -2949,26 +2954,42 @@ fn apply_smoke_suite_selection(
         TestSmokeSuiteTarget::Cli(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::CliSmoke)?];
             selection.apply_model_args(args);
-            selection.filters = smoke_filters("suite", "cli", args, &[], json!({}));
+            selection.filters = smoke_filters(
+                "suite",
+                TestSuiteId::CliSmoke.selector(),
+                args,
+                &[],
+                json!({}),
+            );
         }
         TestSmokeSuiteTarget::ExampleRust(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::RustSmoke)?];
             selection.apply_case_args(args);
-            selection.filters =
-                smoke_filters("suite", "example-rust", &args.model, &args.cases, json!({}));
+            selection.filters = smoke_filters(
+                "suite",
+                TestSuiteId::RustSmoke.selector(),
+                &args.model,
+                &args.cases,
+                json!({}),
+            );
         }
         TestSmokeSuiteTarget::ExampleNode(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::NodeSmoke)?];
             selection.apply_case_args(args);
-            selection.filters =
-                smoke_filters("suite", "example-node", &args.model, &args.cases, json!({}));
+            selection.filters = smoke_filters(
+                "suite",
+                TestSuiteId::NodeSmoke.selector(),
+                &args.model,
+                &args.cases,
+                json!({}),
+            );
         }
         TestSmokeSuiteTarget::ExamplePython(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::PythonSmoke)?];
             selection.apply_case_args(args);
             selection.filters = smoke_filters(
                 "suite",
-                "example-python",
+                TestSuiteId::PythonSmoke.selector(),
                 &args.model,
                 &args.cases,
                 json!({}),
@@ -2979,7 +3000,7 @@ fn apply_smoke_suite_selection(
             selection.apply_case_args(args);
             selection.filters = smoke_filters(
                 "suite",
-                "example-gateway",
+                TestSuiteId::ExampleGatewaySmoke.selector(),
                 &args.model,
                 &args.cases,
                 json!({}),
@@ -2988,12 +3009,17 @@ fn apply_smoke_suite_selection(
         TestSmokeSuiteTarget::ExampleBrowser(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::ExampleBrowserSmoke)?];
             selection.apply_example_browser_args(args);
-            selection.filters = browser_example_filters("suite", "example-browser", args);
+            selection.filters =
+                browser_example_filters("suite", TestSuiteId::ExampleBrowserSmoke.selector(), args);
         }
         TestSmokeSuiteTarget::PlaygroundBrowser(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::PlaygroundBrowserSmoke)?];
             selection.apply_playground_browser_args(args);
-            selection.filters = playground_browser_filters("suite", "playground-browser", args);
+            selection.filters = playground_browser_filters(
+                "suite",
+                TestSuiteId::PlaygroundBrowserSmoke.selector(),
+                args,
+            );
         }
         TestSmokeSuiteTarget::LlamaBackendOps(args) => {
             selection.suites = vec![suite_by_id(TestSuiteId::LlamaBackendOps)?];
@@ -3001,7 +3027,7 @@ fn apply_smoke_suite_selection(
             selection.filters = json!({
                 "command": "smoke",
                 "namespace": "suite",
-                "target": "llama-backend-ops",
+                "target": TestSuiteId::LlamaBackendOps.selector(),
                 "backend": args.backend.as_str(),
                 "mode": args.mode.as_str(),
                 "op": args.op.as_deref(),

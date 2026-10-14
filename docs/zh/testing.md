@@ -6,7 +6,7 @@ Sipp 的测试套件通过 `cargo xtask test list` 统一管理。需要查找�
 
 `cargo xtask test` 提供四个核心操作：
 
-- `list`：列出所有单元测试和冒烟测试套件，支持搜索和发现轻量级测试用例。
+- `list`：列出所有单元测试和冒烟测试套件，支持搜索和发现轻量级测试用例。每个套件以 `unit suite` 或 `smoke suite` 可接受的名称列出；JSON 输出同时包含稳定的报告 `id`。
 - `unit`：按套件（suite）或组（group）执行确定性的代码逻辑和 API 接口测试。
 - `smoke`：按套件或组执行端到端的集成冒烟测试。
 - `verify`：分析已有的覆盖率数据，验证测试目录结构。
