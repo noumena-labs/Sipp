@@ -174,8 +174,7 @@ embeddings through this runtime.
 ## Python Local
 
 ```bash
-# sippy cuda wheel is currently published via GitHub Releases ；full release matrix is on progress
-pip install sipppy
+pip install sipppy  # GPU backends: "sipppy[cuda]", "sipppy[vulkan]", "sipppy[metal]"
 ```
 
 ```python
@@ -232,7 +231,7 @@ embed_model = client.models.add(["embed.gguf"])
 embed_endpoint = client.add(
     "embed",
     Endpoint.local(
-        embed_model.id,
+        embed_model,
         runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(
                 n_ctx=2048,

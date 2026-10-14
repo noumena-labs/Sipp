@@ -12,17 +12,20 @@ Python 包发布名称为 `sipppy`。它安装的导入包名仍然是 `sipp`，
 pip install sipppy
 ```
 
-默认 Wheel 包含 CPU 后端。已发布到 PyPI 的 GPU 后端通过 extras 安装：
+默认 Wheel 包含 CPU 后端。GPU 后端通过 extras 安装：
 
 ```bash
-pip install "sipppy[vulkan]"
-pip install "sipppy[metal]"
+pip install "sipppy[cuda]"    # Linux x64、Windows x64
+pip install "sipppy[vulkan]"  # Linux x64、Windows x64
+pip install "sipppy[metal]"   # macOS
 ```
 
 后端 Wheel 是独立的 PyPI 分发包。例如，`sipppy[vulkan]` 会安装主
 `sipppy` Wheel 以及同版本的 `sipppy-backend-vulkan` Wheel。Python
-代码仍然使用 `from sipp import ...`。首个公开版本的 CUDA 后端 Wheel
-会附在 GitHub Release 中；待 PyPI 文件大小限制提升后再发布到 PyPI。
+代码仍然使用 `from sipp import ...`。
+
+GPU Wheel 不包含主机驱动和运行时。CUDA 后端需要主机安装 NVIDIA 驱动和
+CUDA 13 运行时库；Vulkan 后端需要 Vulkan Loader 和 GPU 驱动。
 
 ## 适用场景
 
@@ -54,7 +57,7 @@ model = client.models.add([sys.argv[1]])
 endpoint = client.add(
     "default",
     Endpoint.local(
-        model.id,
+        model,
         runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
             scheduler=SchedulerRuntimeConfig(
