@@ -136,7 +136,8 @@ npm run dev
 
 npm maps that command to the public `@sipphq/create-sipp` initializer. The
 generated application depends on the browser SDK, `@sipphq/sipp`. The
-initializer requires Node.js 20.19 or newer.
+initializer requires Node.js 20.19+ or 22.12+, matching the generated app's
+Vite version.
 
 For an existing application, choose the package by where that import executes,
 not by the framework name:

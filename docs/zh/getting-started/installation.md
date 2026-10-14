@@ -12,7 +12,7 @@ npm run dev
 ```
 
 该命令运行公开的 `@sipphq/create-sipp` 初始化器，并创建依赖浏览器 SDK
-`@sipphq/sipp` 的 Vite 应用。初始化器需要 Node.js 20.19 或更高版本。
+`@sipphq/sipp` 的 Vite 应用。初始化器需要 Node.js 20.19+ 或 22.12+，即生成应用所用 Vite 版本支持的范围。
 
 ## 软件包安装
 

@@ -4,7 +4,7 @@ The official browser-app initializer for [Sipp](https://github.com/noumena-labs/
 It creates a Vite application that runs `@sipphq/sipp` in the browser; it does
 not install or run the Node-only `@sipphq/sipp-server` package.
 
-Requires Node.js 20.19 or newer.
+Requires Node.js 20.19+ or 22.12+ (the range Vite 8 supports).
 
 ## Quickstart
 
