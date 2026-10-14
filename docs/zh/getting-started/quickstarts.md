@@ -165,8 +165,7 @@ console.log(query.text, chat.text, embedding.values.length);
 ## Python 本地推理
 
 ```bash
-# sippy cuda wheel 目前通过 GitHub Releases 分发；完整的 PyPI 构建矩阵正在准备中。
-pip install sipppy
+pip install sipppy  # GPU 后端："sipppy[cuda]"、"sipppy[vulkan]"、"sipppy[metal]"
 ```
 
 ```python
@@ -223,7 +222,7 @@ embed_model = client.models.add(["embed.gguf"])
 embed_endpoint = client.add(
     "embed",
     Endpoint.local(
-        embed_model.id,
+        embed_model,
         runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(
                 n_ctx=2048,

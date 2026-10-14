@@ -21,7 +21,7 @@ npm run dev
 | 浏览器 | `npm install @sipphq/sipp` | 浏览器本地 GGUF 推理及网关客户端。 |
 | Node.js | `npm install @sipphq/sipp-server` | Node.js 本地推理及网关客户端。 |
 | Python | `pip install sipppy` | Python 本地推理及网关客户端。 |
-| Python CUDA | GitHub Release Wheel | 使用 CUDA 后端 Wheel 的 Python 本地推理。 |
+| Python CUDA | `pip install "sipppy[cuda]"` | 使用 CUDA 后端 Wheel 的 Python 本地推理。 |
 | Python Vulkan | `pip install "sipppy[vulkan]"` | 使用 Vulkan 后端 Wheel 的 Python 本地推理。 |
 | Python Metal | `pip install "sipppy[metal]"` | macOS 上使用 Metal 后端 Wheel 的 Python 本地推理。 |
 | Rust | `cargo add sipp-rs` | Rust 本地推理及网关客户端。 |
@@ -38,10 +38,10 @@ npm run dev
 - Python Wheel 需要 Python 3.10 或更新版本。
 - 浏览器本地推理需要支持 WebAssembly 的现代浏览器；WebGPU 加速取决于浏览器和设备支持。具体请查看 [设备支持](../references/device-support.md)。
 - Node 安装使用 `@sipphq/sipp-server`，npm 会自动解析匹配的平台二进制包。Python
-  CPU 包使用 `sipppy`，Vulkan、Metal 后端通过 `sipppy[vulkan]`、
-  `sipppy[metal]` 等 PyPI extras 拉取匹配的 `sipppy-backend-*`
-  分发包；CUDA 后端 Wheel 暂时附在 GitHub Release 中，待 PyPI
-  文件大小限制提升后再发布到 PyPI。Python 代码仍然导入 `sipp`。
+  CPU 包使用 `sipppy`，CUDA、Vulkan、Metal 后端通过 `sipppy[cuda]`、
+  `sipppy[vulkan]`、`sipppy[metal]` 等 PyPI extras 拉取匹配的
+  `sipppy-backend-*` 分发包；GPU 后端还需要主机驱动和运行时（见
+  [Python 包](../packages/python.md)）。Python 代码仍然导入 `sipp`。
   如需强制指定 `cpu`、`vulkan`、`cuda` 或 `metal`，设置环境变量
   `SIPP_NODE_BACKEND` 或 `SIPP_PYTHON_BACKEND`。
 - 网关客户端只需要网关基础 URL、公共目标名称和应用专属的认证凭据。

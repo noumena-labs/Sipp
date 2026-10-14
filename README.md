@@ -164,8 +164,7 @@ cargo add sipp-rs
 sipp build swift
 
 # For Python automation and data engineering pipelines
-# (sippy wheels ship from GitHub Releases today; full PyPI build matrix in progress)
-# pip install sipppy
+pip install sipppy
 
 # Deploy the secure cloud gateway server instance via Docker
 # (cloud gateway will be available in the future, currently building from source)

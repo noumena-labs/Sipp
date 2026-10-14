@@ -120,8 +120,7 @@ npm install @sipphq/sipp-server
 cargo add sipp-rs
 
 # 适用于 Python 自动化和数据工程管线
-# （sippy wheel 目前从 GitHub Releases 发布；完整 PyPI 正在推进中）
-# pip install sipppy
+pip install sipppy
 
 # 通过 Docker 部署安全的云网关服务实例
 # （云网关未来会开放，目前从源码构建）

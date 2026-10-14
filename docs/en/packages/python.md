@@ -11,34 +11,28 @@ See the [Library API Overview](../api) for the shared `add`, `query`,
 
 ## Install
 
-> [!NOTE]
-> Python wheels currently ship from the project's GitHub Releases, not PyPI.
-> A full PyPI release with a complete build matrix (CPU and GPU backends across
-> operating systems, architectures, and Python versions, in the style of
-> PyTorch's distribution matrix) is in progress. The package name `sipppy` import are stable; only the distribution channel will change.
-
-Download the `sipppy` wheel that matches your platform, Python version, and
-backend from the [GitHub Releases](https://github.com/noumena-labs/Sipp/releases)
-page, then install it with pip. The default wheel includes the CPU backend:
+Install from PyPI. The default wheel includes the CPU backend:
 
 ```bash
 pip install sipppy
 ```
 
-The default wheel includes the CPU backend. Install PyPI-published GPU
-backends as extras:
+Install GPU backends as extras:
 
 ```bash
-pip install "sipppy[vulkan]"
-pip install "sipppy[metal]"
+pip install "sipppy[cuda]"    # Linux x64, Windows x64
+pip install "sipppy[vulkan]"  # Linux x64, Windows x64
+pip install "sipppy[metal]"   # macOS
 ```
 
 The backend wheels are separate PyPI distributions. For example,
 `sipppy[vulkan]` installs the main `sipppy` wheel plus the matching
 `sipppy-backend-vulkan` wheel for the same release version. Python code still
-imports `sipp`. CUDA backend wheels are attached to GitHub releases for the
-first public release and will move to PyPI after the CUDA wheel size limit is
-raised.
+imports `sipp`.
+
+GPU wheels do not bundle host drivers or runtimes. The CUDA backend needs an
+NVIDIA driver and the CUDA 13 runtime libraries on the host; the Vulkan backend
+needs a Vulkan loader and GPU driver.
 
 ## Use It For
 
@@ -70,7 +64,7 @@ model = client.models.add([sys.argv[1]])
 endpoint = client.add(
     "default",
     Endpoint.local(
-        model.id,
+        model,
         runtime=NativeRuntimeConfig(
             context=ContextRuntimeConfig(n_ctx=2048),
             scheduler=SchedulerRuntimeConfig(
