@@ -87,6 +87,30 @@ fn new_test_commands_parse() {
 }
 
 #[test]
+fn listed_suite_selectors_parse_and_select_their_suite() {
+    for suite in TEST_SUITES {
+        let group = suite.group.as_str();
+        let selector = suite.id.selector();
+        let cli = Cli::try_parse_from(["xtask", "test", group, "suite", selector])
+            .unwrap_or_else(|error| panic!("`test {group} suite {selector}` failed: {error}"));
+        let Commands::Test { command } = cli.command else {
+            panic!("expected test command");
+        };
+        let selected = match command {
+            TestCommands::Unit(args) => selected_unit_suites(&args).unwrap().suites,
+            TestCommands::Smoke(args) => selected_smoke_suites(&args).unwrap().suites,
+            _ => panic!("expected unit or smoke command"),
+        };
+
+        assert_eq!(
+            selected.iter().map(|suite| suite.id).collect::<Vec<_>>(),
+            vec![suite.id],
+            "`test {group} suite {selector}` selected the wrong suite"
+        );
+    }
+}
+
+#[test]
 fn test_unit_accepts_interface_binding_targets() {
     let cli = Cli::parse_from([
         "xtask",
@@ -870,6 +894,15 @@ fn list_json_does_not_include_profiles() {
     assert!(value.get("profiles").is_none());
     assert!(value["suites"][0].get("profiles").is_none());
     assert_eq!(value["suites"][0]["id"], "xtask");
+}
+
+#[test]
+fn list_json_reports_the_cli_selector_beside_the_stable_id() {
+    let suites = [suite_by_id(TestSuiteId::NodeSmoke).unwrap()];
+    let value = list_json_value(&suites, &[]);
+
+    assert_eq!(value["suites"][0]["id"], "node-smoke");
+    assert_eq!(value["suites"][0]["selector"], "example-node");
 }
 
 #[test]

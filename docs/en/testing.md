@@ -8,6 +8,8 @@ when choosing a target or checking what CI runs.
 `cargo xtask test` has four top-level actions:
 
 - `list`: list unit and smoke suites and optionally discover/search cheap cases.
+  Each suite is listed by the name `unit suite` or `smoke suite` accepts; JSON
+  output also carries the stable report `id`.
 - `unit`: run deterministic code-flow and API-layer tests by suite or group.
 - `smoke`: run holistic integration smoke tests by suite or group.
 - `verify`: analyze existing coverage artifacts and validate test structure.

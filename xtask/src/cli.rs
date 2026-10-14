@@ -1199,6 +1199,30 @@ impl TestSuiteId {
             TestSuiteId::LlamaBackendOps => "llama-backend-ops",
         }
     }
+
+    /// Suite name accepted by `test unit suite` or `test smoke suite`.
+    pub fn selector(&self) -> &'static str {
+        match self {
+            TestSuiteId::Xtask => "xtask",
+            TestSuiteId::RustCrates => "rust-crates",
+            TestSuiteId::RustBindings => "rust-bindings",
+            TestSuiteId::PackageTs => "browser",
+            TestSuiteId::DemoTs => "demos",
+            TestSuiteId::RustPublicApi => "api",
+            TestSuiteId::Cli => "cli",
+            TestSuiteId::NodePackage => "node-package",
+            TestSuiteId::PythonPackage => "python-package",
+            TestSuiteId::SwiftPackage => "swift-package",
+            TestSuiteId::CliSmoke => "cli",
+            TestSuiteId::RustSmoke => "example-rust",
+            TestSuiteId::NodeSmoke => "example-node",
+            TestSuiteId::PythonSmoke => "example-python",
+            TestSuiteId::ExampleGatewaySmoke => "example-gateway",
+            TestSuiteId::ExampleBrowserSmoke => "example-browser",
+            TestSuiteId::PlaygroundBrowserSmoke => "playground-browser",
+            TestSuiteId::LlamaBackendOps => "llama-backend-ops",
+        }
+    }
 }
 
 /// Browser demo run workflows.
