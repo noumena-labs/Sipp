@@ -1154,6 +1154,14 @@ impl SippClient {
         })
     }
 
+    /// Retire every endpoint; later calls reject and repeated closes succeed.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn close(&self) -> AsyncTask<ClientCloseTask> {
+        AsyncTask::new(ClientCloseTask {
+            client: self.inner.clone(),
+        })
+    }
+
     /// Start raw-prompt text generation.
     #[napi(ts_return_type = "SippTextRun")]
     pub fn query(
@@ -1445,6 +1453,27 @@ impl Task for ClientRemoveTask {
             .lock()
             .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
         Ok(block_on(client.remove(&self.id)))
+    }
+
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+        output.map_err(|error| client_error_to_node(env, error))
+    }
+}
+
+pub struct ClientCloseTask {
+    client: SharedSippClient,
+}
+
+impl Task for ClientCloseTask {
+    type Output = ClientTaskOutput<()>;
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| napi_error(CLIENT_MUTEX_POISONED))?;
+        Ok(block_on(client.close()))
     }
 
     fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {

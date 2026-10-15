@@ -96,6 +96,15 @@ public final class SippClient: Sendable {
         }
     }
 
+    /// Retires every endpoint; later calls fail and repeated closes succeed.
+    public func close() async throws {
+        try await lifecycleOperations.perform {
+            try await callBridge {
+                try await self.bridge.close()
+            }
+        }
+    }
+
     /// Starts raw-prompt text generation.
     public func query(
         _ prompt: String,

@@ -40,6 +40,7 @@ pub struct SippClient {
     models: ModelStore,
     endpoints: HashMap<EndpointRef, Arc<dyn InferenceEndpoint>>,
     local_models: HashMap<String, String>,
+    closed: bool,
     #[cfg(not(target_family = "wasm"))]
     io_executor: Option<IoExecutor>,
 }
@@ -116,6 +117,7 @@ impl SippClient {
             models: ModelStore::local(storage_root)?,
             endpoints: HashMap::new(),
             local_models: HashMap::new(),
+            closed: false,
             #[cfg(not(target_family = "wasm"))]
             io_executor: None,
         })
@@ -139,6 +141,7 @@ impl SippClient {
             models: ModelStore::local_with_source_root(storage_root, local_source_root)?,
             endpoints: HashMap::new(),
             local_models: HashMap::new(),
+            closed: false,
             #[cfg(not(target_family = "wasm"))]
             io_executor: None,
         })
@@ -156,13 +159,15 @@ impl SippClient {
     ///
     /// # Errors
     ///
-    /// Returns an error when the id or endpoint input is invalid, endpoint
-    /// construction fails, or the requested endpoint feature is unavailable.
+    /// Returns an error when the client is closed, the id or endpoint input is
+    /// invalid, endpoint construction fails, or the requested endpoint feature
+    /// is unavailable.
     pub async fn add(
         &mut self,
         id: impl Into<String>,
         endpoint: impl Into<Endpoint>,
     ) -> SippResult<EndpointRef> {
+        self.ensure_open()?;
         let id = normalize_id(id, "endpoint id")?;
         let endpoint_ref = EndpointRef::from_id(id);
         let prepared = self
@@ -292,8 +297,10 @@ impl SippClient {
     ///
     /// # Errors
     ///
-    /// Returns an error when the id is invalid or no endpoint uses it.
+    /// Returns an error when the client is closed, the id is invalid, or no
+    /// endpoint uses it.
     pub async fn remove(&mut self, id: &str) -> SippResult<()> {
+        self.ensure_open()?;
         let id = normalize_id(id, "endpoint id")?;
         let endpoint = EndpointRef::from_id(id.clone());
         if !self.endpoints.contains_key(&endpoint) {
@@ -302,6 +309,35 @@ impl SippClient {
             )));
         }
         self.retire_endpoint(&endpoint).await
+    }
+
+    /// Retire every registered endpoint and reject later calls.
+    ///
+    /// Closing an already closed client succeeds without further work.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first endpoint shutdown error once every endpoint is retired.
+    pub async fn close(&mut self) -> SippResult<()> {
+        self.closed = true;
+        let endpoints: Vec<EndpointRef> = self.endpoints.keys().cloned().collect();
+        let mut first_error = None;
+        for endpoint in endpoints {
+            if let Err(error) = self.retire_endpoint(&endpoint).await {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn ensure_open(&self) -> SippResult<()> {
+        if self.closed {
+            Err(SippError::InvalidRequest(
+                "SippClient is closed".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Submit a raw-prompt text generation request.
@@ -400,6 +436,7 @@ impl SippClient {
         requested: Option<&EndpointRef>,
         operation: Operation,
     ) -> SippResult<Arc<dyn InferenceEndpoint>> {
+        self.ensure_open()?;
         let selected = if let Some(endpoint) = requested {
             endpoint
         } else {

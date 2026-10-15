@@ -1009,6 +1009,18 @@ impl PySippClient {
         .map_err(to_py_client_error)
     }
 
+    /// Retire every endpoint; later calls fail and repeated closes succeed.
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        let inner = self.inner.clone();
+        py.allow_threads(move || {
+            let mut client = inner
+                .lock()
+                .map_err(|_| ClientError::Internal(PY_CLIENT_MUTEX_POISONED.to_string()))?;
+            block_on(client.close())
+        })
+        .map_err(to_py_client_error)
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (prompt, *, endpoint = None, options = None, local = None, extra = None, emit_tokens = false))]
     fn query(

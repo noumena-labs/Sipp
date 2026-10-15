@@ -29,5 +29,6 @@ final class PublicAPITests: XCTestCase {
         _ = client.embed("Hello", endpoint: endpoint)
         try await client.remove("chat")
         try await client.models.remove(model)
+        try await client.close()
     }
 }

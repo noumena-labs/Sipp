@@ -17,7 +17,7 @@ use crate::client::{
     EndpointCapabilities, EndpointRef, GatewayAuthentication, GatewayDescriptor, GatewayRoutes,
     GatewayTimeoutPolicy, SippAudioRun, SippChatRequest, SippClient, SippEmbedRequest,
     SippEmbeddingRun, SippError, SippListenRequest, SippQueryRequest, SippRequestContext,
-    SippSpeakRequest, SippTextRun,
+    SippResult, SippSpeakRequest, SippTextRun,
 };
 #[cfg(feature = "providers")]
 use crate::client::{ProviderDescriptor, ProviderSecret};
@@ -176,6 +176,39 @@ fn removing_an_endpoint_awaits_shutdown() {
     block_on(client.remove("local")).expect("remove endpoint");
 
     assert_eq!(close_count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn closing_retires_every_endpoint_and_rejects_later_calls() {
+    let (_root, mut client) = isolated_client("close");
+    let close_count = Arc::new(AtomicUsize::new(0));
+    for id in ["first", "second"] {
+        let endpoint = EndpointRef::from_id(id);
+        client.endpoints.insert(
+            endpoint.clone(),
+            Arc::new(CloseTrackingEndpoint {
+                endpoint,
+                capabilities: EndpointCapabilities::remote_text(),
+                close_count: close_count.clone(),
+            }),
+        );
+    }
+
+    block_on(client.close()).expect("close client");
+    block_on(client.close()).expect("close is idempotent");
+
+    assert_eq!(close_count.load(Ordering::SeqCst), 2);
+    assert!(client.endpoints.is_empty());
+    let closed = |result: SippResult<()>| matches!(result, Err(SippError::InvalidRequest(message)) if message == "SippClient is closed");
+    assert!(closed(
+        block_on(client.add("gateway", gateway_descriptor())).map(drop)
+    ));
+    assert!(closed(block_on(client.remove("first"))));
+    assert!(closed(
+        client
+            .resolve(Some(&EndpointRef::from_id("first")), Operation::Query)
+            .map(drop)
+    ));
 }
 
 #[test]

@@ -509,6 +509,20 @@ impl FfiSippClient {
             .map_err(FfiError::from)
     }
 
+    /// Retire every endpoint; later calls fail and repeated closes succeed.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first endpoint shutdown error once every endpoint is retired.
+    pub async fn close(&self) -> Result<(), FfiError> {
+        self.client
+            .write()
+            .await
+            .close()
+            .await
+            .map_err(FfiError::from)
+    }
+
     /// Start raw-prompt text generation on a registered endpoint.
     pub async fn query(&self, request: FfiQueryRequest) -> Arc<FfiTextRun> {
         let (context, request) = request.into_core();
