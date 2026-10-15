@@ -153,6 +153,27 @@ def test_same_id_endpoint_replacement_is_owned_by_the_native_client(
         thread.join()
 
 
+def test_closing_the_native_client_retires_endpoints_and_rejects_later_calls(
+    tmp_path: Path,
+) -> None:
+    import sipp
+
+    base_url = "http://127.0.0.1:9"
+    client = sipp.SippClient(storage_root=tmp_path / "client")
+    first = client.add("first", sipp.Endpoint.gateway("first", base_url))
+    client.add("second", sipp.Endpoint.gateway("second", base_url))
+
+    client.close()
+    client.close()
+
+    with pytest.raises(ValueError, match="SippClient is closed"):
+        client.query("route", endpoint=first).result()
+    with pytest.raises(ValueError, match="SippClient is closed"):
+        client.add("third", sipp.Endpoint.gateway("third", base_url))
+    with pytest.raises(ValueError, match="SippClient is closed"):
+        client.remove("first")
+
+
 def test_remote_503_preserves_lifecycle_metadata_after_shared_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

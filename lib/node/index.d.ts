@@ -8,6 +8,8 @@ export declare class SippClient {
   add(id: string, endpoint: Endpoint): Promise<EndpointRef>
   /** Remove a registered endpoint. */
   remove(id: string): Promise<void>
+  /** Retire every endpoint; later calls reject and repeated closes succeed. */
+  close(): Promise<void>
   /** Start raw-prompt text generation and return the run handle. */
   query(input: QueryInput, options?: QueryOptions): SippTextRun
   /** Start chat generation from ordered role/content messages. */
