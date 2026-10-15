@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -141,8 +142,7 @@ impl GatewayServerConfig {
     /// Load endpoints and return the application-owned client runtime.
     pub async fn build_runtime(&self) -> anyhow::Result<GatewayServerRuntime> {
         let mut client = SippClient::with_storage_root(&self.storage_root)?;
-        let mut targets = BTreeMap::new();
-        let mut summaries = Vec::new();
+        let mut targets = Vec::new();
         for target in &self.targets {
             let (endpoint, summary) = target
                 .endpoint
@@ -152,14 +152,9 @@ impl GatewayServerConfig {
                 .add(target.name.clone(), endpoint)
                 .await
                 .with_context(|| format!("failed to load target {}", target.name))?;
-            targets.insert(target.name.clone(), endpoint);
-            summaries.push(summary);
+            targets.push((endpoint, summary));
         }
-        Ok(GatewayServerRuntime {
-            client: Arc::new(client),
-            targets: Arc::new(targets),
-            target_summaries: Arc::new(summaries),
-        })
+        Ok(GatewayServerRuntime::new(client, targets))
     }
 
     /// Load application bearer token policy.
@@ -277,8 +272,50 @@ impl RateLimitConfig {
 #[derive(Clone)]
 pub struct GatewayServerRuntime {
     pub(crate) client: Arc<SippClient>,
-    pub(crate) targets: Arc<BTreeMap<String, EndpointRef>>,
+    targets: Arc<BTreeMap<String, (EndpointRef, TargetKind)>>,
     pub(crate) target_summaries: Arc<Vec<TargetSummary>>,
+    next_context_key: Arc<AtomicU64>,
+}
+
+/// Endpoint selection for one gateway request.
+pub(crate) struct RoutedTarget {
+    pub(crate) endpoint: EndpointRef,
+    /// Fresh KV context key for local targets; `None` for providers, which
+    /// reject local options.
+    pub(crate) context_key: Option<String>,
+}
+
+impl GatewayServerRuntime {
+    pub(crate) fn new(client: SippClient, targets: Vec<(EndpointRef, TargetSummary)>) -> Self {
+        let (endpoints, summaries) = targets
+            .into_iter()
+            .map(|(endpoint, summary)| ((summary.name.clone(), (endpoint, summary.kind)), summary))
+            .unzip();
+        Self {
+            client: Arc::new(client),
+            targets: Arc::new(endpoints),
+            target_summaries: Arc::new(summaries),
+            next_context_key: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Resolve a public target name.
+    ///
+    /// Each local request gets its own context key. A shared key would admit
+    /// one in-flight request at a time, serializing every gateway caller, and
+    /// would let callers reuse each other's KV state. Idle sessions are evicted
+    /// within the runtime's `n_parallel` sequences, so keys need no cleanup.
+    pub(crate) fn route(&self, target: &str) -> Option<RoutedTarget> {
+        let (endpoint, kind) = self.targets.get(target)?;
+        let context_key = (*kind == TargetKind::Local).then(|| {
+            let id = self.next_context_key.fetch_add(1, Ordering::Relaxed);
+            format!("gateway-{id}")
+        });
+        Some(RoutedTarget {
+            endpoint: endpoint.clone(),
+            context_key,
+        })
+    }
 }
 
 /// TOML-selectable routes.

@@ -55,6 +55,8 @@ pub(crate) struct GatewayRequestRecord {
 /// Security rejection category recorded in dashboard telemetry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GatewayRejectionKind {
+    /// The application-wide concurrency limit was reached.
+    Admission,
     Blocked,
     ClientClosed,
     RateLimited,
@@ -129,6 +131,11 @@ impl GatewayMetrics {
         );
         let _ = writeln!(
             output,
+            "sipp_gateway_admission_rejections_total {}",
+            state.admission_rejections
+        );
+        let _ = writeln!(
+            output,
             "sipp_gateway_blocklist_hits_total {}",
             state.blocklist_hits
         );
@@ -187,6 +194,7 @@ struct DashboardMetrics {
     output_tokens: u64,
     total_tokens: u64,
     rate_limit_hits: u64,
+    admission_rejections: u64,
     blocklist_hits: u64,
     status_classes: BTreeMap<&'static str, u64>,
     operations: BTreeMap<&'static str, OperationSummary>,
@@ -204,6 +212,9 @@ impl DashboardMetrics {
             self.total_errors = self.total_errors.saturating_add(1);
         }
         match record.rejection {
+            Some(GatewayRejectionKind::Admission) => {
+                self.admission_rejections = self.admission_rejections.saturating_add(1)
+            }
             Some(GatewayRejectionKind::Blocked) => {
                 self.blocklist_hits = self.blocklist_hits.saturating_add(1)
             }
@@ -318,7 +329,7 @@ impl DashboardMetrics {
                 Some(GatewayRejectionKind::Blocked) => {
                     bucket.blocked = bucket.blocked.saturating_add(1)
                 }
-                Some(GatewayRejectionKind::ClientClosed) => {}
+                Some(GatewayRejectionKind::Admission | GatewayRejectionKind::ClientClosed) => {}
                 Some(GatewayRejectionKind::RateLimited) => {
                     bucket.rate_limited = bucket.rate_limited.saturating_add(1)
                 }
@@ -528,6 +539,7 @@ impl RecentRequest {
             total_tokens,
             streaming: record.streaming,
             rejection: record.rejection.map(|kind| match kind {
+                GatewayRejectionKind::Admission => "admission",
                 GatewayRejectionKind::Blocked => "blocked",
                 GatewayRejectionKind::ClientClosed => "client_closed",
                 GatewayRejectionKind::RateLimited => "rate_limited",
@@ -597,7 +609,7 @@ impl ClientSummary {
             Some(GatewayRejectionKind::Blocked) => {
                 self.blocklist_hits = self.blocklist_hits.saturating_add(1)
             }
-            Some(GatewayRejectionKind::ClientClosed) => {}
+            Some(GatewayRejectionKind::Admission | GatewayRejectionKind::ClientClosed) => {}
             Some(GatewayRejectionKind::RateLimited) => {
                 self.rate_limit_hits = self.rate_limit_hits.saturating_add(1)
             }

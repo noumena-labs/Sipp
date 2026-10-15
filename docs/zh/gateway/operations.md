@@ -41,6 +41,8 @@ sipp_gateway_requests_total{operation="query"} 3
 sipp_gateway_errors_total{operation="chat"} 1
 ```
 
+`429` 拒绝会单独计数：`sipp_gateway_rate_limit_hits_total` 统计客户端速率限制，`sipp_gateway_admission_rejections_total` 统计 `max_concurrent_requests` 并发上限。
+
 本地运行时指标由 `stats` 配置决定：
 
 - `off`：关闭运行时指标和后端分析。

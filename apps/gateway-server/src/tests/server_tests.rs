@@ -1,16 +1,16 @@
 //! Tests for gateway-server configuration, routing, admin APIs, and
 //! process-local runtime controls using model-free upstream fixtures.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::{to_bytes, Body};
 use axum::extract::ConnectInfo;
 use axum::http::{
-    header::{COOKIE, SET_COOKIE},
+    header::{COOKIE, RETRY_AFTER, SET_COOKIE},
     Request, StatusCode,
 };
 use sipp::engine::{GpuLayerConfig, NativeRuntimeConfig};
@@ -35,6 +35,14 @@ async fn service(base_url: String) -> GatewayHttpService {
 }
 
 async fn service_with_security(base_url: String, security: SecurityConfig) -> GatewayHttpService {
+    service_with_limits(base_url, security, None).await
+}
+
+async fn service_with_limits(
+    base_url: String,
+    security: SecurityConfig,
+    max_concurrent_requests: Option<usize>,
+) -> GatewayHttpService {
     let routes = RouteConfig {
         query: "/generate".to_string(),
         chat: "/conversation".to_string(),
@@ -62,17 +70,13 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
         )
         .await
         .expect("gateway endpoint");
-    let runtime = GatewayServerRuntime {
-        client: Arc::new(client),
-        targets: Arc::new(BTreeMap::from([("allowed".to_string(), endpoint)])),
-        target_summaries: Arc::new(vec![TargetSummary {
-            name: "allowed".to_string(),
-            kind: TargetKind::OpenAiCompatible,
-            model: "upstream".to_string(),
-            backend: None,
-            provider_base_url: Some(base_url),
-        }]),
-    };
+    let runtime = GatewayServerRuntime::new(
+        client,
+        vec![(
+            endpoint,
+            target_summary("allowed", TargetKind::OpenAiCompatible, Some(base_url)),
+        )],
+    );
 
     GatewayHttpService::new(
         runtime,
@@ -87,12 +91,22 @@ async fn service_with_security(base_url: String, security: SecurityConfig) -> Ga
             routes,
             max_request_bytes: 1024,
             allowed_origins: Vec::new(),
-            max_concurrent_requests: None,
+            max_concurrent_requests,
             security,
             admin_assets_dir: admin_asset_dir(),
         },
     )
     .expect("service")
+}
+
+fn target_summary(name: &str, kind: TargetKind, base_url: Option<String>) -> TargetSummary {
+    TargetSummary {
+        name: name.to_string(),
+        kind,
+        model: "upstream".to_string(),
+        backend: None,
+        provider_base_url: base_url,
+    }
 }
 
 fn test_security_config() -> SecurityConfig {
@@ -573,6 +587,8 @@ async fn security_controls_are_in_memory_and_reset_with_service_state() {
         .await
         .expect("response");
     assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    // One request per minute refills a token in just under 60 seconds.
+    assert_eq!(limited.headers()[RETRY_AFTER], "60");
 
     let management = service.management_router();
     let login = management
@@ -632,6 +648,93 @@ async fn security_controls_are_in_memory_and_reset_with_service_state() {
         .await
         .expect("response");
     assert_eq!(reset.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn local_targets_get_a_fresh_context_key_per_request() {
+    let storage_root = std::env::temp_dir().join(unique_env_name("sipp-gateway-route"));
+    let client = SippClient::with_storage_root(storage_root).expect("client");
+    let endpoint = sipp::EndpointRef::from_id("endpoint");
+    let runtime = GatewayServerRuntime::new(
+        client,
+        vec![
+            (
+                endpoint.clone(),
+                target_summary("local", TargetKind::Local, None),
+            ),
+            (
+                endpoint.clone(),
+                target_summary("provider", TargetKind::OpenAi, None),
+            ),
+        ],
+    );
+
+    let first = runtime.route("local").expect("local target");
+    let second = runtime.route("local").expect("local target");
+    assert_eq!(first.endpoint, endpoint);
+    assert!(first.context_key.is_some());
+    assert_ne!(first.context_key, second.context_key);
+    assert_eq!(
+        runtime
+            .route("provider")
+            .expect("provider target")
+            .context_key,
+        None
+    );
+    assert!(runtime.route("missing").is_none());
+}
+
+#[tokio::test]
+async fn concurrency_rejections_carry_retry_after_and_are_counted() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/query"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({
+                    "id": "upstream-response",
+                    "model": "upstream",
+                    "text": "hello",
+                    "finish_reason": "stop"
+                }))
+                .set_delay(Duration::from_secs(1)),
+        )
+        .mount(&upstream)
+        .await;
+    let service = service_with_limits(upstream.uri(), test_security_config(), Some(1)).await;
+    let public = service.public_router();
+
+    let held = tokio::spawn(public.clone().oneshot(authorized_query("127.0.0.10")));
+    // The permit is taken before the upstream call, so a received upstream
+    // request means the only permit is held.
+    while upstream
+        .received_requests()
+        .await
+        .is_none_or(|requests| requests.is_empty())
+    {
+        tokio::task::yield_now().await;
+    }
+    let rejected = public
+        .oneshot(authorized_query("127.0.0.10"))
+        .await
+        .expect("response");
+    assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(rejected.headers()[RETRY_AFTER], "1");
+    let held = held.await.expect("held request").expect("response");
+    assert_eq!(held.status(), StatusCode::OK);
+
+    let metrics = service
+        .management_router()
+        .oneshot(
+            Request::get("/telemetry")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let metrics = response_text(metrics).await;
+    assert!(metrics.contains("sipp_gateway_admission_rejections_total 1\n"));
+    assert!(metrics.contains("sipp_gateway_rate_limit_hits_total 0\n"));
 }
 
 #[tokio::test]

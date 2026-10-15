@@ -203,7 +203,7 @@ timing and terminal events.
 | `403` | Bearer token is valid but not allowed to use the requested target. |
 | `404` | Requested `model` target is not configured. |
 | `413` | Request body exceeds `max_request_bytes`. |
-| `429` | `max_concurrent_requests` admission limit is full. |
+| `429` | `max_concurrent_requests` admission limit is full, or the client exceeded the rate limit. The `Retry-After` header gives the wait in seconds. |
 | `500` | Target load or execution failure. Check gateway logs and target config. |
 
 Non-streaming errors use JSON:
