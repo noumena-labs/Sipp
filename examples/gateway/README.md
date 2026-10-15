@@ -21,6 +21,10 @@ cargo xtask run examples serve gateway-local \
   --bind 127.0.0.1:8787
 ```
 
+Each request gets its own context key, so `--parallel <n>` (default `1`) lets
+up to `n` requests run at once per endpoint. Raising it allocates KV space for
+more sequences.
+
 Use `apps/gateway-server` for the first-party authenticated application, or
 compose `lib/gateway` helpers in your own framework routes.
 

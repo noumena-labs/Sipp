@@ -106,7 +106,7 @@ curl -sS "$GATEWAY_URL/v1/embed" \
   -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "'"$SIPP_GATEWAY_TARGET"'",
+    "model": "local-embed",
     "input": "gateway inference"
   }'
 ```
@@ -116,12 +116,13 @@ Embedding responses use JSON:
 ```json
 {
   "id": "response",
-  "model": "local",
+  "model": "local-embed",
   "embedding": [0.0123, -0.0456]
 }
 ```
 
-Embedding requires a target that supports embeddings. Text-only local models or
+Embedding requires a target that supports embeddings, such as `local-embed` in
+the shipped examples (`openai-embed` in provider-only). Text-only local models or
 provider targets can return an execution error for `/v1/embed`.
 
 ## Streaming

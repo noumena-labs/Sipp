@@ -104,13 +104,21 @@ CPU context capacity is required.
 | Group | Common fields | Use |
 | --- | --- | --- |
 | `placement` | `devices`, `gpu_layers`, `split_mode`, `main_gpu`, `tensor_split`, `load_mode`, `fit_params` | Model placement, loading, and GPU residency choices. `load_mode` accepts `auto`, `none`, `mmap`, `mlock`, `mmap_mlock`, or `direct_io`. |
-| `context` | `n_ctx`, `n_batch`, `n_ubatch`, `n_parallel`, `n_threads`, `n_threads_batch`, `flash_attention`, `offload_kqv` | Context window, batch sizes, CPU thread counts, attention, and KV behavior. |
+| `context` | `n_ctx`, `n_batch`, `n_ubatch`, `n_parallel`, `n_threads`, `n_threads_batch`, `flash_attention`, `offload_kqv`, `embeddings`, `pooling` | Context window, batch sizes, CPU thread counts, attention, KV behavior, and embedding output. |
 | `sampling` | `samplers`, `seed`, `top_k`, `top_p`, `min_p`, `temperature`, `repeat_penalty`, `mirostat`, `logit_bias` | Default local sampling behavior for text generation. |
 | `scheduler` | `continuous_batching`, `policy`, `prefill_chunk_size`, `max_running_requests`, `max_queued_requests` | Request scheduling, batching, and queue limits. |
 | `cache` | `mode`, `retained_prefix_tokens`, `snapshot_interval_tokens`, `max_snapshot_entries`, `max_snapshot_bytes` | Prefix KV reuse and snapshot behavior. |
 | `multimodal` | `use_gpu`, `image_min_tokens`, `image_max_tokens` | Vision and image-token settings. Projectors are paired through `models.add`. |
 | `residency` | `max_gpu_models_per_device`, `allow_cpu_models_while_gpu_loaded`, `require_gpu_lease` | GPU model residency policy for native runtimes. |
 | `observability` | `runtime_metrics`, `backend_profiling` | Runtime timing, throughput, and backend diagnostics. |
+
+`context.embeddings = true` creates the context with embedding output enabled.
+Encoder-only embedding models enable it automatically; decoder-only embedding
+models need it set explicitly. `context.pooling` selects how token outputs
+become one vector: `none`, `mean`, `cls`, `last`, or `rank`. When it is omitted
+or `unspecified`, the model's GGUF `pooling_type` metadata decides. `none`
+produces no pooled vector, so the endpoint cannot serve `embed`, and `rank`
+returns unnormalized classifier scores.
 
 Encoder-capable models default `n_ubatch` to `n_batch`, or 2048 when neither is
 configured. Each encoder prompt must fit within `n_ubatch`; concurrent prompts

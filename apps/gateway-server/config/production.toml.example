@@ -28,7 +28,7 @@ admin = "/admin"
 [[tokens]]
 env = "SIPP_GATEWAY_TOKEN"
 caller = "production-client"
-targets = ["local"]
+targets = ["local", "local-embed"]
 
 [[targets]]
 name = "local"
@@ -36,3 +36,15 @@ type = "local"
 model = "/models/model.gguf"
 backend = "auto"
 stats = "basic"
+
+# A second local target loads its own model and context to serve /v1/embed.
+[[targets]]
+name = "local-embed"
+type = "local"
+model = "/models/nomic-embed-text-v1.5.Q4_K_M.gguf"
+backend = "auto"
+stats = "basic"
+
+[targets.runtime.context]
+embeddings = true
+pooling = "mean"

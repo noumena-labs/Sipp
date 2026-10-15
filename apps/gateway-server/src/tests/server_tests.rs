@@ -473,17 +473,35 @@ fn config_rejects_duplicate_routes_on_the_same_listener() {
 
 #[test]
 fn shipped_gateway_configs_match_the_new_schema() {
-    for name in [
-        "local.toml.example",
-        "development.toml.example",
-        "production.toml.example",
-        "provider-only.toml.example",
-        "hybrid.toml.example",
+    for (name, embed_target) in [
+        ("local.toml.example", "local-embed"),
+        ("development.toml.example", "local-embed"),
+        ("production.toml.example", "local-embed"),
+        ("provider-only.toml.example", "openai-embed"),
+        ("hybrid.toml.example", "local-embed"),
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
             .join(name);
-        GatewayServerConfig::from_path(&path).expect(name);
+        let config = GatewayServerConfig::from_path(&path).expect(name);
+
+        // Every example serves /v1/embed through a granted embedding target.
+        let target = config
+            .targets
+            .iter()
+            .find(|target| target.name == embed_target)
+            .expect(name);
+        if let EndpointConfig::Local { runtime, .. } = &target.endpoint {
+            assert_eq!(runtime.context.embeddings, Some(true), "{name}");
+            assert!(runtime.context.pooling.is_some(), "{name}");
+        }
+        assert!(
+            config
+                .tokens
+                .iter()
+                .all(|token| token.targets.iter().any(|target| target == embed_target)),
+            "{name}"
+        );
     }
 }
 

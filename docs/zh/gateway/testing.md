@@ -103,7 +103,7 @@ curl -sS "$GATEWAY_URL/v1/embed" \
   -H "Authorization: Bearer $SIPP_GATEWAY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "'"$SIPP_GATEWAY_TARGET"'",
+    "model": "local-embed",
     "input": "gateway inference"
   }'
 ```
@@ -113,12 +113,12 @@ curl -sS "$GATEWAY_URL/v1/embed" \
 ```json
 {
   "id": "response",
-  "model": "local",
+  "model": "local-embed",
   "embedding": [0.0123, -0.0456]
 }
 ```
 
-调用嵌入接口需要目标模型支持向量生成。对仅支持文本生成的本地模型或服务商发起 `/v1/embed` 请求时，系统返回执行错误。
+调用嵌入接口需要目标模型支持向量生成，例如随附示例中的 `local-embed`（provider-only 示例中为 `openai-embed`）。对仅支持文本生成的本地模型或服务商发起 `/v1/embed` 请求时，系统返回执行错误。
 
 ## 流式传输
 

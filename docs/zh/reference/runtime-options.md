@@ -37,13 +37,15 @@ Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相
 | 分组 | 常见字段 | 用途 |
 | --- | --- | --- |
 | `placement` | `devices`, `gpu_layers`, `split_mode`, `main_gpu`, `tensor_split`, `load_mode`, `fit_params` | 模型放置、加载和 GPU 驻留。`load_mode` 可设为 `auto`、`none`、`mmap`、`mlock`、`mmap_mlock` 或 `direct_io`。 |
-| `context` | `n_ctx`, `n_batch`, `n_ubatch`, `n_parallel`, `n_threads`, `n_threads_batch`, `flash_attention`, `offload_kqv` | 上下文窗口、批大小、微批大小、并发数、CPU 线程、注意力机制、KV 缓存 |
+| `context` | `n_ctx`, `n_batch`, `n_ubatch`, `n_parallel`, `n_threads`, `n_threads_batch`, `flash_attention`, `offload_kqv`, `embeddings`, `pooling` | 上下文窗口、批大小、微批大小、并发数、CPU 线程、注意力机制、KV 缓存、嵌入输出 |
 | `sampling` | `samplers`, `seed`, `top_k`, `top_p`, `min_p`, `temperature`, `repeat_penalty`, `mirostat`, `logit_bias` | 本地文本生成的默认采样参数 |
 | `scheduler` | `continuous_batching`, `policy`, `prefill_chunk_size`, `max_running_requests`, `max_queued_requests` | 请求调度、批处理、队列限制 |
 | `cache` | `mode`, `retained_prefix_tokens`, `snapshot_interval_tokens`, `max_snapshot_entries`, `max_snapshot_bytes` | 前缀 KV 缓存复用和快照 |
 | `multimodal` | `use_gpu`, `image_min_tokens`, `image_max_tokens` | 视觉与图片 Token 配置。投影器通过 `models.add` 配对 |
 | `residency` | `max_gpu_models_per_device`, `allow_cpu_models_while_gpu_loaded`, `require_gpu_lease` | GPU 模型驻留策略，多模型 GPU 资源分配 |
 | `observability` | `runtime_metrics`, `backend_profiling` | 运行时记录延迟、吞吐量和后端诊断数据 |
+
+`context.embeddings = true` 会在创建上下文时启用嵌入输出。仅编码器的嵌入模型会自动启用；仅解码器的嵌入模型需要显式设置。`context.pooling` 决定如何将各 Token 的输出合并为一个向量：`none`、`mean`、`cls`、`last` 或 `rank`。省略或设为 `unspecified` 时，由模型 GGUF 元数据中的 `pooling_type` 决定。`none` 不产生池化向量，因此端点无法提供 `embed`；`rank` 返回未经归一化的分类器分数。
 
 支持编码器的模型默认 `n_ubatch` 等于 `n_batch`；两者均未配置时使用 2048。 每个编码器提示词都必须能放入一个 `n_ubatch`；并发提示词的总长度超过该值时，运行时会将它们分到不同的编码器批次中。
 

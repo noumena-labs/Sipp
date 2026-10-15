@@ -259,6 +259,27 @@ requests wait for a free sequence. Raise it to serve concurrent callers:
 n_parallel = 4
 ```
 
+`/v1/embed` needs a target that loads an embedding model with embeddings
+enabled. The shipped local, development, production, and hybrid examples add a
+separate `local-embed` target for this, which loads a second model and context
+next to the generation target:
+
+```toml
+[[targets]]
+name = "local-embed"
+type = "local"
+model = "/models/nomic-embed-text-v1.5.Q4_K_M.gguf"
+backend = "auto"
+
+[targets.runtime.context]
+embeddings = true
+pooling = "mean"
+```
+
+The provider-only example uses an OpenAI embedding model in an `openai-embed`
+target instead. See [Runtime Options](../reference/runtime-options.md) for
+`embeddings` and `pooling`.
+
 For on-board inference, prefer `backend = "auto"` or an explicit GPU backend.
 `backend = "auto"` selects the best compiled and available backend in this
 order: CUDA, Metal, Vulkan, then CPU. Explicit `cpu` disables GPU offload and
