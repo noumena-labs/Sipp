@@ -36,6 +36,9 @@ struct Cli {
     /// Listener address.
     #[arg(long, default_value = "127.0.0.1:8080")]
     bind: SocketAddr,
+    /// Requests each endpoint runs at once (`runtime.context.n_parallel`).
+    #[arg(long, default_value_t = 1)]
+    parallel: i32,
 }
 
 #[tokio::main]
@@ -43,12 +46,14 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let mut client = SippClient::new()?;
     let model = client.models().add([cli.model]).await?;
+    let mut text_runtime = NativeRuntimeConfig::default();
+    text_runtime.context.n_parallel = Some(cli.parallel);
     let local = endpoint::Local::new(&model);
     let text_endpoint = client
-        .add("local-text", local.clone())
+        .add("local-text", local.clone().runtime(text_runtime.clone()))
         .await
         .context("failed to load local text model")?;
-    let mut embedding_runtime = NativeRuntimeConfig::default();
+    let mut embedding_runtime = text_runtime;
     embedding_runtime.context.embeddings = Some(true);
     embedding_runtime.context.pooling = Some(PoolingType::Mean);
     let embedding_local = local.runtime(embedding_runtime);
@@ -62,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         text_endpoint,
         embedding_endpoint,
         next_request_id: Arc::new(AtomicU64::new(1)),
+        next_context_key: Arc::new(AtomicU64::new(1)),
         codec: GatewayCodec,
     };
     let app = Router::new()
@@ -89,6 +95,7 @@ struct AppState {
     text_endpoint: EndpointRef,
     embedding_endpoint: EndpointRef,
     next_request_id: Arc<AtomicU64>,
+    next_context_key: Arc<AtomicU64>,
     codec: GatewayCodec,
 }
 
@@ -100,12 +107,13 @@ async fn query(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
         Ok(decoded) => decoded,
         Err(error) => return error_response(&state, Some(&request_id), error),
     };
-    let endpoint = match state.resolve(&decoded.target, Operation::Query) {
-        Ok(endpoint) => endpoint,
+    let (endpoint, context_key) = match state.resolve(&decoded.target, Operation::Query) {
+        Ok(resolved) => resolved,
         Err(error) => return error_response(&state, Some(&request_id), error),
     };
     let mut request = decoded.request;
     request.endpoint = Some(endpoint);
+    request.local.context_key = Some(context_key);
     request.emit_tokens = decoded.stream;
     let run = state.client.query_with_context(
         SippRequestContext {
@@ -138,12 +146,13 @@ async fn chat(State(state): State<AppState>, headers: HeaderMap, body: Bytes) ->
         Ok(decoded) => decoded,
         Err(error) => return error_response(&state, Some(&request_id), error),
     };
-    let endpoint = match state.resolve(&decoded.target, Operation::Chat) {
-        Ok(endpoint) => endpoint,
+    let (endpoint, context_key) = match state.resolve(&decoded.target, Operation::Chat) {
+        Ok(resolved) => resolved,
         Err(error) => return error_response(&state, Some(&request_id), error),
     };
     let mut request = decoded.request;
     request.endpoint = Some(endpoint);
+    request.local.context_key = Some(context_key);
     request.emit_tokens = decoded.stream;
     let run = state.client.chat_with_context(
         SippRequestContext {
@@ -176,12 +185,13 @@ async fn embed(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
         Ok(decoded) => decoded,
         Err(error) => return error_response(&state, Some(&request_id), error),
     };
-    let endpoint = match state.resolve(&decoded.target, Operation::Embed) {
-        Ok(endpoint) => endpoint,
+    let (endpoint, context_key) = match state.resolve(&decoded.target, Operation::Embed) {
+        Ok(resolved) => resolved,
         Err(error) => return error_response(&state, Some(&request_id), error),
     };
     let mut request = decoded.request;
     request.endpoint = Some(endpoint);
+    request.local.context_key = Some(context_key);
     let run = state.client.embed_with_context(
         SippRequestContext {
             request_id: Some(request_id.clone()),
@@ -207,7 +217,14 @@ impl AppState {
         format!("example_{id:016x}")
     }
 
-    fn resolve(&self, target: &str, operation: Operation) -> Result<EndpointRef, GatewayHttpError> {
+    /// Returns the endpoint and a fresh context key. A key per request lets
+    /// requests run in parallel up to `--parallel` and keeps callers from
+    /// reusing each other's KV cache.
+    fn resolve(
+        &self,
+        target: &str,
+        operation: Operation,
+    ) -> Result<(EndpointRef, String), GatewayHttpError> {
         if target != "local" {
             return Err(GatewayHttpError::new(
                 StatusCode::NOT_FOUND,
@@ -226,7 +243,8 @@ impl AppState {
                 ));
             }
         };
-        Ok(endpoint)
+        let id = self.next_context_key.fetch_add(1, Ordering::Relaxed);
+        Ok((endpoint, format!("example-{id}")))
     }
 }
 

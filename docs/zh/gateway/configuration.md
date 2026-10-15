@@ -223,6 +223,22 @@ stats = "basic"
 n_parallel = 4
 ```
 
+`/v1/embed` 需要一个加载嵌入模型并启用 embeddings 的目标。随附的 local、development、production 和 hybrid 示例为此单独添加了 `local-embed` 目标，它会在生成目标之外再加载一个模型和上下文：
+
+```toml
+[[targets]]
+name = "local-embed"
+type = "local"
+model = "/models/nomic-embed-text-v1.5.Q4_K_M.gguf"
+backend = "auto"
+
+[targets.runtime.context]
+embeddings = true
+pooling = "mean"
+```
+
+provider-only 示例则改用 `openai-embed` 目标中的 OpenAI 嵌入模型。`embeddings` 和 `pooling` 的说明见[运行时选项](../reference/runtime-options.md)。
+
 本地推理推荐 `backend = "auto"` 或明确指定 GPU 后端。`auto` 会按优先级选择可用的最佳编译后端：CUDA、Metal、Vulkan、CPU。指定 `cpu` 会禁用 GPU offload，仅用于诊断。显式指定的 GPU 后端未编译或不受支持时，进程报错退出。
 
 `stats = "off"` 关闭运行时指标与后端分析。

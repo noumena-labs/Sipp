@@ -27,11 +27,18 @@ admin = "/admin"
 [[tokens]]
 env = "SIPP_GATEWAY_TOKEN"
 caller = "provider-client"
-targets = ["openai-chat"]
+targets = ["openai-chat", "openai-embed"]
 
 [[targets]]
 name = "openai-chat"
 type = "openai"
 model = "gpt-5-mini"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 60
+
+[[targets]]
+name = "openai-embed"
+type = "openai"
+model = "text-embedding-3-small"
 api_key_env = "OPENAI_API_KEY"
 timeout_seconds = 60
