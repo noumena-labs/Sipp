@@ -3,11 +3,11 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, Method, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -26,7 +26,7 @@ use sipp_gateway::{
 use tower_http::cors::CorsLayer;
 
 use crate::admin::{self, AdminDashboardState, AdminDashboardView};
-use crate::config::{GatewayServerRuntime, LoadedToken, RouteConfig, SecurityConfig};
+use crate::config::{GatewayServerRuntime, LoadedToken, RouteConfig, RoutedTarget, SecurityConfig};
 use crate::metrics::{GatewayMetrics, GatewayRejectionKind, GatewayRequestRecord};
 use crate::runtime::{
     ConcurrencyAcquireError, ConcurrencyPermit, GatewayControls, GatewaySecurity,
@@ -227,16 +227,19 @@ async fn embed(
     if let Err(error) = authorize(&context, &decoded.target) {
         return error_response(&state, trace, caller, Some(target), error);
     }
-    let endpoint = match resolve_endpoint(&state, &decoded.target) {
-        Ok(endpoint) => endpoint,
+    let routed = match route(&state, &decoded.target) {
+        Ok(routed) => routed,
         Err(error) => return error_response(&state, trace, caller, Some(target), error),
     };
-    let _permit = match acquire(&state) {
+    let _permit = match state.controls.try_acquire() {
         Ok(permit) => permit,
-        Err(error) => return error_response(&state, trace, caller, Some(target), error),
+        Err(error) => {
+            return admission_rejection_response(&state, trace, caller, Some(target), error)
+        }
     };
     let mut request = decoded.request;
-    request.endpoint = Some(endpoint);
+    request.endpoint = Some(routed.endpoint);
+    request.local.context_key = routed.context_key;
     let run = state.runtime.client.embed_with_context(
         SippRequestContext {
             request_id: request_id.map(str::to_string),
@@ -295,16 +298,19 @@ async fn text_handler(
             if let Err(error) = authorize(&context, &decoded.target) {
                 return error_response(&state, trace, caller, Some(target), error);
             }
-            let endpoint = match resolve_endpoint(&state, &decoded.target) {
-                Ok(endpoint) => endpoint,
+            let routed = match route(&state, &decoded.target) {
+                Ok(routed) => routed,
                 Err(error) => return error_response(&state, trace, caller, Some(target), error),
             };
-            let permit = match acquire(&state) {
+            let permit = match state.controls.try_acquire() {
                 Ok(permit) => permit,
-                Err(error) => return error_response(&state, trace, caller, Some(target), error),
+                Err(error) => {
+                    return admission_rejection_response(&state, trace, caller, Some(target), error)
+                }
             };
             let mut request = decoded.request;
-            request.endpoint = Some(endpoint);
+            request.endpoint = Some(routed.endpoint);
+            request.local.context_key = routed.context_key;
             request.emit_tokens = decoded.stream;
             let run = state.runtime.client.query_with_context(
                 SippRequestContext {
@@ -355,16 +361,19 @@ async fn text_handler(
             if let Err(error) = authorize(&context, &decoded.target) {
                 return error_response(&state, trace, caller, Some(target), error);
             }
-            let endpoint = match resolve_endpoint(&state, &decoded.target) {
-                Ok(endpoint) => endpoint,
+            let routed = match route(&state, &decoded.target) {
+                Ok(routed) => routed,
                 Err(error) => return error_response(&state, trace, caller, Some(target), error),
             };
-            let permit = match acquire(&state) {
+            let permit = match state.controls.try_acquire() {
                 Ok(permit) => permit,
-                Err(error) => return error_response(&state, trace, caller, Some(target), error),
+                Err(error) => {
+                    return admission_rejection_response(&state, trace, caller, Some(target), error)
+                }
             };
             let mut request = decoded.request;
-            request.endpoint = Some(endpoint);
+            request.endpoint = Some(routed.endpoint);
+            request.local.context_key = routed.context_key;
             request.emit_tokens = decoded.stream;
             let run = state.runtime.client.chat_with_context(
                 SippRequestContext {
@@ -491,8 +500,8 @@ fn caller_label(authenticated: &AuthenticatedRequest) -> Option<String> {
         .map(str::to_string)
 }
 
-fn resolve_endpoint(state: &PublicState, target: &str) -> ToolkitResult<sipp::EndpointRef> {
-    state.runtime.targets.get(target).cloned().ok_or_else(|| {
+fn route(state: &PublicState, target: &str) -> ToolkitResult<RoutedTarget> {
+    state.runtime.route(target).ok_or_else(|| {
         GatewayHttpError::new(StatusCode::NOT_FOUND, "resolution", "target not found")
     })
 }
@@ -516,21 +525,6 @@ fn authorize(
             "caller is not allowed to use the target",
         ))
     }
-}
-
-fn acquire(state: &PublicState) -> ToolkitResult<ConcurrencyPermit> {
-    state.controls.try_acquire().map_err(|error| match error {
-        ConcurrencyAcquireError::LimitExceeded => GatewayHttpError::new(
-            StatusCode::TOO_MANY_REQUESTS,
-            "admission",
-            "application concurrency limit exceeded",
-        ),
-        ConcurrencyAcquireError::Unavailable => GatewayHttpError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "admission",
-            "application concurrency controls are unavailable",
-        ),
-    })
 }
 
 fn stream_response(
@@ -708,6 +702,10 @@ fn success_response(
     )
 }
 
+/// Suggested wait after the concurrency limit rejects a request. Permits are
+/// released when in-flight requests finish, which has no predictable time.
+const ADMISSION_RETRY_AFTER: Duration = Duration::from_secs(1);
+
 fn error_response(
     state: &PublicState,
     trace: RequestTrace,
@@ -715,14 +713,7 @@ fn error_response(
     target: Option<String>,
     error: GatewayHttpError,
 ) -> Response<Body> {
-    trace.record(state, caller, target, error.status, None, None);
-    let body = state.codec.encode_error(&error);
-    response(
-        error.status,
-        state.codec.content_type(false),
-        Body::from(body),
-        trace.request_id(),
-    )
+    rejection_response(state, trace, caller, target, error, None, None)
 }
 
 fn security_rejection_response(
@@ -730,35 +721,88 @@ fn security_rejection_response(
     trace: RequestTrace,
     rejection: SecurityCheckError,
 ) -> Response<Body> {
-    let (status, code, message, kind) = match rejection {
+    let (status, code, message, kind, retry_after) = match rejection {
         SecurityCheckError::Blocked => (
             StatusCode::FORBIDDEN,
             "blocked",
             "client is blocked by the gateway",
             Some(GatewayRejectionKind::Blocked),
+            None,
         ),
-        SecurityCheckError::RateLimited => (
+        SecurityCheckError::RateLimited { retry_after } => (
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
             "client rate limit exceeded",
             Some(GatewayRejectionKind::RateLimited),
+            Some(retry_after),
         ),
         SecurityCheckError::Unavailable => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "security_controls",
             "gateway security controls are unavailable",
             None,
+            None,
         ),
     };
     let error = GatewayHttpError::new(status, code, message);
-    trace.record(state, None, None, status, None, kind);
+    rejection_response(state, trace, None, None, error, kind, retry_after)
+}
+
+fn admission_rejection_response(
+    state: &PublicState,
+    trace: RequestTrace,
+    caller: Option<String>,
+    target: Option<String>,
+    rejection: ConcurrencyAcquireError,
+) -> Response<Body> {
+    let (error, kind, retry_after) = match rejection {
+        ConcurrencyAcquireError::LimitExceeded => (
+            GatewayHttpError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "admission",
+                "application concurrency limit exceeded",
+            ),
+            Some(GatewayRejectionKind::Admission),
+            Some(ADMISSION_RETRY_AFTER),
+        ),
+        ConcurrencyAcquireError::Unavailable => (
+            GatewayHttpError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "admission",
+                "application concurrency controls are unavailable",
+            ),
+            None,
+            None,
+        ),
+    };
+    rejection_response(state, trace, caller, target, error, kind, retry_after)
+}
+
+fn rejection_response(
+    state: &PublicState,
+    trace: RequestTrace,
+    caller: Option<String>,
+    target: Option<String>,
+    error: GatewayHttpError,
+    kind: Option<GatewayRejectionKind>,
+    retry_after: Option<Duration>,
+) -> Response<Body> {
+    trace.record(state, caller, target, error.status, None, kind);
     let body = state.codec.encode_error(&error);
-    response(
-        status,
+    let mut response = response(
+        error.status,
         state.codec.content_type(false),
         Body::from(body),
         trace.request_id(),
-    )
+    );
+    if let Some(retry_after) = retry_after {
+        // Whole seconds, rounded up so a client that honors it is admitted.
+        let seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from(seconds.max(1)));
+    }
+    response
 }
 
 fn response(

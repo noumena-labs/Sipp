@@ -250,6 +250,15 @@ stats = "basic"
 - `runtime` can contain advanced native runtime settings from the shared
   runtime options schema.
 
+Each request to a local target gets its own KV context, so requests run in
+parallel up to `runtime.context.n_parallel` sequences (default `1`); later
+requests wait for a free sequence. Raise it to serve concurrent callers:
+
+```toml
+[targets.runtime.context]
+n_parallel = 4
+```
+
 For on-board inference, prefer `backend = "auto"` or an explicit GPU backend.
 `backend = "auto"` selects the best compiled and available backend in this
 order: CUDA, Metal, Vulkan, then CPU. Explicit `cpu` disables GPU offload and

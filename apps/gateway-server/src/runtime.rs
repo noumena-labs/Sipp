@@ -250,7 +250,9 @@ impl GatewaySecurity {
         bucket.updated_at = now;
         bucket.last_seen = now;
         if bucket.tokens < 1.0 {
-            return Err(SecurityCheckError::RateLimited);
+            return Err(SecurityCheckError::RateLimited {
+                retry_after: Duration::from_secs_f64((1.0 - bucket.tokens) / refill_per_second),
+            });
         }
         bucket.tokens -= 1.0;
         Ok(())
@@ -261,7 +263,11 @@ impl GatewaySecurity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SecurityCheckError {
     Blocked,
-    RateLimited,
+    /// The client's bucket holds less than one token; `retry_after` is the
+    /// time until it refills one.
+    RateLimited {
+        retry_after: Duration,
+    },
     Unavailable,
 }
 

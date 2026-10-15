@@ -216,6 +216,13 @@ stats = "basic"
 - `stats`：支持 `off`、`basic`、`profile`。
 - `runtime`：高级原生运行时设置（共享运行时选项架构）。
 
+发往本地目标的每个请求都使用独立的 KV 上下文，最多可并行 `runtime.context.n_parallel` 个序列（默认 `1`），其余请求会等待空闲序列。如需服务并发调用方，请调高该值：
+
+```toml
+[targets.runtime.context]
+n_parallel = 4
+```
+
 本地推理推荐 `backend = "auto"` 或明确指定 GPU 后端。`auto` 会按优先级选择可用的最佳编译后端：CUDA、Metal、Vulkan、CPU。指定 `cpu` 会禁用 GPU offload，仅用于诊断。显式指定的 GPU 后端未编译或不受支持时，进程报错退出。
 
 `stats = "off"` 关闭运行时指标与后端分析。

@@ -51,6 +51,10 @@ sipp_gateway_requests_total{operation="query"} 3
 sipp_gateway_errors_total{operation="chat"} 1
 ```
 
+`429` rejections are counted separately: `sipp_gateway_rate_limit_hits_total`
+for the per-client rate limit and `sipp_gateway_admission_rejections_total` for
+the `max_concurrent_requests` limit.
+
 Target-level local runtime metrics depend on the target `stats` setting:
 
 - `off`: disable runtime metrics and backend profiling.
