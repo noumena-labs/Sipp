@@ -55,18 +55,19 @@ These backends require custom CMake flags on top of the vendored llama.cpp build
 
 The table below shows the first browser version where each feature is available for desktop operating systems. A dash (`—`) means the feature is not supported.
 
-| Browser | Support | WASM st | WASM pthread¹ | WebGPU | WebGPU + f16² | OPFS³ | Workers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Chrome (Windows) | ✅ Tested 149.0.7827.200 | 57 | 92⁴ | 113 | 113 | 86 | 4 |
-| Chrome (macOS) | ✅ Tested 149.0.7827.199 | 57 | 92⁴ | 113 | 113 | 86 | 4 |
-| Edge (Windows) | ✅ Tested 149.0.4022.80 | 79⁵ | 92⁴ | 113 | 113 | 86 | 79⁵ |
-| Firefox (Windows) | 🟡 CPU tested 152.0.2 | 52 | 79⁴ | 141 | 141 | 111 | 3.5 |
-| Firefox (macOS) | 🟡 CPU tested 152.0.3 | 52 | 79⁴ | 145⁶ | 145⁶ | 111 | 3.5 |
-| Firefox (Linux) | ❌ Untested | 52 | 79⁴ | ⚠ Nightly | ⚠ Nightly | 111 | 3.5 |
-| Safari (macOS) | ✅ Tested 26.4 (CPU) · STP (WebGPU) | 11 | 15.2⁴ | 26 | 26 | 16.4 | 4 |
-| Opera (Win, Mac, Linux) | ❌ Untested | 44 | 78⁴ | 99 | 99 | 72 | 11.5 |
-| ChromeOS | ❌ Untested | 57 | 92⁴ | 113 | 113 | 86 | 4 |
-| Other Chromium-based⁷ | ❌ Untested | 57+ | 92⁴ | 113 | 113 | 86+ | 4+ |
+| Browser | Support | WASM st | WASM pthread¹ | WebGPU | WebGPU + f16² | JSPI⁸ | OPFS³ | Workers |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Chrome (Windows) | ✅ Tested 149.0.7827.200 | 57 | 92⁴ | 113 | 113 | 137 | 86 | 4 |
+| Chrome (macOS) | ✅ Tested 149.0.7827.199 | 57 | 92⁴ | 113 | 113 | 137 | 86 | 4 |
+| Chrome (Linux) | 🟡 Tested 153 (see [results](#tested-webgpu-configurations)) | 57 | 92⁴ | 113 | 113 | 137 | 86 | 4 |
+| Edge (Windows) | ✅ Tested 149.0.4022.80 | 79⁵ | 92⁴ | 113 | 113 | 137 | 86 | 79⁵ |
+| Firefox (Windows) | 🟡 CPU tested 152.0.2 | 52 | 79⁴ | 141 | 141 | 153 | 111 | 3.5 |
+| Firefox (macOS) | 🟡 CPU tested 152.0.3 | 52 | 79⁴ | 145⁶ | 145⁶ | 153 | 111 | 3.5 |
+| Firefox (Linux) | 🟡 Tested 156 (see [results](#tested-webgpu-configurations)) | 52 | 79⁴ | ≤156⁹ | ≤156⁹ | 153 | 111 | 3.5 |
+| Safari (macOS) | ✅ Tested 26.4 (CPU) · STP (WebGPU) | 11 | 15.2⁴ | 26 | 26 | 27 | 16.4 | 4 |
+| Opera (Win, Mac, Linux) | ❌ Untested | 44 | 78⁴ | 99 | 99 | Chromium 137⁷ | 72 | 11.5 |
+| ChromeOS | ❌ Untested | 57 | 92⁴ | 113 | 113 | 137 | 86 | 4 |
+| Other Chromium-based⁷ | ❌ Untested | 57+ | 92⁴ | 113 | 113 | Chromium 137⁷ | 86+ | 4+ |
 
 **Footnotes:**
 
@@ -77,6 +78,8 @@ The table below shows the first browser version where each feature is available 
 * ⁵ Edge switched to a Chromium engine at version 79. The Chromium-based Edge supports WASM single-thread from 79, Workers from 79. The legacy EdgeHTML engine supported Workers from version 12 and WASM from version 16.
 * ⁶ Firefox 145 enables WebGPU on macOS version 26 (ARM64). Intel Mac support is in progress in Nightly.
 * ⁷ Includes Brave, Vivaldi, Arc, and other Chromium-derived browsers. Versions match their underlying Chromium release.
+* ⁸ WebAssembly JavaScript Promise Integration. Sipp's WebGPU runtime requires it; browsers without it run on the CPU. Sipp detects it with a functional probe, not by browser version.
+* ⁹ Observed in the Firefox 156 release on Ubuntu 24.04. The first release that enables WebGPU on Linux is not confirmed.
 
 ---
 
@@ -229,32 +232,41 @@ path on Apple Silicon.
 
 ### WebGPU (Browser)
 
-Any GPU that the host browser exposes as a WebGPU adapter may work, but Sipp requires the `shader-f16` feature for WebGPU acceleration. Common configurations:
+Sipp's WebGPU path needs JSPI and an adapter that exposes `shader-f16`. The
+browser decides per GPU and driver whether to expose `shader-f16`, so a
+supported browser version does not guarantee GPU execution. Without it, `auto`
+runs on the CPU.
 
-| GPU Family | Chrome (D3D12) | Chrome (Vulkan) | Firefox (wgpu) | Safari (Metal) |
-| --- | --- | --- | --- | --- |
-| NVIDIA | Yes | Yes (Linux) | Yes | — |
-| AMD | Yes | Yes (Linux) | Yes | Yes |
-| Intel integrated | Yes | Yes (Linux) | Yes | Yes |
-| Apple Silicon | — | — | Yes | Yes |
-| Qualcomm (Android) | Yes | — | — | — |
-| ARM Mali | Yes (Android) | — | — | — |
+#### Tested WebGPU Configurations
+
+Each row is one observed run. Combinations that are not listed are unverified.
+
+| Checked | Sipp | Browser | OS | GPU | `shader-f16` | Outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-10 | 0.1.4 | Chrome 151 | macOS | Apple M1 Pro | Exposed | ✅ WebGPU works |
+| 2026-10 | 0.1.4 | Chrome 153 | Ubuntu 24.04 | NVIDIA RTX 4090 | Not exposed | 🟡 CPU fallback; `backend: 'webgpu'` is rejected |
+| 2026-10 | 0.1.4 | Firefox 156 | Ubuntu 24.04 | NVIDIA RTX 4090 | Exposed | ⚠ Experimental: the WebGPU model load fails (see below) |
 
 #### Firefox Runtime Findings
 
-Firefox 150.0.2 exposes the required WASM pthread, worker, WebGPU, and
-`shader-f16` capabilities on tested Windows configurations. Default builds that
-do not complete the JSPI suspend/resume probe use the pthread CPU no-JSPI
-artifact. Experimental builds that pass the probe can select WebGPU+JSPI
-without a Firefox-specific branch. Both paths still require
-`SharedArrayBuffer`, workers, and COOP/COEP headers.
+Firefox 153 and later ship JSPI, so Firefox takes the WebGPU path whenever the
+adapter exposes `shader-f16`. On Firefox 156 on Linux with an RTX 4090, loading
+Qwen2.5 0.5B fails: ggml-webgpu (in the vendored llama.cpp) uploads the model's
+145 MB embedding tensor in a single write, and Firefox loses the GPU device
+after about 64 MB of pending uploads. With a test patch that splits the upload,
+the model runs on WebGPU but decodes at about 1 token per second. The upload fix
+belongs upstream in llama.cpp. Until then, treat Firefox WebGPU on Linux as
+experimental: an `auto` load should retry on the CPU, which has not yet been
+verified on this configuration, and `backend: 'cpu'` avoids WebGPU entirely.
+Firefox releases before 153 fail the JSPI probe and run on the CPU, as tested
+with Firefox 152 on Windows and macOS.
 
 #### Safari Runtime Findings
 
-Safari builds that cannot complete the JSPI suspend/resume probe select the
-pthread CPU no-JSPI artifact instead of failing to boot. Builds with a complete
-JSPI implementation can select WebGPU+JSPI without a Safari-specific branch.
-Safari still requires `SharedArrayBuffer`, workers, and COOP/COEP headers.
+Safari 27 ships JSPI, so Safari takes the WebGPU path whenever the adapter
+exposes `shader-f16`. This path is unverified. Safari 26 and earlier fail the
+JSPI probe and run on the CPU. Safari still requires `SharedArrayBuffer`,
+workers, and COOP/COEP headers.
 
 ---
 
@@ -278,7 +290,7 @@ Safari still requires `SharedArrayBuffer`, workers, and COOP/COEP headers.
 * **Windows Docker Vulkan** is not supported. Use the CUDA or CPU profiles on Windows with WSL2.
 * **macOS Docker** is CPU-only. Metal cannot run inside a Linux Docker container.
 * **Android** is not a first-class package target. The native iOS Swift package can be built from source, but is not published yet. The browser WASM package works on mobile web browsers.
-* **Chrome (desktop)** is the primary tested browser target. Other desktop browsers (Edge, Firefox, Safari, Opera, Chromium derivatives) are untested.
+* **Chrome (desktop)** is the primary tested browser target. Browser and GPU combinations missing from [Tested WebGPU Configurations](#tested-webgpu-configurations) are unverified.
 * **Mobile browser support** has not been validated yet. Chrome (Android) is the next target for testing.
-* **Firefox WebGPU on Linux and Android** is in active development (Nightly / Beta). Firefox WebGPU on macOS Intel is also in progress.
+* **Firefox WebGPU on Linux** is experimental: model loads can fail on large GPU uploads (see [Firefox Runtime Findings](#firefox-runtime-findings)). Firefox WebGPU on Android is in Beta / Nightly, and on macOS Intel it is in progress.
 * **Gateways** are compatible with OpenAI and OpenAI-compatible providers plus Anthropic. Additional provider support is added over time.

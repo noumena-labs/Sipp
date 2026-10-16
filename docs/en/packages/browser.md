@@ -28,6 +28,10 @@ Use this package in browser code. For server routes or Node services, use
 `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` response headers.
 
+`@sipphq/sipp` has no npm dependencies: its WASM runtimes ship inside the
+package. A GGUF model is a separate download, and GPU execution depends on the
+browser and GPU (see [Device Support](../reference/device-support.md)).
+
 ## Use It For
 
 - Browser-local text and vision inference.

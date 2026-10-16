@@ -55,18 +55,19 @@ Sipp 支持在多种设备、操作系统、浏览器和 GPU 加速器上运行�
 
 下表显示了桌面操作系统上各项功能开始可用的最低浏览器版本。横线（`—`）表示不支持该功能。
 
-| 浏览器 | 支持情况 | WASM st | WASM pthread¹ | WebGPU | WebGPU + f16² | OPFS³ | Workers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Chrome (Windows) | ✅ 已测试 149.0.7827.200 | 57 | 92⁴ | 113 | 113 | 86 | 4 |
-| Chrome (macOS) | ✅ 已测试 149.0.7827.199 | 57 | 92⁴ | 113 | 113 | 86 | 4 |
-| Edge (Windows) | ✅ 已测试 149.0.4022.80 | 79⁵ | 92⁴ | 113 | 113 | 86 | 79⁵ |
-| Firefox (Windows) | 🟡 CPU 已测试 152.0.2 | 52 | 79⁴ | 141 | 141 | 111 | 3.5 |
-| Firefox (macOS) | 🟡 CPU 已测试 152.0.3 | 52 | 79⁴ | 145⁶ | 145⁶ | 111 | 3.5 |
-| Firefox (Linux) | ❌ 未测试 | 52 | 79⁴ | ⚠ Nightly | ⚠ Nightly | 111 | 3.5 |
-| Safari (macOS) | ✅ 已测试 26.4（CPU）· STP（WebGPU） | 11 | 15.2⁴ | 26 | 26 | 16.4 | 4 |
-| Opera (Win, Mac, Linux) | ❌ 未测试 | 44 | 78⁴ | 99 | 99 | 72 | 11.5 |
-| ChromeOS | ❌ 未测试 | 57 | 92⁴ | 113 | 113 | 86 | 4 |
-| 其他基于 Chromium 的浏览器⁷ | ❌ 未测试 | 57+ | 92⁴ | 113 | 113 | 86+ | 4+ |
+| 浏览器 | 支持情况 | WASM st | WASM pthread¹ | WebGPU | WebGPU + f16² | JSPI⁸ | OPFS³ | Workers |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Chrome (Windows) | ✅ 已测试 149.0.7827.200 | 57 | 92⁴ | 113 | 113 | 137 | 86 | 4 |
+| Chrome (macOS) | ✅ 已测试 149.0.7827.199 | 57 | 92⁴ | 113 | 113 | 137 | 86 | 4 |
+| Chrome (Linux) | 🟡 已测试 153（见[测试结果](#已测试的-webgpu-配置)） | 57 | 92⁴ | 113 | 113 | 137 | 86 | 4 |
+| Edge (Windows) | ✅ 已测试 149.0.4022.80 | 79⁵ | 92⁴ | 113 | 113 | 137 | 86 | 79⁵ |
+| Firefox (Windows) | 🟡 CPU 已测试 152.0.2 | 52 | 79⁴ | 141 | 141 | 153 | 111 | 3.5 |
+| Firefox (macOS) | 🟡 CPU 已测试 152.0.3 | 52 | 79⁴ | 145⁶ | 145⁶ | 153 | 111 | 3.5 |
+| Firefox (Linux) | 🟡 已测试 156（见[测试结果](#已测试的-webgpu-配置)） | 52 | 79⁴ | ≤156⁹ | ≤156⁹ | 153 | 111 | 3.5 |
+| Safari (macOS) | ✅ 已测试 26.4（CPU）· STP（WebGPU） | 11 | 15.2⁴ | 26 | 26 | 27 | 16.4 | 4 |
+| Opera (Win, Mac, Linux) | ❌ 未测试 | 44 | 78⁴ | 99 | 99 | Chromium 137⁷ | 72 | 11.5 |
+| ChromeOS | ❌ 未测试 | 57 | 92⁴ | 113 | 113 | 137 | 86 | 4 |
+| 其他基于 Chromium 的浏览器⁷ | ❌ 未测试 | 57+ | 92⁴ | 113 | 113 | Chromium 137⁷ | 86+ | 4+ |
 
 **脚注：**
 
@@ -77,6 +78,8 @@ Sipp 支持在多种设备、操作系统、浏览器和 GPU 加速器上运行�
 * ⁵ Edge 从 79 版本开始改用 Chromium 引擎。基于 Chromium 的 Edge 自 79 版本开始支持 WASM 单线程（single-thread）和 Worker。旧版 EdgeHTML 引擎自 12 版本支持 Worker，自 16 版本支持 WASM。
 * ⁶ Firefox 145 在 macOS 26（ARM64）上启用了 WebGPU。Nightly 版本正在测试 Intel Mac 的支持。
 * ⁷ 包括 Brave、Vivaldi、Arc 和其他基于 Chromium 的浏览器。支持情况与底层的 Chromium 版本一致。
+* ⁸ WebAssembly JavaScript Promise Integration。Sipp 的 WebGPU 运行时需要它；不支持它的浏览器会在 CPU 上运行。Sipp 通过功能性探测而不是浏览器版本来检测它。
+* ⁹ 在 Ubuntu 24.04 上的 Firefox 156 正式版中观察到。Linux 上首个默认启用 WebGPU 的正式版本尚未确认。
 
 ---
 
@@ -205,31 +208,37 @@ Python 原生包只会被 x64 Node/Python 进程使用；原生 arm64 Node/Pytho
 
 ### WebGPU (浏览器)
 
-几乎所有宿主浏览器支持的 WebGPU GPU 都可以工作，但 Sipp 需要 `shader-f16` 特性才能启用 WebGPU 加速。常见配置如下：
+Sipp 的 WebGPU 路径需要 JSPI，以及暴露 `shader-f16` 的适配器。浏览器会根据
+GPU 和驱动决定是否暴露 `shader-f16`，因此浏览器版本受支持并不保证能在 GPU 上
+运行。缺少该特性时，`auto` 会在 CPU 上运行。
 
-| GPU 系列 | Chrome (D3D12) | Chrome (Vulkan) | Firefox (wgpu) | Safari (Metal) |
-| --- | --- | --- | --- | --- |
-| NVIDIA | 是 | 是 (Linux) | 是 | — |
-| AMD | 是 | 是 (Linux) | 是 | 是 |
-| Intel 集成显卡 | 是 | 是 (Linux) | 是 | 是 |
-| Apple Silicon | — | — | 是 | 是 |
-| 高通 (Android) | 是 | — | — | — |
-| ARM Mali | 是 (Android) | — | — | — |
+#### 已测试的 WebGPU 配置
+
+每一行都是一次实际运行的观察结果。未列出的组合均未经验证。
+
+| 检查时间 | Sipp | 浏览器 | 操作系统 | GPU | `shader-f16` | 结果 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-10 | 0.1.4 | Chrome 151 | macOS | Apple M1 Pro | 已暴露 | ✅ WebGPU 可用 |
+| 2026-10 | 0.1.4 | Chrome 153 | Ubuntu 24.04 | NVIDIA RTX 4090 | 未暴露 | 🟡 回退到 CPU；`backend: 'webgpu'` 会被拒绝 |
+| 2026-10 | 0.1.4 | Firefox 156 | Ubuntu 24.04 | NVIDIA RTX 4090 | 已暴露 | ⚠ 实验性：WebGPU 模型加载失败（见下文） |
 
 #### Firefox 运行时测试结论
 
-在已测试的 Windows 配置中，Firefox 150.0.2 暴露了 WASM pthread、Worker、
-WebGPU 和 `shader-f16` 能力。无法完成 JSPI 挂起/恢复探测的默认构建会选择
-pthread CPU no-JSPI；通过探测的实验性构建可以选择 WebGPU+JSPI，而不需要
-Firefox 专用分支。两条路径都需要 `SharedArrayBuffer`、Worker 和 COOP/COEP
-响应头。
+Firefox 153 及更高版本提供 JSPI，因此只要适配器暴露 `shader-f16`，Firefox 就会
+走 WebGPU 路径。在 Linux 上搭配 RTX 4090 的 Firefox 156 中，加载 Qwen2.5 0.5B
+会失败：（内置 llama.cpp 中的）ggml-webgpu 会一次性写入模型 145 MB 的嵌入张量，
+而 Firefox 在待上传数据达到约 64 MB 后会丢失 GPU 设备。使用分块上传的测试补丁后，
+模型可以在 WebGPU 上运行，但解码速度只有约每秒 1 个 token。上传问题应在上游
+llama.cpp 中修复。在此之前，请将 Linux 上的 Firefox WebGPU 视为实验性功能：
+`auto` 加载应会在 CPU 上重试（尚未在该配置上验证），而 `backend: 'cpu'` 会完全
+避开 WebGPU。早于 153 的 Firefox 版本无法通过 JSPI 探测，会在 CPU 上运行，
+这已在 Windows 和 macOS 上的 Firefox 152 中测试。
 
 #### Safari 运行时测试结论
 
-无法完成 JSPI 挂起/恢复探测的 Safari 构建会选择 pthread CPU no-JSPI，避免
-启动失败。提供完整 JSPI 实现并通过探测的构建可以选择 WebGPU+JSPI，而不需要
-Safari 专用分支。Safari 仍然需要 `SharedArrayBuffer`、Worker 和 COOP/COEP
-响应头。
+Safari 27 提供 JSPI，因此只要适配器暴露 `shader-f16`，Safari 就会走 WebGPU
+路径。该路径尚未验证。Safari 26 及更早版本无法通过 JSPI 探测，会在 CPU 上运行。
+Safari 仍然需要 `SharedArrayBuffer`、Worker 和 COOP/COEP 响应头。
 
 ---
 
@@ -253,7 +262,7 @@ Safari 专用分支。Safari 仍然需要 `SharedArrayBuffer`、Worker 和 COOP/
 * **Windows Docker Vulkan**：暂不支持。在开启了 WSL2 的 Windows 上请改用 CUDA 或 CPU 配置文件。
 * **macOS Docker**：仅支持 CPU。Linux Docker 容器内无法运行 Metal。
 * **Android 与 iOS**：目前不是首要目标。浏览器 WASM 包可以在移动端 Web 浏览器上运行，但尚未提供原生的 Android 或 iOS 软件包。
-* **Chrome (桌面端)**：主要测试对象。其他桌面端浏览器（Edge、Firefox、Safari、Opera 及 Chromium 衍生版本）尚未测试。
+* **Chrome (桌面端)**：主要测试对象。[已测试的 WebGPU 配置](#已测试的-webgpu-配置)中未列出的浏览器与 GPU 组合均未经验证。
 * **移动端浏览器支持**：尚未测试验证。Android 版 Chrome 是下一个测试目标。
-* **Linux 和 Android 上的 Firefox WebGPU**：活跃开发中 (Nightly / Beta)。macOS Intel 上的 Firefox WebGPU 也在推进中。
+* **Linux 上的 Firefox WebGPU**：实验性功能，模型加载可能因大块 GPU 上传而失败（见 [Firefox 运行时测试结论](#firefox-运行时测试结论)）。Android 上的 Firefox WebGPU 仍处于 Beta / Nightly 阶段，macOS Intel 上的支持也在推进中。
 * **网关**：目前支持 OpenAI、兼容 OpenAI 的提供商以及 Anthropic。后续会继续增加对其他提供商的支持。

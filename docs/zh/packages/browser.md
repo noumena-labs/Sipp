@@ -21,6 +21,8 @@ npm install @sipphq/sipp
 
 在浏览器环境中使用此包。服务器路由或 Node 服务改用 [`@sipphq/sipp-server`](node.md)。浏览器本地 WebGPU/WASM 推理需要在托管服务器上配置 `Cross-Origin-Opener-Policy: same-origin` 与 `Cross-Origin-Embedder-Policy: require-corp` 响应头。
 
+`@sipphq/sipp` 没有任何 npm 依赖：其 WASM 运行时随包一同发布。GGUF 模型需要另行下载，GPU 推理则取决于浏览器和 GPU（参见[设备支持](../reference/device-support.md)）。
+
 ## 适用场景
 
 - 浏览器本地执行文本和视觉模型推理。
