@@ -114,15 +114,25 @@ Sipp ships pthread WASM runtime artifacts by default:
 
 > ⁷ Defaults to `min(4, navigator.hardwareConcurrency)`. Override with `runtime.context.n_threads` in model load options.
 
-The Worker selects the bundled artifact after a functional JSPI probe that
-instantiates a small module and verifies an actual suspend/resume cycle. A
-successful probe selects WebGPU+JSPI; a missing, incomplete, or failing JSPI
-implementation selects the CPU non-JSPI artifact. Selection does not depend on
-the browser user agent or the presence of one WebAssembly property. Explicit
-runtime URLs are forwarded to the Worker unchanged and bypass bundled artifact
-selection. Selecting the bundled CPU artifact is a hard backend constraint:
-`backend: 'webgpu'` is rejected before model activation. The bundled runtime
-requires pthread availability. When `runtime.context.n_ctx` is omitted, browser
+The Worker resolves the load's `backend` before it picks the bundled artifact.
+WebGPU is used only when a functional JSPI probe passes (it instantiates a small
+module and verifies an actual suspend/resume cycle) and the WebGPU adapter
+supports `shader-f16`. Every other load, including `backend: 'cpu'`, uses the
+CPU non-JSPI artifact, so a CPU session never creates a WebGPU device. Selection
+does not depend on the browser user agent or the presence of one WebAssembly
+property.
+
+- `auto` uses WebGPU when both checks pass, and the CPU otherwise.
+- `webgpu` is rejected with `UNSUPPORTED_OPERATION` before model activation
+  when either check fails. A WebGPU load whose runtime registers no WebGPU
+  device also fails instead of running on CPU.
+- After a load, `client.state().backend.selected` reports the resolved backend
+  (`unknown` before the first load), and `backend.available` uses the same
+  lowercase names.
+
+Explicit runtime URLs are forwarded to the Worker unchanged and bypass bundled
+artifact selection; Sipp runs them as given for every backend. The bundled
+runtime requires pthread availability. When `runtime.context.n_ctx` is omitted, browser
 CPU activation uses the smaller of 4096 and the model's trained context capacity
 when that metadata is available, or 4096 when it is not. This keeps large
 contexts from exhausting Wasm memory without inflating known smaller models:

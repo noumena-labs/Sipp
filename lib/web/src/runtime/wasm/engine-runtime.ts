@@ -47,7 +47,7 @@ import { hasSamplingRuntimeOverrideFields } from '../../engine/inference-types.j
 import {
   resolveRuntimeThreadingMode,
   resolveRuntimeUrls,
-  type RuntimeBackendConstraint,
+  type ResolvedBrowserBackend,
   type WasmThreadingMode,
 } from '../../engine/runtime-assets.js';
 import { RuntimePairingValidationError } from '../../models/types.js';
@@ -175,7 +175,7 @@ const DEFAULT_WASM_TRANSPORT_OBSERVABILITY: TransportObservability = {
 };
 
 interface WasmEngineRuntimeOptions {
-  readonly backendConstraint?: RuntimeBackendConstraint | null;
+  readonly backend?: ResolvedBrowserBackend;
 }
 
 function asErrorMessage(error: unknown): string {
@@ -199,7 +199,7 @@ function verifyRustBrowserEngineAbi(bridge: WasmBridge): number {
 
 /** Worker-owned Wasm runtime for one browser model session. */
 export class WasmEngineRuntime implements EngineRuntime {
-  public readonly backendConstraint: RuntimeBackendConstraint | null;
+  public readonly backend: ResolvedBrowserBackend;
   private module: EngineModule | null = null;
   private wasmBridge: WasmBridge | null = null;
   private initPromise: Promise<void> | null = null;
@@ -225,7 +225,7 @@ export class WasmEngineRuntime implements EngineRuntime {
     private readonly config: SippClientOptions = {},
     options: WasmEngineRuntimeOptions = {}
   ) {
-    this.backendConstraint = options.backendConstraint ?? null;
+    this.backend = options.backend ?? { backend: 'cpu', webgpuAdapter: null };
     this.transportObservability = this.createTransportObservability();
     this.modelLoader = new WasmModelLoader(this.config);
     this.scheduler = new QueuedRequestScheduler({

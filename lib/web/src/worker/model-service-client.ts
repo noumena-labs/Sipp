@@ -29,6 +29,7 @@ import {
   type ModelLoadOptions,
   type EmbedOptions,
   type AudioResult,
+  type BrowserBackendPreference,
   type EmbeddingResult,
   type GenerationResult,
   type ListenOptions,
@@ -197,7 +198,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.assertOpen();
     return await this.lifecycleOperations.run(async () => {
       await this.retireWorker();
-      const instance = this.ensureWorker();
+      const instance = this.ensureWorker(options.backend);
       try {
         const result = (await this.callWorkerOn(
           instance,
@@ -205,7 +206,6 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
             kind: 'models-load',
             modelId,
             options: {
-              backend: options.backend,
               observability: options.observability,
               runtime: options.runtime,
             },
@@ -544,7 +544,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     this.streamStatsByCallId.delete(callId);
   }
 
-  private ensureWorker(): WorkerInstance {
+  private ensureWorker(backend?: BrowserBackendPreference): WorkerInstance {
     if (this.worker != null) {
       return this.worker;
     }
@@ -581,7 +581,10 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
     // Configure the Worker before any operational request. Messages are
     // delivered in order, so every later request observes this service.
     try {
-      worker.postMessage({ kind: 'initialize', config } satisfies WorkerRequestMessage);
+      worker.postMessage({
+        kind: 'initialize',
+        config: { ...config, ...(backend == null ? {} : { backend }) },
+      } satisfies WorkerRequestMessage);
     } catch (error) {
       // An unconfigurable Worker must not stay installed.
       this.destroyWorker(instance, error);

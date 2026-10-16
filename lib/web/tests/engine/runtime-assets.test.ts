@@ -8,7 +8,13 @@ import {
   resolveRuntimeUrls,
   supportsWasmPthreads,
 } from '../../src/engine/runtime-assets.js';
-import { withWasmPthreadSupport } from '../support/browser-env.js';
+import { QueryError } from '../../src/models/types.js';
+import { withNavigatorGpu, withWasmPthreadSupport } from '../support/browser-env.js';
+
+const F16_ADAPTER = async () => ({ features: { has: (feature: string) => feature === 'shader-f16' } });
+const NO_F16_ADAPTER = async () => ({ features: { has: () => false } });
+const WEBGPU_BACKEND = { backend: 'webgpu', webgpuAdapter: null };
+const CPU_BACKEND = { backend: 'cpu', webgpuAdapter: null };
 
 interface LocationStub {
   href: string;
@@ -52,13 +58,13 @@ function withLocation<T>(href: string | undefined, callback: () => T): T {
 }
 
 test('resolveRuntimeAssetSelection uses bundled runtime assets after probing', async () => {
-  await withWasmPthreadSupport(async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(F16_ADAPTER, async () => {
     const resolved = await withLocation(undefined, () =>
       resolveRuntimeAssetSelection({}, { probeWasmJspi: async () => true })
     );
     assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
-    assert.equal(resolved.backendConstraint, null);
-  });
+    assert.deepEqual(resolved.backend, WEBGPU_BACKEND);
+  }));
 });
 
 test('resolveRuntimeUrls accepts root-relative bundled runtime assets', () => {
@@ -85,7 +91,7 @@ test('resolveRuntimeUrls accepts root-relative bundled runtime assets', () => {
 });
 
 test('bundled selection maps Vite optimized deps back to package wasm assets', async () => {
-  await withWasmPthreadSupport(async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(F16_ADAPTER, async () => {
     assert.deepEqual(
       await resolveRuntimeAssetSelection({}, {
         importerUrl: 'https://app.test/node_modules/.vite/deps/@noumena-labs_sipp.js?v=123',
@@ -95,14 +101,14 @@ test('bundled selection maps Vite optimized deps back to package wasm assets', a
         moduleUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm-pthread.js',
         wasmUrl: 'https://app.test/node_modules/@noumena-labs/sipp/dist/wasm/sipp-wasm-pthread.wasm',
         threading: 'pthread',
-        backendConstraint: null,
+        backend: WEBGPU_BACKEND,
       }
     );
-  });
+  }));
 });
 
 test('bundled selection maps public Vite optimized deps back to package wasm assets', async () => {
-  await withWasmPthreadSupport(async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(F16_ADAPTER, async () => {
     assert.deepEqual(
       await resolveRuntimeAssetSelection({}, {
         importerUrl: 'https://app.test/node_modules/.vite/deps/@sipphq_sipp.js?v=123',
@@ -112,10 +118,10 @@ test('bundled selection maps public Vite optimized deps back to package wasm ass
         moduleUrl: 'https://app.test/node_modules/@sipphq/sipp/dist/wasm/sipp-wasm-pthread.js',
         wasmUrl: 'https://app.test/node_modules/@sipphq/sipp/dist/wasm/sipp-wasm-pthread.wasm',
         threading: 'pthread',
-        backendConstraint: null,
+        backend: WEBGPU_BACKEND,
       }
     );
-  });
+  }));
 });
 
 test('resolveOptimizedPackageAssetUrl returns null for normal module URLs', () => {
@@ -149,7 +155,7 @@ test('resolveOptimizedPackageAssetUrl preserves a Vite dev base path', () => {
 });
 
 test('resolveRuntimeAssetSelection defaults to the pthread artifact when JSPI works', async () => {
-  await withWasmPthreadSupport(async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(F16_ADAPTER, async () => {
     assert.equal(supportsWasmPthreads(), true);
     assert.equal(resolveRuntimeThreadingMode({}), 'pthread');
     const resolved = await resolveRuntimeAssetSelection(
@@ -159,7 +165,7 @@ test('resolveRuntimeAssetSelection defaults to the pthread artifact when JSPI wo
     assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
     assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
     assert.equal(resolved.threading, 'pthread');
-  });
+  }));
 });
 
 test('resolveRuntimeAssetSelection rejects bundled runtimes without wasm pthread support', async () => {
@@ -170,7 +176,7 @@ test('resolveRuntimeAssetSelection rejects bundled runtimes without wasm pthread
 });
 
 test('resolveRuntimeAssetSelection selects the pthread artifact when explicitly requested', async () => {
-  await withWasmPthreadSupport(async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(F16_ADAPTER, async () => {
     assert.equal(resolveRuntimeThreadingMode({ wasmThreading: 'pthread' }), 'pthread');
     const resolved = await resolveRuntimeAssetSelection(
       { wasmThreading: 'pthread' },
@@ -179,7 +185,7 @@ test('resolveRuntimeAssetSelection selects the pthread artifact when explicitly 
     assert.match(resolved.moduleUrl, /sipp-wasm-pthread\.js$/);
     assert.match(resolved.wasmUrl, /sipp-wasm-pthread\.wasm$/);
     assert.equal(resolved.threading, 'pthread');
-  });
+  }));
 });
 
 test('resolveRuntimeAssetSelection falls back to CPU when functional JSPI fails', async () => {
@@ -191,7 +197,7 @@ test('resolveRuntimeAssetSelection falls back to CPU when functional JSPI fails'
     assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
     assert.match(resolved.wasmUrl, /sipp-wasm-pthread-cpu-nojspi\.wasm$/);
     assert.equal(resolved.threading, 'pthread');
-    assert.equal(resolved.backendConstraint, 'cpu-only');
+    assert.deepEqual(resolved.backend, CPU_BACKEND);
   });
 });
 
@@ -203,8 +209,78 @@ test('resolveRuntimeAssetSelection treats a throwing JSPI probe as unsupported',
     );
 
     assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
-    assert.equal(resolved.backendConstraint, 'cpu-only');
+    assert.deepEqual(resolved.backend, CPU_BACKEND);
   });
+});
+
+test('resolveRuntimeAssetSelection selects the CPU artifact for explicit cpu without requesting an adapter', async () => {
+  let adapterRequests = 0;
+  await withWasmPthreadSupport(() => withNavigatorGpu(async () => {
+    adapterRequests += 1;
+    return await F16_ADAPTER();
+  }, async () => {
+    const resolved = await resolveRuntimeAssetSelection(
+      { backend: 'cpu' },
+      { probeWasmJspi: async () => true }
+    );
+
+    assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
+    assert.deepEqual(resolved.backend, CPU_BACKEND);
+  }));
+  assert.equal(adapterRequests, 0);
+});
+
+test('resolveRuntimeAssetSelection selects the CPU artifact for auto without shader-f16', async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(NO_F16_ADAPTER, async () => {
+    const resolved = await resolveRuntimeAssetSelection(
+      { backend: 'auto' },
+      { probeWasmJspi: async () => true }
+    );
+
+    assert.match(resolved.moduleUrl, /sipp-wasm-pthread-cpu-nojspi\.js$/);
+    assert.deepEqual(resolved.backend, CPU_BACKEND);
+  }));
+});
+
+test('resolveRuntimeAssetSelection rejects explicit webgpu without shader-f16', async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(NO_F16_ADAPTER, async () => {
+    await assert.rejects(
+      resolveRuntimeAssetSelection({ backend: 'webgpu' }, { probeWasmJspi: async () => true }),
+      (error) =>
+        error instanceof QueryError &&
+        error.code === 'UNSUPPORTED_OPERATION' &&
+        error.message.includes('"shader-f16"')
+    );
+  }));
+});
+
+test('resolveRuntimeAssetSelection rejects explicit webgpu without a WebGPU adapter', async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(async () => null, async () => {
+    await assert.rejects(
+      resolveRuntimeAssetSelection({ backend: 'webgpu' }, { probeWasmJspi: async () => true }),
+      (error) =>
+        error instanceof QueryError &&
+        error.code === 'UNSUPPORTED_OPERATION' &&
+        error.message.includes('no WebGPU adapter')
+    );
+  }));
+});
+
+test('resolveRuntimeAssetSelection rejects explicit webgpu when functional JSPI fails', async () => {
+  let adapterRequests = 0;
+  await withWasmPthreadSupport(() => withNavigatorGpu(async () => {
+    adapterRequests += 1;
+    return await F16_ADAPTER();
+  }, async () => {
+    await assert.rejects(
+      resolveRuntimeAssetSelection({ backend: 'webgpu' }, { probeWasmJspi: async () => false }),
+      (error) =>
+        error instanceof QueryError &&
+        error.code === 'UNSUPPORTED_OPERATION' &&
+        error.message.includes('did not pass the JSPI suspend/resume probe')
+    );
+  }));
+  assert.equal(adapterRequests, 0);
 });
 
 test('memoizeWasmJspiProbe executes its functional probe once', async () => {
@@ -219,7 +295,7 @@ test('memoizeWasmJspiProbe executes its functional probe once', async () => {
 });
 
 test('resolveRuntimeAssetSelection does not force CPU for custom runtime URLs', async () => {
-  await withWasmPthreadSupport(async () => {
+  await withWasmPthreadSupport(() => withNavigatorGpu(F16_ADAPTER, async () => {
     assert.deepEqual(
       await resolveRuntimeAssetSelection({
           wasmThreading: 'pthread',
@@ -230,10 +306,10 @@ test('resolveRuntimeAssetSelection does not force CPU for custom runtime URLs', 
           moduleUrl: 'https://app.test/custom.js',
           wasmUrl: 'https://app.test/custom.wasm',
           threading: 'pthread',
-          backendConstraint: null,
+          backend: WEBGPU_BACKEND,
         }
     );
-  });
+  }));
 });
 
 test('resolveRuntimeUrls rejects bundled single-thread runtime preference', () => {

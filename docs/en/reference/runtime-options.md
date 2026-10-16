@@ -87,10 +87,13 @@ Browser `backend` accepts `auto`, `cpu`, or `webgpu`. Native package backend
 selection is package-specific: Node.js uses `SIPP_NODE_BACKEND`, Python
 uses `SIPP_PYTHON_BACKEND`, and the CLI uses `--backend`.
 
-If the browser fails the functional JSPI suspend/resume probe, Sipp selects its
-bundled CPU-only runtime. That runtime accepts `auto` and `cpu` but rejects
-`webgpu` with `UNSUPPORTED_OPERATION`. Custom `moduleUrl` and `wasmUrl` assets
-bypass bundled selection, so Sipp does not infer their compiled backends.
+Browser WebGPU requires a browser that passes the functional JSPI
+suspend/resume probe and a WebGPU adapter with the `shader-f16` feature.
+Without both, `webgpu` is rejected with `UNSUPPORTED_OPERATION` and `auto` uses
+the CPU. CPU loads run on Sipp's bundled CPU-only runtime, which never
+initializes WebGPU. Custom `moduleUrl` and `wasmUrl` assets bypass bundled
+selection and serve every backend, so Sipp does not infer their compiled
+backends.
 When `runtime.context.n_ctx` is omitted, browser CPU activation uses the smaller
 of 4096 and the model's trained context capacity when that metadata is available,
 or 4096 when it is not. This bounds large Wasm KV caches without inflating models

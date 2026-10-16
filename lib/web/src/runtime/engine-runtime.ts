@@ -26,7 +26,7 @@ import type {
   RustLifecycleBridge,
 } from '../wasm/wasm-bridge.js';
 import type {
-  RuntimeBackendConstraint,
+  ResolvedBrowserBackend,
   WasmThreadingMode,
 } from '../engine/runtime-assets.js';
 
@@ -49,7 +49,8 @@ export interface RuntimeActivationResult<TCommit> {
 }
 
 export interface EngineRuntime {
-  readonly backendConstraint: RuntimeBackendConstraint | null;
+  /** Backend this runtime was selected for; fixed for its lifetime. */
+  readonly backend: ResolvedBrowserBackend;
   getWasmThreadingMode(): WasmThreadingMode;
   getTransportObservability(): TransportObservability;
   initModule(): Promise<void>;

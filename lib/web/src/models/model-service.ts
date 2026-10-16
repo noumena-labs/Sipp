@@ -34,7 +34,6 @@ import {
   QueryError,
   type AssetRecord,
   type AudioResult,
-  type BrowserBackendPreference,
   type CatalogModelInfo,
   type CatalogObservabilityEvent,
   type ChatInput,
@@ -64,7 +63,6 @@ import {
   type RuntimeSessionDescriptor,
   type RuntimeSessionSnapshot,
   type SpeakOptions,
-  type WebGpuAdapterInfo,
 } from './types.js';
 import {
   audioResultFromGenerateResponse,
@@ -77,10 +75,7 @@ import {
   toBackendProfileObservation,
   toRuntimeObservation,
 } from './observability-controller.js';
-import type {
-  RuntimeBackendConstraint,
-  WasmThreadingMode,
-} from '../engine/runtime-assets.js';
+import type { WasmThreadingMode } from '../engine/runtime-assets.js';
 
 interface InstalledAsset {
   record: AssetRecord;
@@ -122,80 +117,8 @@ function validateSpeechLanguage(operation: string, language: string | undefined)
   }
 }
 
-type NavigatorWithGpu = Navigator & {
-  gpu?: {
-    requestAdapter(): Promise<NavigatorGpuAdapter | null>;
-  };
-};
-type NavigatorGpuAdapter = {
-  readonly features?: {
-    has(feature: string): boolean;
-  };
-  readonly info?: Partial<WebGpuAdapterInfo> | null;
-  requestAdapterInfo?: () => Promise<Partial<WebGpuAdapterInfo> | null>;
-};
-
-interface ResolvedBrowserBackend {
-  backend: Exclude<BrowserBackendPreference, 'auto'>;
-  webgpuAdapter: WebGpuAdapterInfo | null;
-}
-
 function isFile(value: unknown): value is File {
   return typeof File !== 'undefined' && value instanceof File;
-}
-
-async function resolveBrowserBackend(
-  backend: BrowserBackendPreference | undefined,
-  constraint: RuntimeBackendConstraint | null
-): Promise<ResolvedBrowserBackend> {
-  const requestedBackend = backend === 'auto' ? undefined : backend;
-  if (constraint === 'cpu-only') {
-    if (requestedBackend === 'webgpu') {
-      throw new QueryError(
-        'UNSUPPORTED_OPERATION',
-        'The active browser runtime is CPU-only because this browser did not pass the JSPI ' +
-          'suspend/resume probe. Remove backend: "webgpu", or supply WebGPU-capable ' +
-          'moduleUrl and wasmUrl assets.'
-      );
-    }
-    return { backend: 'cpu', webgpuAdapter: null };
-  }
-  if (requestedBackend === 'cpu') {
-    return { backend: requestedBackend, webgpuAdapter: null };
-  }
-  const gpu = (globalThis.navigator as NavigatorWithGpu | undefined)?.gpu;
-  const adapter = gpu == null ? null : await gpu.requestAdapter();
-  if (requestedBackend === 'webgpu') {
-    return { backend: requestedBackend, webgpuAdapter: await readWebGpuAdapterInfo(adapter) };
-  }
-  if (adapter?.features?.has('shader-f16') !== true) {
-    return { backend: 'cpu', webgpuAdapter: null };
-  }
-  return { backend: 'webgpu', webgpuAdapter: await readWebGpuAdapterInfo(adapter) };
-}
-
-/**
- * Read the adapter identity in the scope that runs the engine. The wasm
- * backend requests its adapter from this same scope, so this mirrors the GPU
- * inference actually executes on (decisive on hybrid-GPU machines, where the
- * browser, not the app, picks the physical GPU).
- */
-async function readWebGpuAdapterInfo(
-  adapter: NavigatorGpuAdapter | null
-): Promise<WebGpuAdapterInfo | null> {
-  if (adapter == null) {
-    return null;
-  }
-  const info = adapter.info ?? (await adapter.requestAdapterInfo?.()) ?? null;
-  if (info == null) {
-    return null;
-  }
-  return {
-    vendor: info.vendor ?? '',
-    architecture: info.architecture ?? '',
-    device: info.device ?? '',
-    description: info.description ?? '',
-  };
 }
 
 function hostSleep(delayMs: number): Promise<void> {
@@ -861,13 +784,9 @@ export class ModelService {
     };
     const observabilityMode = options.observability ?? 'off';
     const manifest = await this.registry.read();
-    const rustPromise = this.getRustLifecycle(manifest);
+    const resolvedRust = await this.getRustLifecycle(manifest);
     const wasmThreading = this.runtime.getWasmThreadingMode();
-    const backendPromise = resolveBrowserBackend(
-      options.backend,
-      this.runtime.backendConstraint
-    );
-    const [resolvedRust, resolvedBackend] = await Promise.all([rustPromise, backendPromise]);
+    const resolvedBackend = this.runtime.backend;
     const runtimeConfig = applyBrowserRuntimeDefaults(options.runtime, wasmThreading);
     const rustOptions = {
       backend: resolvedBackend.backend,
@@ -914,9 +833,19 @@ export class ModelService {
           report.runtimeObservability,
           this.runtime.getTransportObservability()
         );
+        // Explicit or auto-selected WebGPU must never silently run on CPU.
+        if (
+          resolvedBackend.backend === 'webgpu' &&
+          report.backendObservability?.webgpuDeviceCount === 0
+        ) {
+          throw new QueryError(
+            'UNSUPPORTED_OPERATION',
+            'WebGPU was selected, but the runtime registered no WebGPU device.'
+          );
+        }
         const profile = toBackendProfileObservation(
           report.backendObservability,
-          resolvedBackend.webgpuAdapter
+          resolvedBackend
         );
         const committed = await resolvedRust.commitLoad({
           loadId: prepared.loadId,

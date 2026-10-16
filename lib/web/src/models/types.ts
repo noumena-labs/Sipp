@@ -303,6 +303,8 @@ export interface RuntimeObservation {
 }
 
 export interface BackendProfileObservation {
+  /** Backend the load resolved to before activation; authoritative. */
+  selected?: EngineBackendName;
   profilingEnabled: boolean;
   webgpuCompiled: boolean;
   webgpuRegistered: boolean;
@@ -341,7 +343,7 @@ export type FinishReason = 'stop' | 'length' | 'cancelled' | 'error';
 
 export interface BackendInfo {
   selected: EngineBackendName;
-  available: string[];
+  available: EngineBackendName[];
   adapter: WebGpuAdapterInfo | null;
   devices: Array<{
     id: string | null;

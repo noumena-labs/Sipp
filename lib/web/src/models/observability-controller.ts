@@ -4,6 +4,7 @@ import type {
   RequestObservabilityMetrics,
   TransportObservability,
 } from '../engine/inference-types.js';
+import type { ResolvedBrowserBackend } from '../engine/runtime-assets.js';
 import type {
   AudioResult,
   BackendInfo,
@@ -23,7 +24,6 @@ import type {
   RequestState,
   RequestStats,
   RuntimeObservation,
-  WebGpuAdapterInfo,
 } from './types.js';
 
 const emptyStats: EngineStats = {
@@ -157,12 +157,14 @@ export function toRuntimeObservation(
 
 export function toBackendProfileObservation(
   backend: BackendObservability | null,
-  webgpuAdapter: WebGpuAdapterInfo | null = null
+  resolved: ResolvedBrowserBackend
 ): BackendProfileObservation | undefined {
   if (backend == null) {
     return undefined;
   }
+  const { webgpuAdapter } = resolved;
   return {
+    selected: resolved.backend,
     profilingEnabled: backend.profilingEnabled,
     webgpuCompiled: backend.webgpuCompiled,
     webgpuRegistered: backend.webgpuRegistered,
@@ -334,8 +336,11 @@ function toBackendInfo(profile: BackendProfileObservation | undefined): BackendI
   }
 
   return {
-    selected: selectBackend(profile),
-    available: profile.availableBackends.map((backend) => backend.name),
+    // Profiles persisted before `selected` existed report it as unknown.
+    selected: profile.selected ?? 'unknown',
+    available: [
+      ...new Set(profile.availableBackends.map((backend) => normalizeBackendName(backend.name))),
+    ],
     adapter: profile.webgpuAdapter == null ? null : { ...profile.webgpuAdapter },
     devices: profile.devices.map((device) => ({
       id: null,
@@ -347,18 +352,8 @@ function toBackendInfo(profile: BackendProfileObservation | undefined): BackendI
   };
 }
 
-function selectBackend(profile: BackendProfileObservation): EngineBackendName {
-  if (profile.webgpuRegistered && profile.webgpuDeviceCount > 0 && profile.gpuOffloadSupported) {
-    return 'webgpu';
-  }
-
-  const acceleratedDevice = profile.devices.find((device) => device.type !== 'cpu');
-  const backendName = acceleratedDevice?.backendName ?? profile.availableBackends.at(0)?.name;
-  return normalizeBackendName(backendName);
-}
-
-function normalizeBackendName(name: string | undefined): EngineBackendName {
-  const normalized = name?.toLowerCase() ?? '';
+function normalizeBackendName(name: string): EngineBackendName {
+  const normalized = name.toLowerCase();
   if (normalized.includes('cuda')) return 'cuda';
   if (normalized.includes('metal')) return 'metal';
   if (normalized.includes('vulkan')) return 'vulkan';
