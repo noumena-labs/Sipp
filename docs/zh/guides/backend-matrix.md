@@ -15,7 +15,7 @@ ggml 运算级别的兼容矩阵参考上游的 [llama.cpp GGML 运算表](https
 | --- | --- | --- | --- |
 | `cpu` | 主机 CPU | 浏览器、Node.js、Python、Rust/源码、CLI、网关服务 | 移植性最好的默认后端。原生构建用 ggml CPU；浏览器构建用 WASM CPU。 |
 | `webgpu` | 浏览器 GPU | Browser 包 | 仅限浏览器，通过 `options.backend` 激活。需要浏览器及其底层系统支持 WebGPU。 |
-| `cuda` | NVIDIA GPU | 原生构建、Node.js、Python、CLI、网关服务 | 需本地安装 CUDA Toolkit 和对应 NVIDIA 驱动。xtask 检测状态但不安装 CUDA。 |
+| `cuda` | NVIDIA GPU | 原生构建、Node.js、Python、CLI、网关服务 | 需要 580 或更新版本的 NVIDIA 驱动。Node.js 和 Python 包会提供 CUDA 13 库；源码构建需要 CUDA 13 Toolkit。xtask 检测状态但不安装 CUDA。 |
 | `metal` | Apple GPU | macOS 原生构建、Node.js、Python、CLI、网关服务 | 仅限 macOS 原生环境。适合 Apple Silicon 和已测试的 AMD Mac；Intel 集成显卡建议使用 CPU。 |
 | `vulkan` | 兼容 Vulkan 的 GPU | 原生构建、Node.js、Python、CLI、网关服务 | 需系统和驱动支持。xtask 会在编译时按需准备 Vulkan SDK。macOS Vulkan 仅建议源码构建测试，本质上通过 Metal 翻译层运行。 |
 

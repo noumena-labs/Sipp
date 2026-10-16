@@ -22,7 +22,7 @@ truth for per-operation support.
 | --- | --- | --- | --- |
 | `cpu` | Host CPU | Browser, Node.js, Python, Rust/source, CLI, gateway server | Portable default. Native builds use ggml CPU; browser builds use WASM CPU with the browser runtime. |
 | `webgpu` | Browser GPU through WebGPU | Browser package | Browser-only. Selected with browser local endpoint `options.backend`; requires a WebGPU-capable browser and adapter. |
-| `cuda` | NVIDIA GPU | Native source builds, Node.js, Python, CLI, gateway server | Requires a local CUDA Toolkit and compatible NVIDIA driver. xtask reports CUDA readiness but does not install CUDA. |
+| `cuda` | NVIDIA GPU | Native source builds, Node.js, Python, CLI, gateway server | Needs an NVIDIA driver 580 or newer. The Node.js and Python packages provide the CUDA 13 libraries; source builds need the CUDA 13 Toolkit. xtask reports CUDA readiness but does not install CUDA. |
 | `metal` | Apple GPU through Metal | Native source builds, Node.js, Python, CLI, gateway server on macOS | macOS-only native backend. Best for Apple Silicon and tested AMD Macs; use CPU on Intel integrated GPUs. |
 | `vulkan` | GPU through Vulkan | Native source builds, Node.js, Python, CLI, gateway server | Requires a Vulkan-capable system and driver. xtask can bootstrap the Vulkan SDK for builds. macOS Vulkan is source-build only and runs through a Metal translation layer. |
 

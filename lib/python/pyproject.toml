@@ -22,6 +22,14 @@ all = [
 [dependency-groups]
 dev = ["maturin>=1.5,<2", "pytest>=8,<9", "pytest-cov>=7,<8"]
 
+[tool.uv]
+# Lock CUDA wheels that exist for both CUDA package platforms; some NVIDIA
+# releases publish Linux wheels only.
+required-environments = [
+  "sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
 [tool.uv.sources]
 sipppy-backend-cuda = { path = "backends/cuda" }
 sipppy-backend-vulkan = { path = "backends/vulkan" }

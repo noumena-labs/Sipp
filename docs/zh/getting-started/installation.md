@@ -40,8 +40,8 @@ npm run dev
 - Node 安装使用 `@sipphq/sipp-server`，npm 会自动解析匹配的平台二进制包。Python
   CPU 包使用 `sipppy`，CUDA、Vulkan、Metal 后端通过 `sipppy[cuda]`、
   `sipppy[vulkan]`、`sipppy[metal]` 等 PyPI extras 拉取匹配的
-  `sipppy-backend-*` 分发包；GPU 后端还需要主机驱动和运行时（见
-  [Python 包](../packages/python.md)）。Python 代码仍然导入 `sipp`。
+  `sipppy-backend-*` 分发包；GPU 后端还需要主机 GPU 驱动（见
+  [Node.js 包](../packages/node.md)和 [Python 包](../packages/python.md)）。Python 代码仍然导入 `sipp`。
   如需强制指定 `cpu`、`vulkan`、`cuda` 或 `metal`，设置环境变量
   `SIPP_NODE_BACKEND` 或 `SIPP_PYTHON_BACKEND`。
 - 网关客户端只需要网关基础 URL、公共目标名称和应用专属的认证凭据。

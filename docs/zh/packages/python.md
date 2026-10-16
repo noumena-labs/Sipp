@@ -24,8 +24,9 @@ pip install "sipppy[metal]"   # macOS
 `sipppy` Wheel 以及同版本的 `sipppy-backend-vulkan` Wheel。Python
 代码仍然使用 `from sipp import ...`。
 
-GPU Wheel 不包含主机驱动和运行时。CUDA 后端需要主机安装 NVIDIA 驱动和
-CUDA 13 运行时库；Vulkan 后端需要 Vulkan Loader 和 GPU 驱动。
+`sipppy[cuda]` 还会从 PyPI 安装 NVIDIA 的 CUDA 13 库（`nvidia-cublas`，Linux 上
+另加 `nvidia-cuda-runtime`），因此 CUDA 后端只需要主机安装 580 或更新版本的
+NVIDIA 驱动。Vulkan 后端需要 Vulkan Loader 和 GPU 驱动。
 
 ## 适用场景
 
