@@ -1,9 +1,12 @@
 import type { SippClientOptions } from '../engine/browser-client.js';
-import { resolveOptimizedPackageAssetUrl } from '../engine/runtime-assets.js';
+import {
+  resolveOptimizedPackageAssetUrl,
+  type ResolvedBrowserBackend,
+} from '../engine/runtime-assets.js';
 import { ObservabilityController } from '../models/observability-controller.js';
 import { observabilitySnapshotToEngineState } from '../models/observability-controller.js';
 import { SharedTokenRingReader } from '../runtime/shared-token-ring.js';
-import { createAbortError } from '../utils/abort.js';
+import { createAbortError, isAbortError } from '../utils/abort.js';
 import { AsyncSerialQueue } from '../utils/async-queue.js';
 import {
   hostTaskScheduler,
@@ -66,6 +69,8 @@ interface WorkerInstance {
   readonly worker: Worker;
   readonly incarnation: number;
   acceptPresentation: boolean;
+  /** Backend the Worker resolved, once it reports it. */
+  backend: ResolvedBrowserBackend['backend'] | null;
 }
 
 /** @internal Test seams. Not part of the public client surface. */
@@ -200,29 +205,67 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       await this.retireWorker();
       const instance = this.ensureWorker(options.backend);
       try {
-        const result = (await this.callWorkerOn(
-          instance,
-          {
-            kind: 'models-load',
-            modelId,
-            options: {
-              observability: options.observability,
-              runtime: options.runtime,
-            },
-          },
-          {
-            signal: options.signal,
-            onProgress: options.onProgress,
-          }
-        )) as ModelInfo;
-        this.activeRuntimeIncarnation = instance.incarnation;
-        this.currentSnapshot = result;
-        return result;
+        return await this.loadOnWorker(instance, modelId, options);
       } catch (error) {
-        this.destroyWorker(instance, error);
-        throw error;
+        // An automatic WebGPU choice whose runtime failed retries once on a
+        // CPU Worker. Request, model, storage, and cancellation failures
+        // surface as QueryError or AbortError and would fail on CPU too.
+        const recoverable =
+          (options.backend ?? 'auto') === 'auto' &&
+          instance.backend === 'webgpu' &&
+          !(error instanceof QueryError) &&
+          !isAbortError(error);
+        if (!recoverable) {
+          throw error;
+        }
+        const webgpuMessage = error instanceof Error ? error.message : String(error);
+        this.emitEngineEvent({
+          type: 'fallback-warning',
+          kind: 'backend',
+          detail: `WebGPU model load failed; retrying on the CPU: ${webgpuMessage}`,
+          fallbackTo: 'cpu',
+        });
+        // loadOnWorker already destroyed the failed Worker.
+        try {
+          return await this.loadOnWorker(this.ensureWorker('cpu'), modelId, options);
+        } catch (cpuError) {
+          throw new AggregateError(
+            [error, cpuError],
+            'Model load failed on WebGPU and on the CPU fallback.'
+          );
+        }
       }
     });
+  }
+
+  private async loadOnWorker(
+    instance: WorkerInstance,
+    modelId: string,
+    options: ModelLoadOptions
+  ): Promise<ModelInfo> {
+    try {
+      const result = (await this.callWorkerOn(
+        instance,
+        {
+          kind: 'models-load',
+          modelId,
+          options: {
+            observability: options.observability,
+            runtime: options.runtime,
+          },
+        },
+        {
+          signal: options.signal,
+          onProgress: options.onProgress,
+        }
+      )) as ModelInfo;
+      this.activeRuntimeIncarnation = instance.incarnation;
+      this.currentSnapshot = result;
+      return result;
+    } catch (error) {
+      this.destroyWorker(instance, error);
+      throw error;
+    }
   }
 
   public current(): ModelInfo | null {
@@ -562,6 +605,7 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
       worker,
       incarnation: this.nextWorkerIncarnation++,
       acceptPresentation: true,
+      backend: null,
     };
     this.worker = instance;
     worker.onmessage = (event: MessageEvent<WorkerResponseMessage>) => {
@@ -803,6 +847,10 @@ export class WorkerModelServiceClient implements ModelLifecycleService {
 
   private handleWorkerMessage(instance: WorkerInstance, message: WorkerResponseMessage): void {
     if (this.worker !== instance) {
+      return;
+    }
+    if (message.kind === 'backend-resolved') {
+      instance.backend = message.backend;
       return;
     }
     if (message.kind === 'load-progress') {

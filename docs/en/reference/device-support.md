@@ -122,10 +122,14 @@ CPU non-JSPI artifact, so a CPU session never creates a WebGPU device. Selection
 does not depend on the browser user agent or the presence of one WebAssembly
 property.
 
-- `auto` uses WebGPU when both checks pass, and the CPU otherwise.
+- `auto` uses WebGPU when both checks pass, and the CPU otherwise. If the
+  WebGPU runtime then fails to load the model, Sipp retries once on a CPU
+  Worker and emits a `fallback-warning` event with `kind: 'backend'`. Request,
+  model, storage, and cancellation errors are not retried. If the retry also
+  fails, the load rejects with an `AggregateError` holding both causes.
 - `webgpu` is rejected with `UNSUPPORTED_OPERATION` before model activation
-  when either check fails. A WebGPU load whose runtime registers no WebGPU
-  device also fails instead of running on CPU.
+  when either check fails. An explicit `webgpu` load never falls back to the
+  CPU, including when its runtime registers no WebGPU device.
 - After a load, `client.state().backend.selected` reports the resolved backend
   (`unknown` before the first load), and `backend.available` uses the same
   lowercase names.

@@ -1782,8 +1782,8 @@ test('ModelService fails a WebGPU load when the runtime registered no WebGPU dev
   await assert.rejects(
     installAndLoad(service, localSource('webgpu-without-device.gguf')),
     (error) =>
-      error instanceof QueryError &&
-      error.code === 'UNSUPPORTED_OPERATION' &&
+      error instanceof Error &&
+      !(error instanceof QueryError) &&
       error.message.includes('registered no WebGPU device')
   );
   assert.equal(service.current(), null);

@@ -834,14 +834,12 @@ export class ModelService {
           this.runtime.getTransportObservability()
         );
         // Explicit or auto-selected WebGPU must never silently run on CPU.
+        // This is a runtime failure, so an automatic choice retries on CPU.
         if (
           resolvedBackend.backend === 'webgpu' &&
           report.backendObservability?.webgpuDeviceCount === 0
         ) {
-          throw new QueryError(
-            'UNSUPPORTED_OPERATION',
-            'WebGPU was selected, but the runtime registered no WebGPU device.'
-          );
+          throw new Error('WebGPU was selected, but the runtime registered no WebGPU device.');
         }
         const profile = toBackendProfileObservation(
           report.backendObservability,

@@ -420,6 +420,81 @@ function workerRespondList(worker: FakeModelWorker, callId: number): void {
   worker.respond({ kind: 'resolve', callId, value: [] });
 }
 
+/** Fails the Worker's load after it reports its resolved backend. */
+async function failLoad(
+  worker: FakeModelWorker,
+  backend: 'cpu' | 'webgpu',
+  failure: { message: string; queryErrorCode?: 'MODEL_BROKEN' }
+): Promise<void> {
+  const loadMessage = await waitForWorkerMessage(worker, 'models-load');
+  worker.respond({ kind: 'backend-resolved', backend });
+  worker.respond({ kind: 'reject', callId: loadMessage.callId, ...failure });
+}
+
+test('WorkerModelServiceClient retries a failed automatic WebGPU load once on CPU', async () => {
+  await withFakeModelWorker(async () => {
+    const client = createFakeWorkerClient();
+    const events: unknown[] = [];
+    client.subscribeEvents((event) => events.push(event));
+    const load = client.load('model-1');
+
+    await failLoad(await waitForModelWorker(0), 'webgpu', { message: 'device lost' });
+    const cpuWorker = await waitForModelWorker(1);
+    const loadMessage = await waitForWorkerMessage(cpuWorker, 'models-load');
+    const initialize = cpuWorker.posted[0];
+    assert.equal(initialize.kind === 'initialize' ? initialize.config.backend : null, 'cpu');
+    cpuWorker.respond({ kind: 'resolve', callId: loadMessage.callId, value: loadedModel('model-1') });
+
+    assert.equal((await load).id, 'model-1');
+    assert.deepEqual(events, [{
+      type: 'fallback-warning',
+      kind: 'backend',
+      detail: 'WebGPU model load failed; retrying on the CPU: device lost',
+      fallbackTo: 'cpu',
+    }]);
+    await closeClient(client, cpuWorker);
+  });
+});
+
+test('WorkerModelServiceClient reports both causes when the CPU fallback also fails', async () => {
+  await withFakeModelWorker(async () => {
+    const client = createFakeWorkerClient();
+    const load = client.load('model-1', { backend: 'auto' });
+
+    await failLoad(await waitForModelWorker(0), 'webgpu', { message: 'device lost' });
+    await failLoad(await waitForModelWorker(1), 'cpu', { message: 'out of memory' });
+
+    await assert.rejects(load, (error) =>
+      error instanceof AggregateError &&
+      error.errors.map((cause: Error) => cause.message).join() === 'device lost,out of memory'
+    );
+    assert.equal(FakeModelWorker.instances.length, 2);
+  });
+});
+
+test('WorkerModelServiceClient does not retry loads that CPU cannot recover', async () => {
+  const cases = [
+    { name: 'CPU load', backend: 'cpu', failure: { message: 'boom' } },
+    { name: 'explicit WebGPU', backend: 'webgpu', failure: { message: 'boom' } },
+    {
+      name: 'model error',
+      backend: 'webgpu',
+      failure: { message: 'broken', queryErrorCode: 'MODEL_BROKEN' },
+    },
+  ] as const;
+  for (const { name, backend, failure } of cases) {
+    await withFakeModelWorker(async () => {
+      const client = createFakeWorkerClient();
+      const load = client.load('model-1', name === 'explicit WebGPU' ? { backend } : {});
+
+      await failLoad(await waitForModelWorker(0), backend, failure);
+
+      await assert.rejects(load, { message: failure.message }, name);
+      assert.equal(FakeModelWorker.instances.length, 1, name);
+    });
+  }
+});
+
 test('WorkerModelServiceClient contains a throwing token sink and settles the request', async () => {
   await withFakeModelWorker(async () => {
     const tasks = new FakeTaskScheduler();
