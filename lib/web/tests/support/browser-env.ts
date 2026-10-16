@@ -36,3 +36,29 @@ export function withWasmPthreadSupport<T>(callback: () => T): T {
     throw error;
   }
 }
+
+export async function withNavigatorGpu<T>(
+  requestAdapter: () => Promise<{
+    readonly features?: { has(feature: string): boolean };
+  } | null>,
+  callback: () => Promise<T>
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    enumerable: true,
+    value: {
+      ...(globalThis.navigator ?? {}),
+      gpu: { requestAdapter },
+    },
+  });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor == null) {
+      Reflect.deleteProperty(globalThis, 'navigator');
+    } else {
+      Object.defineProperty(globalThis, 'navigator', descriptor);
+    }
+  }
+}

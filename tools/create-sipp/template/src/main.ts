@@ -117,7 +117,9 @@ loadModelBtn.addEventListener('click', async () => {
     sendBtn.disabled = false;
     userInput.focus();
 
-    appendSystemNotice('Model loaded successfully! You can now start chatting.');
+    appendSystemNotice(
+      `Model loaded on ${client.state().backend.selected}. You can now start chatting.`,
+    );
   } catch (err: unknown) {
     console.error('Failed to load model:', err);
     statusBadge.className = 'badge badge-idle';

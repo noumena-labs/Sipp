@@ -1,4 +1,9 @@
 import type { SippClientOptions } from './browser-client.js';
+import {
+  QueryError,
+  type BrowserBackendPreference,
+  type WebGpuAdapterInfo,
+} from '../models/types.js';
 import { currentLocationOrigin, resolveUrl } from '../utils/url.js';
 
 const VITE_OPTIMIZED_DEPS_SEGMENT = '/node_modules/.vite/deps/';
@@ -11,17 +16,17 @@ export interface RuntimeUrls {
   threading: WasmThreadingMode;
 }
 
+/** The backend one Worker runs, resolved once before its runtime is chosen. */
+export interface ResolvedBrowserBackend {
+  readonly backend: Exclude<BrowserBackendPreference, 'auto'>;
+  readonly webgpuAdapter: WebGpuAdapterInfo | null;
+}
+
 export interface RuntimeAssetSelection extends RuntimeUrls {
-  readonly backendConstraint: RuntimeBackendConstraint | null;
+  readonly backend: ResolvedBrowserBackend;
 }
 
 export type WasmThreadingMode = 'single-thread' | 'pthread';
-export type RuntimeBackendConstraint = 'cpu-only';
-
-interface BundledRuntimeAsset {
-  readonly artifactName: string;
-  readonly backendConstraint: RuntimeBackendConstraint | null;
-}
 
 interface RuntimeUrlResolutionOptions {
   readonly bundledRuntimeUrls?: () => RuntimeUrls;
@@ -32,14 +37,23 @@ interface RuntimeAssetSelectionOptions {
   readonly probeWasmJspi?: () => Promise<boolean>;
 }
 
-const DEFAULT_BUNDLED_RUNTIME: BundledRuntimeAsset = {
-  artifactName: 'sipp-wasm-pthread',
-  backendConstraint: null,
+type NavigatorWithGpu = Navigator & {
+  gpu?: {
+    requestAdapter(): Promise<NavigatorGpuAdapter | null>;
+  };
 };
-const CPU_NOJSPI_BUNDLED_RUNTIME: BundledRuntimeAsset = {
-  artifactName: 'sipp-wasm-pthread-cpu-nojspi',
-  backendConstraint: 'cpu-only',
+type NavigatorGpuAdapter = {
+  readonly features?: {
+    has(feature: string): boolean;
+  };
+  readonly info?: Partial<WebGpuAdapterInfo> | null;
+  requestAdapterInfo?: () => Promise<Partial<WebGpuAdapterInfo> | null>;
 };
+
+const DEFAULT_BUNDLED_RUNTIME = 'sipp-wasm-pthread';
+/** Built without WebGPU, so a CPU session never creates a WebGPU device. */
+const CPU_BUNDLED_RUNTIME = 'sipp-wasm-pthread-cpu-nojspi';
+const CPU_RESOLVED_BACKEND: ResolvedBrowserBackend = { backend: 'cpu', webgpuAdapter: null };
 
 const JSPI_PROBE_MODULE = Uint8Array.from([
   0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
@@ -144,7 +158,7 @@ function assertWasmPthreadsSupported(): void {
 }
 
 function bundledRuntimeUrls(
-  runtime: BundledRuntimeAsset,
+  artifactName: string,
   importerUrl: string = import.meta.url
 ): RuntimeUrls {
   const optimizedRuntimeAssetsUrl = resolveOptimizedPackageAssetUrl(
@@ -155,11 +169,11 @@ function bundledRuntimeUrls(
 
   return {
     moduleUrl: new URL(
-      `../../wasm/${runtime.artifactName}.js`,
+      `../../wasm/${artifactName}.js`,
       runtimeAssetsBaseUrl
     ).toString(),
     wasmUrl: new URL(
-      `../../wasm/${runtime.artifactName}.wasm`,
+      `../../wasm/${artifactName}.wasm`,
       runtimeAssetsBaseUrl
     ).toString(),
     threading: 'pthread',
@@ -217,7 +231,11 @@ async function runFunctionalWasmJspiProbe(): Promise<boolean> {
   }
 }
 
-/** Resolves one bundled or explicit runtime choice after the functional probe. */
+/**
+ * Resolves the Worker's backend, then the runtime that runs it. A resolved CPU
+ * backend selects the bundled CPU-only runtime, so CPU sessions never
+ * initialize WebGPU. Explicit `moduleUrl`/`wasmUrl` assets are used as given.
+ */
 export async function resolveRuntimeAssetSelection(
   config: Pick<
     SippClientOptions,
@@ -225,13 +243,13 @@ export async function resolveRuntimeAssetSelection(
     | 'wasmUrl'
     | 'trustedOrigins'
     | 'wasmThreading'
-  >,
+  > & { readonly backend?: BrowserBackendPreference },
   options: RuntimeAssetSelectionOptions = {}
 ): Promise<RuntimeAssetSelection> {
   if (hasRuntimeUrlOverride(config)) {
     return {
       ...resolveRuntimeUrls(config),
-      backendConstraint: null,
+      backend: await resolveBrowserBackend(config.backend, true),
     };
   }
 
@@ -241,14 +259,72 @@ export async function resolveRuntimeAssetSelection(
   } catch {
     supportsJspi = false;
   }
-  const runtime = supportsJspi
-    ? DEFAULT_BUNDLED_RUNTIME
-    : CPU_NOJSPI_BUNDLED_RUNTIME;
+  const backend = await resolveBrowserBackend(config.backend, supportsJspi);
+  const artifactName = backend.backend === 'cpu'
+    ? CPU_BUNDLED_RUNTIME
+    : DEFAULT_BUNDLED_RUNTIME;
   return {
     ...resolveRuntimeUrls(config, {
-      bundledRuntimeUrls: () => bundledRuntimeUrls(runtime, options.importerUrl),
+      bundledRuntimeUrls: () => bundledRuntimeUrls(artifactName, options.importerUrl),
     }),
-    backendConstraint: runtime.backendConstraint,
+    backend,
+  };
+}
+
+/**
+ * Resolves a backend preference against this scope's WebGPU adapter. The
+ * wasm backend requests its adapter from the same scope, so the result
+ * matches the GPU inference runs on. ggml-webgpu registers no device without
+ * `shader-f16`, so both `auto` and `webgpu` require it.
+ */
+async function resolveBrowserBackend(
+  backend: BrowserBackendPreference | undefined,
+  supportsWebGpuRuntime: boolean
+): Promise<ResolvedBrowserBackend> {
+  if (!supportsWebGpuRuntime) {
+    if (backend === 'webgpu') {
+      throw new QueryError(
+        'UNSUPPORTED_OPERATION',
+        'The active browser runtime is CPU-only because this browser did not pass the JSPI ' +
+          'suspend/resume probe. Remove backend: "webgpu", or supply WebGPU-capable ' +
+          'moduleUrl and wasmUrl assets.'
+      );
+    }
+    return CPU_RESOLVED_BACKEND;
+  }
+  if (backend === 'cpu') {
+    return CPU_RESOLVED_BACKEND;
+  }
+  const gpu = (globalThis.navigator as NavigatorWithGpu | undefined)?.gpu;
+  const adapter = gpu == null ? null : await gpu.requestAdapter();
+  if (adapter?.features?.has('shader-f16') !== true) {
+    if (backend === 'webgpu') {
+      throw new QueryError(
+        'UNSUPPORTED_OPERATION',
+        adapter == null
+          ? 'backend: "webgpu" requires WebGPU, but this browser provides no WebGPU adapter.'
+          : 'backend: "webgpu" requires the WebGPU "shader-f16" feature, which this ' +
+            'adapter does not support. Use backend: "auto" or "cpu".'
+      );
+    }
+    return CPU_RESOLVED_BACKEND;
+  }
+  return { backend: 'webgpu', webgpuAdapter: await readWebGpuAdapterInfo(adapter) };
+}
+
+/** Reads the adapter identity, which tells hybrid-GPU machines' GPUs apart. */
+async function readWebGpuAdapterInfo(
+  adapter: NavigatorGpuAdapter
+): Promise<WebGpuAdapterInfo | null> {
+  const info = adapter.info ?? (await adapter.requestAdapterInfo?.()) ?? null;
+  if (info == null) {
+    return null;
+  }
+  return {
+    vendor: info.vendor ?? '',
+    architecture: info.architecture ?? '',
+    device: info.device ?? '',
+    description: info.description ?? '',
   };
 }
 

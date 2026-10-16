@@ -15,7 +15,7 @@
 
 Python 和 Rust 通过各语言自己的描述符和配置类/结构体提供相同的功能。
 
-浏览器的 `backend` 接受 `auto`、`cpu` 或 `webgpu`。如果浏览器未通过功能性 JSPI 挂起/恢复探测，Sipp 会选择内置的纯 CPU 运行时。此运行时接受 `auto` 和 `cpu`，但会以 `UNSUPPORTED_OPERATION` 拒绝 `webgpu`。显式提供的自定义 `moduleUrl` 和 `wasmUrl` 会绕过内置选择，因此 Sipp 不会推断这些自定义产物编译了哪些后端。浏览器 CPU 激活 `runtime.context.n_ctx` 时，若元数据中有模型训练上下文容量，则使用它与 4096 中的较小值；若无法确定，则使用 4096。这样既限制较大的 Wasm KV 缓存，也不会扩大已知的较小模型上下文；如需不同的 CPU 上下文容量，请直接设置 `n_ctx`。
+浏览器的 `backend` 接受 `auto`、`cpu` 或 `webgpu`。浏览器 WebGPU 需要浏览器通过功能性 JSPI 挂起/恢复探测，并且 WebGPU 适配器支持 `shader-f16` 特性。两者缺一时，`webgpu` 会以 `UNSUPPORTED_OPERATION` 被拒绝，`auto` 则使用 CPU。CPU 加载运行在 Sipp 内置的纯 CPU 运行时上，该运行时不会初始化 WebGPU。显式提供的自定义 `moduleUrl` 和 `wasmUrl` 会绕过内置选择，并用于所有后端，因此 Sipp 不会推断这些自定义产物编译了哪些后端。浏览器 CPU 激活 `runtime.context.n_ctx` 时，若元数据中有模型训练上下文容量，则使用它与 4096 中的较小值；若无法确定，则使用 4096。这样既限制较大的 Wasm KV 缓存，也不会扩大已知的较小模型上下文；如需不同的 CPU 上下文容量，请直接设置 `n_ctx`。
 
 ## 浏览器客户端选项
 

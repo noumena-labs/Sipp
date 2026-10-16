@@ -119,7 +119,7 @@ Next steps:
   npm run dev
 
 Cross-Origin Isolation (COOP & COEP) headers are pre-configured in vite.config.ts.
-Happy building with browser-native WebGPU AI! ⚡
+Happy building with browser-native AI! ⚡
 `);
     return 0;
   } finally {

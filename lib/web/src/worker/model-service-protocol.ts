@@ -1,4 +1,5 @@
 import type {
+  BrowserBackendPreference,
   ModelAddSource,
   ModelLoadOptions,
   ModelLoadProgress,
@@ -25,6 +26,8 @@ export interface WorkerRuntimeConfig {
   readonly storageRoot?: string;
   readonly browserCache?: BrowserCachePolicyOptions;
   readonly trustedOrigins?: readonly string[];
+  /** Backend for the model this Worker loads. It selects the runtime artifact. */
+  readonly backend?: BrowserBackendPreference;
 }
 
 export type WorkerQueryOptions =
@@ -59,7 +62,7 @@ export type WorkerRequestMessage =
       kind: 'models-load';
       callId: number;
       modelId: string;
-      options: Pick<ModelLoadOptions, 'backend' | 'observability' | 'runtime'>;
+      options: Pick<ModelLoadOptions, 'observability' | 'runtime'>;
     }
   | {
       kind: 'models-list';

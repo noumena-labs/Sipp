@@ -114,7 +114,13 @@ Sipp 默认提供 pthread WASM 运行时产物：
 
 > ⁷ 默认为 `min(4, navigator.hardwareConcurrency)`。可以通过模型加载选项中的 `runtime.context.n_threads` 覆盖此默认值。
 
-Worker 会先运行功能性 JSPI 探测：实例化一个小型模块，并验证一次真实的挂起/恢复周期。探测成功时选择 WebGPU+JSPI；JSPI 缺失、不完整或执行失败时选择 CPU non-JSPI。选择过程不依赖浏览器 User-Agent，也不只检查某个 WebAssembly 属性。显式运行时 URL 会原样传给 Worker，并绕过内置产物选择。选择内置 CPU 产物会形成强制后端约束：`backend: 'webgpu'` 会在模型激活前被拒绝。浏览器 CPU 激活在省略 `runtime.context.n_ctx` 时，若元数据中有模型训练上下文容量，则使用它与 4096 中的较小值；若无法确定，则使用 4096。这样既避免大上下文耗尽 Wasm 内存，也不会扩大已知的较小模型 KV 缓存。内置运行时需要支持 pthread：
+Worker 会先解析加载请求的 `backend`，再选择内置产物。只有功能性 JSPI 探测通过（实例化一个小型模块，并验证一次真实的挂起/恢复周期），且 WebGPU 适配器支持 `shader-f16` 时，才会使用 WebGPU。其他所有加载（包括 `backend: 'cpu'`）都使用 CPU non-JSPI 产物，因此 CPU 会话不会创建 WebGPU 设备。选择过程不依赖浏览器 User-Agent，也不只检查某个 WebAssembly 属性。
+
+- `auto` 在两项检查都通过时使用 WebGPU，否则使用 CPU。
+- 任一检查失败时，`webgpu` 会在模型激活前以 `UNSUPPORTED_OPERATION` 被拒绝。WebGPU 加载若运行时没有注册任何 WebGPU 设备，也会直接失败，而不是改用 CPU 运行。
+- 加载完成后，`client.state().backend.selected` 报告解析出的后端（首次加载前为 `unknown`），`backend.available` 使用相同的小写名称。
+
+显式运行时 URL 会原样传给 Worker，并绕过内置产物选择；Sipp 会对所有后端按原样运行这些产物。浏览器 CPU 激活在省略 `runtime.context.n_ctx` 时，若元数据中有模型训练上下文容量，则使用它与 4096 中的较小值；若无法确定，则使用 4096。这样既避免大上下文耗尽 Wasm 内存，也不会扩大已知的较小模型 KV 缓存。内置运行时需要支持 pthread：
 
 ```ts
 function supportsWasmPthreads(): boolean {

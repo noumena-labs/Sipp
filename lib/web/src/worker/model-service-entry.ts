@@ -43,7 +43,7 @@ async function createService(config: WorkerRuntimeConfig): Promise<ModelService>
       browserCache: config.browserCache,
       trustedOrigins: config.trustedOrigins,
     },
-    { backendConstraint: runtimeAssets.backendConstraint }
+    { backend: runtimeAssets.backend }
   );
   const initialized = new ModelService(
     runtime,

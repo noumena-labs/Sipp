@@ -387,13 +387,20 @@ test('WorkerModelServiceClient configures each replacement worker exactly once',
     workerRespondList(catalogWorker, listMessage.callId);
     await listing;
 
-    const load = client.load('model-1');
+    const load = client.load('model-1', { backend: 'cpu' });
     const shutdown = await waitForWorkerMessage(catalogWorker, 'shutdown');
     catalogWorker.respond({ kind: 'resolve', callId: shutdown.callId });
     const activationWorker = await waitForModelWorker(1);
     const loadMessage = await waitForWorkerMessage(activationWorker, 'models-load');
 
-    assert.equal(activationWorker.posted[0].kind, 'initialize');
+    const initialize = activationWorker.posted[0];
+    assert.equal(initialize.kind, 'initialize');
+    // The backend selects the runtime artifact, so it configures the Worker.
+    assert.deepEqual(
+      initialize.kind === 'initialize' ? initialize.config : null,
+      { ...readWorkerConfig(client), backend: 'cpu' }
+    );
+    assert.equal('backend' in loadMessage.options, false);
     assert.equal(
       activationWorker.posted.filter((message) => message.kind === 'initialize').length,
       1

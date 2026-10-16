@@ -36,7 +36,7 @@ import type {
   RuntimeActivation,
   RuntimeActivationResult,
 } from '../../src/runtime/engine-runtime.js';
-import type { RuntimeBackendConstraint } from '../../src/engine/runtime-assets.js';
+import type { ResolvedBrowserBackend } from '../../src/engine/runtime-assets.js';
 import type {
   RustLifecycleBridge,
   type RustLifecycleInstallSource,
@@ -97,32 +97,6 @@ async function withGlobalFetch<T>(
       Reflect.deleteProperty(globalThis, 'fetch');
     } else {
       Object.defineProperty(globalThis, 'fetch', descriptor);
-    }
-  }
-}
-
-async function withNavigatorGpu<T>(
-  requestAdapter: () => Promise<{
-    readonly features?: { has(feature: string): boolean };
-  } | null>,
-  callback: () => Promise<T>
-): Promise<T> {
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
-  Object.defineProperty(globalThis, 'navigator', {
-    configurable: true,
-    enumerable: true,
-    value: {
-      ...(globalThis.navigator ?? {}),
-      gpu: { requestAdapter },
-    },
-  });
-  try {
-    return await callback();
-  } finally {
-    if (descriptor == null) {
-      Reflect.deleteProperty(globalThis, 'navigator');
-    } else {
-      Object.defineProperty(globalThis, 'navigator', descriptor);
     }
   }
 }
@@ -531,11 +505,24 @@ function stableTypeList(values: readonly string[]): string {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right)).join('\u0000');
 }
 
+function fakeBackendObservability(): BackendObservability {
+  return {
+    profilingEnabled: true,
+    webgpuCompiled: false,
+    webgpuRegistered: false,
+    webgpuDeviceCount: 0,
+    gpuOffloadSupported: false,
+    engineInitialized: true,
+    availableBackends: [{ name: 'cpu', deviceCount: 1 }],
+    devices: [],
+  };
+}
+
 class FakeRuntime implements EngineRuntime {
   public closeCount = 0;
   public loadCount = 0;
   public wasmThreadingMode: 'single-thread' | 'pthread' = 'single-thread';
-  public backendConstraint: RuntimeBackendConstraint | null = null;
+  public backend: ResolvedBrowserBackend = { backend: 'cpu', webgpuAdapter: null };
   public lastPrompt: string | null = null;
   public lastAudio: Uint8Array | null = null;
   public lastMaxDurationMs: number | undefined;
@@ -874,19 +861,7 @@ class FakeRuntime implements EngineRuntime {
   }
 
   public async getBackendObservability(): Promise<BackendObservability | null> {
-    if (!this.backendProfilingEnabled) {
-      return null;
-    }
-    return {
-      profilingEnabled: true,
-      webgpuCompiled: false,
-      webgpuRegistered: false,
-      webgpuDeviceCount: 0,
-      gpuOffloadSupported: false,
-      engineInitialized: true,
-      availableBackends: [{ name: 'cpu', deviceCount: 1 }],
-      devices: [],
-    };
+    return this.backendProfilingEnabled ? fakeBackendObservability() : null;
   }
 
   private createMetrics(): RequestObservabilityMetrics {
@@ -1776,74 +1751,57 @@ test('ModelService defaults browser pthread runtime thread counts before Rust pr
   });
 });
 
-test('ModelService auto-selects WebGPU when the browser has a shader-f16 adapter', async () => {
-  await withNavigatorGpu(async () => ({ features: { has: () => true } }), async () => {
-    const { service, rust } = createRustBackedService();
-
-    await installAndLoad(service, localSource('webgpu-auto.gguf'));
-
-    assert.equal(
-      (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
-      'webgpu'
-    );
-    assert.equal(
-      (rust.lastOptions as { runtime?: NativeRuntimeConfig }).runtime?.context?.n_ctx,
-      undefined
-    );
+test('ModelService prepares the load with the runtime resolved backend', async () => {
+  const runtime = new FakeRuntime();
+  runtime.backend = { backend: 'webgpu', webgpuAdapter: null };
+  runtime.getBackendObservability = async () => ({
+    ...fakeBackendObservability(),
+    webgpuRegistered: true,
+    webgpuDeviceCount: 1,
   });
+  const { service, rust } = createRustBackedService(runtime);
+
+  await installAndLoad(service, localSource('webgpu-selected.gguf'));
+
+  assert.equal(
+    (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
+    'webgpu'
+  );
+  assert.equal(
+    (rust.lastOptions as { runtime?: NativeRuntimeConfig }).runtime?.context?.n_ctx,
+    undefined
+  );
 });
 
-test('ModelService makes the CPU-only runtime constraint dominant over auto-selection', async () => {
-  await withNavigatorGpu(async () => ({ features: { has: () => true } }), async () => {
-    const runtime = new FakeRuntime();
-    runtime.backendConstraint = 'cpu-only';
-    const { service, rust } = createRustBackedService(runtime);
+test('ModelService fails a WebGPU load when the runtime registered no WebGPU device', async () => {
+  const runtime = new FakeRuntime();
+  runtime.backend = { backend: 'webgpu', webgpuAdapter: null };
+  runtime.getBackendObservability = async () => fakeBackendObservability();
+  const { service } = createRustBackedService(runtime);
 
-    await installAndLoad(service, localSource('cpu-runtime-override.gguf'));
-
-    assert.equal(
-      (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
-      'cpu'
-    );
-  });
-});
-
-test('ModelService rejects an explicit WebGPU backend on the CPU-only runtime', async () => {
-  let adapterRequests = 0;
-  await withNavigatorGpu(async () => {
-    adapterRequests += 1;
-    return { features: { has: () => true } };
-  }, async () => {
-    const runtime = new FakeRuntime();
-    runtime.backendConstraint = 'cpu-only';
-    const { service } = createRustBackedService(runtime);
-
-    await assert.rejects(
-      installAndLoad(service, localSource('explicit-webgpu.gguf'), { backend: 'webgpu' }),
-      (error) =>
-        error instanceof QueryError &&
-        error.code === 'UNSUPPORTED_OPERATION' &&
-        error.message.includes('did not pass the JSPI suspend/resume probe')
-    );
-    assert.equal(adapterRequests, 0);
-  });
+  await assert.rejects(
+    installAndLoad(service, localSource('webgpu-without-device.gguf')),
+    (error) =>
+      error instanceof QueryError &&
+      error.code === 'UNSUPPORTED_OPERATION' &&
+      error.message.includes('registered no WebGPU device')
+  );
+  assert.equal(service.current(), null);
 });
 
 test('ModelService leaves omitted CPU context sizing to Rust lifecycle', async () => {
-  await withNavigatorGpu(async () => ({ features: { has: () => false } }), async () => {
-    const { service, rust } = createRustBackedService();
+  const { service, rust } = createRustBackedService();
 
-    await installAndLoad(service, localSource('webgpu-auto-no-f16.gguf'));
+  await installAndLoad(service, localSource('cpu-context.gguf'));
 
-    assert.equal(
-      (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
-      'cpu'
-    );
-    assert.equal(
-      (rust.lastOptions as { runtime?: NativeRuntimeConfig }).runtime?.context?.n_ctx,
-      undefined
-    );
-  });
+  assert.equal(
+    (rust.lastOptions as { backend?: BrowserBackendPreference }).backend,
+    'cpu'
+  );
+  assert.equal(
+    (rust.lastOptions as { runtime?: NativeRuntimeConfig }).runtime?.context?.n_ctx,
+    undefined
+  );
 });
 
 test('ModelService.chat renders chat templates and sanitizes assistant boundaries', async () => {
