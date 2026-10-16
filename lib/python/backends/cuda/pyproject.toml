@@ -8,6 +8,12 @@ version = "0.1.0"
 description = "Native CUDA backend for Sipp Python"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
+# NVIDIA's CUDA 13 libraries the binding links. The Windows binding links the
+# CUDA runtime statically, so it needs only cuBLAS.
+dependencies = [
+  "nvidia-cublas>=13,<14",
+  "nvidia-cuda-runtime>=13,<14; sys_platform == 'linux'",
+]
 
 [tool.maturin]
 module-name = "sipp_backend_cuda._native"

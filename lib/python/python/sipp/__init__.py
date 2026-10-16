@@ -5,6 +5,7 @@ classes used to configure and call Sipp, and reports which backend was selected
 for the current process.
 """
 
+import ctypes
 import importlib
 import importlib.util
 import os
@@ -20,6 +21,8 @@ _BACKEND_MODULES = {
     "vulkan": "sipp_backend_vulkan._native",
 }
 _VALID_BACKENDS = {"auto", "cpu", "cuda", "metal", "vulkan"}
+# The CUDA libraries the Linux binding links, dependencies first.
+_CUDA_LINUX_LIBRARIES = ("libcudart.so.13", "libcublasLt.so.13", "libcublas.so.13")
 _ACTIVE_BACKEND = "unknown"
 
 
@@ -45,6 +48,37 @@ def _add_windows_dll_directories() -> None:
             continue
         seen.add(normalized)
         _DLL_DIRECTORIES.append(os.add_dll_directory(normalized))
+
+
+def _prepare_cuda_wheels() -> None:
+    """Make the NVIDIA CUDA 13 wheels installed by ``sipppy[cuda]`` reachable.
+
+    Windows finds DLLs through registered directories. Linux reads
+    LD_LIBRARY_PATH only at startup, so the libraries are loaded by full path,
+    dependencies first, and the binding then resolves them by soname.
+    """
+    spec = importlib.util.find_spec("nvidia")
+    if spec is None or spec.submodule_search_locations is None:
+        return
+
+    # Use the first installed copy, so two environments never load two runtimes.
+    cuda = next(
+        (Path(root) / "cu13" for root in spec.submodule_search_locations
+         if (Path(root) / "cu13").is_dir()),
+        None,
+    )
+    if cuda is None:
+        return
+
+    if os.name == "nt":
+        directory = cuda / "bin" / "x86_64"
+        if directory.is_dir():
+            _DLL_DIRECTORIES.append(os.add_dll_directory(str(directory)))
+        return
+    for library in _CUDA_LINUX_LIBRARIES:
+        path = cuda / "lib" / library
+        if path.exists():
+            ctypes.CDLL(str(path), mode=ctypes.RTLD_GLOBAL)
 
 
 def _auto_backends_for_host() -> list[str]:
@@ -128,6 +162,8 @@ def _load_backend_package(backend: str) -> Optional[object]:
     global _ACTIVE_BACKEND
 
     module_name = _BACKEND_MODULES[backend]
+    if backend == "cuda":
+        _prepare_cuda_wheels()
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as error:

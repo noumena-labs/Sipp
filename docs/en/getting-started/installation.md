@@ -52,8 +52,9 @@ added.
 - Node installs use `@sipphq/sipp-server`; npm resolves the matching optional
   platform binary package automatically. Python installs use the `sipppy` wheel
   (imported as `sipp`) from PyPI for CPU and extras such as `sipppy[cuda]` for
-  GPU backend wheels; GPU backends also need the host driver and runtime (see
-  the [Python package](../packages/python.md) page). Use `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you need to force
+  GPU backend wheels; GPU backends also need the host GPU driver (see the
+  [Node.js package](../packages/node.md) and [Python package](../packages/python.md)
+  pages). Use `SIPP_NODE_BACKEND` or `SIPP_PYTHON_BACKEND` when you need to force
   `cpu`, `vulkan`, `cuda`, or `metal`.
 - Gateway clients need only the gateway base URL, public target name, and
   application-owned authentication value.

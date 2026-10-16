@@ -304,6 +304,61 @@ def test_package_loader_registers_cuda_13_dll_directory(tmp_path: Path) -> None:
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
 
 
+def test_package_loader_makes_cuda_13_wheels_reachable(tmp_path: Path) -> None:
+    backend_package = tmp_path / "sipp_backend_cuda"
+    backend_package.mkdir()
+    (backend_package / "__init__.py").write_text("", encoding="utf-8")
+    (backend_package / "_native.py").write_text(
+        _fake_native_module_source('{"compiled":{"cuda":true}}', "cuda"),
+        encoding="utf-8",
+    )
+    cuda = tmp_path / "nvidia" / "cu13"
+    windows_bin = cuda / "bin" / "x86_64"
+    windows_bin.mkdir(parents=True)
+    (cuda / "lib").mkdir()
+    libraries = ["libcudart.so.13", "libcublasLt.so.13", "libcublas.so.13"]
+    for library in libraries:
+        (cuda / "lib" / library).write_bytes(b"")
+    expected = (
+        [str(windows_bin)]
+        if os.name == "nt"
+        else [str(cuda / "lib" / library) for library in libraries]
+    )
+    package_root = Path(__file__).resolve().parents[1] / "python"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join([str(tmp_path), str(package_root)])
+    env["SIPP_PYTHON_BACKEND"] = "cuda"
+    env.pop("SIPP_PYTHON_NATIVE_LIBRARY_PATH", None)
+    env.pop("CUDA_PATH", None)
+    env.pop("CUDA_HOME", None)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import ctypes, os\n"
+                "reached = []\n"
+                "def add_dll_directory(path):\n"
+                "    reached.append(os.fspath(path))\n"
+                "    return object()\n"
+                "os.add_dll_directory = add_dll_directory\n"
+                "ctypes.CDLL = lambda path, mode=0: reached.append(path)\n"
+                "import sipp\n"
+                "assert sipp.get_active_backend() == 'cuda'\n"
+                "reached = [path for path in reached if 'cu13' in path]\n"
+                f"assert reached == {expected!r}, reached\n"
+            ),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
 def test_package_loader_supports_installed_backend_package(tmp_path: Path) -> None:
     backend_package = tmp_path / "sipp_backend_vulkan"
     backend_package.mkdir()

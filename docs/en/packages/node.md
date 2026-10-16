@@ -21,6 +21,15 @@ Use this package only in Node runtime code. Browser components should use
 platform package for the current OS and CPU, and the runtime loader selects
 the best packaged backend for that host.
 
+On Windows x64 and Linux x64, the CUDA backend needs the CUDA 13 libraries.
+Sipp uses an installed CUDA 13 toolkit when it finds one. Otherwise, when an
+NVIDIA driver 580 or newer is present, `npm install` downloads NVIDIA's CUDA 13
+libraries (about 400 MB) once per machine into `~/.sipp/cuda` (or
+`$SIPP_HOME/cuda`). Set `SIPP_SKIP_CUDA_DOWNLOAD=1` to skip the download.
+Package managers that skip install scripts, such as pnpm, Bun, or
+`npm install --ignore-scripts`, skip it too; run
+`node node_modules/@sipphq/sipp-server/install-cuda.js` to download later.
+
 ## Use It For
 
 - Server-side local GGUF inference.

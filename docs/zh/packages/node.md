@@ -12,6 +12,13 @@ npm install @sipphq/sipp-server
 
 仅在 Node 运行时代码中使用此包。浏览器组件改用 [`@sipphq/sipp`](browser.md)。
 
+在 Windows x64 和 Linux x64 上，CUDA 后端需要 CUDA 13 库。Sipp 找到已安装的
+CUDA 13 Toolkit 时会直接使用它；否则，在存在 580 或更新版本 NVIDIA 驱动时，
+`npm install` 会为每台机器下载一次 NVIDIA 的 CUDA 13 库（约 400 MB），保存到
+`~/.sipp/cuda`（或 `$SIPP_HOME/cuda`）。设置 `SIPP_SKIP_CUDA_DOWNLOAD=1` 可跳过下载。
+跳过安装脚本的包管理器（例如 pnpm、Bun 或 `npm install --ignore-scripts`）也会跳过
+下载；之后可运行 `node node_modules/@sipphq/sipp-server/install-cuda.js` 下载。
+
 ## 适用场景
 
 - 服务端本地执行模型推理。

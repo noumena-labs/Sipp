@@ -30,9 +30,10 @@ The backend wheels are separate PyPI distributions. For example,
 `sipppy-backend-vulkan` wheel for the same release version. Python code still
 imports `sipp`.
 
-GPU wheels do not bundle host drivers or runtimes. The CUDA backend needs an
-NVIDIA driver and the CUDA 13 runtime libraries on the host; the Vulkan backend
-needs a Vulkan loader and GPU driver.
+`sipppy[cuda]` also installs NVIDIA's CUDA 13 libraries from PyPI
+(`nvidia-cublas`, plus `nvidia-cuda-runtime` on Linux), so the CUDA backend
+needs only an NVIDIA driver 580 or newer on the host. The Vulkan backend needs
+a Vulkan loader and GPU driver.
 
 ## Use It For
 
