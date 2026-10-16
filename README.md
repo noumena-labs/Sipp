@@ -119,7 +119,7 @@ Run them yourself here: [benchmark.sipp.sh/benchmark](https://benchmark.sipp.sh/
 > * **TTFT (Time to First Token):** Measured in milliseconds (ms). **Lower is better**.
 > * **Decode:** Measured in tokens per second (tok/s). **Higher is better**.
 > * **E2E Latency (End-to-End Latency):** Measured in milliseconds (ms). **Lower is better**.
-> * *Performed on a Nvidia GTX 3080, 1 warm up, 3 measured runs. Results avg. of all measured runs.*
+> * *A single maintainer run on an NVIDIA RTX 3080: 1 warm-up, then the mean of 3 measured runs. The model, prompt and output lengths, browser version, and cache state of this run were not recorded, so treat the figures as indicative. Results vary with model, hardware, and browser; run the benchmark above to measure your own setup.*
 
 
 

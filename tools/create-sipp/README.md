@@ -26,5 +26,5 @@ npm run dev
 
 - **Vite + TypeScript**: Fast modern development environment.
 - **Cross-Origin Isolation Pre-Wired**: `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` headers configured in `vite.config.ts` for WebGPU and multithreaded WASM support.
-- **Streaming Chat UI**: Complete, responsive, zero-dependency browser chat interface.
+- **Streaming Chat UI**: Complete, responsive browser chat interface whose only runtime dependency is `@sipphq/sipp`.
 - **Resumable Hugging Face Downloads**: Download models directly inside the browser using byte ranges and OPFS caching.
