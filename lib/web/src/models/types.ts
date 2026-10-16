@@ -607,13 +607,23 @@ export const Endpoint = {
   },
 };
 
-/** Structured notice emitted when Sipp falls back to a full model download. */
-export interface FallbackEvent {
-  readonly type: 'fallback-warning';
-  readonly kind: 'transfer';
-  readonly detail: string;
-  readonly fallbackTo: 'full-download';
-}
+/**
+ * Structured notice emitted when Sipp falls back to a full model download, or
+ * retries a failed automatic WebGPU load on the CPU.
+ */
+export type FallbackEvent =
+  | {
+      readonly type: 'fallback-warning';
+      readonly kind: 'transfer';
+      readonly detail: string;
+      readonly fallbackTo: 'full-download';
+    }
+  | {
+      readonly type: 'fallback-warning';
+      readonly kind: 'backend';
+      readonly detail: string;
+      readonly fallbackTo: 'cpu';
+    };
 
 export type EngineEvent =
   | { type: 'state'; state: EngineState }

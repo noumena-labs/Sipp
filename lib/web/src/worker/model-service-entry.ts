@@ -31,6 +31,7 @@ type WorkerOperationRequest = Exclude<
 
 async function createService(config: WorkerRuntimeConfig): Promise<ModelService> {
   const runtimeAssets = await resolveRuntimeAssetSelection(config);
+  post({ kind: 'backend-resolved', backend: runtimeAssets.backend.backend });
   const storage = new FileSystemStorage(config.storageRoot);
   runtime = new WasmEngineRuntime(
     {

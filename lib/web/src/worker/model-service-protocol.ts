@@ -15,6 +15,7 @@ import type {
   TokenBatch,
 } from '../models/types.js';
 import type { BrowserCachePolicyOptions } from '../models/asset-store.js';
+import type { ResolvedBrowserBackend } from '../engine/runtime-assets.js';
 import type { SharedTokenRingDescriptor } from '../runtime/shared-token-ring.js';
 
 export interface WorkerRuntimeConfig {
@@ -127,6 +128,11 @@ export type WorkerResponseMessage =
       queryErrorCode?: QueryErrorCode;
       /** Messages of the AggregateError attached as `cleanupFailures`. */
       cleanupFailures?: readonly string[];
+    }
+  | {
+      /** Backend the Worker resolved before choosing its runtime artifact. */
+      kind: 'backend-resolved';
+      backend: ResolvedBrowserBackend['backend'];
     }
   | {
       kind: 'load-progress';
