@@ -287,7 +287,7 @@ char * apply_chat_template(
     inputs.add_generation_prompt = add_assistant;
     inputs.use_jinja = true;
 
-    return copy_string(common_chat_templates_apply(templates->inner.get(), inputs).prompt);
+    return copy_string(common_chat_templates_apply(templates->inner.get(), inputs).prompt.str());
 }
 
 common_chat_params apply_asr_chat_template(
@@ -341,11 +341,10 @@ std::string parse_asr_content(
     asr_output_protocol protocol,
     std::string_view output) {
     common_chat_parser_params parser_params(chat_params);
-    if (!chat_params.parser.empty()) {
-        parser_params.parser.load(chat_params.parser);
-    }
+    parser_params.parser = chat_params.parser;
 
-    std::string content = common_chat_parse(std::string(output), false, parser_params).content;
+    std::string content =
+        common_chat_parse(common_chat_input(std::string(output)), false, parser_params).content;
     if (protocol == asr_output_protocol::tagged) {
         constexpr const char * output_marker = "<asr_text>";
         const size_t marker = content.find(output_marker);
@@ -984,7 +983,8 @@ char * sipp_apply_asr_chat_template(
 
     try {
         return copy_string(
-            apply_asr_chat_template(templates, std::string_view(language, language_len)).prompt);
+            apply_asr_chat_template(templates, std::string_view(language, language_len))
+                .prompt.str());
     } catch (const std::exception &) {
         return nullptr;
     }
@@ -1375,13 +1375,14 @@ sipp_mtmd_audio_job * sipp_mtmd_audio_begin(
         job->sampler = context->audio_sampler.get();
 
         if (!context->audio_generator) {
-            context->audio_generator = std::make_unique<mtmd_helper::gen_audio>(lctx, context->inner);
-            if (!context->audio_generator->ctx) {
+            context->audio_generator = std::make_unique<mtmd_helper::gen_audio>();
+            context->audio_generator->init(lctx, context->inner);
+            if (!context->audio_generator->valid()) {
                 throw std::runtime_error("failed to initialize the audio generator");
             }
         }
         job->generator = context->audio_generator.get();
-        mtmd_helper_gen_audio_inp input{};
+        mtmd_helper_gen_audio_inp input = mtmd_helper_gen_audio_inp_default();
         input.seq_id = 0;
         input.prompt = text;
         input.prompt_len = text_len;
